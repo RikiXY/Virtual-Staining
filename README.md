@@ -7,7 +7,7 @@ L'obiettivo di questo progetto è sviluppare un modello di **Machine Learning** 
 Le immagini sono reperibili e scaricabili dal seguente [drive](https://drive.google.com/drive/folders/1IXghZigB_MtO467T4DVMgGQ_lThMao8I?usp=sharing)
 All'interno della repository è presente il file _.gitignore_ che esclude (per questioni di dimensioni di caricamento) le immagini contenute nella cartella locale _Materiale/Images/_
 ## To Do List
-- [ ] Crea repository e carica i file attuali
+- [x] Crea repository e carica i file attuali
 - [ ] Coregistrazione immagini
 	- [ ] Selezione di una regione comune
 	- [ ] Feature matching per la stima della trasformazione (ORB/SIFT oppure ECC Image Registration) 
