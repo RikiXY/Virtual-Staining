@@ -1,0 +1,173 @@
+{
+  "main": {
+    "id": "e4087515406522f6",
+    "type": "split",
+    "children": [
+      {
+        "id": "c155309e2db39874",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "8d85249af9378025",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "Deep_learning-enable_virtual_histological_staining_of_biological_samples-NOTE.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "Deep_learning-enable_virtual_histological_staining_of_biological_samples-NOTE"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "a04253993c07d8b6",
+    "type": "split",
+    "children": [
+      {
+        "id": "eebd44a8476d2e1a",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "9bef9e5da0784ef8",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Esplora risorse"
+            }
+          },
+          {
+            "id": "f1a1c81fdc257bbe",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Ricerca"
+            }
+          },
+          {
+            "id": "ccb5b88c207eca6f",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Segnalibri"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "aded43ae052aa95c",
+    "type": "split",
+    "children": [
+      {
+        "id": "d1915c2b7861033a",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "4d23cb0d30e466ac",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "Deep_learning-enable_virtual_histological_staining_of_biological_samples-NOTE.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Riferimenti a Deep_learning-enable_virtual_histological_staining_of_biological_samples-NOTE"
+            }
+          },
+          {
+            "id": "80ecbb7084aa2e0b",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "Deep_learning-enable_virtual_histological_staining_of_biological_samples-NOTE.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Collegamenti in uscita da Deep_learning-enable_virtual_histological_staining_of_biological_samples-NOTE"
+            }
+          },
+          {
+            "id": "90e9b2a859f74625",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Etichette"
+            }
+          },
+          {
+            "id": "02ffc0da8df51427",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "Deep_learning-enable_virtual_histological_staining_of_biological_samples-NOTE.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Struttura di Deep_learning-enable_virtual_histological_staining_of_biological_samples-NOTE"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Apri selezione rapida": false,
+      "graph:Apri vista grafo": false,
+      "canvas:Crea nuova lavagna": false,
+      "daily-notes:Apri nota del giorno": false,
+      "templates:Inserisci modello": false,
+      "command-palette:Apri riquadro comandi": false
+    }
+  },
+  "active": "9bef9e5da0784ef8",
+  "lastOpenFiles": []
+}
