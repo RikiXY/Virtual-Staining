@@ -1,2 +1,2 @@
-# Virtual-staining
+# Virtual Staining
 Progetto Università
