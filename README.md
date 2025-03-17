@@ -8,9 +8,9 @@ Le immagini sono reperibili e scaricabili dal seguente [drive](https://drive.goo
 All'interno della repository è presente il file _.gitignore_ che esclude (per questioni di dimensioni di caricamento) le immagini contenute nella cartella locale _Materiale/Images/_  
 
 ## To Do List
-- [x] Crea repository e carica i file attuali
-- [ ] Coregistrazione immagini
-	- [ ] Selezione di una regione comune
+- [X] Crea repository e carica i file attuali
+- [ ] Coregistrazione immagini (da valutare il metodo)
+	- [X] Selezione di una regione comune
 	- [ ] Feature matching per la stima della trasformazione (ORB/SIFT oppure ECC Image Registration) 
 	- [ ] Verifica della coregistrazione
 	- [ ] Ritaglio finale
