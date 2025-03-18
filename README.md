@@ -41,8 +41,4 @@ Come funziona?
 **Perché potremmo non averne bisogno?**
 Se le immagini sono già quasi perfettamente allineate e hanno solo piccole differenze di traslazione, possiamo saltare il Feature Matching e passare direttamente alla registrazione con ECC (cv2.findTransformECC).
 
-<<<<<<< HEAD
 Se abbiamo scalature, rotazioni o deformazioni, il Feature Matching ti aiuta a stimare meglio l’allineamento.
-=======
-Se abbiamo scalature, rotazioni o deformazioni, il Feature Matching ti aiuta a stimare meglio l’allineamento.
->>>>>>> ec2fa68 (minca)
