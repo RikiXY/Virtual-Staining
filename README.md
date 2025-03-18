@@ -8,11 +8,15 @@ Le immagini sono reperibili e scaricabili dal seguente [drive](https://drive.goo
 All'interno della repository è presente il file _.gitignore_ che esclude (per questioni di dimensioni di caricamento) le immagini contenute nella cartella locale _Materiale/Images/_  
 
 ## To Do List
-- [X] Crea repository e carica i file attuali
+- [x] Crea repository e carica i file attuali
 - [ ] Coregistrazione immagini (da valutare il metodo)
 	- [X] Selezione di una regione comune
-	- [ ] Feature matching per la stima della trasformazione (ORB/SIFT oppure ECC Image Registration) 
-	- [ ] Verifica della coregistrazione
+	- [x] Valutazione metodi normalizzazione (equalizeHist, normalize o CLAHE)
+	- [x] Valutazione algoritmo di **featuring match** (ORB/SIFT) da applicare e in che modalità (matcher, filtri, ...)
+	- [ ] Filtraggio ulteriore dei risultati con RANSAC (metodo di stima)
+	- [ ] **Refinement** con ECC
+	- [ ] (Eventuale) ulteriore filtro di distanza euclidea (DA VALUTARE)
+	- [ ] Verifica della coregistrazione ()
 	- [ ] Ritaglio finale
 - [ ] Tutto il resto che andrà aggiunto
 
