@@ -22,21 +22,21 @@ def show_side_images(image_1, title_1, image_2, title_2, cmap='gray', figsize=(1
 
     # Creazione della figura con due sottoplot
     figure = plt.figure(figsize=figsize)
-    subplots = plt.subplots(1, 2)
+    subplots = figure.subplots(1, 2)
     figure.subplots_adjust(wspace=0.01)
 
     # Prima immagine
-    subplots[0].imshow(image_1, cmap=cmap)
     subplots[0].set_title(title_1)
     subplots[0].axis('off')
+    subplots[0].imshow(image_1, cmap=cmap)
 
     # Seconda immagine
-    subplots[1].imshow(image_2, cmap=cmap)
     subplots[1].set_title(title_2)
     subplots[1].axis('off')
+    subplots[1].imshow(image_2, cmap=cmap)
 
     # Mostra le immagini
-    plt.show()
+    #plt.show()
 
 def show_side_hist(image_1, title_1, image_2, title_2, figsize=(10, 5)):
     """
@@ -55,7 +55,7 @@ def show_side_hist(image_1, title_1, image_2, title_2, figsize=(10, 5)):
     
     # Creazione della figura con i subplots
     figure = plt.figure(figsize=figsize)
-    subplots = plt.subplots(1, 2)
+    subplots = figure.subplots(1, 2)
 
     # Istogramma prima immagine
     subplots[0].set_title(title_1)
