@@ -1,2 +1,5 @@
-Materiale/Images/
-Locale/
+/Materiale/Images/*
+/Materiale/Locale/*
+!/Materiale/Locale/.gitkeep
+/Locale/*
+!/Locale/.gitkeep
