@@ -12,20 +12,19 @@ All'interno della repository sono riportati una serie di file contenuti in varie
 - La cartella _Materiale/_ contiene i file sui quali basiamo test (es: _Materiale/Prove/_) e documenti
 - La cartella _Appunti/_ invece contiene tre sotto cartelle:
 	- _"Note MD"/_ contiene alcuni file .md (e occasionalmente i corrispettivi .pdf) in cui sono presenti pensieri e annotazioni 
-	- _Scripts/_ contiene dei tentativi (mai portati avanti\*) di script python
+	- _Scripts/_ contiene dei tentativi di script python
 	- _Notebooks/_ infine forse è la directory **più importante** e contiene i notebook jupyter in cui sono presenti:
 		- **_alignment-images_**: trascurabile (prototipo sviluppato in un altro notebook)
-		- **_allineamento_immagini_**: confronta l'allineamento (mostrando anche i grafici\*\*)  dell'allineamento eseguito attraverso differenti modalità (es: differenti normalizzazioni) 
+		- **_allineamento_immagini_**: confronta l'allineamento (mostrando anche i grafici\*) dell'allineamento eseguito attraverso differenti modalità (es: differenti normalizzazioni) 
 		- **_confronti_**: il nome è auto esplicativo, contiene una serie di confronti tra metodi e combinazioni di filtri; è presente il primo plot di allineamento delle immagini
 		- **_presentazione_coregistrazione_**: è il file presentato all'appuntamento del 19/03 (insieme al **_confronti_**) e contiene spiegazioni e chiarimenti su alcune parti del codice che hanno svolto un ruolo cruciale nella prima parte dei test
 		- **_ritaglio_immagini_**: test di automatizzazione del ritaglio di una sotto immagine per i test
 
-\* lo script è stato momentaneamente abbandonato per questioni logistiche e per permetterci di concentrarci principalmente sui notebook
-\*\* nel caso in cui i grafici o gli output non dovessero comparire basta runnare nuovamente le celle necessarie
+\* nel caso in cui i grafici o gli output non dovessero comparire basta runnare nuovamente le celle necessarie
 ## To Do List
 - [x] Crea repository e carica i file attuali
 - [x] Coregistrazione immagini (da valutare il metodo)
-	- [X] Selezione di una regione comune
+	- [x] Selezione di una regione comune
 	- [x] Valutazione metodi normalizzazione (equalizeHist, normalize o CLAHE)
 	- [x] Valutazione algoritmo di **featuring match** (ORB/SIFT) da applicare e in che modalità (matcher, filtri, ...)
 	- [x] Filtraggio ulteriore dei risultati con RANSAC (metodo di stima)
