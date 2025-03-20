@@ -11,7 +11,7 @@ All'interno della repository è presente il file _.gitignore_ che esclude (per q
 All'interno della repository sono riportati una serie di file contenuti in varie cartelle:
 - La cartella _Materiale/_ contiene i file sui quali basiamo test (es: _Materiale/Prove/_) e documenti
 - La cartella _Appunti/_ invece contiene tre sotto cartelle:
-	- _"Note MD"/_ contiene alcuni file .md (e occasionalmente i corrispettivi .pdf) in cui sono presenti 
+	- _"Note MD"/_ contiene alcuni file .md (e occasionalmente i corrispettivi .pdf) in cui sono presenti pensieri e annotazioni 
 	- _Scripts/_ contiene dei tentativi (mai portati avanti\*) di script python
 	- _Notebooks/_ infine forse è la directory **più importante** e contiene i notebook jupyter in cui sono presenti:
 		- **_alignment-images_**: trascurabile (prototipo sviluppato in un altro notebook)
