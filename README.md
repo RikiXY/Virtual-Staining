@@ -4,7 +4,6 @@ Questo progetto è sviluppato nell'ambito di un **progetto universitario** e si 
 
 L'obiettivo di questo progetto è sviluppare un modello di **Machine Learning** in **Python** per applicare la colorazione virtuale a immagini di campioni biologici, migliorando l'accuratezza e la velocità delle diagnosi mediche.
 
-Le immagini sono reperibili e scaricabili dal seguente [drive](https://drive.google.com/drive/folders/1IXghZigB_MtO467T4DVMgGQ_lThMao8I?usp=sharing)
 All'interno della repository è presente il file _.gitignore_ che esclude (per questioni di dimensioni di caricamento) le immagini contenute nella cartella locale _Materiale/Images/_  
 
 ## To Do List
