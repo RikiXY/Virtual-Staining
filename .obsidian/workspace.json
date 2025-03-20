@@ -4,11 +4,11 @@
     "type": "split",
     "children": [
       {
-        "id": "4dd21f5dfb630779",
+        "id": "1ee9c583829ed6be",
         "type": "tabs",
         "children": [
           {
-            "id": "e9d0f986f425fcbc",
+            "id": "d699ce37fc5fce1a",
             "type": "leaf",
             "state": {
               "type": "markdown",
@@ -168,12 +168,18 @@
       "command-palette:Open command palette": false
     }
   },
-  "active": "e9d0f986f425fcbc",
+  "active": "d699ce37fc5fce1a",
   "lastOpenFiles": [
-    "Annotazioni importanti.md",
-    "Materiale/coregistrazione.ipynb",
-    "Informazioni.md",
+    "Appunti/Notebooks/presentazione_coregistrazione.ipynb",
+    "Appunti/Note MD/Informazioni.md",
     "README.md",
+    "Appunti/Note MD/Annotazioni importanti.md",
+    "Appunti/Note MD/Deep_learning-enable_virtual_histological_staining_of_biological_samples-NOTE.md",
+    "Appunti/Note MD/ChatGPT_o1 metodologia applicativa.md",
+    "Appunti/Note MD/noteChatGPT_o1.md",
+    "Appunti/Note MD/Deep_learning-enable_virtual_histological_staining_of_biological_samples-NOTE.pdf",
+    "Materiale/Deep_learning-enable_virtual_histological_staining_of_biological_samples.pdf",
+    "Materiale/coregistrazione.ipynb",
     "Appunti/ChatGPT metodologia applicativa.md",
     "Materiale/theory_test.ipynb",
     "Materiale/coregistrazione_script.py",
@@ -185,8 +191,6 @@
     "Materiale/Prove",
     "Materiale/Nuova cartella",
     "Materiale/Images/2022_IST_69_A2 senza copri_oggetto.tif",
-    "Materiale/Images/2022_IST_69_A2 non colorato.tif",
-    "Materiale/Images/2022_IST_69_A2 fluo_c1-3.tif",
-    "Materiale/Images/2022_IST_69_A2 con copri_oggetto.tif"
+    "Materiale/Images/2022_IST_69_A2 non colorato.tif"
   ]
 }
