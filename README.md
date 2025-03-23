@@ -6,6 +6,8 @@ L'obiettivo di questo progetto è sviluppare un modello di **Machine Learning** 
 
 All'interno della repository è presente il file _.gitignore_ che esclude (per questioni di dimensioni di caricamento) le immagini contenute nella cartella locale _Materiale/Images/_  
 
+Dato che GitHub non consente la corretta visualizzazione di un file markdown è consigliabile (per un'esperienza migliore) scarica il suo associato file .pdf (es: Timeline_Progetto)
+
 ---
 ## File importanti
 All'interno della repository sono riportati una serie di file contenuti in varie cartelle:
