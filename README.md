@@ -21,6 +21,8 @@ All'interno della repository sono riportati una serie di file contenuti in varie
 		- **_ritaglio_immagini_**: test di automatizzazione del ritaglio di una sotto immagine per i test
 
 \* nel caso in cui i grafici o gli output non dovessero comparire basta runnare nuovamente le celle necessarie
+
+---
 ## To Do List
 - [x] Crea repository e carica i file attuali
 - [x] Coregistrazione immagini (da valutare il metodo)
@@ -30,12 +32,11 @@ All'interno della repository sono riportati una serie di file contenuti in varie
 	- [x] Filtraggio ulteriore dei risultati con RANSAC (metodo di stima)
 	- [x] **Refinement** con ECC
 	- [x] (Eventuale) ulteriore filtro di distanza euclidea (DA VALUTARE)
-	- [x] Verifica della coregistrazione (differenza assoulta e istogrammi)
+	- [x] Verifica della coregistrazione (differenza assoluta e istogrammi)
 	- [x] Ritaglio finale
+	- [ ] Creazione maschera per risolvere problema sfondo per migliorare allineamento
+	- [ ] Automatizzare divisioni in sub images per il dataset. Se sono allineate ok, sennò vanno segnalate.
+	- [ ] Valutazione tramite miglioramento percentuale dell'istogramma
 	- [ ] Sistemare i bordi perché creano conflitti con la normalizzazione e la coregistrazione
 	- [ ] Testare e trovare un metodo efficace per coregistrare immagini 20kx20k
 - [ ] Tutto il resto che andrà aggiunto
-
----
-
-
