@@ -43,14 +43,14 @@ def show_images(images, cmap=None):
                 subplots[row, column].axis('off')
     plt.show()
 
-def split_in_4(img):
-    h, w = img.shape[:2]
-    return img[:h//2, :w//2], img[:h//2, w//2:], img[h//2:, :w//2], img[h//2:, w//2:]
+def find_mask(img):
+    """Trova la maschera per i componenti connessi dell'immagine
 
-def join_4(img1, img2, img3, img4):
-    return np.vstack((np.hstack((img1, img2)), np.hstack((img3, img4))))
+    Args:
+        img (MatLike): Immagine di input
 
-def mask(img):
+    Returns: Maschera
+    """
     # Binarizza l'immagine con una soglia
     _, binary = cv2.threshold(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 230, 255, cv2.THRESH_BINARY)
     # Trova i componenti connessi
@@ -62,7 +62,7 @@ def mask(img):
     sorted_indices = np.argsort(stats[1:, cv2.CC_STAT_AREA])[::-1] + 1
 
     # Crea una maschera vuota per filtrare i componenti
-    mask = np.zeros_like(binary)
+    mask = np.zeros_like(binary).astype(np.uint8)
 
     images = []
     # Per ogni componente in ordine decrescente di area
@@ -88,22 +88,66 @@ def mask(img):
     
     # Applica la maschera all'immagine
     mask = cv2.bitwise_not(mask)
-    masked = cv2.bitwise_and(img, img, mask=mask)
-    return masked
+    return mask
 
-def split_and_mask(img, n=1):
-    n -= 1
-    if n == 0:
-        return mask(img)
-    images = split_in_4(img)
-    masked_images = [split_and_mask(img, n) for img in images]
-    return join_4(*masked_images)
+def pad_image(img, x, y, w, h):
+    """
+    Espande l'immagine con un bordo bianco per mantenere le dimensioni originali
+    """
+    top = y
+    bottom = h - y - img.shape[0]
+    left = x
+    right = w - x - img.shape[1]
+    padded_image = cv2.copyMakeBorder(
+        img, top, bottom, left, right,
+        borderType=cv2.BORDER_CONSTANT,
+        value=255)
+    return padded_image
+
+def find_mask_with_grid(img, sub_shape, grid):
+    """
+    Trova la maschera per ogni regione dell'immagine divisa in una griglia
+    Arguments:
+    img -- immagine di input
+    sub_shape -- dimensione delle sotto-immagini
+    grid -- numero di suddivisioni della griglia
+    """
+    mask = np.ones((img.shape[0], img.shape[1]), dtype=np.uint8) * 255 # Maschera totale
+
+    # Dividendo l'immagine in una griglia grid*grid, trova la maschera per ogni regione
+    for y in range(0, img.shape[0], img.shape[0]//grid):
+        for x in range(0, img.shape[1], img.shape[1]//grid):
+            # Trova la maschera per la regione di interesse grande sub_shape
+            roi = img[y:y+sub_shape[0], x:x+sub_shape[1]]
+            roi_mask = find_mask(roi)
+            # Espande la maschera per mantenere le dimensioni originali
+            roi_mask = pad_image(roi_mask, x, y, img.shape[1], img.shape[0])
+            # Aggiorna la maschera totale
+            mask = cv2.bitwise_and(mask, roi_mask)
+    return mask
 
 def main():
     label_free = cv2.imread("Materiale/Locale/fullsize_label_free.tif")
-    #label_free = split_in_4(label_free)[1]
-    #cv2.imwrite("Materiale/Locale/cut_images/alto_sx_1.png", label_free)
-    masked = split_and_mask(label_free, 3)
+
+    images = []
+    mask = np.ones((label_free.shape[0], label_free.shape[1]), dtype=np.uint8) * 255
+    # Si usano diversi parametri sub_shape e grid per trovare la maschera
+    for divisor, grid in [(2, 3), (4, 6), (6, 9), (8, 15)]:
+        sub_shape = (label_free.shape[0]//divisor, label_free.shape[1]//divisor)
+        # Si trova la maschera con i parametri specificati
+        _mask = find_mask_with_grid(label_free, sub_shape, grid)
+        mask = cv2.bitwise_and(mask, _mask)
+
+    # Si applica la maschera all'immagine
+    masked = cv2.bitwise_and(label_free, label_free, mask=mask)
+
+    # Si salvano le immagini
+    cv2.imwrite("Materiale/Locale/mask.tif", mask)
+    cv2.imwrite("Materiale/Locale/masked.tif", masked)
+
+    # Si abbassa la risoluzione delle immagini per visualizzarle
+    label_free = cv2.resize(label_free, (label_free.shape[1]//4, label_free.shape[0]//4))
+    masked = cv2.resize(masked, (masked.shape[1]//4, masked.shape[0]//4))
     show_images([[(label_free, "Immagine originale"), (masked, "Immagine filtrata")]])
 
 if __name__ == "__main__":
