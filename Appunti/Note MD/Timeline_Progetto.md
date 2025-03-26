@@ -81,10 +81,11 @@ Dai test svolti abbiamo deciso di usare la normalizzazione <span style="color:#9
 *Spiegazione*: abbiamo creato un breve script per ottenere un numero _n_ di coppie di sotto immagini label-free/stained. <span style="color:#f7b267"><b>La griglia applicata al momento è abbastanza elementare e non presenta elementi di ridondanza (al contrario della griglia per la maschera fatta il 25 Marzo) nel posizionamento dei quadrati. In futuro sarebbe meglio introdurre ridondanza per aumentare la robustezza</b></span>.
 
 <span style="color:#e15c64"><b>Problema riscontrato</b></span>: volevamo costruire il nostro dataset costituito dalle sotto immagini dell'immagine originale, ma applicando lo script sopra citato abbiamo notato come le coppie di immagini non fossero (ovviamente) coregistrate, ciò è dovuto al fatto che il processo di coregistrazione sarebbe stato applicato dopo.
-<span style="color:#71c78c"><b>Soluzione attuata</b></span>: per migliorare il quantitativo di informazione mantenuto, possiamo applicare una coregistrazione meno raffinata giusto per avere un miglior punto di partenza. In questo modo la procedura che seguiremo sarà:
-1. applicare ECC alle immagini originali (con padding per non perdere informazione)
-	- verrà spostata (coregistrata) l'immagine stained e la sua corrispettiva maschera (calcolata il 25 Marzo) attraverso la medesima matrice di trasformazione
-2. eseguire il ritaglio di _n_ coppie di sotto immagini
-3. applicare la coregistrazione alle _n_ coppie
-4. Dataset ottenuto (in teoria)
+<span style="color:#71c78c"><b>Soluzione proposta</b></span>: possiamo applicare una coregistrazione meno raffinata giusto per avere un miglior punto di partenza.
+
+<span style="color:#e15c64"><b>Problema riscontrato</b></span>: ECC sull'immagine 20k x 20k non ha effetto.
+<span style="color:#71c78c"><b>Soluzione proposta</b></span>: applicare ECC su quarti (o sedicesimi) dell'immagine.
+
+<span style="color:#e15c64"><b>Problema riscontrato</b></span>: ECC non ha effetto nemmeno su sotto porzioni dell'immagine
+<span style="color:#71c78c"><b>Soluzione attuata</b></span>: Non facciamo l'allineamento iniziale e ci limitiamo a eseguire la coregistrazione su ogni sotto immagine.
 
