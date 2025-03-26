@@ -128,27 +128,41 @@ def find_mask_with_grid(img, sub_shape, grid):
 
 def main():
     label_free = cv2.imread("Materiale/Locale/fullsize_label_free.tif")
+    stained = cv2.imread("Materiale/Locale/fullsize_stained.tif")
 
-    images = []
-    mask = np.ones((label_free.shape[0], label_free.shape[1]), dtype=np.uint8) * 255
+    mask_lf = np.ones((label_free.shape[0], label_free.shape[1]), dtype=np.uint8) * 255
+    mask_st = np.ones((stained.shape[0], stained.shape[1]), dtype=np.uint8) * 255
     # Si usano diversi parametri sub_shape (2=metà del lato) e grid per trovare la maschera (3=3 quadri per lato)
     for divisor, grid in [(2, 3), (4, 6), (6, 9), (8, 15)]:
+        print(f"Divisor: {divisor}, Grid: {grid}")
+        # Si trova la maschera per l'immagine label_free
         sub_shape = (label_free.shape[0]//divisor, label_free.shape[1]//divisor)
         # Si trova la maschera con i parametri specificati
         _mask = find_mask_with_grid(label_free, sub_shape, grid)
-        mask = cv2.bitwise_and(mask, _mask)
+        mask_lf = cv2.bitwise_and(mask_lf, _mask)
 
-    # Si applica la maschera all'immagine
-    masked = cv2.bitwise_and(label_free, label_free, mask=mask)
+        # Si trova la maschera per l'immagine stained
+        sub_shape = (stained.shape[0]//divisor, stained.shape[1]//divisor)
+        # Si trova la maschera con i parametri specificati
+        _mask = find_mask_with_grid(stained, sub_shape, grid)
+        mask_st = cv2.bitwise_and(mask_st, _mask)
+
+    # Si applica la maschera alle immagini
+    masked_lf = cv2.bitwise_and(label_free, label_free, mask=mask_lf)
+    masked_st = cv2.bitwise_and(stained, stained, mask=mask_st)
 
     # Si salvano le immagini
-    cv2.imwrite("Materiale/Locale/mask.tif", mask)
-    cv2.imwrite("Materiale/Locale/masked.tif", masked)
+    cv2.imwrite("Materiale/Immagini/mask_label_free.tif", mask_lf)
+    cv2.imwrite("Materiale/Immagini/mask_stained.tif", mask_st)
 
     # Si abbassa la risoluzione delle immagini per visualizzarle
     label_free = cv2.resize(label_free, (label_free.shape[1]//4, label_free.shape[0]//4))
-    masked = cv2.resize(masked, (masked.shape[1]//4, masked.shape[0]//4))
-    show_images([[(label_free, "Immagine originale"), (masked, "Immagine filtrata")]])
+    masked_lf = cv2.resize(masked_lf, (masked_lf.shape[1]//4, masked_lf.shape[0]//4))
+    stained = cv2.resize(stained, (stained.shape[1]//4, stained.shape[0]//4))
+    masked_st = cv2.resize(masked_st, (masked_st.shape[1]//4, masked_st.shape[0]//4))
+    show_images([
+        [(label_free, "Immagine originale"), (masked_lf, "Immagine filtrata")],
+        [(stained, "Immagine originale"), (masked_st, "Immagine filtrata")]])
 
 if __name__ == "__main__":
     main()
