@@ -5,7 +5,7 @@ Per riscontri dettagliati vedere i notebook.
 Legenda colori:  
 <span style="display:inline-block; width: 14px; height: 14px; background-color:#e15c64; border-radius: 2px;"></span> <b style="margin-left: 8px;">Problemi riscontrati</b> – criticità rilevate nel processo  
 <span style="display:inline-block; width: 14px; height: 14px; background-color:#71c78c; border-radius: 2px;"></span> <b style="margin-left: 8px;">Soluzioni attuate</b> – strategie o interventi correttivi  
-<span style="display:inline-block; width: 14px; height: 14px; background-color:#f7b267; border-radius: 2px;"></span> <b style="margin-left: 8px;">Futura implementazione</b> – idee o ottimizzazioni da valutare  
+<span style="display:inline-block; width: 14px; height: 14px; background-color:#f7b267; border-radius: 2px;"></span> <b style="margin-left: 8px;">Futura implementazione/risultati ottenuti</b> – idee o ottimizzazioni da valutare  
 <span style="display:inline-block; width: 14px; height: 14px; background-color:#f4d35e; border-radius: 2px;"></span> <b style="margin-left: 8px;">Parole chiave</b> – concetti centrali del progetto  
 <span style="display:inline-block; width: 14px; height: 14px; background-color:#9bb1ff; border-radius: 2px;"></span> <b style="margin-left: 8px;">Metodi applicati</b> – tecniche e algoritmi impiegati  
 
@@ -48,6 +48,43 @@ Dai test svolti abbiamo deciso di usare la normalizzazione <span style="color:#9
 
 <span style="color:#e15c64"><b>Problema riscontrato</b></span>: applicando il programma sviluppato a una serie di immagini abbiamo osservato come molte di esse venissero allineate in maniera sufficientemente valida, ma alcune no. Questa discontinuità nei risultati è dovuta alla presenza dello sfondo e da come esso venga mal gestito dalla normalizzazione, causando una (presunta) creazione di false feature e di conseguenza non permettendo agli algoritmi di funzionare correttamente.  
 <span style="color:#71c78c"><b>Possibile soluzione</b></span>: due possibili soluzioni possono essere o il riconoscimento del bordo della cellula e un conseguente isolamento dello sfondo, sul quale non applicheremmo la normalizzazione, oppure l'applicazione di algoritmi differenti come ECC oppure Intensity-based.  
-<span style="color:#f7b267"><b>Questo problema e questa soluzione ancora non sono stati affrontati. Saranno affrontati probabilmente nella settimana del 24 Marzo</b></span>.  
+<span style="color:#f7b267"><b>Questo problema e questa soluzione ancora non sono stati affrontati. Saranno affrontati probabilmente nella settimana del 24 Marzo</b></span>. 
 
 ## 24 Marzo
+<span style="color:#e15c64"><b>Problema riscontrato</b></span>: eseguendo diversi test su sotto immagini abbiamo notato come si creassero degli artefatti dovuti alla normalizzazione in zone di sfondo o genericamente bianche e grandi (rispetto alla dimensione delle immagini). Questo induceva l'algoritmo <span style="color:#9bb1ff"><b>SIFT</b></span> (o ORB) a cercare delle feature in queste zone, rischiando di conseguenza di trovare feature inesistenti.
+<span style="color:#71c78c"><b>Soluzione proposta</b></span>: abbiamo optato, seguendo il consiglio dei docenti, per lo sviluppo di una maschera che permettesse di evitare di normalizzare eventuali zone critiche e di ricercare in esse feature. In sintesi abbiamo applicato la maschera sia alla normalizzazione che a SIFT. 
+
+- **Abbiamo valutato diversi metodi per creare la maschera**
+*Spiegazione*: abbiamo valutato principalmente tre metodi: il <span style="color:#f4d35e"><b>Flood Fill from Edges</b></span>, <span style="color:#f4d35e"><b>Connected Components</b></span> e infine un possibile <span style="color:#f4d35e"><b>White pixel counter</b></span>. 
+
+<span style="color:#e15c64"><b>Problema riscontrato</b></span>: il white pixel counter, per via della sua eccessiva semplicità non otteneva i risultati desiderati, e di conseguenza l'abbiamo scartato come opzione; il flood fill from edges poteva essere una valida opzione ma, in corso d'opera, abbiamo deciso di considerare all'interno della maschera anche le zone bianche interne all'immagine.
+<span style="color:#71c78c"><b>Soluzione attuata</b></span>: utilizzo di connected components per l'ottenimento della maschera finale.
+
+- **Binarizzazione dell'immagine per rilevamento dei componenti**
+*Spiegazione*: binarizzando l'immagine imponendo una soglia di 230 (valore ottenuto sperimentalmente e osservando i valori di intensità all'interno dell'immagine) abbiamo ottenuto una matrice binaria che descrive una maschera primitiva da filtrare successivamente (per via dei troppi dettagli trascurabili)
+
+- **Inizio dell'analisi dei componenti**
+*Spiegazione*: una volta ottenuta la matrice binaria abbiamo filtrato le zone più piccole e ininfluenti considerando come criterio il fatto che lo sfondo debba essere abbastanza grande e omogeneo; in questo modo filtriamo tutte le zone più piccole presenti o non omogenee.
+
+<span style="color:#e15c64"><b>Problema riscontrato</b></span>: come capiamo se le zone sono omogenee?
+<span style="color:#71c78c"><b>Soluzione attuata</b></span>: attraverso un soglia di deviazione standard possiamo filtrare gruppi candidati alla partecipazione della maschera. I gruppi che presentano rumore o poco omogenei saranno scartati; questo ci permette inoltre di mantenere zone interne della cellula contenenti informazioni.
+
+## 25 Marzo
+- **Creazione script per ottenere la maschera dell'immagine originale (20k x 20k)**
+*Spiegazione*: applicare l'algoritmo per la creazione della maschera sull'immagine originale non era possibile per via delle risorse hardware insufficienti, di conseguenza abbiamo diviso l'immagine in _n_ sotto immagini e applicato ad esse l'algoritmo per la maschera. Dividendo l'immagine originale in quarti (ad esempio) abbiamo ricavato nella prima riga tre quadrati (\[0, 0.5\*xTot\], \[0.25\*xTot, 0.75\*xTot\], \[0.5\*xTot, xTot\]), in questo modo abbiamo ottenuto, sovrapponendo attraverso un AND logico le rispettive maschere, una robustezza maggiore e una sovrapposizione corretta.
+
+## 26 Marzo
+- **Applicazione maschera in fase di allineamento**
+*Spiegazione*: dopo aver rifinito l'algoritmo per la creazione della maschera e testato ulteriori parametri (_threshold_ e _stddev\_threshold_) l'abbiamo applicato alle sotto immagini dell'immagine originale e osservato come in realtà <span style="color:#f7b267"><b>il miglioramento ottenuto tramite l'ausilio della maschera è veramente minimo</b></span>.
+
+- **Creazione griglia senza sovrapposizione**
+*Spiegazione*: abbiamo creato un breve script per ottenere un numero _n_ di coppie di sotto immagini label-free/stained. <span style="color:#f7b267"><b>La griglia applicata al momento è abbastanza elementare e non presenta elementi di ridondanza (al contrario della griglia per la maschera fatta il 25 Marzo) nel posizionamento dei quadrati. In futuro sarebbe meglio introdurre ridondanza per aumentare la robustezza</b></span>.
+
+<span style="color:#e15c64"><b>Problema riscontrato</b></span>: volevamo costruire il nostro dataset costituito dalle sotto immagini dell'immagine originale, ma applicando lo script sopra citato abbiamo notato come le coppie di immagini non fossero (ovviamente) coregistrate, ciò è dovuto al fatto che il processo di coregistrazione sarebbe stato applicato dopo.
+<span style="color:#71c78c"><b>Soluzione attuata</b></span>: per migliorare il quantitativo di informazione mantenuto, possiamo applicare una coregistrazione meno raffinata giusto per avere un miglior punto di partenza. In questo modo la procedura che seguiremo sarà:
+1. applicare ECC alle immagini originali (con padding per non perdere informazione)
+	- verrà spostata (coregistrata) l'immagine stained e la sua corrispettiva maschera prima calcolata attraverso la medesima matrice di trasformazione
+2. eseguire il ritaglio di _n_ coppie di sotto immagini
+3. applicare la coregistrazione alle _n_ coppie
+4. Dataset ottenuto (in teoria)
+
