@@ -131,7 +131,7 @@ def main():
 
     images = []
     mask = np.ones((label_free.shape[0], label_free.shape[1]), dtype=np.uint8) * 255
-    # Si usano diversi parametri sub_shape e grid per trovare la maschera
+    # Si usano diversi parametri sub_shape (2=metà del lato) e grid per trovare la maschera (3=3 quadri per lato)
     for divisor, grid in [(2, 3), (4, 6), (6, 9), (8, 15)]:
         sub_shape = (label_free.shape[0]//divisor, label_free.shape[1]//divisor)
         # Si trova la maschera con i parametri specificati
