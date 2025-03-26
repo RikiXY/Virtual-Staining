@@ -69,6 +69,10 @@ def find_mask(img):
     for i in sorted_indices[:n_filtered]:
         x, y, w, h, area = stats[i]
 
+        # Filtra i componenti troppo piccoli
+        if w < 100 and h < 100:
+            continue
+
         # Riempe la maschera
         component_mask = (labels == i).astype(np.uint8) * 255
         countours, _ = cv2.findContours(component_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -84,7 +88,7 @@ def find_mask(img):
 
         # Filtra i componenti con una deviazione standard troppo alta
         if std_dev < 10:
-            mask[labels == i] = 255
+            mask[component_mask == 255] = 255
     
     # Applica la maschera all'immagine
     mask = cv2.bitwise_not(mask)
