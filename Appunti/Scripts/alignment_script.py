@@ -146,7 +146,7 @@ def main():
             cv2.imwrite(f"Materiale/Locale/aligned/{i:>02}_{j:>02}_stained.tif", aligned)
             cv2.imwrite(f"Materiale/Locale/aligned/mask_{i:>02}_{j:>02}_stained.tif", mask_aligned)
             count += 1
-            print(f"Immagine allineata per {i}_{j}")
+            print(f"Immagine allineata per {i}_{j} - {(count+count_bad)/len(images)*100:.2f}%")
         else:
             print(f"Manca un'immagine per {i}_{j}", data)
     print(f"{count} immagini allineate, {count_bad} immagini scartate")
