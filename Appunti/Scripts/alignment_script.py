@@ -1,18 +1,21 @@
 import cv2, os
 import numpy as np
 
-def align(img_1, img_2, nfeatures=10000, ed_distance=200):
+def align(img_1, img_2, img_1_mask=None, img_2_mask=None, nfeatures=10000, ed_distance=200):
     """Allinea due immagini
 
     Args:
-        img_1: La prima immagine
-        img_2: La seconda immagine
+        img_1 (numpy.ndarray): La prima immagine
+        img_2 (numpy.ndarray): La seconda immagine
+        img_1_mask (numpy.ndarray, optional): La maschera della prima immagine. None di base.
+        img_2_mask (numpy.ndarray, optional): La maschera della seconda immagine. None di base.
         nfeatures (int, optional): Numero di features per il calcolo di SIFT. 10000 di base.
         ed_distance (int, optional): Distanza per il filtro euclideo inclusiva. 200 di base.
 
     Returns:
-        img_2_aligned: L'immagine 2 allineata
-        warp_matrix: La matrice di trasformazione
+        numpy.ndarray: L'immagine 2 allineata
+        numpy.ndarray: La maschera dell'immagine 2 allineata
+        numpy.ndarray: La matrice di trasformazione
     """
     # Applicazione CLAHE
     clahe = cv2.createCLAHE(clipLimit=18.0, tileGridSize=(8, 8))
@@ -28,8 +31,8 @@ def align(img_1, img_2, nfeatures=10000, ed_distance=200):
 
     # Calcolo delle features con SIFT
     sift = cv2.SIFT_create(nfeatures=nfeatures)
-    keypoints_1, descriptors_1 = sift.detectAndCompute(img_1_clahe, None)
-    keypoints_2, descriptors_2 = sift.detectAndCompute(img_2_clahe, None)
+    keypoints_1, descriptors_1 = sift.detectAndCompute(img_1_clahe, img_1_mask)
+    keypoints_2, descriptors_2 = sift.detectAndCompute(img_2_clahe, img_2_mask)
 
     # Matching delle features
     bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
@@ -53,10 +56,13 @@ def align(img_1, img_2, nfeatures=10000, ed_distance=200):
     # Calcolo della matrice di trasformazione
     warp_matrix, mask = cv2.estimateAffinePartial2D(points_2, points_1)
 
-    # Allineamento dell'immagine
+    # Allineamento dell'immagine e della maschera
     img_2_aligned = cv2.warpAffine(img_2, warp_matrix, (img_2.shape[1], img_2.shape[0]))
+    img_2_mask_aligned = None
+    if img_2_mask is not None:
+        img_2_mask_aligned = cv2.warpAffine(img_2_mask, warp_matrix, (img_2.shape[1], img_2.shape[0]))
 
-    return img_2_aligned, warp_matrix
+    return img_2_aligned, img_2_mask_aligned, warp_matrix
 
 def main():
     # Controllo dell'esistenza della cartella Materiale/Locale/grid
@@ -74,6 +80,7 @@ def main():
             mask = False
             if "mask" in file:
                 mask = True
+                image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
                 file = file.replace("mask_", "")
             
             # Estrazione delle coordinate
@@ -103,14 +110,18 @@ def main():
     
     margin = 200
     count = 0
+    count_bad = 0
     # Allineamento delle immagini
     for (i, j), data in images.items():
         if "label_free" in data and "stained" in data:
             try:
-                aligned, warp_matrix = align(data["label_free"], data["stained"])
+                aligned, mask_aligned, warp_matrix = align(
+                    data["label_free"], data["stained"],
+                    img_1_mask=data["mask_label_free"], img_2_mask=data["mask_stained"])
             except ValueError:
                 cv2.imwrite(f"Materiale/Locale/bad_alignment/MATCHES_{i:>02}_{j:>02}_label_free.tif", data["label_free"])
                 cv2.imwrite(f"Materiale/Locale/bad_alignment/MATCHES_{i:>02}_{j:>02}_stained.tif", aligned)
+                count_bad += 1
                 print(f"Non ci sono abbastanza match per {i}_{j}")
                 continue
 
@@ -119,21 +130,26 @@ def main():
             if dx > margin or dy > margin:
                 cv2.imwrite(f"Materiale/Locale/bad_alignment/MARGIN_{i:>02}_{j:>02}_label_free.tif", data["label_free"])
                 cv2.imwrite(f"Materiale/Locale/bad_alignment/MARGIN_{i:>02}_{j:>02}_stained.tif", aligned)
+                count_bad += 1
                 print(f"Traslazione troppo grande per {i}_{j}")
                 continue
             
             # Immagini ritagliate senza margine
             label_free = data["label_free"][margin:-margin, margin:-margin]
+            label_free_mask = data["mask_label_free"][margin:-margin, margin:-margin]
             aligned = aligned[margin:-margin, margin:-margin]
+            mask_aligned = mask_aligned[margin:-margin, margin:-margin]
 
             # Salvataggio delle immagini
             cv2.imwrite(f"Materiale/Locale/aligned/{i:>02}_{j:>02}_label_free.tif", label_free)
+            cv2.imwrite(f"Materiale/Locale/aligned/mask_{i:>02}_{j:>02}_label_free.tif", label_free_mask)
             cv2.imwrite(f"Materiale/Locale/aligned/{i:>02}_{j:>02}_stained.tif", aligned)
+            cv2.imwrite(f"Materiale/Locale/aligned/mask_{i:>02}_{j:>02}_stained.tif", mask_aligned)
             count += 1
             print(f"Immagine allineata per {i}_{j}")
         else:
             print(f"Manca un'immagine per {i}_{j}", data)
-    print(f"{count} immagini allineate")
+    print(f"{count} immagini allineate, {count_bad} immagini scartate")
 
 if __name__ == "__main__":
     main()
