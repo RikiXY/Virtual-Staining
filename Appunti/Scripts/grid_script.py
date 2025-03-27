@@ -31,38 +31,38 @@ def main():
 
     image_size = (1000, 1000)
     margin = 200
+    image_size = (image_size[0]+margin*2, image_size[1]+margin*2)
     # Estrazione delle immagini da label_free
-    indices = []
-    for x in range(0, label_free.shape[1], image_size[0]):
-        for y in range(0, label_free.shape[0], image_size[1]):
-            i = x // image_size[0]
-            j = y // image_size[1]
+    positions = []
+    grid_movement = (500, 500)
+    for x in range(0, label_free.shape[1], grid_movement[0]):
+        for y in range(0, label_free.shape[0], grid_movement[1]):
             # Estrazione della regione di interesse della maschera
-            roi_mask = extract_image(mask_lf, i*image_size[0], j*image_size[1], image_size[0]+margin*2, image_size[1]+margin*2)
+            roi_mask = extract_image(mask_lf, x, y, image_size[0], image_size[1])
             # Se l'immagine è troppo piccola salto il quadrato
-            if roi_mask.shape[0] < image_size[1]+margin*2 or roi_mask.shape[1] < image_size[0]+margin*2:
-                print(f"Salto {i}_{j} per dimensioni insufficienti")
+            if roi_mask.shape[0] < image_size[1] or roi_mask.shape[1] < image_size[0]:
+                print(f"Salto {x:>05}_{y:>05} per dimensioni insufficienti")
                 continue
             # Se tutta la maschera è al 60% nera salto il quadrato in quanto è sfondo
             if cv2.countNonZero(roi_mask) < 0.4 * roi_mask.size:
-                print(f"Salto {i}_{j} per maschera insufficiente")
+                print(f"Salto {x:>05}_{y:>05} per maschera insufficiente")
                 continue
             # Estrazione della regione di interesse dell'immagine
-            roi_image = extract_image(label_free, i*image_size[0], j*image_size[1], image_size[0]+margin*2, image_size[1]+margin*2)
-            cv2.imwrite(f"Materiale/Locale/grid/{i:>02}_{j:>02}_label_free.tif", roi_image)
-            cv2.imwrite(f"Materiale/Locale/grid/mask_{i:>02}_{j:>02}_label_free.tif", roi_mask)
-            indices.append((i, j))
-    print(f"{len(indices)} immagini estratte da label_free")
+            roi_image = extract_image(label_free, x, y, image_size[0], image_size[1])
+            cv2.imwrite(f"Materiale/Locale/grid/{x:>05}_{y:>05}_label_free.tif", roi_image)
+            cv2.imwrite(f"Materiale/Locale/grid/mask_{x:>05}_{y:>05}_label_free.tif", roi_mask)
+            positions.append((x, y))
+    print(f"{len(positions)} immagini estratte da label_free")
 
     # Estrazione delle immagini da stained
-    for i, j in indices:
+    for x, y in positions:
         # Estrazione della regione di interesse della maschera
-        roi_mask = extract_image(mask_st, i*image_size[0], j*image_size[1], image_size[0]+margin*2, image_size[1]+margin*2)
+        roi_mask = extract_image(mask_st, x, y, image_size[0], image_size[1])
         # Estrazione della regione di interesse dell'immagine
-        roi_image = extract_image(stained, i*image_size[0], j*image_size[1], image_size[0]+margin*2, image_size[1]+margin*2)
-        cv2.imwrite(f"Materiale/Locale/grid/{i:>02}_{j:>02}_stained.tif", roi_image)
-        cv2.imwrite(f"Materiale/Locale/grid/mask_{i:>02}_{j:>02}_stained.tif", roi_mask)
-    print(f"{len(indices)} immagini estratte da stained")
+        roi_image = extract_image(stained, x, y, image_size[0], image_size[1])
+        cv2.imwrite(f"Materiale/Locale/grid/{x:>05}_{y:>05}_stained.tif", roi_image)
+        cv2.imwrite(f"Materiale/Locale/grid/mask_{x:>05}_{y:>05}_stained.tif", roi_mask)
+    print(f"{len(positions)} immagini estratte da stained")
 
 if __name__ == "__main__":
     main()
