@@ -37,9 +37,9 @@ All'interno della repository sono riportati una serie di file contenuti in varie
 	- [x] (Eventuale) ulteriore filtro di distanza euclidea (DA VALUTARE)
 	- [x] Verifica della coregistrazione (differenza assoluta e istogrammi)
 	- [x] Ritaglio finale
-	- [ ] Creazione maschera per risolvere problema sfondo per migliorare allineamento
-	- [ ] Automatizzare divisioni in sub images per il dataset. Se sono allineate ok, sennò vanno segnalate.
-	- [ ] Valutazione tramite miglioramento percentuale dell'istogramma
-	- [ ] Sistemare i bordi perché creano conflitti con la normalizzazione e la coregistrazione
-	- [ ] Testare e trovare un metodo efficace per coregistrare immagini 20kx20k
+	- [x] Creazione maschera per risolvere problema sfondo per migliorare allineamento
+	- [x] Automatizzare divisioni in sub images per il dataset. Se sono allineate ok, sennò vanno segnalate.
+	- [x] Valutazione tramite miglioramento percentuale dell'istogramma
+	- [x] Sistemare i bordi perché creano conflitti con la normalizzazione e la coregistrazione
+	- [x] Testare e trovare un metodo efficace per coregistrare immagini 20kx20k
 - [ ] Tutto il resto che andrà aggiunto
