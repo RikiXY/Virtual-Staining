@@ -85,6 +85,7 @@ def main():
             
             # Estrazione delle coordinate
             i, j, type = file.replace(".tif", "").split("_", 2)
+            i, j = int(i), int(j)
             if (i, j) not in images:
                 images[(i, j)] = {}
             
@@ -119,19 +120,19 @@ def main():
                     data["label_free"], data["stained"],
                     img_1_mask=data["mask_label_free"], img_2_mask=data["mask_stained"])
             except ValueError:
-                cv2.imwrite(f"Materiale/Locale/bad_alignment/MATCHES_{i:>02}_{j:>02}_label_free.tif", data["label_free"])
-                cv2.imwrite(f"Materiale/Locale/bad_alignment/MATCHES_{i:>02}_{j:>02}_stained.tif", aligned)
+                cv2.imwrite(f"Materiale/Locale/bad_alignment/MATCHES_{i:>05}_{j:>05}_label_free.tif", data["label_free"])
+                cv2.imwrite(f"Materiale/Locale/bad_alignment/MATCHES_{i:>05}_{j:>05}_stained.tif", aligned)
                 count_bad += 1
-                print(f"Non ci sono abbastanza match per {i}_{j}")
+                print(f"Non ci sono abbastanza match per {i:>05}_{j:>05}")
                 continue
 
             # Controllo della traslazione
             dx, dy = warp_matrix[:, 2]
             if dx > margin or dy > margin:
-                cv2.imwrite(f"Materiale/Locale/bad_alignment/MARGIN_{i:>02}_{j:>02}_label_free.tif", data["label_free"])
-                cv2.imwrite(f"Materiale/Locale/bad_alignment/MARGIN_{i:>02}_{j:>02}_stained.tif", aligned)
+                cv2.imwrite(f"Materiale/Locale/bad_alignment/MARGIN_{i:>05}_{j:>05}_label_free.tif", data["label_free"])
+                cv2.imwrite(f"Materiale/Locale/bad_alignment/MARGIN_{i:>05}_{j:>05}_stained.tif", aligned)
                 count_bad += 1
-                print(f"Traslazione troppo grande per {i}_{j}")
+                print(f"Traslazione troppo grande per {i:>05}_{j:>05}")
                 continue
             
             # Immagini ritagliate senza margine
@@ -141,14 +142,14 @@ def main():
             mask_aligned = mask_aligned[margin:-margin, margin:-margin]
 
             # Salvataggio delle immagini
-            cv2.imwrite(f"Materiale/Locale/aligned/{i:>02}_{j:>02}_label_free.tif", label_free)
-            cv2.imwrite(f"Materiale/Locale/aligned/mask_{i:>02}_{j:>02}_label_free.tif", label_free_mask)
-            cv2.imwrite(f"Materiale/Locale/aligned/{i:>02}_{j:>02}_stained.tif", aligned)
-            cv2.imwrite(f"Materiale/Locale/aligned/mask_{i:>02}_{j:>02}_stained.tif", mask_aligned)
+            cv2.imwrite(f"Materiale/Locale/aligned/{i:>05}_{j:>05}_label_free.tif", label_free)
+            cv2.imwrite(f"Materiale/Locale/aligned/mask_{i:>05}_{j:>05}_label_free.tif", label_free_mask)
+            cv2.imwrite(f"Materiale/Locale/aligned/{i:>05}_{j:>05}_stained.tif", aligned)
+            cv2.imwrite(f"Materiale/Locale/aligned/mask_{i:>05}_{j:>05}_stained.tif", mask_aligned)
             count += 1
-            print(f"Immagine allineata per {i}_{j} - {(count+count_bad)/len(images)*100:.2f}%")
+            print(f"Immagine allineata per {i:>05}_{j:>05} - {(count+count_bad)/len(images)*100:.2f}%")
         else:
-            print(f"Manca un'immagine per {i}_{j}", data)
+            print(f"Manca un'immagine per {i:>05}_{j:>05}", data)
     print(f"{count} immagini allineate, {count_bad} immagini scartate")
 
 if __name__ == "__main__":
