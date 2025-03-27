@@ -34,6 +34,10 @@ def align(img_1, img_2, img_1_mask=None, img_2_mask=None, nfeatures=10000, ed_di
     keypoints_1, descriptors_1 = sift.detectAndCompute(img_1_clahe, img_1_mask)
     keypoints_2, descriptors_2 = sift.detectAndCompute(img_2_clahe, img_2_mask)
 
+    # Controllo se ci sono abbastanza features
+    if len(keypoints_1) < 4 or len(keypoints_2) < 4:
+        raise ValueError("Non ci sono abbastanza features")
+
     # Matching delle features
     bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
     matches = bf.match(descriptors_1, descriptors_2)
