@@ -27,6 +27,9 @@ def main():
     mask_lf = cv2.imread("Materiale/Immagini/mask_label_free.tif", cv2.IMREAD_GRAYSCALE)
     stained = cv2.imread("Materiale/Locale/fullsize_stained.tif")
     mask_st = cv2.imread("Materiale/Immagini/mask_stained.tif", cv2.IMREAD_GRAYSCALE)
+    if label_free is None or mask_lf is None or stained is None or mask_st is None:
+        print("Errore nel caricamento delle immagini")
+        return
     print("Immagini caricate")
 
     image_size = (1000, 1000)
@@ -50,7 +53,7 @@ def main():
             # Estrazione della regione di interesse dell'immagine
             roi_image = extract_image(label_free, x, y, image_size[0], image_size[1])
             cv2.imwrite(f"Materiale/Locale/grid/{x:>05}_{y:>05}_label_free.tif", roi_image)
-            cv2.imwrite(f"Materiale/Locale/grid/mask_{x:>05}_{y:>05}_label_free.tif", roi_mask)
+            # cv2.imwrite(f"Materiale/Locale/grid/mask_{x:>05}_{y:>05}_label_free.tif", roi_mask)
             positions.append((x, y))
     print(f"{len(positions)} immagini estratte da label_free")
 
@@ -61,7 +64,7 @@ def main():
         # Estrazione della regione di interesse dell'immagine
         roi_image = extract_image(stained, x, y, image_size[0], image_size[1])
         cv2.imwrite(f"Materiale/Locale/grid/{x:>05}_{y:>05}_stained.tif", roi_image)
-        cv2.imwrite(f"Materiale/Locale/grid/mask_{x:>05}_{y:>05}_stained.tif", roi_mask)
+        # cv2.imwrite(f"Materiale/Locale/grid/mask_{x:>05}_{y:>05}_stained.tif", roi_mask)
     print(f"{len(positions)} immagini estratte da stained")
 
 if __name__ == "__main__":

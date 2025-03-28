@@ -28,18 +28,24 @@ All'interno della repository sono riportati una serie di file contenuti in varie
 ---
 ## To Do List
 - [x] Crea repository e carica i file attuali
-- [x] Coregistrazione immagini (da valutare il metodo)
+- [x] Coregistrazione immagini (*SIFT*)
 	- [x] Selezione di una regione comune
-	- [x] Valutazione metodi normalizzazione (equalizeHist, normalize o CLAHE)
+	- [x] Valutazione metodi normalizzazione (equalizeHist, normalize o *CLAHE*)
 	- [x] Valutazione algoritmo di **featuring match** (ORB/SIFT) da applicare e in che modalità (matcher, filtri, ...)
 	- [x] Filtraggio ulteriore dei risultati con RANSAC (metodo di stima)
-	- [x] **Refinement** con ECC
-	- [x] (Eventuale) ulteriore filtro di distanza euclidea (DA VALUTARE)
+	- [ ] ~~Refinement con ECC~~ 
+	- [x] Applicazione filtro di distanza euclidea
 	- [x] Verifica della coregistrazione (differenza assoluta e istogrammi)
 	- [x] Ritaglio finale
 	- [x] Creazione maschera per risolvere problema sfondo per migliorare allineamento
 	- [x] Automatizzare divisioni in sub images per il dataset. Se sono allineate ok, sennò vanno segnalate.
-	- [x] Valutazione tramite miglioramento percentuale dell'istogramma
+	- [x] Valutazione tramite miglioramento percentuale dell'istogramma (risultato ottenuto: incremento minimo)
 	- [x] Sistemare i bordi perché creano conflitti con la normalizzazione e la coregistrazione
 	- [x] Testare e trovare un metodo efficace per coregistrare immagini 20kx20k
+- [ ] Verifica del dataset
+	- [ ] creazione script per verificare che le dimensioni delle immagini siano coerenti
+	- [ ] verifica che siano abbastanza allineate (differenza assoluta)
+- [ ] Sviluppo rete neurale (supervisionato)
+	- [ ] Suddivisione dataset 70-15-15 (Training, Validation e Test)
+	- [ ] Valutazione di rete da usare (probabilmente GAN dato che viene già utilizzata. Pix2Pix; implementata in PyTorch)
 - [ ] Tutto il resto che andrà aggiunto
