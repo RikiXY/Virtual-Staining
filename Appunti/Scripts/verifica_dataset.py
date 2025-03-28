@@ -9,7 +9,10 @@ import seaborn as sns
 # Percorso alla cartella delle immagini
 base_path = os.path.abspath("Materiale/Locale/aligned")
 
-def plot_differenze_da_csv(csv_path, salva_fig=False, output_path="analisi_differenze.png"):
+# Percorso al file CSV di output
+csv_path = "Appunti/Scripts/differenze_output_post.csv"
+
+def plot_differenze_da_csv(salva_fig=False, output_path="analisi_differenze.png"):
     """
     Legge un file CSV contenente colonne 'Indice' e 'Diff_media',
     e mostra tre grafici: scatter, istogramma+KDE e boxplot.
@@ -23,7 +26,7 @@ def plot_differenze_da_csv(csv_path, salva_fig=False, output_path="analisi_diffe
     df = pd.read_csv(csv_path)
 
     # Setup figure
-    fig, axs = plt.subplots(3, 1, figsize=(10, 12))
+    fig, axs = plt.subplots(2, 1, figsize=(10, 12))
 
     # === 1. Scatter plot ===
     axs[0].scatter(df["Indice"], df["Diff_media"], color="royalblue", s=15)
@@ -38,11 +41,6 @@ def plot_differenze_da_csv(csv_path, salva_fig=False, output_path="analisi_diffe
     axs[1].set_xlabel("Differenza media")
     axs[1].set_ylabel("Frequenza")
 
-    # === 3. Boxplot ===
-    sns.boxplot(x=df["Diff_media"], ax=axs[2], color="lightgreen")
-    axs[2].set_title("Boxplot delle differenze medie")
-    axs[2].set_xlabel("Differenza media")
-
     # Layout e output
     plt.tight_layout()
 
@@ -51,7 +49,6 @@ def plot_differenze_da_csv(csv_path, salva_fig=False, output_path="analisi_diffe
         print(f"✅ Grafico salvato in: {output_path}")
     else:
         plt.show()
-
 
 def esporta_differenze_csv(path_csv, label_free_files, diff_values):
     with open(path_csv, mode='w', newline='') as file:
@@ -62,7 +59,6 @@ def esporta_differenze_csv(path_csv, label_free_files, diff_values):
             writer.writerow([i, fname, round(diff, 4)])
 
     print(f"✅ File CSV salvato in: {path_csv}")
-
 
 def plot_diff_examples(base_path, n=5):
     all_files = sorted(os.listdir(base_path))
@@ -136,7 +132,6 @@ def plot_min_max(base_path, label_free_files, min_idx, max_idx):
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.show()
 
-
 def main():
     
     # Trova tutti i file nella cartella
@@ -186,14 +181,13 @@ def main():
     print(f"Minimo: {min_idx} - Massimo: {max_idx}")
     plot_min_max(base_path, label_free_files, min_idx, max_idx)
     
-    csv_path = "differenze_output.csv"
     esporta_differenze_csv(csv_path, label_free_files, diff_values)
-    plot_differenze_da_csv("differenze_output.csv")  # solo visualizzazione
+    
 
 if __name__ == "__main__":
     # plot_diff_examples(os.path.abspath("Materiale/Locale/aligned"))
     main()
-    
+    plot_differenze_da_csv()  # solo visualizzazione
 
     """
     Interpretazione della diff media = 19.68
@@ -204,9 +198,9 @@ if __name__ == "__main__":
         
     Sono decisamente buoni, perché:
     Aspetto	Valutazione
-    Co-registrazione visiva	✅ Ottima
-    Distribuzione delle diff	✅ Normale, con pochi outlier
-    Quantità di dati	✅ Oltre 1000 coppie è eccellente
-    Differenze strutturate	✅ Rete può imparare il mapping
-    Rumore/artifact	🚫 Non visibile nei dati esaminati
+    Co-registrazione visiva	    |       Ottima
+    Distribuzione delle diff	|       Normale, con pochi outlier
+    Quantità di dati	        |       Oltre 1000 coppie è eccellente
+    Differenze strutturate  	|       Rete può imparare il mapping
+    Rumore/artifact	            |       Non visibile nei dati esaminati
     """

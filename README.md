@@ -42,9 +42,9 @@ All'interno della repository sono riportati una serie di file contenuti in varie
 	- [x] Valutazione tramite miglioramento percentuale dell'istogramma (risultato ottenuto: incremento minimo)
 	- [x] Sistemare i bordi perché creano conflitti con la normalizzazione e la coregistrazione
 	- [x] Testare e trovare un metodo efficace per coregistrare immagini 20kx20k
-- [ ] Verifica del dataset
-	- [ ] creazione script per verificare che le dimensioni delle immagini siano coerenti
-	- [ ] verifica che siano abbastanza allineate (differenza assoluta)
+- [X] Verifica del dataset
+	- [X] creazione script per verificare che le dimensioni delle immagini siano coerenti
+	- [X] verifica che siano abbastanza allineate (differenza assoluta)
 - [ ] Sviluppo rete neurale (supervisionato)
 	- [ ] Suddivisione dataset 70-15-15 (Training, Validation e Test)
 	- [ ] Valutazione di rete da usare (probabilmente GAN dato che viene già utilizzata. Pix2Pix; implementata in PyTorch)
