@@ -53,7 +53,7 @@ def main():
             # Estrazione della regione di interesse dell'immagine
             roi_image = extract_image(label_free, x, y, image_size[0], image_size[1])
             cv2.imwrite(f"Materiale/Locale/grid/{x:>05}_{y:>05}_label_free.tif", roi_image)
-            # cv2.imwrite(f"Materiale/Locale/grid/mask_{x:>05}_{y:>05}_label_free.tif", roi_mask)
+            cv2.imwrite(f"Materiale/Locale/grid/mask_{x:>05}_{y:>05}_label_free.tif", roi_mask)
             positions.append((x, y))
     print(f"{len(positions)} immagini estratte da label_free")
 
@@ -64,7 +64,7 @@ def main():
         # Estrazione della regione di interesse dell'immagine
         roi_image = extract_image(stained, x, y, image_size[0], image_size[1])
         cv2.imwrite(f"Materiale/Locale/grid/{x:>05}_{y:>05}_stained.tif", roi_image)
-        # cv2.imwrite(f"Materiale/Locale/grid/mask_{x:>05}_{y:>05}_stained.tif", roi_mask)
+        cv2.imwrite(f"Materiale/Locale/grid/mask_{x:>05}_{y:>05}_stained.tif", roi_mask)
     print(f"{len(positions)} immagini estratte da stained")
 
 if __name__ == "__main__":
