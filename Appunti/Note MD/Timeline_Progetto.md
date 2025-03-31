@@ -91,5 +91,6 @@ Dai test svolti abbiamo deciso di usare la normalizzazione <span style="color:#9
 
 - **Creazione script suddivisioni immagine e coregistrazione**
 
-
+## 28 Marzo
+- **Creazione script convalida dataset**
 
