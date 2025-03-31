@@ -32,12 +32,12 @@ def main():
         return
     print("Immagini caricate")
 
-    image_size = (1000, 1000)
+    image_size = (512, 512) # prima era 1000x1000
     margin = 200
     image_size = (image_size[0]+margin*2, image_size[1]+margin*2)
     # Estrazione delle immagini da label_free
     positions = []
-    grid_movement = (500, 500)
+    grid_movement = (300, 300) # prima il passo era 500x500
     for x in range(0, label_free.shape[1], grid_movement[0]):
         for y in range(0, label_free.shape[0], grid_movement[1]):
             # Estrazione della regione di interesse della maschera
