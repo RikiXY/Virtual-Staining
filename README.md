@@ -48,4 +48,5 @@ All'interno della repository sono riportati una serie di file contenuti in varie
 - [ ] Sviluppo rete neurale (supervisionato)
 	- [ ] Suddivisione dataset 70-15-15 (Training, Validation e Test)
 	- [ ] Valutazione di rete da usare (probabilmente GAN dato che viene già utilizzata. Pix2Pix; implementata in PyTorch)
+	- [ ] Controlla i diffusion model
 - [ ] Tutto il resto che andrà aggiunto
