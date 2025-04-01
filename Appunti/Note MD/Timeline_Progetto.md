@@ -89,8 +89,30 @@ Dai test svolti abbiamo deciso di usare la normalizzazione <span style="color:#9
 <span style="color:#e15c64"><b>Problema riscontrato</b></span>: ECC non ha effetto nemmeno su sotto porzioni dell'immagine.  
 <span style="color:#71c78c"><b>Soluzione attuata</b></span>: Non facciamo l'allineamento iniziale e ci limitiamo a eseguire la coregistrazione su ogni sotto immagine.
 
-- **Creazione script suddivisioni immagine e coregistrazione**
+- **Creazione script suddivisioni immagine e script coregistrazione**  
+*Spiegazione*: lo script `grid_script.py` genera una cartella contenente _n_ coppie di immagini label-free/stained e _n_ coppie di maschere corrispondenti. Lo script `alignment_script.py` prende le immagini dalla cartella `grid/` (creata dallo script precedente), le allinea e le colloca nella cartella `aligned/`. Le coppie che non soddisfano i requisiti (almeno il 60% di immagine e non sfondo, e abbastanza match) vengono collocate in `bad_alignment/`.  
 
 ## 28 Marzo
-- **Creazione script convalida dataset**
+- **Creazione script convalida dataset**  
+*Spiegazione*: lo script verifica che, per ogni immagine, sia presente la sua corrispettiva stained, verifica che le dimensioni delle immagini costituenti le coppie siano uguali. Infine plotta dei grafici rappresentanti l'andamento delle differenze assolute del dataset.  
+
+## 31 Marzo
+- **Colloquio con i docenti per discutere sulle prossime cose da sviluppare o da rivedere**  
+*Esito colloquio*: dal colloquio è emerso un esito positivo da parte dei docenti, i quali ci hanno proposto di continuare lo sviluppo del progetto, iniziando a pensare alla realizzazione della rete pensando a una modellizzazione <span style="color:#f4d35e"><b>GAN</b></span> o a un <span style="color:#f4d35e"><b>Diffusion model</b></span>. Durante il colloquio è emersa anche un'idea sull'allineamento svolto e che ci avrebbe permesso di allineare le immagini 20k x 20k.
+
+- **Sviluppo notebook (diventerà uno script) per la suddivisione in cartelle per la rete**  
+*Spiegazione*: All'interno del notebook è riportato un breve script che crea tre cartelle `train/`, `val/` e `test/` contenenti le coppie di immagini adibite rispettivamente al  un <span style="color:#f4d35e"><b>training</b></span>, <span style="color:#f4d35e"><b>validation</b></span> e <span style="color:#f4d35e"><b>testing</b></span>. La cartelle conterranno il 70%-15%-15% delle coppie originali. Le immagini inserite all'interno delle cartelle non sono contigue, ma bensì prese casualmente.
+
+- **Sviluppo idea per la coregistrazione delle immagini intere**  
+\[DA INSERIRE\]
+
+- **Impostazione dell'ambiente di sviluppo per PyTorch**  
+*Spiegazione*: durante il pomeriggio della giornata abbiamo provato a lavorare parallelamente alle due voci dell'elenco puntato (idea per la coregistrazione e settaggio per PyTorch). Abbiamo verificato come scaricare <span style="color:#f4d35e"><b>PyTorch</b></span> e come impostarlo affinché potesse girare su GPU (Nvidia RTX 3060Ti) sfruttando i <span style="color:#f4d35e"><b>Cuda Cores</b></span>.  Abbiamo provato precedentemente a far girare anche alcune istruzioni di <span style="color:#f4d35e"><b>OpenCV</b></span> su scheda grafica, ma senza successo; <span style="color:#f7b267"><b>bisognerebbe compilare manualmente il pacchetto per poter sfruttare questa funzionalità; si potrebbe fare in futuro per velocizzare il processo iniziale</b></span>.
+
+## 1 Aprile
+- **Creazione script di prova per vedere il funzionamento generale di PyTorch**  
+*Spiegazione*: trasportati dalla pura curiosità ci siamo messi a verificare il comportamento di una semplice rete di convoluzione (collocata all'interno dello script `prova_pytorch.py`. Volevamo capire la struttura fondamentale di un algoritmo scritto in PyTorch e se il tentativo svolto il giorno prima (per farlo girare su GPU) funzionasse.  
+
+- **Creazione script di prova per vedere il funzionamento di pix2pix**  
+*Spiegazione*: dato il successo di esecuzione dello script precedente, abbiamo provato a creare un semplice script basato sul modello GAN, quindi con un <span style="color:#f4d35e"><b>Generator</b></span> e un <span style="color:#f4d35e"><b>Discriminator</b></span>, creati con reti differenti (UNet-like e PatchGAN). I risultati ottenuti in fase di training sembrano positivi e sulla giusta strada, ma ancora ben distanti dai risultati che vogliamo ottenere (dato che i colori non sono assegnati correttamente). <span style="color:#f7b267"><b>I prossimi passi dovrebbero essere quelli che ci permettono di migliorare questo prototipo (inserendo più layer o modelli più approfonditi per Generator e Discriminator)</b></span>.
 
