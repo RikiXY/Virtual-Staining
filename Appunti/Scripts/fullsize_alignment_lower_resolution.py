@@ -1,4 +1,4 @@
-import cv2, os
+import cv2
 import numpy as np
 
 def align(img_1, img_2, img_1_mask=None, img_2_mask=None, nfeatures=10000, ed_distance=200):
@@ -106,8 +106,8 @@ def main():
     fullsize_mask_aligned = cv2.warpAffine(mask_st, warp_matrix, (label_free.shape[1], label_free.shape[0]))
 
     # Salvataggio dell'immagine allineata
-    cv2.imwrite("Materiale/Locale/fullsize_stained_aligned.tif", fullsize_aligned)
-    cv2.imwrite("Materiale/Locale/fullsize_stained_mask_aligned.tif", fullsize_mask_aligned)
+    cv2.imwrite("Materiale/Locale/aligned_stained.tif", fullsize_aligned)
+    cv2.imwrite("Materiale/Immagini/aligned_mask_stained.tif", fullsize_mask_aligned)
     print("Immagine allineata salvata")
 
 if __name__ == "__main__":
