@@ -5,6 +5,7 @@ from PIL import Image
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torchvision.utils as vutils
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
 
@@ -66,7 +67,7 @@ class SimpleConvNet(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Conv2d(3, 32, kernel_size=3, padding=1),
-            nn.ReLU(),
+            nn.LeakyReLU(0.1),
             nn.Conv2d(32, 3, kernel_size=3, padding=1),
             nn.Tanh()  # output in [-1, 1]
         )
@@ -78,7 +79,7 @@ def main():
     # -------------------------------------------------------
     # Creazione dataset e dataloader
     # -------------------------------------------------------
-    train_folder = "Materiale/Locale/dataset_split/train"  # <-- METTI il tuo path
+    train_folder = "Materiale/Locale/dataset_split/train" 
     train_dataset = PairedHistologyDataset(train_folder, transform=transform)
 
     # Imposta batch_size e num_workers=0 per evitare errori su Windows
@@ -98,7 +99,7 @@ def main():
 
     model = SimpleConvNet().to(device)
     criterion = nn.L1Loss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=1e-5)
 
     # -------------------------------------------------------
     # Training loop + mini-profiler con time.time()
@@ -106,19 +107,23 @@ def main():
     print("Inizio training di prova...\n")
     model.train()
 
-    num_epochs = 2  # due epoche di test
+    # Crea la cartella per le immagini di preview
+    output_dir = "Materiale/Locale/output_preview"
+    os.makedirs(output_dir, exist_ok=True)
+
+
+    num_epochs = 10  # due epoche di test
     for epoch in range(num_epochs):
         running_loss = 0.0
-        start_epoch = time.time()
+        start_time = time.time()
 
         for i, (input_img, target_img) in enumerate(train_loader):
-            # Misura tempo di caricamento + transfer su GPU
-            t0 = time.time()
+            
+            # Trasferisci su GPU
             input_img = input_img.to(device, non_blocking=True)
             target_img = target_img.to(device, non_blocking=True)
-            t1 = time.time()
 
-            # Forward + backward pass
+            # Forward + backward
             output = model(input_img)
             loss = criterion(output, target_img)
 
@@ -126,24 +131,28 @@ def main():
             loss.backward()
             optimizer.step()
 
-            t2 = time.time()
-
             running_loss += loss.item()
 
-            # Stampa ogni 10 batch i tempi
-            if i % 10 == 0:
-                print(f"[Ep {epoch+1:02d} | Batch {i:03d}] "
-                    f"Load+Transfer: {(t1 - t0)*1e3:.1f} ms, "
-                    f"Fwd+Bwd: {(t2 - t1)*1e3:.1f} ms, "
-                    f"Loss: {loss.item():.4f}")
+            # Salva le immagini ogni 10 batch
+            if i % 4 == 0:
+                # output è nel range [-1, 1] → riportiamolo in [0, 1] per salvarlo
+                output_vis = (output.detach().cpu() + 1) / 2.0
+                target_vis = (target_img.detach().cpu() + 1) / 2.0
+                input_vis  = input_img.detach().cpu()  # già in [0, 1]
 
-        end_epoch = time.time()
-        epoch_time = end_epoch - start_epoch
+                # Salviamo solo la prima immagine del batch
+                vutils.save_image(input_vis[0],  os.path.join(output_dir, f"ep{epoch+1:02d}_b{i:03d}_input.png"))
+                vutils.save_image(output_vis[0], os.path.join(output_dir, f"ep{epoch+1:02d}_b{i:03d}_output.png"))
+                vutils.save_image(target_vis[0], os.path.join(output_dir, f"ep{epoch+1:02d}_b{i:03d}_target.png"))
+
+
+                # print(f"    Salvata preview batch {i} in 'output_preview/'")
+
+        # fine epoca
         avg_loss = running_loss / len(train_loader)
-        print(f"Epoch {epoch+1}/{num_epochs} - Loss media: {avg_loss:.4f}, "
-            f"Tempo epoch: {epoch_time:.2f} s\n")
+        print(f"Epoch {epoch+1}/{num_epochs} - Loss media: {avg_loss:.4f}")
 
-    print("Training completato! ✅")
+    print("Training completato!")
 
 if __name__ == "__main__":
     main()
