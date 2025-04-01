@@ -184,7 +184,7 @@ class Alignment:
             points[1].append(keypoints_2[match.trainIdx].pt)
         
         # Calcola la matrice di trasformazione per allineare le immagini
-        # estimateAffine2D crea una matrice di trasformazione che può solo
+        # estimateAffinePartial2D crea una matrice di trasformazione che può solo
         # traslare, ruotare e ridimensionare l'immagine
         points_1 = np.array(points[0])
         points_2 = np.array(points[1])
