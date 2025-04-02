@@ -10,7 +10,7 @@ from torchvision import transforms
 from torchvision.utils import save_image
 from PIL import Image
 
-num_epoche = 100
+num_epoche = 10
 
 # --------------------- Dataset ---------------------
 class PairedHistologyDataset(Dataset):
@@ -84,7 +84,7 @@ class Up(nn.Module):
             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
             self.conv = DoubleConv(in_channels, out_channels)
         else:
-            self.up = nn.ConvTranspose2d(in_channels // 2, in_channels // 2,
+            self.up = nn.ConvTranspose2d(in_channels, in_channels // 2,
                                          kernel_size=2, stride=2)
             self.conv = DoubleConv(in_channels, out_channels)
 
@@ -171,7 +171,7 @@ class PatchGANDiscriminator(nn.Module):
     PatchGAN discriminator for image-to-image tasks (e.g., pix2pix, CycleGAN).
     Produces an N×N map of 'real/fake' predictions for each patch of the input.
     """
-    def __init__(self, in_channels=3, ndf=64, use_sigmoid=False):
+    def __init__(self, in_channels=6, ndf=64, use_sigmoid=False):
         """
         Args:
             in_channels (int): Number of channels in the input. In pix2pix, 
@@ -235,7 +235,7 @@ class PatchGANDiscriminator(nn.Module):
 
         self.model = nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward(self, x, y):
         """
         Inputs:
             x (Tensor): shape (batch_size, in_channels, H, W)
@@ -244,7 +244,7 @@ class PatchGANDiscriminator(nn.Module):
             (or similarly downsampled dimensions), where each location 
             is a prediction of real/fake for that patch.
         """
-        return self.model(x)
+        return self.model(torch.cat([x, y], dim=1))  # Concatenate input and output
 
 
 # --------------------- Determinism ---------------------
@@ -274,13 +274,13 @@ def main():
     dataset = PairedHistologyDataset("Materiale/Locale/dataset_split/train", transform)
     loader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=4, pin_memory=True) # prima num_workers era a 0 e pin_memory non c'era e batch_size a 4
 
-    G = UNetGenerator().to(device)
+    G = UNetGenerator(bilinear=False).to(device)
     D = PatchGANDiscriminator().to(device)
     
     opt_G = optim.Adam(G.parameters(), lr=2e-4, betas=(0.5, 0.999))
     opt_D = optim.Adam(D.parameters(), lr=2e-4, betas=(0.5, 0.999))
 
-    bce = nn.BCELoss()
+    bce = nn.BCEWithLogitsLoss()
     l1 = nn.L1Loss()
 
     os.makedirs("Materiale/Locale/output_pix2pix", exist_ok=True)
