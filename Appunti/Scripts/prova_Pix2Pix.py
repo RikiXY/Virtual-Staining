@@ -6,11 +6,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
+from torch.amp import autocast, GradScaler
 from torchvision import transforms
 from torchvision.utils import save_image
 from PIL import Image
 
-num_epoche = 10
+num_epoche = 100
 
 # --------------------- Dataset ---------------------
 class PairedHistologyDataset(Dataset):
@@ -134,18 +135,40 @@ class UNetGenerator(nn.Module):
         self.bilinear = bilinear
 
         # You can customize the number of filters in each stage.
+
+        # Version from 32 to 512
+        # self.inc = DoubleConv(n_channels, 32)         # initial conv
+        # self.down1 = Down(32, 64) 
+        # self.down2 = Down(64, 128)
+        # self.down3 = Down(128, 256)
+        # self.down4 = Down(256, 512)
+
+        # Version from 64 to 1024
         self.inc = DoubleConv(n_channels, 64)         # initial conv
         self.down1 = Down(64, 128)
         self.down2 = Down(128, 256)
         self.down3 = Down(256, 512)
-        self.down4 = Down(512, 1024)
+        self.down4 = Down(512, 1024)                  # bottleneck
+
         
         # if using bilinear, use factor=2 in the below up layers
+
+        # Version from 512 to 32
+        # self.up1 = Up(512, 256, bilinear)
+        # self.up2 = Up(256, 128, bilinear)
+        # self.up3 = Up(128, 64, bilinear)
+        # self.up4 = Up(64, 32, bilinear)
+
+        # Version from 1024 to 64
         self.up1 = Up(1024, 512, bilinear)
         self.up2 = Up(512, 256, bilinear)
         self.up3 = Up(256, 128, bilinear)
         self.up4 = Up(128, 64, bilinear)
         
+        # Version from 32 to 3
+        # self.outc = OutConv(32, n_classes)
+
+        # Version from 64 to 3
         self.outc = OutConv(64, n_classes)
 
     def forward(self, x):
@@ -255,8 +278,8 @@ def set_seed(seed):
         torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     random.seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True # prima era True
+    torch.backends.cudnn.benchmark = False # prima era False
 
 # --------------------- Training ---------------------
 def main():
@@ -272,13 +295,20 @@ def main():
     ])
 
     dataset = PairedHistologyDataset("Materiale/Locale/dataset_split/train", transform)
-    loader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=4, pin_memory=True) # prima num_workers era a 0 e pin_memory non c'era e batch_size a 4
+    loader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=12, pin_memory=True) # prima num_workers era a 0 e pin_memory non c'era e batch_size a 4, Shuffle era a Flase
+    # andrebbero presi i tempi precisi per ogni configurazione (profiling(?)), ma in linea di massima:
+    # con num_workers=12 impiega circa 1.27 minuti, 1.28 e 1.22
+    # con num_workers=8 impiega circa 1.26 minuti, 1.26 e 1.34
+    # con num_workers=4 impega circa 1.41 minuti, 1.41 e 1.38
+    # con num_workers=0 impiega circa 1.27 minuti, 1.23 e 1.29
 
     G = UNetGenerator(bilinear=False).to(device)
     D = PatchGANDiscriminator().to(device)
     
     opt_G = optim.Adam(G.parameters(), lr=2e-4, betas=(0.5, 0.999))
     opt_D = optim.Adam(D.parameters(), lr=2e-4, betas=(0.5, 0.999))
+
+    scaler = GradScaler(device='cuda')
 
     bce = nn.BCEWithLogitsLoss()
     l1 = nn.L1Loss()
@@ -291,22 +321,33 @@ def main():
         for i, (x, y) in enumerate(loader):
             x, y = x.to(device), y.to(device)
             
-            # Train discriminator
-            fake = G(x).detach()
-            D_real = D(x, y)
-            D_fake = D(x, fake)
-            
-            real_label = torch.ones_like(D_real, device=device)
-            fake_label = torch.zeros_like(D_fake, device=device)
+            # ---------- DISCRIMINATOR ----------
+            with autocast("cuda"):
+                fake = G(x).detach()
+                D_real = D(x, y)
+                D_fake = D(x, fake)
 
-            loss_D = bce(D_real, real_label) + bce(D_fake, fake_label)
-            opt_D.zero_grad(); loss_D.backward(); opt_D.step()
+                real_label = torch.ones_like(D_real, device=device)
+                fake_label = torch.zeros_like(D_fake, device=device)
 
-            # Train generator
-            fake = G(x)
-            D_fake = D(x, fake)
-            loss_G = bce(D_fake, real_label) + l1(fake, y) * 100
-            opt_G.zero_grad(); loss_G.backward(); opt_G.step()
+                loss_D = bce(D_real, real_label) + bce(D_fake, fake_label)
+
+            opt_D.zero_grad()
+            scaler.scale(loss_D).backward()
+            scaler.step(opt_D)
+
+            # ---------- GENERATOR ----------
+            with autocast("cuda"):
+                fake = G(x)
+                D_fake = D(x, fake)
+                loss_G = bce(D_fake, real_label) + l1(fake, y) * 100
+
+            opt_G.zero_grad()
+            scaler.scale(loss_G).backward()
+            scaler.step(opt_G)
+
+            # ---------- UPDATE SCALER ----------
+            scaler.update()
 
             if i % loader.batch_size == 0:
                 save_image((x[0] * 0.5 + 0.5), f"Materiale/Locale/output_pix2pix/{epoch:02d}_{i:03d}_input.png")
