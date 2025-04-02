@@ -1,5 +1,6 @@
-import os
-import time
+import os, random
+import numpy as np
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -65,8 +66,22 @@ class PatchDiscriminator(nn.Module):
     def forward(self, x, y):
         return self.model(torch.cat([x, y], dim=1))
 
+
+# --------------------- Determinism ---------------------
+def set_seed(seed):
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 # --------------------- Training ---------------------
 def main():
+    set_seed(42) # Imposta il seed per la riproducibilità
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
 
@@ -77,7 +92,7 @@ def main():
     ])
 
     dataset = PairedHistologyDataset("Materiale/Locale/dataset_split/train", transform)
-    loader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=4, pin_memory=True) # prima num_workers era a 0 e pin_memory non c'era e batch_size a 4
+    loader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=4, pin_memory=True) # prima num_workers era a 0 e pin_memory non c'era e batch_size a 4
 
     G = UNetGenerator().to(device)
     D = PatchDiscriminator().to(device)
@@ -89,8 +104,10 @@ def main():
     l1 = nn.L1Loss()
 
     os.makedirs("Materiale/Locale/output_pix2pix", exist_ok=True)
+    for file in os.listdir("Materiale/Locale/output_pix2pix"):
+        os.remove(os.path.join("Materiale/Locale/output_pix2pix", file))
 
-    for epoch in range(20):
+    for epoch in range(5):
         for i, (x, y) in enumerate(loader):
             x, y = x.to(device), y.to(device)
             
@@ -111,7 +128,7 @@ def main():
             loss_G = bce(D_fake, real_label) + l1(fake, y) * 100
             opt_G.zero_grad(); loss_G.backward(); opt_G.step()
 
-            if i % 10 == 0:
+            if i % loader.batch_size == 0:
                 save_image((x[0] * 0.5 + 0.5), f"Materiale/Locale/output_pix2pix/{epoch:02d}_{i:03d}_input.png")
                 save_image((fake[0].detach() * 0.5 + 0.5), f"Materiale/Locale/output_pix2pix/{epoch:02d}_{i:03d}_output.png")
                 save_image((y[0] * 0.5 + 0.5), f"Materiale/Locale/output_pix2pix/{epoch:02d}_{i:03d}_target.png")
