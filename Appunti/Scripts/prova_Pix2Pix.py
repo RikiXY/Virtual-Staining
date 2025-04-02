@@ -3,6 +3,7 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
@@ -38,35 +39,212 @@ class PairedHistologyDataset(Dataset):
         return lf, st
 
 # --------------------- Generator (UNet-like) ---------------------
-class UNetGenerator(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.encoder = nn.Sequential(
-            nn.Conv2d(3, 64, 4, 2, 1), nn.LeakyReLU(0.2),
-            nn.Conv2d(64, 128, 4, 2, 1), nn.BatchNorm2d(128), nn.LeakyReLU(0.2)
-        )
-        self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(128, 64, 4, 2, 1), nn.ReLU(),
-            nn.ConvTranspose2d(64, 3, 4, 2, 1), nn.Tanh()
+class DoubleConv(nn.Module):
+    """
+    A building block: (Conv -> BatchNorm -> ReLU) x 2
+    """
+    def __init__(self, in_channels, out_channels):
+        super(DoubleConv, self).__init__()
+        self.double_conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
         )
 
     def forward(self, x):
-        x = self.encoder(x)
-        x = self.decoder(x)
-        return x
+        return self.double_conv(x)
 
-# --------------------- Discriminator (PatchGAN) ---------------------
-class PatchDiscriminator(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.model = nn.Sequential(
-            nn.Conv2d(6, 64, 4, 2, 1), nn.LeakyReLU(0.2),
-            nn.Conv2d(64, 128, 4, 2, 1), nn.BatchNorm2d(128), nn.LeakyReLU(0.2),
-            nn.Conv2d(128, 1, 4, 1, 1), nn.Sigmoid()
+class Down(nn.Module):
+    """
+    Downscaling with maxpool followed by DoubleConv
+    """
+    def __init__(self, in_channels, out_channels):
+        super(Down, self).__init__()
+        self.maxpool_conv = nn.Sequential(
+            nn.MaxPool2d(kernel_size=2),
+            DoubleConv(in_channels, out_channels)
         )
 
-    def forward(self, x, y):
-        return self.model(torch.cat([x, y], dim=1))
+    def forward(self, x):
+        return self.maxpool_conv(x)
+
+class Up(nn.Module):
+    """
+    Upscaling using transposed convolution, then DoubleConv.
+    Skip connection is concatenated with the upsampled feature map.
+    """
+    def __init__(self, in_channels, out_channels, bilinear=True):
+        super(Up, self).__init__()
+
+        # if bilinear, use the normal convolutions to reduce the number of channels
+        if bilinear:
+            self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+            self.conv = DoubleConv(in_channels, out_channels)
+        else:
+            self.up = nn.ConvTranspose2d(in_channels // 2, in_channels // 2,
+                                         kernel_size=2, stride=2)
+            self.conv = DoubleConv(in_channels, out_channels)
+
+    def forward(self, x1, x2):
+        # x1 is the current upsampled feature map
+        # x2 is the skip connection from the encoder
+        x1 = self.up(x1)
+        
+        # Input is [N, C, H, W].
+        # We need to handle differences if x1 and x2 have different shapes
+        # (they shouldn't if you started with 512x512, but just in case).
+        diffY = x2.size()[2] - x1.size()[2]
+        diffX = x2.size()[3] - x1.size()[3]
+        
+        x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
+                        diffY // 2, diffY - diffY // 2])
+        
+        # Concatenate along the channels axis
+        x = torch.cat([x2, x1], dim=1)
+        return self.conv(x)
+
+class OutConv(nn.Module):
+    """
+    Final 1x1 convolution for output
+    """
+    def __init__(self, in_channels, out_channels):
+        super(OutConv, self).__init__()
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+
+    def forward(self, x):
+        return self.conv(x)
+
+
+class UNetGenerator(nn.Module):
+    def __init__(self, n_channels=3, n_classes=3, bilinear=False):
+        """
+        Args:
+            n_channels (int): Number of input channels. For RGB, use 3. 
+                              For single-channel (grayscale), use 1, etc.
+            n_classes (int): Number of output channels/classes. 
+                             For RGB output, use 3.
+            bilinear (bool): Whether to use bilinear upsampling or transposed conv.
+        """
+        super(UNetGenerator, self).__init__()
+        self.n_channels = n_channels
+        self.n_classes = n_classes
+        self.bilinear = bilinear
+
+        # You can customize the number of filters in each stage.
+        self.inc = DoubleConv(n_channels, 64)         # initial conv
+        self.down1 = Down(64, 128)
+        self.down2 = Down(128, 256)
+        self.down3 = Down(256, 512)
+        self.down4 = Down(512, 1024)
+        
+        # if using bilinear, use factor=2 in the below up layers
+        self.up1 = Up(1024, 512, bilinear)
+        self.up2 = Up(512, 256, bilinear)
+        self.up3 = Up(256, 128, bilinear)
+        self.up4 = Up(128, 64, bilinear)
+        
+        self.outc = OutConv(64, n_classes)
+
+    def forward(self, x):
+        # Encoder
+        x1 = self.inc(x)       # shape: [N, 64, 512, 512]
+        x2 = self.down1(x1)    # shape: [N, 128, 256, 256]
+        x3 = self.down2(x2)    # shape: [N, 256, 128, 128]
+        x4 = self.down3(x3)    # shape: [N, 512, 64, 64]
+        x5 = self.down4(x4)    # shape: [N, 1024, 32, 32]
+
+        # Decoder
+        x = self.up1(x5, x4)   # shape: [N, 512, 64, 64]
+        x = self.up2(x, x3)    # shape: [N, 256, 128, 128]
+        x = self.up3(x, x2)    # shape: [N, 128, 256, 256]
+        x = self.up4(x, x1)    # shape: [N, 64, 512, 512]
+        
+        logits = self.outc(x)  # shape: [N, n_classes, 512, 512]
+        return logits
+
+# --------------------- Discriminator (PatchGAN) ---------------------
+class PatchGANDiscriminator(nn.Module):
+    """
+    PatchGAN discriminator for image-to-image tasks (e.g., pix2pix, CycleGAN).
+    Produces an N×N map of 'real/fake' predictions for each patch of the input.
+    """
+    def __init__(self, in_channels=3, ndf=64, use_sigmoid=False):
+        """
+        Args:
+            in_channels (int): Number of channels in the input. In pix2pix, 
+                               if we concatenate input + output images, 
+                               this might be 6 (e.g. 3+3).
+            ndf (int): Base number of discriminator filters. 
+                       The number of filters doubles with each layer.
+            use_sigmoid (bool): Whether to apply a sigmoid at the end 
+                                (common in older versions of pix2pix). 
+                                In newer WGAN-GP, we typically don't.
+        """
+        super(PatchGANDiscriminator, self).__init__()
+
+        # The PatchGAN discriminator is basically several downsampling layers
+        # leading to a final 1×1 convolution. Each location in the final
+        # feature map corresponds to a "patch" in the input image.
+
+        # Convolution blocks
+        # 1) No normalization in the first layer
+        layers = [
+            nn.Conv2d(in_channels, ndf, kernel_size=4, stride=2, padding=1),
+            nn.LeakyReLU(0.2, inplace=True),
+        ]
+
+        # 2) Downsampling layers
+        curr_dim = ndf
+        next_dim = curr_dim * 2
+        layers += [
+            nn.Conv2d(curr_dim, next_dim, kernel_size=4, stride=2, padding=1),
+            nn.InstanceNorm2d(next_dim),
+            nn.LeakyReLU(0.2, inplace=True),
+        ]
+
+        curr_dim = next_dim
+        next_dim = curr_dim * 2
+        layers += [
+            nn.Conv2d(curr_dim, next_dim, kernel_size=4, stride=2, padding=1),
+            nn.InstanceNorm2d(next_dim),
+            nn.LeakyReLU(0.2, inplace=True),
+        ]
+
+        # 3) Stride = 1 for the last convolution(s) so that 
+        #    the receptive field is about 70×70 (PatchGAN).
+        curr_dim = next_dim
+        next_dim = curr_dim * 2
+        # This layer keeps stride=1 to reduce the patch size growth
+        layers += [
+            nn.Conv2d(curr_dim, next_dim, kernel_size=4, stride=1, padding=1),
+            nn.InstanceNorm2d(next_dim),
+            nn.LeakyReLU(0.2, inplace=True),
+        ]
+
+        # 4) Output layer: 1 filter, stride=1
+        layers += [
+            nn.Conv2d(next_dim, 1, kernel_size=4, stride=1, padding=1)
+        ]
+        
+        # Optionally apply a sigmoid (e.g., for vanilla GAN or BCE loss)
+        if use_sigmoid:
+            layers += [nn.Sigmoid()]
+
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, x):
+        """
+        Inputs:
+            x (Tensor): shape (batch_size, in_channels, H, W)
+        Returns:
+            Tensor of shape (batch_size, 1, H/2^n, W/2^n) 
+            (or similarly downsampled dimensions), where each location 
+            is a prediction of real/fake for that patch.
+        """
+        return self.model(x)
 
 
 # --------------------- Determinism ---------------------
@@ -97,7 +275,7 @@ def main():
     loader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=4, pin_memory=True) # prima num_workers era a 0 e pin_memory non c'era e batch_size a 4
 
     G = UNetGenerator().to(device)
-    D = PatchDiscriminator().to(device)
+    D = PatchGANDiscriminator().to(device)
     
     opt_G = optim.Adam(G.parameters(), lr=2e-4, betas=(0.5, 0.999))
     opt_D = optim.Adam(D.parameters(), lr=2e-4, betas=(0.5, 0.999))
