@@ -9,6 +9,8 @@ from torchvision import transforms
 from torchvision.utils import save_image
 from PIL import Image
 
+num_epoche = 100
+
 # --------------------- Dataset ---------------------
 class PairedHistologyDataset(Dataset):
     def __init__(self, folder_path, transform=None):
@@ -107,7 +109,7 @@ def main():
     for file in os.listdir("Materiale/Locale/output_pix2pix"):
         os.remove(os.path.join("Materiale/Locale/output_pix2pix", file))
 
-    for epoch in range(5):
+    for epoch in range(num_epoche):
         for i, (x, y) in enumerate(loader):
             x, y = x.to(device), y.to(device)
             
