@@ -5,11 +5,15 @@ import os
 import re
 import matplotlib.pyplot as plt
 from PIL import Image
+import sys
 
 # === CONFIGURAZIONE ===
 input_folder = "Materiale/Locale/output_val"
 output_folder = "Materiale/Locale/graphs"
-filtro_epoche = 1  # <-- epoche da mostrare: solo quelle per cui (epoca % filtro_epoche == 0)
+if len(sys.argv) >= 2:
+    epoche_rate = int(sys.argv[1])  # <-- epoche da mostrare: solo quelle per cui (epoca % epoche_rate == 0)
+else:
+    epoche_rate = 1  # <-- epoche da mostrare: solo quelle per cui (epoca % epoche_rate == 0)
 num_batch = 1  # <-- batch da mostrare: solo quelli per cui (batch == num_batch)
 
 # Crea la cartella di output se non esiste
@@ -38,7 +42,7 @@ sorted_epoch_batches = sorted(images_by_epoch_batch.keys(),
 
 # Applica il filtro sulle epoche (ignorando il batch, ma lasciandolo poi in fase di visualizzazione)
 filtered_epoch_batches = [
-    (ep, ba) for (ep, ba) in sorted_epoch_batches if int(ep) % filtro_epoche == 0
+    (ep, ba) for (ep, ba) in sorted_epoch_batches if int(ep) % epoche_rate == 0
 ]
 
 # Se il filtro esclude tutto, mostra almeno la prima epoca (se presente)
@@ -71,7 +75,7 @@ for i, (epoch_str, batch_str) in enumerate(filtered_epoch_batches):
 plt.tight_layout(rect=[0, 0, 1, 0.96])  # lascia spazio per il titolo
 
 # === SALVATAGGIO ===
-output_path = os.path.join(output_folder, f"confronto_epoch_batch_ogni{filtro_epoche}.png")
+output_path = os.path.join(output_folder, f"confronto_epoch_batch_ogni{epoche_rate}.png")
 plt.savefig(output_path)
 # plt.show()
 
