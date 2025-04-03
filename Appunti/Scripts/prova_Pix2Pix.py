@@ -505,7 +505,8 @@ def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scale
         # Stampa e log su file
         if i % 10 == 0:
             log_message(f"[ep {epoch} | b {i}] loss_G: {loss_G.item():.4f} loss_D: {loss_D.item():.4f}", log_file)
-            save_images("Materiale/Locale/output_pix2pix", x[0], fake[0], y[0], epoch, i)
+            # Non serve salvare le immagini di training dato che le salviamo in validate
+            # save_images("Materiale/Locale/output_pix2pix", x[0], fake[0], y[0], epoch, i)
 
 
 # --------------------- Main ---------------------
