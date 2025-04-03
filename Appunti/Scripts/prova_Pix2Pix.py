@@ -1,11 +1,8 @@
-import os, random
+import os, random, time, datetime
 import numpy as np
-import time
-import datetime
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torch.amp import autocast, GradScaler
@@ -16,16 +13,17 @@ from PIL import Image
 # =========================
 # PARAMETRI IMPORTANTI
 # ----------------------
-num_epoche = 1 # Numero di epoche da eseguire
-useCheckPoint = True # Se vuoi riprendere da un checkpoint esistente, metti True
-checkpoint_path = "checkpoint_pix2pix_epoca.pth" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
+n_epochs = 1 # Numero di epoche da eseguire
+use_checkpoint = True # Se vuoi riprendere da un checkpoint esistente, metti True
+restore_checkpoint_path = "checkpoint_pix2pix_epoca.pth" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
 seed = 42 # Seed per la riproducibilità
 # -----------------------
-BatchSize = 8 # Batch size per il DataLoader (8 è un buon valore, ma dipende dalla GPU)
-Shuffle = True # Se vuoi mescolare i dati ad ogni epoca, metti True
-NumWorkers = 12 # Numero di worker per il DataLoader (12 è un buon valore, ma dipende dalla GPU)
-ImgSize = (512, 512) # Risoluzione delle immagini (512x512 è un buon valore per Pix2Pix), si può pensare anche a 256x256
+batch_size = 8 # Batch size per il DataLoader (8 è un buon valore, ma dipende dalla GPU)
+shuffle = True # Se vuoi mescolare i dati ad ogni epoca, metti True
+n_workers = 12 # Numero di worker per il DataLoader (12 è un buon valore, ma dipende dalla GPU)
+image_size = (512, 512) # Risoluzione delle immagini (512x512 è un buon valore per Pix2Pix), si può pensare anche a 256x256
 # =========================
+
 
 # --------------------- Dataset ---------------------
 class PairedHistologyDataset(Dataset):
@@ -52,6 +50,7 @@ class PairedHistologyDataset(Dataset):
             lf = self.transform(lf)
             st = self.transform(st)
         return lf, st
+
 
 # --------------------- Generatore (UNet-like) ---------------------
 class DoubleConv(nn.Module):
@@ -107,15 +106,6 @@ class Up(nn.Module):
         # x1 is the current upsampled feature map
         # x2 is the skip connection from the encoder
         x1 = self.up(x1)
-        
-        # Input is [N, C, H, W].
-        # We need to handle differences if x1 and x2 have different shapes
-        # (they shouldn't if you started with 512x512, but just in case).
-        diffY = x2.size()[2] - x1.size()[2]
-        diffX = x2.size()[3] - x1.size()[3]
-        
-        x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
-                        diffY // 2, diffY - diffY // 2])
         
         # Concatenate along the channels axis
         x = torch.cat([x2, x1], dim=1)
@@ -183,6 +173,7 @@ class UNetGenerator(nn.Module):
         
         logits = self.outc(x)  # Shape: [N, n_classes, 512, 512]
         return logits
+
 
 # --------------------- Discriminatore (PatchGAN) ---------------------
 class PatchGANDiscriminator(nn.Module):
@@ -277,29 +268,111 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-# =========================
-# Funzione di caricamento checkpoint
-# =========================
-def load_checkpoint(checkpoint_path, Generator, Discriminator, opt_G, opt_D, scaler_G, scaler_D, device):
+
+# --------------------- Logging ---------------------
+def log_message(message, log_file, show_time=True, use_stdout=True):
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if show_time:
+        message = f"[{now_str}] {message}"
+    with open(log_file, "a+") as f:
+        f.write(message + "\n")
+    if use_stdout:
+        print(message)
+
+
+# --------------------- Checkpoints ---------------------
+def save_checkpoint(checkpoint_path, epoch, G, D, opt_G, opt_D, scaler_G, scaler_D):
+    """
+    Salva un checkpoint del modello.
+
+    Args:
+        checkpoint_path (str): Percorso dove salvare il checkpoint.
+        epoch (int): Epoca corrente.
+        G (nn.Module): Modello del generatore.
+        D (nn.Module): Modello del discriminatore.
+        opt_G (torch.optim.Optimizer): Ottimizzatore del generatore.
+        opt_D (torch.optim.Optimizer): Ottimizzatore del discriminatore.
+        scaler_G (torch.cuda.amp.GradScaler): GradScaler per il generatore.
+        scaler_D (torch.cuda.amp.GradScaler): GradScaler per il discriminatore.
+    """
+    checkpoint = {
+        'epoch': epoch,
+        'generator_state_dict': G.state_dict(),
+        'discriminator_state_dict': D.state_dict(),
+        'optimizerG_state_dict': opt_G.state_dict(),
+        'optimizerD_state_dict': opt_D.state_dict(),
+        'scalerG_state_dict': scaler_G.state_dict(),
+        'scalerD_state_dict': scaler_D.state_dict()
+    }
+    torch.save(checkpoint, checkpoint_path)
+
+def load_checkpoint(checkpoint_path, G, D, opt_G, opt_D, scaler_G, scaler_D, device):
+    """
+    Carica un checkpoint del modello.
+
+    Args:
+        checkpoint_path (str): Percorso del checkpoint da caricare.
+        G (nn.Module): Modello del generatore.
+        D (nn.Module): Modello del discriminatore.
+        opt_G (torch.optim.Optimizer): Ottimizzatore del generatore.
+        opt_D (torch.optim.Optimizer): Ottimizzatore del discriminatore.
+        scaler_G (torch.cuda.amp.GradScaler): GradScaler per il generatore.
+        scaler_D (torch.cuda.amp.GradScaler): GradScaler per il discriminatore.
+        device (torch.device): Dispositivo su cui caricare i modelli.
+    """
     checkpoint = torch.load(checkpoint_path, map_location=device)
-    Generator.load_state_dict(checkpoint['generator_state_dict'])
-    Discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
+    G.load_state_dict(checkpoint['generator_state_dict'])
+    D.load_state_dict(checkpoint['discriminator_state_dict'])
     opt_G.load_state_dict(checkpoint['optimizerG_state_dict'])
     opt_D.load_state_dict(checkpoint['optimizerD_state_dict'])
     scaler_G.load_state_dict(checkpoint['scalerG_state_dict'])
     scaler_D.load_state_dict(checkpoint['scalerD_state_dict'])
-    
     start_epoch = checkpoint['epoch'] + 1  # Riprendi dalla successiva
-    print(f"Checkpoint caricato (epoch {checkpoint['epoch']}). Ripartenza da epoch {start_epoch}.")
     return start_epoch
 
-# =========================
-# Validazione del modello
-# =========================
-def validate(Generator, Discriminator, val_loader, device, bce_loss, l1_loss, epoch):
+
+# --------------------- Funzioni utili ---------------------
+def save_images(path, input, output, target, epoch, batch_index):
+    """
+    Salva le immagini di input, output e target in formato PNG.
+    
+    Args:
+        path (str): Percorso della cartella di salvataggio.
+        input (Tensor): Immagine di input.
+        output (Tensor): Immagine generata dal modello.
+        target (Tensor): Immagine target (stained).
+        epoch (int): Numero dell'epoca corrente.
+        batch_index (int): Indice del batch corrente.
+    """
+    # Salva le immagini di input, output e target
+    # Rimettiamo le immagini da [-1,1] a [0,1]
+    save_image((input[0] * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_input.png"))
+    save_image((output[0].detach() * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_output.png"))
+    save_image((target[0] * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_target.png"))
+
+
+# --------------------- Training e Validazione ---------------------
+def validate(G, D, validation_loader, device, bce_loss, l1_loss, epoch, log_file):
+    """
+    Funzione di validazione del modello.
+    Questa funzione calcola la loss media del generatore e del discriminatore.
+
+    Args:
+        G (nn.Module): Modello del generatore.
+        D (nn.Module): Modello del discriminatore.
+        validation_loader (DataLoader): DataLoader per il set di validazione.
+        device (torch.device): Dispositivo su cui eseguire i calcoli (CPU o GPU).
+        bce_loss (nn.Module): Funzione di perdita BCE (Binary Cross Entropy).
+        l1_loss (nn.Module): Funzione di perdita L1 (Mean Absolute Error).
+        epoch (int): Numero dell'epoca corrente.
+        log_file (str): Percorso del file di log.
+
+    Returns:
+        tuple: Media delle perdite del generatore e del discriminatore.
+    """
     # Metti in eval mode
-    Generator.eval()
-    Discriminator.eval()
+    G.eval()
+    D.eval()
 
     # Crea/assicurati che esista la cartella per gli output di validazione
     os.makedirs("Materiale/Locale/output_val", exist_ok=True)
@@ -310,15 +383,15 @@ def validate(Generator, Discriminator, val_loader, device, bce_loss, l1_loss, ep
 
     # Niente gradienti
     with torch.no_grad(), autocast("cuda"):
-        for i, (x, y) in enumerate(val_loader):
+        for i, (x, y) in enumerate(validation_loader):
             x, y = x.to(device), y.to(device)
 
             # Genera immagini di output
-            fake = Generator(x)
+            fake = G(x)
 
             # Predizioni del discriminatore su reale e falso
-            D_real = Discriminator(x, y)
-            D_fake = Discriminator(x, fake)
+            D_real = D(x, y)
+            D_fake = D(x, fake)
 
             # BCE labels
             real_label = torch.ones_like(D_real, device=device)
@@ -326,7 +399,7 @@ def validate(Generator, Discriminator, val_loader, device, bce_loss, l1_loss, ep
 
             # Calcolo delle due loss (D e G)
             loss_D = bce_loss(D_real, real_label) + bce_loss(D_fake, fake_label)
-            loss_G = bce_loss(D_fake, real_label) + 25 * l1_loss(fake, y)
+            loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * 25
 
             total_loss_D += loss_D.item()
             total_loss_G += loss_G.item()
@@ -336,74 +409,151 @@ def validate(Generator, Discriminator, val_loader, device, bce_loss, l1_loss, ep
             # Ad esempio, salvi i primi 5 batch
             if i < 5:
                 # Salva la prima immagine del batch (indice 0)
-                # Rimettiamo le immagini da [-1,1] a [0,1]
-                from torchvision.utils import save_image
-                save_image((x[0] * 0.5 + 0.5), 
-                           f"Materiale/Locale/output_val/epoch{epoch}_batch{i}_input.png")
-                save_image((fake[0].detach() * 0.5 + 0.5), 
-                           f"Materiale/Locale/output_val/epoch{epoch}_batch{i}_output.png")
-                save_image((y[0] * 0.5 + 0.5), 
-                           f"Materiale/Locale/output_val/epoch{epoch}_batch{i}_target.png")
+                save_images("Materiale/Locale/output_val", x[0], fake[0], y[0], epoch, i)
 
     # Ritorni la media delle loss
     avg_loss_D = total_loss_D / count
     avg_loss_G = total_loss_G / count
 
-    # Rimetti i modelli in training (se vuoi farlo qui)
-    Generator.train()
-    Discriminator.train()
+    # Log
+    log_message(f"[Epoca {epoch}] Validation: loss_G={avg_loss_G:.4f} loss_D={avg_loss_D:.4f}", log_file)
 
     return avg_loss_G, avg_loss_D
 
+def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scaler_D, bce_loss, l1_loss, epoch, log_file):
+    """
+    Funzione di training per un'epoca.
+    Questa funzione esegue il training del generatore e del discriminatore per un'epoca.
+    Calcola le perdite e aggiorna i pesi dei modelli.
+
+    Args:
+        G (nn.Module): Modello del generatore.
+        D (nn.Module): Modello del discriminatore.
+        training_loader (DataLoader): DataLoader per il set di addestramento.
+        device (torch.device): Dispositivo su cui eseguire i calcoli (CPU o GPU).
+        opt_G (torch.optim.Optimizer): Ottimizzatore per il generatore.
+        opt_D (torch.optim.Optimizer): Ottimizzatore per il discriminatore.
+        scaler_G (torch.cuda.amp.GradScaler): GradScaler per il generatore.
+        scaler_D (torch.cuda.amp.GradScaler): GradScaler per il discriminatore.
+        bce_loss (nn.Module): Funzione di perdita BCE (Binary Cross Entropy).
+        l1_loss (nn.Module): Funzione di perdita L1 (Mean Absolute Error).
+        epoch (int): Numero dell'epoca corrente.
+        log_file (str): Percorso del file di log.
+    """
+    # Metti in training mode
+    G.train()
+    D.train()
+    
+    for i, (x, y) in enumerate(training_loader):
+        # (x, y) sono le immagini di input e target
+        # x sono batch_size immagini di input (label-free)
+        # y sono batch_size immagini di target (stained)
+
+        # Trasferimento su GPU
+        x, y = x.to(device), y.to(device)
+        
+        # ---------- DISCRIMINATORE ----------
+        with autocast("cuda"):
+            # Genera immagini false
+            fake = G(x).detach()
+            # .detach() fa sì che quando si utilizza fake, non si calcolino i gradienti per il generatore
+            # Di fatto evita che qualsiasi funzione che interagisce con fake possa modificare i gradienti del generatore
+
+            # Calcola le predizioni del discriminatore
+            # D_real è la predizione per le immagini reali
+            # D_fake è la predizione per le immagini false
+            D_real = D(x, y)
+            D_fake = D(x, fake)
+
+            # Calcola la perdita del discriminatore
+            # real_label e fake_label sono le etichette per BCEWithLogitsLoss
+            # real_label = 1 (reale), fake_label = 0 (falso)
+            real_label = torch.ones_like(D_real, device=device)
+            fake_label = torch.zeros_like(D_fake, device=device)
+
+            # Calcola la perdita combinando le predizioni reali e false
+            loss_D = bce_loss(D_real, real_label) + bce_loss(D_fake, fake_label)
+
+        # Ottimizzazione del discriminatore
+        opt_D.zero_grad() # zero_grad() azzera i gradienti accumulati
+        scaler_D.scale(loss_D).backward() # scaler.scale() calcola i gradienti in modo scalato
+        scaler_D.step(opt_D) # scaler.step() applica i gradienti all'ottimizzatore
+        scaler_D.update() # Aggiorna lo scaler
+
+        # ---------- GENERATORE ----------
+        with autocast("cuda"):
+            # Genera immagini false
+            fake = G(x)
+
+            # Calcola le predizioni del discriminatore per le immagini false
+            D_fake = D(x, fake)
+
+            # Calcola la perdita del generatore
+            # La perdita del generatore è la somma della BCE con le predizioni del discriminatore
+            # e della L1 loss tra le immagini false e quelle reali
+            # La L1 loss penalizza le differenze tra le immagini generate e quelle reali
+            # La BCE penalizza le predizioni del discriminatore
+            loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * 25 # bisogna provare altri valori (prima era 100)
+
+        # Ottimizzazione del generatore
+        opt_G.zero_grad() # zero_grad() azzera i gradienti accumulati
+        scaler_G.scale(loss_G).backward() # scaler.scale() calcola i gradienti in modo scalato
+        scaler_G.step(opt_G) # scaler.step() applica i gradienti all'ottimizzatore
+        scaler_G.update()
+
+        # Stampa e log su file
+        if i % 10 == 0:
+            log_message(f"[ep {epoch} | b {i}] loss_G: {loss_G.item():.4f} loss_D: {loss_D.item():.4f}", log_file)
+            save_images("Materiale/Locale/output_pix2pix", x[0], fake[0], y[0], epoch, i)
 
 
-# --------------------- Training ---------------------
+# --------------------- Main ---------------------
 def main():
+    start_time = time.time()
 
+    # Crea la cartella per i log (se non esiste già)
     os.makedirs("Materiale/Locale/output_pix2pix_logs", exist_ok=True)
 
-    # 1) Genero un nome file log con data/ora attuale (unico per ogni esecuzione).
+    # Genero un nome file log con data/ora attuale (unico per ogni esecuzione).
     timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     log_file = f"Materiale/Locale/output_pix2pix_logs/Log-{timestamp_str}.txt"
-
-    # 2) Tempo iniziale e data/ora di avvio
-    start_time = time.time()
-    start_dt_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # 3) Creazione file di log in scrittura ("w"): cancella o crea ex novo
-    with open(log_file, "w") as f:
-        f.write(f"{start_dt_str}\nInizio training\n")
+    # Se esiste già un file con lo stesso nome, lo cancello (per evitare conflitti)
+    if os.path.exists(log_file):
+        os.remove(log_file)
+    log_message("Script avviato", log_file)
 
     set_seed(seed) # Imposta il seed per la riproducibilità
+    log_message(f"Seed impostato a {seed}", log_file)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("Device:", device)
+    log_message(f"Dispositivo: {device}", log_file)
 
+    # Trasformazioni per il dataset
+    # Normalizzazione delle immagini tra -1 e 1 (per il generatore)
     transform = transforms.Compose([
-        transforms.Resize(ImgSize), # Risoluzione delle immagini, potrebbe essere 256 o 512
+        transforms.Resize(image_size), # Risoluzione delle immagini, potrebbe essere 256 o 512
         transforms.ToTensor(),
         transforms.Normalize([0.5]*3, [0.5]*3)
     ])
 
-    dataset = PairedHistologyDataset("Materiale/Locale/dataset_split/train", transform)
-    loader = DataLoader(dataset, batch_size=BatchSize, shuffle=Shuffle, num_workers=NumWorkers, pin_memory=True) # prima num_workers era a 0 e pin_memory non c'era e batch_size a 4, Shuffle era a Flase
+    training_dataset = PairedHistologyDataset("Materiale/Locale/dataset_split/train", transform)
+    training_loader = DataLoader(training_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=n_workers, pin_memory=True) # prima num_workers era a 0 e pin_memory non c'era e batch_size a 4, Shuffle era a Flase
     # andrebbero presi i tempi precisi per ogni configurazione (profiling(?)), ma in linea di massima:
     # con num_workers=12 impiega circa 1.27 minuti, 1.28 e 1.22
     # con num_workers=8 impiega circa 1.26 minuti, 1.26 e 1.34
     # con num_workers=4 impega circa 1.41 minuti, 1.41 e 1.38
     # con num_workers=0 impiega circa 1.27 minuti, 1.23 e 1.29
 
-    val_dataset = PairedHistologyDataset("Materiale/Locale/dataset_split/val", transform)
-    val_loader = DataLoader(val_dataset, batch_size=BatchSize, shuffle=Shuffle, num_workers=NumWorkers, pin_memory=True)
-
+    validation_dataset = PairedHistologyDataset("Materiale/Locale/dataset_split/val", transform)
+    validation_loader = DataLoader(validation_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=n_workers, pin_memory=True)
 
     # Inizializzazione del modello
-    Generator = UNetGenerator().to(device)
-    Discriminator = PatchGANDiscriminator().to(device)
+    generator = UNetGenerator().to(device)
+    discriminator = PatchGANDiscriminator().to(device)
     
     # Inizializzazione degli ottimizzatori
-    opt_G = optim.Adam(Generator.parameters(), lr=2e-4, betas=(0.5, 0.999))
-    opt_D = optim.Adam(Discriminator.parameters(), lr=2e-4, betas=(0.5, 0.999))
+    opt_G = optim.Adam(generator.parameters(), lr=2e-4, betas=(0.5, 0.999))
+    opt_D = optim.Adam(discriminator.parameters(), lr=2e-4, betas=(0.5, 0.999))
 
     # Inizializzazione del GradScaler per la precisione mista
     scaler_G = GradScaler(device='cuda')
@@ -418,140 +568,46 @@ def main():
     for file in os.listdir("Materiale/Locale/output_pix2pix"):
         os.remove(os.path.join("Materiale/Locale/output_pix2pix", file))
 
-    if useCheckPoint == 1:
+    start_epoch = 0
+    if use_checkpoint:
         os.makedirs("Materiale/Locale/checkpoints", exist_ok=True)
-
-    # Se vuoi usare i checkpoint, carica il checkpoint esistente
-    if os.path.exists(checkpoint_path) and useCheckPoint:
-        print("Caricamento checkpoint...")
-        start_epoch = load_checkpoint(checkpoint_path, Generator, Discriminator, 
-                                      opt_G, opt_D, scaler_G, scaler_D, device)
+        # Se vuoi usare i checkpoint, carica il checkpoint esistente
+        if os.path.exists(restore_checkpoint_path):
+            start_epoch = load_checkpoint(restore_checkpoint_path, generator, discriminator, 
+                                        opt_G, opt_D, scaler_G, scaler_D, device)
+            log_message(f"Checkpoint caricato da {restore_checkpoint_path}, epoca {start_epoch}", log_file)
+        else:
+            log_message("ATTENZIONE - Checkpoint non trovato", log_file)
     else:
-        print("Nessun checkpoint trovato o non richiesto.")
-        # Se non esiste un checkpoint, inizia da 0
-        start_epoch = 0
+        log_message("Nessun checkpoint caricato", log_file)
 
-    print("Inizio allenamento...")
-    for epoch in range(num_epoche):
+    # Inizio allenamento
+    log_message("Inizio allenamento", log_file)
+    for epoch in range(start_epoch, n_epochs):
+        log_message(f"Inizio epoca {epoch}", log_file)
 
-        # Log inizio epoca
-        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open(log_file, "a") as f:
-            f.write(f"{now_str}\nStart epoca {epoch}\n")
-        
-        Generator.train()
-        Discriminator.train()
-
-        for i, (x, y) in enumerate(loader):
-            # (x, y) sono le immagini di input e target
-            # x sono batch_size immagini di input (label-free)
-            # y sono batch_size immagini di target (stained)
-
-            # Trasferimento su GPU
-            x, y = x.to(device), y.to(device)
-            
-            # ---------- DISCRIMINATORE ----------
-            with autocast("cuda"):
-                # Genera immagini false
-                fake = Generator(x).detach()
-
-                # Calcola le predizioni del discriminatore
-                # D_real è la predizione per le immagini reali
-                # D_fake è la predizione per le immagini false
-                D_real = Discriminator(x, y)
-                D_fake = Discriminator(x, fake)
-
-                # Calcola la perdita del discriminatore
-                # real_label e fake_label sono le etichette per BCEWithLogitsLoss
-                # real_label = 1 (reale), fake_label = 0 (falso)
-                real_label = torch.ones_like(D_real, device=device)
-                fake_label = torch.zeros_like(D_fake, device=device)
-
-                # Calcola la perdita combinando le predizioni reali e false
-                loss_D = bce_loss(D_real, real_label) + bce_loss(D_fake, fake_label)
-
-            # Ottimizzazione del discriminatore
-            opt_D.zero_grad() # zero_grad() azzera i gradienti accumulati
-            scaler_D.scale(loss_D).backward() # scaler.scale() calcola i gradienti in modo scalato
-            scaler_D.step(opt_D) # scaler.step() applica i gradienti all'ottimizzatore
-            scaler_D.update() # Aggiorna lo scaler
-
-            # ---------- GENERATORE ----------
-            with autocast("cuda"):
-                # Genera immagini false
-                fake = Generator(x)
-
-                # Calcola le predizioni del discriminatore per le immagini false
-                D_fake = Discriminator(x, fake)
-
-                # Calcola la perdita del generatore
-                # La perdita del generatore è la somma della BCE con le predizioni del discriminatore
-                # e della L1 loss tra le immagini false e quelle reali
-                # La L1 loss penalizza le differenze tra le immagini generate e quelle reali
-                # La BCE penalizza le predizioni del discriminatore
-                loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * 25 # bisogna provare altri valori (prima era 100)
-
-            # Ottimizzazione del generatore
-            opt_G.zero_grad() # zero_grad() azzera i gradienti accumulati
-            scaler_G.scale(loss_G).backward() # scaler.scale() calcola i gradienti in modo scalato
-            scaler_G.step(opt_G) # scaler.step() applica i gradienti all'ottimizzatore
-            scaler_G.update()
-
-            # Stampa e log su file
-            if i % 1 == 0:
-                msg = f"[ep {epoch} | b {i}] loss_G: {loss_G.item():.4f} loss_D: {loss_D.item():.4f}"
-                print(msg)
-                # Append su log
-                with open(log_file, "a") as f:
-                    f.write(msg + "\n")
-
-                save_image((x[0] * 0.5 + 0.5), 
-                           f"Materiale/Locale/output_pix2pix/{epoch:02d}_{i:03d}_input.png")
-                save_image((fake[0].detach() * 0.5 + 0.5), 
-                           f"Materiale/Locale/output_pix2pix/{epoch:02d}_{i:03d}_output.png")
-                save_image((y[0] * 0.5 + 0.5), 
-                           f"Materiale/Locale/output_pix2pix/{epoch:02d}_{i:03d}_target.png")
+        # ---------- ALLENAMENTO (una epoca) ----------
+        train_one_epoch(generator, discriminator, training_loader, device, opt_G, opt_D, scaler_G, scaler_D,
+                        bce_loss, l1_loss, epoch, log_file)
 
         # ---------- VALIDATION (a fine epoca) ----------
-        val_loss_G, val_loss_D = validate(Generator, Discriminator, val_loader, device, bce_loss, l1_loss, epoch)
-
-        # LOG
-        val_msg = f"[Epoca {epoch}] Validation: loss_G={val_loss_G:.4f} loss_D={val_loss_D:.4f}"
-        print(val_msg)
-        with open(log_file, "a") as f:
-            f.write(val_msg + "\n")
+        validate(generator, discriminator, validation_loader, device, bce_loss, l1_loss, epoch)
 
         # Log fine epoca
-        with open(log_file, "a") as f:
-            f.write(f"End epoca {epoch}\n")
-
+        log_message(f"Fine epoca {epoch}", log_file)
 
         # ------ SALVATAGGIO CHECKPOINT ------
         # Salva ogni epoca (o magari ogni 5 epoche, se preferisci)
-        if useCheckPoint == 1:
-            if (epoch+1) % 1 == 0:
-                checkpoint = {
-                    'epoch': epoch,
-                    'generator_state_dict': Generator.state_dict(),
-                    'discriminator_state_dict': Discriminator.state_dict(),
-                    'optimizerG_state_dict': opt_G.state_dict(),
-                    'optimizerD_state_dict': opt_D.state_dict(),
-                    'scalerG_state_dict': scaler_G.state_dict(),
-                    'scalerD_state_dict': scaler_D.state_dict()
-                    # volendo potresti salvare anche l'ultimo loss_G, loss_D, ecc.
-                }
-                checkpoint_name = f"Materiale/Locale/checkpoints/checkpoint_Pix2Pix_epoca{epoch}_{timestamp_str}.pth"
-                torch.save(checkpoint, checkpoint_name)
-                print(f"Checkpoint salvato all'epoca {epoch}!")
+        if use_checkpoint:
+            if (epoch + 1) % 1 == 0:
+                checkpoint_path = f"Materiale/Locale/checkpoints/checkpoint_Pix2Pix_epoca{epoch}_{timestamp_str}.pth"
+                save_checkpoint(checkpoint_path, epoch, generator, discriminator, opt_G, opt_D, scaler_G, scaler_D)
+                log_message(f"Checkpoint salvato in {checkpoint_path} all'epoca {epoch}", log_file)
 
     # Fine allenamento
     end_time = time.time()
     total_seconds = end_time - start_time
-    end_dt_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    final_msg = f"Fine esecuzione in {end_dt_str}. Tempo impiegato = {total_seconds:.2f} secondi\n"
-    print(final_msg)
-    with open(log_file, "a") as f:
-        f.write(final_msg)
+    log_message(f"Fine esecuzione. Tempo impiegato = {total_seconds:.2f} secondi", log_file)
               
 
 if __name__ == "__main__":
