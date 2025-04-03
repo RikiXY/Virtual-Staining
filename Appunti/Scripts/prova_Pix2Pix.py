@@ -13,6 +13,19 @@ from torchvision import transforms
 from torchvision.utils import save_image
 from PIL import Image
 
+# =========================
+# PARAMETRI IMPORTANTI
+# ----------------------
+num_epoche = 1 # Numero di epoche da eseguire
+useCheckPoint = False # Se vuoi riprendere da un checkpoint esistente, metti True
+seed = 42 # Seed per la riproducibilità
+# -----------------------
+BatchSize = 8 # Batch size per il DataLoader (8 è un buon valore, ma dipende dalla GPU)
+Shuffle = True # Se vuoi mescolare i dati ad ogni epoca, metti True
+NumWorkers = 12 # Numero di worker per il DataLoader (12 è un buon valore, ma dipende dalla GPU)
+ImgSize = (512, 512) # Risoluzione delle immagini (512x512 è un buon valore per Pix2Pix), si può pensare anche a 256x256
+# =========================
+
 # --------------------- Dataset ---------------------
 class PairedHistologyDataset(Dataset):
     def __init__(self, folder_path, transform=None):
@@ -360,19 +373,19 @@ def main():
     with open(log_file, "w") as f:
         f.write(f"{start_dt_str}\nInizio training\n")
 
-    set_seed(42) # Imposta il seed per la riproducibilità
+    set_seed(seed) # Imposta il seed per la riproducibilità
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
 
     transform = transforms.Compose([
-        transforms.Resize((512, 512)), # Risoluzione delle immagini, potrebbe essere 256 o 512
+        transforms.Resize(ImgSize), # Risoluzione delle immagini, potrebbe essere 256 o 512
         transforms.ToTensor(),
         transforms.Normalize([0.5]*3, [0.5]*3)
     ])
 
     dataset = PairedHistologyDataset("Materiale/Locale/dataset_split/train", transform)
-    loader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=12, pin_memory=True) # prima num_workers era a 0 e pin_memory non c'era e batch_size a 4, Shuffle era a Flase
+    loader = DataLoader(dataset, batch_size=BatchSize, shuffle=Shuffle, num_workers=NumWorkers, pin_memory=True) # prima num_workers era a 0 e pin_memory non c'era e batch_size a 4, Shuffle era a Flase
     # andrebbero presi i tempi precisi per ogni configurazione (profiling(?)), ma in linea di massima:
     # con num_workers=12 impiega circa 1.27 minuti, 1.28 e 1.22
     # con num_workers=8 impiega circa 1.26 minuti, 1.26 e 1.34
@@ -380,7 +393,7 @@ def main():
     # con num_workers=0 impiega circa 1.27 minuti, 1.23 e 1.29
 
     val_dataset = PairedHistologyDataset("Materiale/Locale/dataset_split/val", transform)
-    val_loader = DataLoader(val_dataset, batch_size=8, shuffle=True, num_workers=12, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=BatchSize, shuffle=Shuffle, num_workers=NumWorkers, pin_memory=True)
 
 
     # Inizializzazione del modello
@@ -404,9 +417,8 @@ def main():
     for file in os.listdir("Materiale/Locale/output_pix2pix"):
         os.remove(os.path.join("Materiale/Locale/output_pix2pix", file))
 
-    num_epoche = 1
-
-    useCheckPoint = False # Se vuoi riprendere da un checkpoint esistente, metti True
+    if useCheckPoint == 1:
+        os.makedirs("Materiale/Locale/checkpoints", exist_ok=True)
 
     # Se vuoi riprendere da un checkpoint esistente, metti la path qui
     checkpoint_path = "checkpoint_pix2pix_epoch.pth" # <-- Cambia questo con il tuo checkpoint
@@ -502,7 +514,6 @@ def main():
 
          # ---------- VALIDATION (a fine epoca) ----------
         val_loss_G, val_loss_D = validate(Generator, Discriminator, val_loader, device, bce_loss, l1_loss, epoch)
-        print(f"[Epoca {epoch}] Validation: loss_G={val_loss_G:.4f} loss_D={val_loss_D:.4f}")
 
         # LOG
         val_msg = f"[Epoca {epoch}] Validation: loss_G={val_loss_G:.4f} loss_D={val_loss_D:.4f}"
@@ -517,19 +528,21 @@ def main():
 
         # ------ SALVATAGGIO CHECKPOINT ------
         # Salva ogni epoca (o magari ogni 5 epoche, se preferisci)
-        if (epoch+1) % 1 == 0:
-            checkpoint = {
-                'epoch': epoch,
-                'generator_state_dict': Generator.state_dict(),
-                'discriminator_state_dict': Discriminator.state_dict(),
-                'optimizerG_state_dict': opt_G.state_dict(),
-                'optimizerD_state_dict': opt_D.state_dict(),
-                'scalerG_state_dict': scaler_G.state_dict(),
-                'scalerD_state_dict': scaler_D.state_dict()
-                # volendo potresti salvare anche l'ultimo loss_G, loss_D, ecc.
-            }
-            torch.save(checkpoint, f"checkpoint_pix2pix_epoch_{epoch}.pth")
-            print(f"Checkpoint salvato all'epoca {epoch}!")
+        if useCheckPoint == 1:
+            if (epoch+1) % 1 == 0:
+                checkpoint = {
+                    'epoch': epoch,
+                    'generator_state_dict': Generator.state_dict(),
+                    'discriminator_state_dict': Discriminator.state_dict(),
+                    'optimizerG_state_dict': opt_G.state_dict(),
+                    'optimizerD_state_dict': opt_D.state_dict(),
+                    'scalerG_state_dict': scaler_G.state_dict(),
+                    'scalerD_state_dict': scaler_D.state_dict()
+                    # volendo potresti salvare anche l'ultimo loss_G, loss_D, ecc.
+                }
+                checkpoint_name = f"Materiale/Locale/checkpoints/checkpoint_Pix2Pix_epoca{epoch}_{timestamp_str}.pth"
+                torch.save(checkpoint, checkpoint_name)
+                print(f"Checkpoint salvato all'epoca {epoch}!")
 
     # Fine allenamento
     end_time = time.time()
