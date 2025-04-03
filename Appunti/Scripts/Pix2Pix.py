@@ -277,6 +277,28 @@ def log_message(message, log_file, show_time=True, use_stdout=True):
     if use_stdout:
         print(message)
 
+class ProgressTracker:
+    def __init__(self, total_epochs, total_batches, max_history=50):
+        self.total_epochs = total_epochs
+        self.total_batches = total_batches
+        self.start_time = time.time()
+        self.times = []
+    
+    def start(self):
+        self.times = [time.time()]
+
+    def calculate_progress(self, epoch, batch):
+        self.times.append(time.time())
+        if len(self.times) > self.max_history:
+            self.times.pop(0)
+        total_elapsed_time = self.times[-1] - self.start_time
+        elapsed_time = self.times[-1] - self.times[0]
+        eta = (elapsed_time / len(self.times)) * (self.total_epochs * self.total_batches - (epoch * self.total_batches + batch))
+        expected_time = total_elapsed_time + eta
+        progress = (epoch * self.total_batches + batch) / (self.total_epochs * self.total_batches)
+        end_time = self.times[-1] + eta
+        return progress, total_elapsed_time, expected_time, eta, end_time
+
 # --------------------- Checkpoints ---------------------
 def save_checkpoint(checkpoint_path, epoch, G, D, opt_G, opt_D, scaler_G, scaler_D):
     """
@@ -415,7 +437,7 @@ def validate(G, D, validation_loader, device, bce_loss, l1_loss, epoch, log_file
 
     return avg_loss_G, avg_loss_D
 
-def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scaler_D, bce_loss, l1_loss, epoch, log_file):
+def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scaler_D, bce_loss, l1_loss, epoch, log_file, progress_tracker):
     """
     Funzione di training per un'epoca.
     Questa funzione esegue il training del generatore e del discriminatore per un'epoca.
@@ -434,6 +456,7 @@ def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scale
         l1_loss (nn.Module): Funzione di perdita L1 (Mean Absolute Error).
         epoch (int): Numero dell'epoca corrente.
         log_file (str): Percorso del file di log.
+        progress_tracker (ProgressTracker): Oggetto per monitorare il progresso.
     """
     # Metti in training mode
     G.train()
@@ -496,9 +519,12 @@ def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scale
         scaler_G.step(opt_G) # scaler.step() applica i gradienti all'ottimizzatore
         scaler_G.update()
 
+        progress, total_elapsed_time, expected_time, eta, end_time = progress_tracker.calculate_progress(epoch, i)
+        progress_str = f"{progress:.2%} | Durata esecuzione: {total_elapsed_time:.2f}s | Durata stimata: {expected_time:.2f}s | ETA: {eta:.2f}s | Fine: {datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
+
         # Stampa e log su file
         if i % log_rate == 0:
-            log_message(f"[ep {epoch} | b {i}] loss_G: {loss_G.item():.4f} loss_D: {loss_D.item():.4f}", log_file)
+            log_message(f"[ep {epoch} | b {i}] loss_G: {loss_G.item():.4f} loss_D: {loss_D.item():.4f} - {progress_str}", log_file)
             # Non serve salvare le immagini di training dato che le salviamo in validate
             # save_images("Materiale/Locale/output_pix2pix", x[0], fake.detach()[0], y[0], epoch, i)
 
@@ -517,9 +543,11 @@ def main():
         os.remove(log_file)
     log_message("Script avviato", log_file)
 
-    set_seed(seed) # Imposta il seed per la riproducibilità
+    # Imposta il seed per la riproducibilità
+    set_seed(seed)
     log_message(f"Seed impostato a {seed}", log_file)
 
+    # Imposta il dispositivo (GPU o CPU)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log_message(f"Dispositivo: {device}", log_file)
 
@@ -563,6 +591,7 @@ def main():
     for file in os.listdir("Materiale/Locale/output_pix2pix"):
         os.remove(os.path.join("Materiale/Locale/output_pix2pix", file))
 
+    # Checkpoint
     start_epoch = 0
     if use_checkpoint:
         os.makedirs("Materiale/Locale/checkpoints", exist_ok=True)
@@ -576,6 +605,10 @@ def main():
     else:
         log_message("Nessun checkpoint caricato", log_file)
 
+    # Crea il progress tracker
+    progress_tracker = ProgressTracker(n_epochs, len(training_loader))
+    progress_tracker.start()
+
     # Inizio allenamento
     log_message("Inizio allenamento", log_file)
     for epoch in range(start_epoch, n_epochs):
@@ -583,7 +616,7 @@ def main():
 
         # ---------- ALLENAMENTO (una epoca) ----------
         train_one_epoch(generator, discriminator, training_loader, device, opt_G, opt_D, scaler_G, scaler_D,
-                        bce_loss, l1_loss, epoch, log_file)
+                        bce_loss, l1_loss, epoch, log_file, progress_tracker)
 
         # ---------- VALIDATION (a fine epoca) ----------
         validate(generator, discriminator, validation_loader, device, bce_loss, l1_loss, epoch, log_file)
