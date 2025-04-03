@@ -19,7 +19,8 @@ restore_checkpoint_path = "checkpoint_pix2pix_epoca.pth" # Percorso del checkpoi
 seed = 42 # Seed per la riproducibilità
 # -----------------------
 batch_size = 8 # Batch size per il DataLoader (8 è un buon valore, ma dipende dalla GPU)
-shuffle = True # Se vuoi mescolare i dati ad ogni epoca, metti True
+training_shuffle = True # Se vuoi mescolare i dati ad ogni epoca del training, metti True
+validation_shuffle = False # Se vuoi mescolare i dati ad ogni epoca del validation, metti True
 n_workers = 12 # Numero di worker per il DataLoader (12 è un buon valore, ma dipende dalla GPU)
 image_size = (512, 512) # Risoluzione delle immagini (512x512 è un buon valore per Pix2Pix), si può pensare anche a 256x256
 # =========================
@@ -537,7 +538,7 @@ def main():
     ])
 
     training_dataset = PairedHistologyDataset("Materiale/Locale/dataset_split/train", transform)
-    training_loader = DataLoader(training_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=n_workers, pin_memory=True) # prima num_workers era a 0 e pin_memory non c'era e batch_size a 4, Shuffle era a Flase
+    training_loader = DataLoader(training_dataset, batch_size=batch_size, shuffle=training_shuffle, num_workers=n_workers, pin_memory=True) # prima num_workers era a 0 e pin_memory non c'era e batch_size a 4, Shuffle era a Flase
     # andrebbero presi i tempi precisi per ogni configurazione (profiling(?)), ma in linea di massima:
     # con num_workers=12 impiega circa 1.27 minuti, 1.28 e 1.22
     # con num_workers=8 impiega circa 1.26 minuti, 1.26 e 1.34
@@ -545,7 +546,7 @@ def main():
     # con num_workers=0 impiega circa 1.27 minuti, 1.23 e 1.29
 
     validation_dataset = PairedHistologyDataset("Materiale/Locale/dataset_split/val", transform)
-    validation_loader = DataLoader(validation_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=n_workers, pin_memory=True)
+    validation_loader = DataLoader(validation_dataset, batch_size=batch_size, shuffle=validation_shuffle, num_workers=n_workers, pin_memory=True)
 
     # Inizializzazione del modello
     generator = UNetGenerator().to(device)
@@ -599,7 +600,7 @@ def main():
         # ------ SALVATAGGIO CHECKPOINT ------
         # Salva ogni epoca (o magari ogni 5 epoche, se preferisci)
         if use_checkpoint:
-            if (epoch + 1) % 1 == 0:
+            if (epoch + 1) % 10 == 0:
                 checkpoint_path = f"Materiale/Locale/checkpoints/checkpoint_Pix2Pix_epoca{epoch}_{timestamp_str}.pth"
                 save_checkpoint(checkpoint_path, epoch, generator, discriminator, opt_G, opt_D, scaler_G, scaler_D)
                 log_message(f"Checkpoint salvato in {checkpoint_path} all'epoca {epoch}", log_file)
