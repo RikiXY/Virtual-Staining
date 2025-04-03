@@ -25,6 +25,14 @@ All'interno della repository sono riportati una serie di file contenuti in varie
 
 \* nel caso in cui i grafici o gli output non dovessero comparire basta runnare nuovamente le celle necessarie
 
+---  
+## Ordine esecuzione
+Avviare dalla cartella root \(Virtual-Staining/\) nel seguente ordine:  
+1. fullsize_alignment_lower_resolution.py  
+2. divide_fullsize_script.py  
+3. create_dataset.py
+4. Pix2Pix.py
+
 ---
 ## To Do List
 - [x] Crea repository e carica i file attuali
