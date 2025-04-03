@@ -1,3 +1,7 @@
+# =============================================================
+# Il file crea una griglia di immagini allineate a partire dalle immagini label_free e aligned_stained
+# =============================================================
+
 import cv2, os
 
 def extract_image(img, x, y, w, h):

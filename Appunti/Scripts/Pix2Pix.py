@@ -586,7 +586,7 @@ def main():
                         bce_loss, l1_loss, epoch, log_file)
 
         # ---------- VALIDATION (a fine epoca) ----------
-        validate(generator, discriminator, validation_loader, device, bce_loss, l1_loss, epoch)
+        validate(generator, discriminator, validation_loader, device, bce_loss, l1_loss, epoch, log_file)
 
         # Log fine epoca
         log_message(f"Fine epoca {epoch}", log_file)

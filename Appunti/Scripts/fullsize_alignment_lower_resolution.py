@@ -1,3 +1,8 @@
+# =============================================================
+# Il file allinea l'immagine stained sulla label_free attraverso la maschera omografica
+# calcolata sull'immagine fullsize scalata
+# =============================================================
+
 import cv2
 import numpy as np
 

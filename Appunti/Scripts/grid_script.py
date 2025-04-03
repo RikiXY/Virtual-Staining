@@ -1,3 +1,7 @@
+# ======================================================================
+# Il file crea una griglia di immagini non allineate a partire dalle immagini label_free e stained
+# =====================================================================
+
 import cv2, os
 
 def extract_image(img, x, y, w, h):
