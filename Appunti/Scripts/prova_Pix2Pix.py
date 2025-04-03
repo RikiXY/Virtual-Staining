@@ -11,8 +11,6 @@ from torchvision import transforms
 from torchvision.utils import save_image
 from PIL import Image
 
-num_epoche = 100
-
 # --------------------- Dataset ---------------------
 class PairedHistologyDataset(Dataset):
     def __init__(self, folder_path, transform=None):
@@ -263,6 +261,86 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+# =========================
+# Funzione di caricamento checkpoint
+# =========================
+def load_checkpoint(checkpoint_path, Generator, Discriminator, opt_G, opt_D, scaler_G, scaler_D, device):
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    Generator.load_state_dict(checkpoint['generator_state_dict'])
+    Discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
+    opt_G.load_state_dict(checkpoint['optimizerG_state_dict'])
+    opt_D.load_state_dict(checkpoint['optimizerD_state_dict'])
+    scaler_G.load_state_dict(checkpoint['scalerG_state_dict'])
+    scaler_D.load_state_dict(checkpoint['scalerD_state_dict'])
+    
+    start_epoch = checkpoint['epoch'] + 1  # Riprendi dalla successiva
+    print(f"Checkpoint caricato (epoch {checkpoint['epoch']}). Ripartenza da epoch {start_epoch}.")
+    return start_epoch
+
+# =========================
+# Validazione del modello
+# =========================
+def validate(Generator, Discriminator, val_loader, device, bce_loss, l1_loss, epoch):
+    # Metti in eval mode
+    Generator.eval()
+    Discriminator.eval()
+
+    # Crea/assicurati che esista la cartella per gli output di validazione
+    os.makedirs("Materiale/Locale/output_val", exist_ok=True)
+
+    total_loss_G = 0.0
+    total_loss_D = 0.0
+    count = 0
+
+    # Niente gradienti
+    with torch.no_grad(), autocast("cuda"):
+        for i, (x, y) in enumerate(val_loader):
+            x, y = x.to(device), y.to(device)
+
+            # Genera immagini di output
+            fake = Generator(x)
+
+            # Predizioni del discriminatore su reale e falso
+            D_real = Discriminator(x, y)
+            D_fake = Discriminator(x, fake)
+
+            # BCE labels
+            real_label = torch.ones_like(D_real, device=device)
+            fake_label = torch.zeros_like(D_fake, device=device)
+
+            # Calcolo delle due loss (D e G)
+            loss_D = bce_loss(D_real, real_label) + bce_loss(D_fake, fake_label)
+            loss_G = bce_loss(D_fake, real_label) + 25 * l1_loss(fake, y)
+
+            total_loss_D += loss_D.item()
+            total_loss_G += loss_G.item()
+            count += 1
+
+            # --- Salvataggio immagini di esempio ---
+            # Ad esempio, salvi i primi 5 batch
+            if i < 5:
+                # Salva la prima immagine del batch (indice 0)
+                # Rimettiamo le immagini da [-1,1] a [0,1]
+                from torchvision.utils import save_image
+                save_image((x[0] * 0.5 + 0.5), 
+                           f"Materiale/Locale/output_val/epoch{epoch}_batch{i}_input.png")
+                save_image((fake[0].detach() * 0.5 + 0.5), 
+                           f"Materiale/Locale/output_val/epoch{epoch}_batch{i}_output.png")
+                save_image((y[0] * 0.5 + 0.5), 
+                           f"Materiale/Locale/output_val/epoch{epoch}_batch{i}_target.png")
+
+    # Ritorni la media delle loss
+    avg_loss_D = total_loss_D / count
+    avg_loss_G = total_loss_G / count
+
+    # Rimetti i modelli in training (se vuoi farlo qui)
+    Generator.train()
+    Discriminator.train()
+
+    return avg_loss_G, avg_loss_D
+
+
+
 # --------------------- Training ---------------------
 def main():
     set_seed(42) # Imposta il seed per la riproducibilità
@@ -277,12 +355,16 @@ def main():
     ])
 
     dataset = PairedHistologyDataset("Materiale/Locale/dataset_split/train", transform)
-    loader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=12, pin_memory=True) # prima num_workers era a 0 e pin_memory non c'era e batch_size a 4, Shuffle era a Flase
+    loader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=12, pin_memory=True) # prima num_workers era a 0 e pin_memory non c'era e batch_size a 4, Shuffle era a Flase
     # andrebbero presi i tempi precisi per ogni configurazione (profiling(?)), ma in linea di massima:
     # con num_workers=12 impiega circa 1.27 minuti, 1.28 e 1.22
     # con num_workers=8 impiega circa 1.26 minuti, 1.26 e 1.34
     # con num_workers=4 impega circa 1.41 minuti, 1.41 e 1.38
     # con num_workers=0 impiega circa 1.27 minuti, 1.23 e 1.29
+
+    val_dataset = PairedHistologyDataset("Materiale/Locale/dataset_split/val", transform)
+    val_loader = DataLoader(val_dataset, batch_size=8, shuffle=True, num_workers=12, pin_memory=True)
+
 
     # Inizializzazione del modello
     Generator = UNetGenerator().to(device)
@@ -293,7 +375,8 @@ def main():
     opt_D = optim.Adam(Discriminator.parameters(), lr=2e-4, betas=(0.5, 0.999))
 
     # Inizializzazione del GradScaler per la precisione mista
-    scaler = GradScaler(device='cuda')
+    scaler_G = GradScaler(device='cuda')
+    scaler_D = GradScaler(device='cuda')
 
     # Inizializzazione delle funzioni di perdita
     bce_loss = nn.BCEWithLogitsLoss()
@@ -304,8 +387,27 @@ def main():
     for file in os.listdir("Materiale/Locale/output_pix2pix"):
         os.remove(os.path.join("Materiale/Locale/output_pix2pix", file))
 
-    print("Inizio training di prova...\n")
+    num_epoche = 100
+
+    useCheckPoint = False # Se vuoi riprendere da un checkpoint esistente, metti True
+
+    # Se vuoi riprendere da un checkpoint esistente, metti la path qui
+    checkpoint_path = "checkpoint_pix2pix_epoch.pth" # <-- Cambia questo con il tuo checkpoint
+    if os.path.exists(checkpoint_path) and useCheckPoint:
+        print("Caricamento checkpoint...")
+        start_epoch = load_checkpoint(checkpoint_path, Generator, Discriminator, 
+                                      opt_G, opt_D, scaler_G, scaler_D, device)
+    else:
+        print("Nessun checkpoint trovato o non richiesto.")
+        # Se non esiste un checkpoint, inizia da 0
+        start_epoch = 0
+
+    print("Inizio allenamento...")
     for epoch in range(num_epoche):
+        
+        Generator.train()
+        Discriminator.train()
+
         for i, (x, y) in enumerate(loader):
             # (x, y) sono le immagini di input e target
             # x sono batch_size immagini di input (label-free)
@@ -336,8 +438,9 @@ def main():
 
             # Ottimizzazione del discriminatore
             opt_D.zero_grad() # zero_grad() azzera i gradienti accumulati
-            scaler.scale(loss_D).backward() # scaler.scale() calcola i gradienti in modo scalato
-            scaler.step(opt_D) # scaler.step() applica i gradienti all'ottimizzatore
+            scaler_D.scale(loss_D).backward() # scaler.scale() calcola i gradienti in modo scalato
+            scaler_D.step(opt_D) # scaler.step() applica i gradienti all'ottimizzatore
+            scaler_D.update() # Aggiorna lo scaler
 
             # ---------- GENERATORE ----------
             with autocast("cuda"):
@@ -352,22 +455,41 @@ def main():
                 # e della L1 loss tra le immagini false e quelle reali
                 # La L1 loss penalizza le differenze tra le immagini generate e quelle reali
                 # La BCE penalizza le predizioni del discriminatore
-                loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * 100
+                loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * 25 # bisogna provare altri valori (prima era 100)
 
             # Ottimizzazione del generatore
             opt_G.zero_grad() # zero_grad() azzera i gradienti accumulati
-            scaler.scale(loss_G).backward() # scaler.scale() calcola i gradienti in modo scalato
-            scaler.step(opt_G) # scaler.step() applica i gradienti all'ottimizzatore
+            scaler_G.scale(loss_G).backward() # scaler.scale() calcola i gradienti in modo scalato
+            scaler_G.step(opt_G) # scaler.step() applica i gradienti all'ottimizzatore
+            scaler_G.update()
 
-            # Aggiorna lo scaler
-            scaler.update()
-
-            # Stampa le informazioni ogni 10 batch
-            if i % 10 == 0:
+            # Stampa le informazioni ogni n batch
+            if i % 1 == 0:
+                print(f"[ep {epoch} | b {i}] loss_G: {loss_G.item():.4f} loss_D: {loss_D.item():.4f}")
                 save_image((x[0] * 0.5 + 0.5), f"Materiale/Locale/output_pix2pix/{epoch:02d}_{i:03d}_input.png")
                 save_image((fake[0].detach() * 0.5 + 0.5), f"Materiale/Locale/output_pix2pix/{epoch:02d}_{i:03d}_output.png")
                 save_image((y[0] * 0.5 + 0.5), f"Materiale/Locale/output_pix2pix/{epoch:02d}_{i:03d}_target.png")
-                print(f"[ep {epoch} | b {i}] loss_G: {loss_G.item():.4f} loss_D: {loss_D.item():.4f}")
+
+         # ---------- VALIDATION (a fine epoca) ----------
+        val_loss_G, val_loss_D = validate(Generator, Discriminator, val_loader, device, bce_loss, l1_loss, epoch)
+        print(f"[Epoca {epoch}] Validation: loss_G={val_loss_G:.4f} loss_D={val_loss_D:.4f}")
+
+        # ------ SALVATAGGIO CHECKPOINT ------
+        # Salva ogni epoca (o magari ogni 5 epoche, se preferisci)
+        if (epoch+1) % 1 == 0:
+            checkpoint = {
+                'epoch': epoch,
+                'generator_state_dict': Generator.state_dict(),
+                'discriminator_state_dict': Discriminator.state_dict(),
+                'optimizerG_state_dict': opt_G.state_dict(),
+                'optimizerD_state_dict': opt_D.state_dict(),
+                'scalerG_state_dict': scaler_G.state_dict(),
+                'scalerD_state_dict': scaler_D.state_dict()
+                # volendo potresti salvare anche l'ultimo loss_G, loss_D, ecc.
+            }
+            torch.save(checkpoint, f"checkpoint_pix2pix_epoch_{epoch}.pth")
+            print(f"Checkpoint salvato all'epoca {epoch}!")
+                
 
 if __name__ == "__main__":
     main()
