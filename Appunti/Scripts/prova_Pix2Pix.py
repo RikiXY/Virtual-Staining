@@ -512,7 +512,7 @@ def main():
                 save_image((y[0] * 0.5 + 0.5), 
                            f"Materiale/Locale/output_pix2pix/{epoch:02d}_{i:03d}_target.png")
 
-         # ---------- VALIDATION (a fine epoca) ----------
+        # ---------- VALIDATION (a fine epoca) ----------
         val_loss_G, val_loss_D = validate(Generator, Discriminator, val_loader, device, bce_loss, l1_loss, epoch)
 
         # LOG
