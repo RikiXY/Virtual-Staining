@@ -1,5 +1,7 @@
 import os, random
 import numpy as np
+import time
+import datetime
 
 import torch
 import torch.nn as nn
@@ -172,7 +174,7 @@ class UNetGenerator(nn.Module):
 class PatchGANDiscriminator(nn.Module):
     """
     PatchGAN discriminator for image-to-image tasks (e.g., pix2pix, CycleGAN).
-    Produces an N×N map of 'real/fake' predictions for each patch of the input.
+    Produces an NxN map of 'real/fake' predictions for each patch of the input.
     """
     def __init__(self, in_channels=6, ndf=64, use_sigmoid=False):
         """
@@ -343,6 +345,21 @@ def validate(Generator, Discriminator, val_loader, device, bce_loss, l1_loss, ep
 
 # --------------------- Training ---------------------
 def main():
+
+    os.makedirs("Materiale/Locale/output_pix2pix_logs", exist_ok=True)
+
+    # 1) Genero un nome file log con data/ora attuale (unico per ogni esecuzione).
+    timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_file = f"Materiale/Locale/output_pix2pix_logs/Log-{timestamp_str}.txt"
+
+    # 2) Tempo iniziale e data/ora di avvio
+    start_time = time.time()
+    start_dt_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # 3) Creazione file di log in scrittura ("w"): cancella o crea ex novo
+    with open(log_file, "w") as f:
+        f.write(f"{start_dt_str}\nInizio training\n")
+
     set_seed(42) # Imposta il seed per la riproducibilità
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -387,7 +404,7 @@ def main():
     for file in os.listdir("Materiale/Locale/output_pix2pix"):
         os.remove(os.path.join("Materiale/Locale/output_pix2pix", file))
 
-    num_epoche = 100
+    num_epoche = 1
 
     useCheckPoint = False # Se vuoi riprendere da un checkpoint esistente, metti True
 
@@ -404,6 +421,11 @@ def main():
 
     print("Inizio allenamento...")
     for epoch in range(num_epoche):
+
+        # Log inizio epoca
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(log_file, "a") as f:
+            f.write(f"{now_str}\nStart epoca {epoch}\n")
         
         Generator.train()
         Discriminator.train()
@@ -463,16 +485,35 @@ def main():
             scaler_G.step(opt_G) # scaler.step() applica i gradienti all'ottimizzatore
             scaler_G.update()
 
-            # Stampa le informazioni ogni n batch
+            # Stampa e log su file
             if i % 1 == 0:
-                print(f"[ep {epoch} | b {i}] loss_G: {loss_G.item():.4f} loss_D: {loss_D.item():.4f}")
-                save_image((x[0] * 0.5 + 0.5), f"Materiale/Locale/output_pix2pix/{epoch:02d}_{i:03d}_input.png")
-                save_image((fake[0].detach() * 0.5 + 0.5), f"Materiale/Locale/output_pix2pix/{epoch:02d}_{i:03d}_output.png")
-                save_image((y[0] * 0.5 + 0.5), f"Materiale/Locale/output_pix2pix/{epoch:02d}_{i:03d}_target.png")
+                msg = f"[ep {epoch} | b {i}] loss_G: {loss_G.item():.4f} loss_D: {loss_D.item():.4f}"
+                print(msg)
+                # Append su log
+                with open(log_file, "a") as f:
+                    f.write(msg + "\n")
+
+                save_image((x[0] * 0.5 + 0.5), 
+                           f"Materiale/Locale/output_pix2pix/{epoch:02d}_{i:03d}_input.png")
+                save_image((fake[0].detach() * 0.5 + 0.5), 
+                           f"Materiale/Locale/output_pix2pix/{epoch:02d}_{i:03d}_output.png")
+                save_image((y[0] * 0.5 + 0.5), 
+                           f"Materiale/Locale/output_pix2pix/{epoch:02d}_{i:03d}_target.png")
 
          # ---------- VALIDATION (a fine epoca) ----------
         val_loss_G, val_loss_D = validate(Generator, Discriminator, val_loader, device, bce_loss, l1_loss, epoch)
         print(f"[Epoca {epoch}] Validation: loss_G={val_loss_G:.4f} loss_D={val_loss_D:.4f}")
+
+        # LOG
+        val_msg = f"[Epoca {epoch}] Validation: loss_G={val_loss_G:.4f} loss_D={val_loss_D:.4f}"
+        print(val_msg)
+        with open(log_file, "a") as f:
+            f.write(val_msg + "\n")
+
+        # Log fine epoca
+        with open(log_file, "a") as f:
+            f.write(f"End epoca {epoch}\n")
+
 
         # ------ SALVATAGGIO CHECKPOINT ------
         # Salva ogni epoca (o magari ogni 5 epoche, se preferisci)
@@ -489,7 +530,16 @@ def main():
             }
             torch.save(checkpoint, f"checkpoint_pix2pix_epoch_{epoch}.pth")
             print(f"Checkpoint salvato all'epoca {epoch}!")
-                
+
+    # Fine allenamento
+    end_time = time.time()
+    total_seconds = end_time - start_time
+    end_dt_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    final_msg = f"Fine esecuzione in {end_dt_str}. Tempo impiegato = {total_seconds:.2f} secondi\n"
+    print(final_msg)
+    with open(log_file, "a") as f:
+        f.write(final_msg)
+              
 
 if __name__ == "__main__":
     main()
