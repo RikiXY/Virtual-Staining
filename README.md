@@ -31,11 +31,11 @@ Avviare dalla cartella root \(_Virtual-Staining/_\) nel seguente ordine:
 - Per addestramento:
 	1. `python Appunti\Scripts\fullsize_alignment_lower_resolution.py`: esegue l'allineamento;  
 	2. `python Appunti\Scripts\divide_fullsize_script.py`: divide in _n_ coppie allineate (in _aligned/_);  
-	3. `create_dataset.py`: suddivide in 3 sottocartelle \(_test/_, _train/_ e _val/_\) le _n_ coppie;  
-	4. `Pix2Pix.py`: addestra la rete neurale sulla cartelle _train/_ ed esegue valutazioni grazie a _val/_, i risultati della valutazioni vengono salvati in _output\_val/_;  
+	3. `python Appunti\Scripts\create_dataset.py`: suddivide in 3 sottocartelle \(_test/_, _train/_ e _val/_\) le _n_ coppie;  
+	4. `python Appunti\Scripts\Pix2Pix.py`: addestra la rete neurale sulla cartelle _train/_ ed esegue valutazioni grazie a _val/_, i risultati della valutazioni vengono salvati in _output\_val/_;  
 - Per testare:
-	1. `python Pix2Pix.py test`: testa la rete sulle immagini della cartella _test/_ utilizzando il checkpoint di addestramento (da impostare manualmente nello script) e restituisce i risultati in _output\_test/_;  
-	2. `python save_graphs.py`: mi salva delle immagini basate sulla tripla input/output/target nella cartella _graphs\_test/_;  
+	1. `python Appunti\Scripts\Pix2Pix.py test`: testa la rete sulle immagini della cartella _test/_ utilizzando il checkpoint di addestramento (da impostare manualmente nello script) e restituisce i risultati in _output\_test/_;  
+	2. `python Appunti\Scripts\save_graphs.py`: mi salva delle immagini basate sulla tripla input/output/target nella cartella _graphs\_test/_;  
 
 ---
 ## To Do List
