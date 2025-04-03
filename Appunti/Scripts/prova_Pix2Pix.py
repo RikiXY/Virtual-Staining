@@ -13,9 +13,11 @@ from PIL import Image
 # =========================
 # PARAMETRI IMPORTANTI
 # ----------------------
-n_epochs = 1 # Numero di epoche da eseguire
+n_epochs = 100 # Numero di epoche da eseguire
+log_rate = 10 # Ogni quanto loggare (es. ogni 10 batch)
 use_checkpoint = True # Se vuoi riprendere da un checkpoint esistente, metti True
-restore_checkpoint_path = "checkpoint_pix2pix_epoca.pth" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
+checkpoint_rate = 10 # Ogni quanto salvare i checkpoint (es. ogni 10 epoche)
+restore_checkpoint_path = "checkpoint_pix2pix_epocaNUM.pth" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
 seed = 42 # Seed per la riproducibilità
 # -----------------------
 batch_size = 8 # Batch size per il DataLoader (8 è un buon valore, ma dipende dalla GPU)
@@ -51,7 +53,6 @@ class PairedHistologyDataset(Dataset):
             lf = self.transform(lf)
             st = self.transform(st)
         return lf, st
-
 
 # --------------------- Generatore (UNet-like) ---------------------
 class DoubleConv(nn.Module):
@@ -123,7 +124,6 @@ class OutConv(nn.Module):
     def forward(self, x):
         return self.conv(x)
 
-
 class UNetGenerator(nn.Module):
     def __init__(self, n_channels=3, n_classes=3, bilinear=False):
         """
@@ -174,7 +174,6 @@ class UNetGenerator(nn.Module):
         
         logits = self.outc(x)  # Shape: [N, n_classes, 512, 512]
         return logits
-
 
 # --------------------- Discriminatore (PatchGAN) ---------------------
 class PatchGANDiscriminator(nn.Module):
@@ -257,7 +256,6 @@ class PatchGANDiscriminator(nn.Module):
         """
         return self.model(torch.cat([x, y], dim=1)) # Concatena input e output
 
-
 # --------------------- Determinismo ---------------------
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -269,7 +267,6 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-
 # --------------------- Logging ---------------------
 def log_message(message, log_file, show_time=True, use_stdout=True):
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -279,7 +276,6 @@ def log_message(message, log_file, show_time=True, use_stdout=True):
         f.write(message + "\n")
     if use_stdout:
         print(message)
-
 
 # --------------------- Checkpoints ---------------------
 def save_checkpoint(checkpoint_path, epoch, G, D, opt_G, opt_D, scaler_G, scaler_D):
@@ -331,7 +327,6 @@ def load_checkpoint(checkpoint_path, G, D, opt_G, opt_D, scaler_G, scaler_D, dev
     start_epoch = checkpoint['epoch'] + 1  # Riprendi dalla successiva
     return start_epoch
 
-
 # --------------------- Funzioni utili ---------------------
 def save_images(path, input, output, target, epoch, batch_index):
     """
@@ -350,7 +345,6 @@ def save_images(path, input, output, target, epoch, batch_index):
     save_image((input[0] * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_input.png"))
     save_image((output[0].detach() * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_output.png"))
     save_image((target[0] * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_target.png"))
-
 
 # --------------------- Training e Validazione ---------------------
 def validate(G, D, validation_loader, device, bce_loss, l1_loss, epoch, log_file):
@@ -503,11 +497,10 @@ def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scale
         scaler_G.update()
 
         # Stampa e log su file
-        if i % 10 == 0:
+        if i % log_rate == 0:
             log_message(f"[ep {epoch} | b {i}] loss_G: {loss_G.item():.4f} loss_D: {loss_D.item():.4f}", log_file)
             # Non serve salvare le immagini di training dato che le salviamo in validate
             # save_images("Materiale/Locale/output_pix2pix", x[0], fake[0], y[0], epoch, i)
-
 
 # --------------------- Main ---------------------
 def main():
@@ -601,7 +594,7 @@ def main():
         # ------ SALVATAGGIO CHECKPOINT ------
         # Salva ogni epoca (o magari ogni 5 epoche, se preferisci)
         if use_checkpoint:
-            if (epoch + 1) % 10 == 0:
+            if (epoch + 1) % checkpoint_rate == 0:
                 checkpoint_path = f"Materiale/Locale/checkpoints/checkpoint_Pix2Pix_epoca{epoch}_{timestamp_str}.pth"
                 save_checkpoint(checkpoint_path, epoch, generator, discriminator, opt_G, opt_D, scaler_G, scaler_D)
                 log_message(f"Checkpoint salvato in {checkpoint_path} all'epoca {epoch}", log_file)
