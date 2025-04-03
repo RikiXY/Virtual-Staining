@@ -14,11 +14,12 @@ import sys
 # =========================
 # PARAMETRI IMPORTANTI
 # ----------------------
-n_epochs = 5 # Numero di epoche da eseguire
-log_rate = 1 # Ogni quanto loggare (es. ogni 10 batch)
+n_epochs = 100 # Numero di epoche da eseguire
+log_rate = 15 # Ogni quanto loggare (es. ogni 10 batch)
 use_checkpoint = True # Se vuoi riprendere da un checkpoint esistente, metti True       Bisognerebbe creare create_checkpoint e load_checkpoint così si possono distinguere le casiistiche
-checkpoint_rate = 1 # Ogni quanto salvare i checkpoint (es. ogni 10 epoche)
-restore_checkpoint_path = "Materiale/Locale/checkpoints/checkpoint_Pix2Pix_epoca4_2025-04-03_23-40-20.pth" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
+checkpoint_rate = 10 # Ogni quanto salvare i checkpoint (es. ogni 10 epoche)
+restore_checkpoint_path = "NOT_Materiale/Locale/checkpoints/checkpoint_Pix2Pix_epoca4_2025-04-03_23-40-20.pth" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
+validate_rate = 10 # Ogni quanto validare (es. ogni 5 epoche), prendiamo per buono al momento come valore standard =checkpoint_rate
 seed = 42 # Seed per la riproducibilità
 # -----------------------
 batch_size = 8 # Batch size per il DataLoader (8 è un buon valore, ma dipende dalla GPU)
@@ -688,9 +689,6 @@ def main():
         train_one_epoch(generator, discriminator, training_loader, device, opt_G, opt_D, scaler_G, scaler_D,
                         bce_loss, l1_loss, epoch, log_file, progress_tracker)
 
-        # ---------- VALIDATION (a fine epoca) ----------
-        validate(generator, discriminator, validation_loader, device, bce_loss, l1_loss, epoch, log_file)
-
         # Log fine epoca
         log_message(f"Fine epoca {epoch}", log_file)
 
@@ -701,6 +699,10 @@ def main():
                 checkpoint_path = f"Materiale/Locale/checkpoints/checkpoint_Pix2Pix_epoca{epoch}_{timestamp_str}.pth"
                 save_checkpoint(checkpoint_path, epoch, generator, discriminator, opt_G, opt_D, scaler_G, scaler_D)
                 log_message(f"Checkpoint salvato in {checkpoint_path} all'epoca {epoch}", log_file)
+
+        # ---------- VALIDATION (in corrispondenza con checkpoint_rate) ----------
+        if(epoch + 1) % validate_rate == 0:
+            validate(generator, discriminator, validation_loader, device, bce_loss, l1_loss, epoch, log_file)
 
     # Fine allenamento
     end_time = time.time()
