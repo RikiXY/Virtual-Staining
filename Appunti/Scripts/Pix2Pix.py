@@ -342,9 +342,9 @@ def save_images(path, input, output, target, epoch, batch_index):
     """
     # Salva le immagini di input, output e target
     # Rimettiamo le immagini da [-1,1] a [0,1]
-    save_image((input[0] * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_input.png"))
-    save_image((output[0].detach() * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_output.png"))
-    save_image((target[0] * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_target.png"))
+    save_image((input * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_input.png"))
+    save_image((output * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_output.png"))
+    save_image((target * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_target.png"))
 
 # --------------------- Training e Validazione ---------------------
 def validate(G, D, validation_loader, device, bce_loss, l1_loss, epoch, log_file):
@@ -404,7 +404,7 @@ def validate(G, D, validation_loader, device, bce_loss, l1_loss, epoch, log_file
             # Ad esempio, salvi i primi 5 batch
             if i < 5:
                 # Salva la prima immagine del batch (indice 0)
-                save_images("Materiale/Locale/output_val", x[0], fake[0], y[0], epoch, i)
+                save_images("Materiale/Locale/output_val", x[0], fake.detach()[0], y[0], epoch, i)
 
     # Ritorni la media delle loss
     avg_loss_D = total_loss_D / count
@@ -500,7 +500,7 @@ def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scale
         if i % log_rate == 0:
             log_message(f"[ep {epoch} | b {i}] loss_G: {loss_G.item():.4f} loss_D: {loss_D.item():.4f}", log_file)
             # Non serve salvare le immagini di training dato che le salviamo in validate
-            # save_images("Materiale/Locale/output_pix2pix", x[0], fake[0], y[0], epoch, i)
+            # save_images("Materiale/Locale/output_pix2pix", x[0], fake.detach()[0], y[0], epoch, i)
 
 # --------------------- Main ---------------------
 def main():
