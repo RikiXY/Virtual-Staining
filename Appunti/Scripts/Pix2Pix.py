@@ -14,10 +14,10 @@ from PIL import Image
 # PARAMETRI IMPORTANTI
 # ----------------------
 n_epochs = 100 # Numero di epoche da eseguire
-log_rate = 10 # Ogni quanto loggare (es. ogni 10 batch)
+log_rate = 15 # Ogni quanto loggare (es. ogni 10 batch)
 use_checkpoint = True # Se vuoi riprendere da un checkpoint esistente, metti True
 checkpoint_rate = 10 # Ogni quanto salvare i checkpoint (es. ogni 10 epoche)
-restore_checkpoint_path = "checkpoint_pix2pix_epocaNUM.pth" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
+restore_checkpoint_path = "NOT_Materiale/Locale/checkpoints/checkpoint_Pix2Pix_epoca39_2025-04-03_18-09-09.pth" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
 seed = 42 # Seed per la riproducibilità
 # -----------------------
 batch_size = 8 # Batch size per il DataLoader (8 è un buon valore, ma dipende dalla GPU)
@@ -281,6 +281,7 @@ class ProgressTracker:
     def __init__(self, total_epochs, total_batches, max_history=50):
         self.total_epochs = total_epochs
         self.total_batches = total_batches
+        self.max_history = max_history
         self.start_time = time.time()
         self.times = []
     
@@ -520,7 +521,9 @@ def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scale
         scaler_G.update()
 
         progress, total_elapsed_time, expected_time, eta, end_time = progress_tracker.calculate_progress(epoch, i)
-        progress_str = f"{progress:.2%} | Durata esecuzione: {total_elapsed_time:.2f}s | Durata stimata: {expected_time:.2f}s | ETA: {eta:.2f}s | Fine: {datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
+        # progress_str = f"{progress:.2%} | Durata esecuzione: {total_elapsed_time:.2f}s | Durata stimata: {expected_time:.2f}s | ETA: {eta:.2f}s | Fine: {datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
+        progress_str = f"{progress:.2%} | Fine stimata: {datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
+
 
         # Stampa e log su file
         if i % log_rate == 0:
