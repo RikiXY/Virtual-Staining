@@ -17,7 +17,8 @@ from PIL import Image
 # PARAMETRI IMPORTANTI
 # ----------------------
 num_epoche = 1 # Numero di epoche da eseguire
-useCheckPoint = False # Se vuoi riprendere da un checkpoint esistente, metti True
+useCheckPoint = True # Se vuoi riprendere da un checkpoint esistente, metti True
+checkpoint_path = "checkpoint_pix2pix_epoca.pth" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
 seed = 42 # Seed per la riproducibilità
 # -----------------------
 BatchSize = 8 # Batch size per il DataLoader (8 è un buon valore, ma dipende dalla GPU)
@@ -420,8 +421,7 @@ def main():
     if useCheckPoint == 1:
         os.makedirs("Materiale/Locale/checkpoints", exist_ok=True)
 
-    # Se vuoi riprendere da un checkpoint esistente, metti la path qui
-    checkpoint_path = "checkpoint_pix2pix_epoch.pth" # <-- Cambia questo con il tuo checkpoint
+    # Se vuoi usare i checkpoint, carica il checkpoint esistente
     if os.path.exists(checkpoint_path) and useCheckPoint:
         print("Caricamento checkpoint...")
         start_epoch = load_checkpoint(checkpoint_path, Generator, Discriminator, 
