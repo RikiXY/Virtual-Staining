@@ -9,7 +9,7 @@ import sys
 
 # === CONFIGURAZIONE ===
 input_folder = "Materiale/Locale/output_val"
-output_folder = "Materiale/Locale/graphs"
+output_folder = "Materiale/Locale/graphs_val"
 if len(sys.argv) >= 2:
     epoche_rate = int(sys.argv[1])  # <-- epoche da mostrare: solo quelle per cui (epoca % epoche_rate == 0)
 else:
@@ -51,7 +51,7 @@ if not filtered_epoch_batches and sorted_epoch_batches:
 
 # Plotting
 fig, axs = plt.subplots(len(filtered_epoch_batches), 3, figsize=(12, 4 * len(filtered_epoch_batches)))
-fig.suptitle("Confronto immagini (senza num_img fisso)", fontsize=16)
+fig.suptitle("Confronto immagini", fontsize=16)
 
 # Se c'è solo un blocco (una riga) axs è singolo array, uniformiamo la logica
 if len(filtered_epoch_batches) == 1:

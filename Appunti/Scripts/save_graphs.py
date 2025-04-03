@@ -1,32 +1,58 @@
+import os
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
+from glob import glob
 
-# Carica le immagini (assicurati che i percorsi e i nomi dei file siano corretti)
-img_input =  mpimg.imread('Materiale/Locale/output_pix2pix/86_264_input.png')
-img_output = mpimg.imread('Materiale/Locale/output_pix2pix/86_264_output.png')
-img_target = mpimg.imread('Materiale/Locale/output_pix2pix/86_264_target.png')
+# Percorsi delle cartelle
+test_folder = "Materiale/Locale/dataset_split/test/"
+output_folder = "Materiale/Locale/output_test/"
+save_path = "Materiale/Locale/graphs_test/"
+os.makedirs(save_path, exist_ok=True)
 
-# Crea la figura con tre subplot affiancati
-fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+# Trova tutti i file *_label_free.tif nella cartella di testing
+input_files = sorted(glob(os.path.join(test_folder, '*_label_free.tif')))
+# print(f"Found {len(input_files)} input files.")
 
-# Primo subplot: Input
-axes[0].imshow(img_input)
-axes[0].set_title('Input')
-axes[0].axis('off')  # Nasconde gli assi
+for input_file in input_files:
+    base_name = os.path.basename(input_file).replace('_label_free.tif', '')
+    # print(f"Processing {base_name}...")
+    
+    # Percorsi degli altri due file
+    target_file = os.path.join(test_folder, f'{base_name}_stained.tif')
+    # print(f"Target file: {target_file}")
+    output_file = os.path.join(output_folder, f'{base_name}_label_free_generated.tif')
+    # print(f"Output file: {output_file}")
+    
+    # Verifica che tutti e tre i file esistano
+    if not all(os.path.exists(f) for f in [input_file, output_file, target_file]):
+        # print(f"Skipping {base_name}: one or more files not found.")
+        continue
 
-# Secondo subplot: Output
-axes[1].imshow(img_output)
-axes[1].set_title('Output')
-axes[1].axis('off')
+    # Carica le immagini
+    img_input = mpimg.imread(input_file)
+    img_output = mpimg.imread(output_file)
+    img_target = mpimg.imread(target_file)
 
-# Terzo subplot: Target
-axes[2].imshow(img_target)
-axes[2].set_title('Target')
-axes[2].axis('off')
+    # Crea la figura
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+    axes[0].imshow(img_input)
+    axes[0].set_title('Input')
+    axes[0].axis('off')
 
-# Disposizione più pulita e mostra la figura
-plt.tight_layout()
-plt.show()
+    axes[1].imshow(img_output)
+    axes[1].set_title('Output')
+    axes[1].axis('off')
 
-# Se vuoi salvare la figura come file PNG, aggiungi:
-# plt.savefig('Materiale/Locale/graphs/confronto_immagini.png', dpi=300)
+    axes[2].imshow(img_target)
+    axes[2].set_title('Target')
+    axes[2].axis('off')
+
+    plt.tight_layout()
+
+    # Salva la figura
+    save_file = os.path.join(save_path, f'{base_name}.png')
+    plt.savefig(save_file, dpi=300)
+    plt.close()
+
+    # print(f"Saved: {save_file}")
+print("All images processed and saved.")

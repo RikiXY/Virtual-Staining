@@ -9,15 +9,16 @@ from torch.amp import autocast, GradScaler
 from torchvision import transforms
 from torchvision.utils import save_image
 from PIL import Image
+import sys
 
 # =========================
 # PARAMETRI IMPORTANTI
 # ----------------------
-n_epochs = 100 # Numero di epoche da eseguire
-log_rate = 15 # Ogni quanto loggare (es. ogni 10 batch)
-use_checkpoint = True # Se vuoi riprendere da un checkpoint esistente, metti True
-checkpoint_rate = 10 # Ogni quanto salvare i checkpoint (es. ogni 10 epoche)
-restore_checkpoint_path = "NOT_Materiale/Locale/checkpoints/checkpoint_Pix2Pix_epoca39_2025-04-03_18-09-09.pth" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
+n_epochs = 5 # Numero di epoche da eseguire
+log_rate = 1 # Ogni quanto loggare (es. ogni 10 batch)
+use_checkpoint = True # Se vuoi riprendere da un checkpoint esistente, metti True       Bisognerebbe creare create_checkpoint e load_checkpoint così si possono distinguere le casiistiche
+checkpoint_rate = 1 # Ogni quanto salvare i checkpoint (es. ogni 10 epoche)
+restore_checkpoint_path = "Materiale/Locale/checkpoints/checkpoint_Pix2Pix_epoca4_2025-04-03_23-40-20.pth" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
 seed = 42 # Seed per la riproducibilità
 # -----------------------
 batch_size = 8 # Batch size per il DataLoader (8 è un buon valore, ma dipende dalla GPU)
@@ -340,7 +341,7 @@ def load_checkpoint(checkpoint_path, G, D, opt_G, opt_D, scaler_G, scaler_D, dev
         scaler_D (torch.cuda.amp.GradScaler): GradScaler per il discriminatore.
         device (torch.device): Dispositivo su cui caricare i modelli.
     """
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     G.load_state_dict(checkpoint['generator_state_dict'])
     D.load_state_dict(checkpoint['discriminator_state_dict'])
     opt_G.load_state_dict(checkpoint['optimizerG_state_dict'])
@@ -365,9 +366,9 @@ def save_images(path, input, output, target, epoch, batch_index):
     """
     # Salva le immagini di input, output e target
     # Rimettiamo le immagini da [-1,1] a [0,1]
-    save_image((input * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_input.png"))
-    save_image((output * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_output.png"))
-    save_image((target * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_target.png"))
+    save_image((input * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_input.tif"))
+    save_image((output * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_output.tif"))
+    save_image((target * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_target.tif"))
 
 # --------------------- Training e Validazione ---------------------
 def validate(G, D, validation_loader, device, bce_loss, l1_loss, epoch, log_file):
@@ -437,6 +438,72 @@ def validate(G, D, validation_loader, device, bce_loss, l1_loss, epoch, log_file
     log_message(f"[Epoca {epoch}] Validation: loss_G={avg_loss_G:.4f} loss_D={avg_loss_D:.4f}", log_file)
 
     return avg_loss_G, avg_loss_D
+
+def test_inference(checkpoint_path, test_folder, output_folder="Materiale/Locale/output_test", image_size=(512, 512), device="cuda"):
+    """
+    Funzione di test per il modello.
+    Questa funzione esegue l'inferenza su un set di immagini e salva i risultati.
+
+    Args:
+        checkpoint_path (str): Percorso del checkpoint da caricare.
+        test_folder (str): Percorso della cartella contenente le immagini di test.
+        output_folder (str): Percorso della cartella in cui salvare le immagini di output.
+        device (torch.device): Dispositivo su cui eseguire i calcoli (CPU o GPU).
+    """
+
+    # Crea cartella per gli output se non esiste già
+    os.makedirs(output_folder, exist_ok=True)
+
+    # Carica il checkpoint
+    G = UNetGenerator().to(device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    G.load_state_dict(checkpoint['generator_state_dict'])
+    G.eval()
+
+    # Trasformazioni da applicare alle immagini di test
+    transform = transforms.Compose([
+        transforms.Resize(image_size),
+        transforms.ToTensor(),
+        transforms.Normalize([0.5]*3, [0.5]*3),
+    ])
+
+    # Iterazione sui file nella cartella di test
+    test_files = sorted([
+        f for f in os.listdir(test_folder)
+        if f.lower().endswith('_label_free.tif')
+    ])
+    if not test_files:
+        print(f"Nessun file trovato nella cartella di test: {test_folder}")
+        return
+
+    with torch.no_grad(), autocast(device_type="cuda"):
+        for i, filename in enumerate(test_files):
+
+            # Carico l'immagine di test label-free
+            img_path = os.path.join(test_folder, filename)
+            img = Image.open(img_path).convert('RGB')
+
+            # Applico la trasfromazione
+            img_tensor = transform(img).unsqueeze(0).to(device)  # shape: (1, 3, H, W)
+
+            # Passa dal generatore
+            fake_stained = G(img_tensor)  # shape: (1, 3, H, W)
+
+            # Riporta in [0,1] per salvataggio
+            fake_stained = (fake_stained * 0.5) + 0.5
+            fake_stained = fake_stained.clamp(0,1)
+
+            # Salva l'immagine generata
+            out_filename = f"{os.path.splitext(filename)[0]}_generated.tif"
+            out_path = os.path.join(output_folder, out_filename)
+
+            # Converte da tensor a PIL e salva
+            save_image(fake_stained, out_path)
+
+            # print(f"{out_filename} salvata in {output_folder}")
+    print(f"Test completato. Immagini salvate in {output_folder}")
+
+
 
 def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scaler_D, bce_loss, l1_loss, epoch, log_file, progress_tracker):
     """
@@ -642,4 +709,11 @@ def main():
               
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) >= 2 and sys.argv[1] == "test":
+        # Esegui il test con un checkpoint esistente
+        print(f"Parametro 'test' fornito. Inizio test con il checkpoint in: {restore_checkpoint_path}")
+        test_inference(restore_checkpoint_path, test_folder="Materiale/Locale/dataset_split/test", output_folder="Materiale/Locale/output_test", image_size=image_size, device="cuda")
+    else:
+        # Esegui il training
+        print("Parametro 'test' non fornito. Inizio allenamento.")
+        main()
