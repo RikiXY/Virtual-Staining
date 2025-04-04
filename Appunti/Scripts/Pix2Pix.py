@@ -14,12 +14,12 @@ import sys
 # =========================
 # PARAMETRI IMPORTANTI
 # ----------------------
-n_epochs = 100 # Numero di epoche da eseguire
+n_epochs = 5 # Numero di epoche da eseguire
 log_rate = 15 # Ogni quanto loggare (es. ogni 10 batch)
 use_checkpoint = True # Se vuoi riprendere da un checkpoint esistente, metti True       Bisognerebbe creare create_checkpoint e load_checkpoint così si possono distinguere le casiistiche
-checkpoint_rate = 10 # Ogni quanto salvare i checkpoint (es. ogni 10 epoche)
-restore_checkpoint_path = "Materiale/Locale/checkpoints/checkpoint_Pix2Pix_epoca99_2025-04-04_00-55-08.pth" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
-validate_rate = 10 # Ogni quanto validare (es. ogni 5 epoche), prendiamo per buono al momento come valore standard =checkpoint_rate
+checkpoint_rate = 15 # Ogni quanto salvare i checkpoint (es. ogni 10 epoche)
+restore_checkpoint_path = "Materiale/Locale/Pix2Pix/checkpoints/PASTE_HERE_THE_CHECKPOINT_NAME" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
+validate_rate = 1 # Ogni quanto validare (es. ogni 5 epoche), prendiamo per buono al momento come valore standard =checkpoint_rate
 seed = 42 # Seed per la riproducibilità
 # -----------------------
 batch_size = 8 # Batch size per il DataLoader (8 è un buon valore, ma dipende dalla GPU)
@@ -395,7 +395,7 @@ def validate(G, D, validation_loader, device, bce_loss, l1_loss, epoch, log_file
     D.eval()
 
     # Crea/assicurati che esista la cartella per gli output di validazione
-    os.makedirs("Materiale/Locale/output_val", exist_ok=True)
+    os.makedirs("Materiale/Locale/Pix2Pix/output_val", exist_ok=True)
 
     total_loss_G = 0.0
     total_loss_D = 0.0
@@ -429,7 +429,7 @@ def validate(G, D, validation_loader, device, bce_loss, l1_loss, epoch, log_file
             # Ad esempio, salvi i primi 5 batch
             if i < 5:
                 # Salva la prima immagine del batch (indice 0)
-                save_images("Materiale/Locale/output_val", x[0], fake.detach()[0], y[0], epoch, i)
+                save_images("Materiale/Locale/Pix2Pix/output_val", x[0], fake.detach()[0], y[0], epoch, i)
 
     # Ritorni la media delle loss
     avg_loss_D = total_loss_D / count
@@ -440,7 +440,7 @@ def validate(G, D, validation_loader, device, bce_loss, l1_loss, epoch, log_file
 
     return avg_loss_G, avg_loss_D
 
-def test_inference(checkpoint_path, test_folder, output_folder="Materiale/Locale/output_test", image_size=(512, 512), device="cuda"):
+def test_inference(checkpoint_path, test_folder, output_folder="Materiale/Locale/Pix2Pix/output_test", image_size=(512, 512), device="cuda"):
     """
     Funzione di test per il modello.
     Questa funzione esegue l'inferenza su un set di immagini e salva i risultati.
@@ -595,18 +595,18 @@ def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scale
         if i % log_rate == 0:
             log_message(f"[ep {epoch} | b {i}] loss_G: {loss_G.item():.4f} loss_D: {loss_D.item():.4f} - {progress_str}", log_file)
             # Non serve salvare le immagini di training dato che le salviamo in validate
-            # save_images("Materiale/Locale/output_pix2pix", x[0], fake.detach()[0], y[0], epoch, i)
+            # save_images("Materiale/Locale/Pix2Pix/output_train", x[0], fake.detach()[0], y[0], epoch, i)
 
 # --------------------- Main ---------------------
 def main():
     start_time = time.time()
 
     # Crea la cartella per i log (se non esiste già)
-    os.makedirs("Materiale/Locale/output_pix2pix_logs", exist_ok=True)
+    os.makedirs("Materiale/Locale/Pix2Pix/logs", exist_ok=True)
 
     # Genero un nome file log con data/ora attuale (unico per ogni esecuzione).
     timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_file = f"Materiale/Locale/output_pix2pix_logs/Log-{timestamp_str}.txt"
+    log_file = f"Materiale/Locale/Pix2Pix/logs/Log-{timestamp_str}.txt"
     # Se esiste già un file con lo stesso nome, lo cancello (per evitare conflitti)
     if os.path.exists(log_file):
         os.remove(log_file)
@@ -656,14 +656,14 @@ def main():
     l1_loss = nn.L1Loss()
 
     # Creazione cartella per le immagini di preview e cancellazione dei file esistenti
-    os.makedirs("Materiale/Locale/output_pix2pix", exist_ok=True)
-    for file in os.listdir("Materiale/Locale/output_pix2pix"):
-        os.remove(os.path.join("Materiale/Locale/output_pix2pix", file))
+    os.makedirs("Materiale/Locale/Pix2Pix/output_train", exist_ok=True)
+    for file in os.listdir("Materiale/Locale/Pix2Pix/output_train"):
+        os.remove(os.path.join("Materiale/Locale/Pix2Pix/output_train", file))
 
     # Checkpoint
     start_epoch = 0
     if use_checkpoint:
-        os.makedirs("Materiale/Locale/checkpoints", exist_ok=True)
+        os.makedirs("Materiale/Locale/Pix2Pix/checkpoints", exist_ok=True)
         # Se vuoi usare i checkpoint, carica il checkpoint esistente
         if os.path.exists(restore_checkpoint_path):
             start_epoch = load_checkpoint(restore_checkpoint_path, generator, discriminator, 
@@ -694,7 +694,7 @@ def main():
         # Salva ogni epoca (o magari ogni 5 epoche, se preferisci)
         if use_checkpoint:
             if (epoch + 1) % checkpoint_rate == 0:
-                checkpoint_path = f"Materiale/Locale/checkpoints/checkpoint_Pix2Pix_epoca{epoch}_{timestamp_str}.pth"
+                checkpoint_path = f"Materiale/Locale/Pix2Pix/checkpoints/checkpoint_Pix2Pix_epoca{epoch}_{timestamp_str}.pth"
                 save_checkpoint(checkpoint_path, epoch, generator, discriminator, opt_G, opt_D, scaler_G, scaler_D)
                 log_message(f"Checkpoint salvato in {checkpoint_path} all'epoca {epoch}", log_file)
 
@@ -713,7 +713,7 @@ if __name__ == "__main__":
         # Esegui 
         # il test con un checkpoint esistente
         print(f"Parametro 'test' fornito. Inizio test con il checkpoint in: {restore_checkpoint_path}")
-        test_inference(restore_checkpoint_path, test_folder="Materiale/Locale/dataset_split/test", output_folder="Materiale/Locale/output_test", image_size=image_size, device="cuda")
+        test_inference(restore_checkpoint_path, test_folder="Materiale/Locale/dataset_split/test", output_folder="Materiale/Locale/Pix2Pix/output_test", image_size=image_size, device="cuda")
     else:
         # Esegui il training
         print("Parametro 'test' non fornito. Inizio allenamento.")
