@@ -675,7 +675,7 @@ def main():
         log_message("Nessun checkpoint caricato", log_file)
 
     # Crea il progress tracker
-    progress_tracker = ProgressTracker(n_epochs, math.ceil(len(training_loader) / batch_size))
+    progress_tracker = ProgressTracker(n_epochs, len(training_loader))
     progress_tracker.start()
 
     # Inizio allenamento
