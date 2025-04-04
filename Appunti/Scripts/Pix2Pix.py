@@ -460,6 +460,7 @@ def test_inference(checkpoint_path, test_folder, output_folder="Materiale/Locale
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     G.load_state_dict(checkpoint['generator_state_dict'])
     G.eval()
+    log_message(f"Checkpoint caricato.")
 
     # Trasformazioni da applicare alle immagini di test
     transform = transforms.Compose([
@@ -587,7 +588,8 @@ def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scale
         scaler_G.update()
 
         progress, total_elapsed_time, expected_time, eta, end_time = progress_tracker.calculate_progress(epoch, i)
-        progress_str = f"{progress:.2%} | {total_elapsed_time/3600:.1f}h/{expected_time/3600:.1f}h | ETA: {eta/3600:.2f}h -> {datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
+        # progress_str = f"{progress:.2%} | {total_elapsed_time/3600:.1f}h/{expected_time/3600:.1f}h | ETA: {eta/3600:.2f}h -> {datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
+        progress_str = f"{progress:.2%} | {total_elapsed_time/3600:.1f}h/{expected_time/3600:.1f}h | {datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
         # progress_str = f"{progress:.2%} | Fine stimata: {datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
 
 
@@ -610,7 +612,6 @@ def main():
     # Se esiste già un file con lo stesso nome, lo cancello (per evitare conflitti)
     if os.path.exists(log_file):
         os.remove(log_file)
-    log_message("Script avviato", log_file)
 
     # Imposta il seed per la riproducibilità
     set_seed(seed)
@@ -710,11 +711,12 @@ def main():
 
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "test":
-        # Esegui 
-        # il test con un checkpoint esistente
-        print(f"Parametro 'test' fornito. Inizio test con il checkpoint in: {restore_checkpoint_path}")
+        # Esegui il test con un checkpoint esistente
+        print(f"Inizio test con il checkpoint in: {restore_checkpoint_path}")
         test_inference(restore_checkpoint_path, test_folder="Materiale/Locale/dataset_split/test", output_folder="Materiale/Locale/Pix2Pix/output_test", image_size=image_size, device="cuda")
-    else:
-        # Esegui il training
-        print("Parametro 'test' non fornito. Inizio allenamento.")
+    elif len(sys.argv) >= 2 and sys.argv[1] == "train":
+        print(f"Inizio allenamento.")
         main()
+    else:
+        print("Uso: python Pix2Pix.py [train/test]")
+        print("Esegui 'train' per allenare il modello o 'test' per eseguire il test con un checkpoint esistente.")
