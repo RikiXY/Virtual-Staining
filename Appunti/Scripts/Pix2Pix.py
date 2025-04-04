@@ -710,7 +710,8 @@ def main():
 
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "test":
-        # Esegui il test con un checkpoint esistente
+        # Esegui 
+        # il test con un checkpoint esistente
         print(f"Parametro 'test' fornito. Inizio test con il checkpoint in: {restore_checkpoint_path}")
         test_inference(restore_checkpoint_path, test_folder="Materiale/Locale/dataset_split/test", output_folder="Materiale/Locale/output_test", image_size=image_size, device="cuda")
     else:
