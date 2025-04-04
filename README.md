@@ -29,13 +29,13 @@ All'interno della repository sono riportati una serie di file contenuti in varie
 ## Ordine esecuzione
 Avviare dalla cartella root \(_Virtual-Staining/_\) nel seguente ordine:  
 - Per addestramento:
-	1. `python Appunti\Scripts\fullsize_alignment_lower_resolution.py`: esegue l'allineamento;  
-	2. `python Appunti\Scripts\divide_fullsize_script.py`: divide in _n_ coppie allineate (in _aligned/_);  
-	3. `python Appunti\Scripts\create_dataset.py`: suddivide in 3 sottocartelle \(_test/_, _train/_ e _val/_\) le _n_ coppie;  
-	4. `python Appunti\Scripts\Pix2Pix.py`: addestra la rete neurale sulla cartelle _train/_ ed esegue valutazioni grazie a _val/_, i risultati della valutazioni vengono salvati in _output\_val/_;  
+	1. `python Appunti\Scripts\fullsize_alignment_lower_resolution.py`: esegue l'allineamento  
+	2. `python Appunti\Scripts\divide_fullsize_script.py`: divide in _n_ coppie allineate (in _aligned/_)  
+	3. `python Appunti\Scripts\create_dataset.py`: suddivide in 3 sottocartelle \(_test/_, _train/_ e _val/_\) le _n_ coppie  
+	4. `python Appunti\Scripts\Pix2Pix.py`: addestra la rete neurale sulla cartelle _train/_ ed esegue valutazioni grazie a _val/_, i risultati della valutazioni vengono salvati in _output\_val/_  
 - Per testare:
-	1. `python Appunti\Scripts\Pix2Pix.py test`: testa la rete sulle immagini della cartella _test/_ utilizzando il checkpoint di addestramento (da impostare manualmente nello script) e restituisce i risultati in _output\_test/_;  
-	2. `python Appunti\Scripts\save_graphs.py`: mi salva delle immagini basate sulla tripla input/output/target nella cartella _graphs\_test/_;  
+	1. `python Appunti\Scripts\Pix2Pix.py test`: testa la rete sulle immagini della cartella _test/_ utilizzando il checkpoint di addestramento (da impostare manualmente nello script) e restituisce i risultati in _output\_test/_  
+	2. `python Appunti\Scripts\save_graphs.py`: mi salva delle immagini basate sulla tripla input/output/target nella cartella _graphs\_test/_  
 
 ---
 ## To Do List
@@ -62,3 +62,33 @@ Avviare dalla cartella root \(_Virtual-Staining/_\) nel seguente ordine:
 	- [ ] Valutazione di rete da usare (probabilmente GAN dato che viene già utilizzata. Pix2Pix; implementata in PyTorch)
 	- [ ] Controlla i diffusion model
 - [ ] Tutto il resto che andrà aggiunto
+
+---
+## Possibili migliorie:
+1. fullsize_alignment_lower_resolution.py
+_Funzionamento_: usa SIFT con maschere, filtro su distanza euclidea e AffinePartial2D per stimare la trasformazione.
+**Migliorie**:
+	- [ ] Aggiunta di un parametro `--scale` da riga di comando per testare facilmente con scale diverse.
+	- [ ] Loggare anche il numero di match filtrati prima e dopo il filtro euclideo.
+
+2. divide_fullsize_script.py
+_Funzionamento_: ritaglia i bordi, applica griglia con passo 300x300, controlla maschere e salva solo patch rilevanti.
+**Migliorie**:
+	- [ ] Loggare quante patch sono state scartate per motivi diversi (dimensioni, maschera nera).
+	- [ ] Parametrizzare margin, grid_movement, image_size in testa o con `argparse`.
+
+3. create_dataset.py
+_Funzionamento_: suddivide perfettamente il dataset in train/val/test mantenendo le coppie coerenti.
+**Migliorie**:
+	- [ ] Gestione automatica dei file esistenti (opzione per overwrite=True/False).
+
+4. Pix2Pix.py
+_Funzionamento_: training completo, validazione e test integrati. Bilanciamento tra L1 e BCE. Uso di AMP (autocast, GradScaler). Salvataggio e caricamento checkpoint. Logging dettagliato con timestamp.
+**Migliorie**:
+	- [ ] Aggiungere una funzione main_test() separata, richiamata in if \_\_name\_\_ == "\_\_main\_\_" se `sys.argv[1] == "test"`, così da evitare logiche duplicate.
+	- [ ] Parametri come `lambda_l1 = 25` possono diventare variabili in testa allo script per più chiarezza.
+
+5. save_graphs.py
+_Funzionamento_: salva i confronti input/output/target per ogni patch del test set.
+**Migliorie**:
+	- [ ] Mostrare il numero totale di immagini processate.
