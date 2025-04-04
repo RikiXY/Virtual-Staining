@@ -1,4 +1,4 @@
-import os, random, time, datetime
+import os, random, time, datetime, math
 import numpy as np
 
 import torch
@@ -280,7 +280,7 @@ def log_message(message, log_file, show_time=True, use_stdout=True):
         print(message)
 
 class ProgressTracker:
-    def __init__(self, total_epochs, total_batches, max_history=50):
+    def __init__(self, total_epochs, total_batches, max_history=500):
         self.total_epochs = total_epochs
         self.total_batches = total_batches
         self.max_history = max_history
@@ -504,8 +504,6 @@ def test_inference(checkpoint_path, test_folder, output_folder="Materiale/Locale
             # print(f"{out_filename} salvata in {output_folder}")
     print(f"Test completato. Immagini salvate in {output_folder}")
 
-
-
 def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scaler_D, bce_loss, l1_loss, epoch, log_file, progress_tracker):
     """
     Funzione di training per un'epoca.
@@ -589,8 +587,8 @@ def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scale
         scaler_G.update()
 
         progress, total_elapsed_time, expected_time, eta, end_time = progress_tracker.calculate_progress(epoch, i)
-        # progress_str = f"{progress:.2%} | Durata esecuzione: {total_elapsed_time:.2f}s | Durata stimata: {expected_time:.2f}s | ETA: {eta:.2f}s | Fine: {datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
-        progress_str = f"{progress:.2%} | Fine stimata: {datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
+        progress_str = f"{progress:.2%} | {total_elapsed_time/3600:.1f}h/{expected_time/3600:.1f}h | ETA: {eta/3600:.2f}h -> {datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
+        # progress_str = f"{progress:.2%} | Fine stimata: {datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
 
 
         # Stampa e log su file
