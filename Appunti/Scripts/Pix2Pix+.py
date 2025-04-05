@@ -14,13 +14,15 @@ import sys
 # =========================
 # PARAMETRI IMPORTANTI
 # ----------------------
-n_epochs = 5 # Numero di epoche da eseguire
+n_epochs = 150 # Numero di epoche da eseguire
 log_rate = 15 # Ogni quanto loggare (es. ogni 10 batch)
 use_checkpoint = True # Se vuoi riprendere da un checkpoint esistente, metti True       Bisognerebbe creare create_checkpoint e load_checkpoint così si possono distinguere le casiistiche
-checkpoint_rate = 15 # Ogni quanto salvare i checkpoint (es. ogni 10 epoche)
+checkpoint_rate = 10 # Ogni quanto salvare i checkpoint (es. ogni 10 epoche)
 restore_checkpoint_path = "Materiale/Locale/Pix2Pix+/checkpoints/PASTE_HERE_THE_CHECKPOINT_NAME" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
-validate_rate = 1 # Ogni quanto validare (es. ogni 5 epoche), prendiamo per buono al momento come valore standard =checkpoint_rate
+validate_rate = 10 # Ogni quanto validare (es. ogni 5 epoche), prendiamo per buono al momento come valore standard =checkpoint_rate
+max_validation_batches = 5 # Numero massimo di batch da validare (es. 5 batch per la validazione)
 seed = 42 # Seed per la riproducibilità
+debug_gp = False # Se vuoi fare printare i log su GP
 # -----------------------
 batch_size = 8 # Batch size per il DataLoader (8 è un buon valore, ma dipende dalla GPU)
 training_shuffle = True # Se vuoi mescolare i dati ad ogni epoca del training, metti True
@@ -194,6 +196,7 @@ def compute_gradient_penalty(D, real_samples, fake_samples, x_input, device):
     gradients = gradients.view(gradients.size(0), -1)
     gradient_norm = gradients.norm(2, dim=1)
     penalty = ((gradient_norm - 1) ** 2).mean()
+
     return penalty
 
 
@@ -346,6 +349,8 @@ def validate(G, D, validation_loader, device, l1_loss, epoch, log_file):
     # Niente gradienti
     with autocast("cuda"):
         for i, (x, y) in enumerate(validation_loader):
+            if i >= max_validation_batches:  # Limitiamo a 5 batch per la validazione
+                break
             x, y = x.to(device), y.to(device)
 
             # Genera immagini di output
@@ -362,16 +367,16 @@ def validate(G, D, validation_loader, device, l1_loss, epoch, log_file):
 
             loss_D = loss_D_real + loss_D_fake + lambda_gp * gp
             loss_G = -torch.mean(D_fake) + l1_loss(fake, y) * 25
-            
+
             total_loss_D += loss_D.item()
             total_loss_G += loss_G.item()
             count += 1
 
             # --- Salvataggio immagini di esempio ---
             # Ad esempio, salvi i primi 5 batch
-            if i < 5:
-                # Salva la prima immagine del batch (indice 0)
-                save_images("Materiale/Locale/Pix2Pix+/output_val", x[0], fake.detach()[0], y[0], epoch, i)
+            
+            # Salva la prima immagine del batch (indice 0)
+            save_images("Materiale/Locale/Pix2Pix+/output_val", x[0], fake.detach()[0], y[0], epoch, i)
 
     # Ritorni la media delle loss
     avg_loss_D = total_loss_D / count
@@ -448,25 +453,7 @@ def test_inference(checkpoint_path, test_folder, output_folder="Materiale/Locale
     print(f"Test completato. Immagini salvate in {output_folder}")
 
 def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scaler_D, l1_loss, epoch, log_file, progress_tracker):
-    """
-    Funzione di training per un'epoca.
-    Questa funzione esegue il training del generatore e del discriminatore per un'epoca.
-    Calcola le perdite e aggiorna i pesi dei modelli.
-
-    Args:
-        G (nn.Module): Modello del generatore.
-        D (nn.Module): Modello del discriminatore.
-        training_loader (DataLoader): DataLoader per il set di addestramento.
-        device (torch.device): Dispositivo su cui eseguire i calcoli (CPU o GPU).
-        opt_G (torch.optim.Optimizer): Ottimizzatore per il generatore.
-        opt_D (torch.optim.Optimizer): Ottimizzatore per il discriminatore.
-        scaler_G (torch.cuda.amp.GradScaler): GradScaler per il generatore.
-        scaler_D (torch.cuda.amp.GradScaler): GradScaler per il discriminatore.
-        l1_loss (nn.Module): Funzione di perdita L1 (Mean Absolute Error).
-        epoch (int): Numero dell'epoca corrente.
-        log_file (str): Percorso del file di log.
-        progress_tracker (ProgressTracker): Oggetto per monitorare il progresso.
-    """
+    
     # Metti in training mode
     G.train()
     D.train()
@@ -478,6 +465,17 @@ def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scale
 
         # Trasferimento su GPU
         x, y = x.to(device), y.to(device)
+
+        # --- DEBUG: shape & range ---
+        if i % log_rate == 0 and debug_gp == True:
+            log_message(
+                f"[DEBUG][ep {epoch} | b {i}] x shape={x.shape}, "
+                f"y shape={y.shape}, range x=({x.min().item():.2f},{x.max().item():.2f}), "
+                f"range y=({y.min().item():.2f},{y.max().item():.2f})",
+                log_file
+            )
+            # le dimensioni dovrebbero essere (8, 3, 512, 512) per x e y
+            # i valori min e max dovrebbero essere tra -1 e 1 (dopo normalizzazione)
         
         # ---------- DISCRIMINATORE ----------
         with autocast("cuda"):
@@ -492,17 +490,29 @@ def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scale
             D_real = D(x, y)
             D_fake = D(x, fake)
 
-            # Calcola la perdita del discriminatore
-            # real_label e fake_label sono le etichette per BCEWithLogitsLoss
-            # real_label = 1 (reale), fake_label = 0 (falso)
-            real_label = torch.ones_like(D_real, device=device)
-            fake_label = torch.zeros_like(D_fake, device=device)
-
             # WGAN-GP losses
+            gp = compute_gradient_penalty(D, y, fake, x, device)
             loss_D_real = -torch.mean(D_real)
             loss_D_fake = torch.mean(D_fake)
-            gp = compute_gradient_penalty(D, y, fake, x, device)
             lambda_gp = 10  # Costante consigliata nel paper
+
+            # ----- Gestione di emergenza GP -----
+            if not torch.isfinite(gp):
+                log_message(f"[WARNING] [ep {epoch} | b {i}] GP non finita (NaN o Inf): {gp.item()}", log_file)
+                # Se vuoi, puoi saltare questo batch:
+                # continue
+                # Oppure clamp a 0:
+                gp = torch.tensor(0.0, device=device, requires_grad=True)
+            elif gp.item() > 1000:
+                log_message(f"[WARNING] [ep {epoch} | b {i}] GP esageratamente alta: {gp.item():.2f}", log_file)
+                # Esempio di salvataggio delle immagini “incriminate”:
+                save_images("Materiale/Locale/Pix2Pix+/debug_gp", x[0], fake[0], y[0], epoch, i)
+                # Poi clamp a 100 per non rovinare il training.
+                gp = gp.clamp(max=100.0)
+            elif gp.item() > 50:
+                log_message(f"[WARNING] [ep {epoch} | b {i}] GP alta: {gp.item():.2f}", log_file)
+                        # mi serve per capire se sta esplodendo gp oppure le loss
+                        # gp dovrebbe essere tra 1 e 10
 
             loss_D = loss_D_real + loss_D_fake + lambda_gp * gp
 
@@ -547,6 +557,9 @@ def main():
 
     # Crea la cartella per i log (se non esiste già)
     os.makedirs("Materiale/Locale/Pix2Pix+/logs", exist_ok=True)
+
+    # Crea la cartella per il debug di gp (se non esiste già)
+    os.makedirs("Materiale/Locale/Pix2Pix+/debug_gp", exist_ok=True) 
 
     # Genero un nome file log con data/ora attuale (unico per ogni esecuzione).
     timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
