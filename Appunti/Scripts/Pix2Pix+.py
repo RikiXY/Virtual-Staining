@@ -64,10 +64,10 @@ class UNet3PlusGenerator(nn.Module):
     def __init__(self, in_channels=3, out_channels=3, base_filters=64):
         super(UNet3PlusGenerator, self).__init__()
 
-        def conv_block(in_ch, out_ch):
+        def conv_block(in_channels, out_channels):
             return nn.Sequential(
-                nn.Conv2d(in_ch, out_ch, 3, padding=1),
-                nn.BatchNorm2d(out_ch),
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(out_channels),
                 nn.ReLU(inplace=True)
             )
 
@@ -99,7 +99,7 @@ class UNet3PlusGenerator(nn.Module):
         self.final = nn.Conv2d(base_filters, out_channels, kernel_size=1)
 
     def forward(self, x):
-        e1 = self.enc1(x)  # 512x512
+        e1 = self.enc1(x)  # tensore di feature map di shape 512x512
         e2 = self.enc2(self.pool1(e1))  # 256x256
         e3 = self.enc3(self.pool2(e2))  # 128x128
         e4 = self.enc4(self.pool3(e3))  # 64x64
