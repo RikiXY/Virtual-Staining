@@ -178,26 +178,27 @@ class AdvancedPatchGANDiscriminator(nn.Module):
     def forward(self, x, y):
         return self.model(torch.cat([x, y], dim=1))
 
-def compute_gradient_penalty(D, real_samples, fake_samples, x_input, device):
-    alpha = torch.rand(real_samples.size(0), 1, 1, 1, device=device)
-    interpolates = (alpha * real_samples + (1 - alpha) * fake_samples).requires_grad_(True)
-    d_interpolates = D(x_input, interpolates)
-    fake = torch.ones_like(d_interpolates, device=device)
+# Sta dando molti problemi, non riesco a capire perchè
+# def compute_gradient_penalty(D, real_samples, fake_samples, x_input, device):
+#     alpha = torch.rand(real_samples.size(0), 1, 1, 1, device=device)
+#     interpolates = (alpha * real_samples + (1 - alpha) * fake_samples).requires_grad_(True)
+#     d_interpolates = D(x_input, interpolates)
+#     fake = torch.ones_like(d_interpolates, device=device)
 
-    gradients = torch.autograd.grad(
-        outputs=d_interpolates,
-        inputs=interpolates,
-        grad_outputs=fake,
-        create_graph=True,
-        retain_graph=True,
-        only_inputs=True
-    )[0]
+#     gradients = torch.autograd.grad(
+#         outputs=d_interpolates,
+#         inputs=interpolates,
+#         grad_outputs=fake,
+#         create_graph=True,
+#         retain_graph=True,
+#         only_inputs=True
+#     )[0]
 
-    gradients = gradients.view(gradients.size(0), -1)
-    gradient_norm = gradients.norm(2, dim=1)
-    penalty = ((gradient_norm - 1) ** 2).mean()
+#     gradients = gradients.view(gradients.size(0), -1)
+#     gradient_norm = gradients.norm(2, dim=1)
+#     penalty = ((gradient_norm - 1) ** 2).mean()
 
-    return penalty
+#     return penalty
 
 
 # --------------------- Determinismo ---------------------
@@ -318,7 +319,7 @@ def save_images(path, input, output, target, epoch, batch_index):
 
 
 # --------------------- Training e Validazione ---------------------
-def validate(G, D, validation_loader, device, l1_loss, epoch, log_file):
+def validate(G, D, validation_loader, device, l1_loss, bce_loss, epoch, log_file):
     """
     Funzione di validazione del modello.
     Questa funzione calcola la loss media del generatore e del discriminatore.
@@ -360,13 +361,23 @@ def validate(G, D, validation_loader, device, l1_loss, epoch, log_file):
             D_real = D(x, y)
             D_fake = D(x, fake)
 
-            loss_D_real = -torch.mean(D_real)
-            loss_D_fake = torch.mean(D_fake)
-            gp = compute_gradient_penalty(D, y, fake, x, device)
-            lambda_gp = 10
+            real_labels = torch.ones_like(D_real, device=device)
+            fake_labels = torch.zeros_like(D_fake, device=device)
 
-            loss_D = loss_D_real + loss_D_fake + lambda_gp * gp
-            loss_G = -torch.mean(D_fake) + l1_loss(fake, y) * 25
+            loss_D_real = bce_loss(D_real, real_labels)
+            loss_D_fake = bce_loss(D_fake, fake_labels)
+            loss_D = (loss_D_real + loss_D_fake) * 0.5
+
+            adv_loss = bce_loss(D_fake, real_labels)
+            loss_G = adv_loss + l1_loss(fake, y) * 25
+
+            # loss_D_real = -torch.mean(D_real)
+            # loss_D_fake = torch.mean(D_fake)
+            # gp = compute_gradient_penalty(D, y, fake, x, device)
+            # lambda_gp = 10
+
+            # loss_D = loss_D_real + loss_D_fake + lambda_gp * gp
+            # loss_G = -torch.mean(D_fake) + l1_loss(fake, y) * 25
 
             total_loss_D += loss_D.item()
             total_loss_G += loss_G.item()
@@ -452,7 +463,7 @@ def test_inference(checkpoint_path, test_folder, output_folder="Materiale/Locale
             # print(f"{out_filename} salvata in {output_folder}")
     print(f"Test completato. Immagini salvate in {output_folder}")
 
-def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scaler_D, l1_loss, epoch, log_file, progress_tracker):
+def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scaler_D, l1_loss, bce_loss, epoch, log_file, progress_tracker):
     
     # Metti in training mode
     G.train()
@@ -478,43 +489,60 @@ def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scale
             # i valori min e max dovrebbero essere tra -1 e 1 (dopo normalizzazione)
         
         # ---------- DISCRIMINATORE ----------
-        with autocast("cuda"):
-            # Genera immagini false
-            fake = G(x).detach()
-            # .detach() fa sì che quando si utilizza fake, non si calcolino i gradienti per il generatore
-            # Di fatto evita che qualsiasi funzione che interagisce con fake possa modificare i gradienti del generatore
+        # with autocast("cuda"):
+        #     # Genera immagini false
+        #     fake = G(x).detach()
+        #     # .detach() fa sì che quando si utilizza fake, non si calcolino i gradienti per il generatore
+        #     # Di fatto evita che qualsiasi funzione che interagisce con fake possa modificare i gradienti del generatore
 
-            # Calcola le predizioni del discriminatore
-            # D_real è la predizione per le immagini reali
-            # D_fake è la predizione per le immagini false
+        #     # Calcola le predizioni del discriminatore
+        #     # D_real è la predizione per le immagini reali
+        #     # D_fake è la predizione per le immagini false
+        #     D_real = D(x, y)
+        #     D_fake = D(x, fake)
+
+        #     loss_D_real = -torch.mean(D_real)
+        #     loss_D_fake = torch.mean(D_fake)
+            
+            # WGAN-GP losses
+            # gp = compute_gradient_penalty(D, y, fake, x, device)
+            # print(f"GP calcolato per immagine {i}. Valore ottenuto: {gp.item()}")
+            # # ----- Gestione di emergenza GP -----
+            # if not torch.isfinite(gp):
+            #     log_message(f"[WARNING] [ep {epoch} | b {i}] GP non finita (NaN o Inf): {gp.item()}", log_file)
+            #     # Se vuoi, puoi saltare questo batch:
+            #     # continue
+            #     # Oppure clamp a 0:
+            #     gp = torch.tensor(0.0, device=device, requires_grad=True)
+            # elif gp.item() > 1000:
+            #     log_message(f"[WARNING] [ep {epoch} | b {i}] GP esageratamente alta: {gp.item():.2f}", log_file)
+            #     # Esempio di salvataggio delle immagini “incriminate”:
+            #     save_images("Materiale/Locale/Pix2Pix+/debug_gp", x[0], fake[0], y[0], epoch, i)
+            #     # Poi clamp a 100 per non rovinare il training.
+            #     gp = gp.clamp(max=100.0)
+            # elif gp.item() > 50:
+            #     log_message(f"[WARNING] [ep {epoch} | b {i}] GP alta: {gp.item():.2f}", log_file)
+            #             # mi serve per capire se sta esplodendo gp oppure le loss
+            #             # gp dovrebbe essere tra 1 e 10
+            # lambda_gp = 10  # Costante consigliata nel paper
+            # loss_D = loss_D_real + loss_D_fake + lambda_gp * gp
+
+        with autocast("cuda"):
+            fake = G(x).detach()
             D_real = D(x, y)
             D_fake = D(x, fake)
 
-            # WGAN-GP losses
-            gp = compute_gradient_penalty(D, y, fake, x, device)
-            loss_D_real = -torch.mean(D_real)
-            loss_D_fake = torch.mean(D_fake)
-            lambda_gp = 10  # Costante consigliata nel paper
+            # Target: real = 1, fake = 0
+            real_labels = torch.ones_like(D_real, device=device)
+            fake_labels = torch.zeros_like(D_fake, device=device)
 
-            # ----- Gestione di emergenza GP -----
-            if not torch.isfinite(gp):
-                log_message(f"[WARNING] [ep {epoch} | b {i}] GP non finita (NaN o Inf): {gp.item()}", log_file)
-                # Se vuoi, puoi saltare questo batch:
-                # continue
-                # Oppure clamp a 0:
-                gp = torch.tensor(0.0, device=device, requires_grad=True)
-            elif gp.item() > 1000:
-                log_message(f"[WARNING] [ep {epoch} | b {i}] GP esageratamente alta: {gp.item():.2f}", log_file)
-                # Esempio di salvataggio delle immagini “incriminate”:
-                save_images("Materiale/Locale/Pix2Pix+/debug_gp", x[0], fake[0], y[0], epoch, i)
-                # Poi clamp a 100 per non rovinare il training.
-                gp = gp.clamp(max=100.0)
-            elif gp.item() > 50:
-                log_message(f"[WARNING] [ep {epoch} | b {i}] GP alta: {gp.item():.2f}", log_file)
-                        # mi serve per capire se sta esplodendo gp oppure le loss
-                        # gp dovrebbe essere tra 1 e 10
+            loss_D_real = bce_loss(D_real, real_labels)
+            loss_D_fake = bce_loss(D_fake, fake_labels)
 
-            loss_D = loss_D_real + loss_D_fake + lambda_gp * gp
+            loss_D = (loss_D_real + loss_D_fake) * 0.5
+
+
+        
 
         # Ottimizzazione del discriminatore
         opt_D.zero_grad() # zero_grad() azzera i gradienti accumulati
@@ -531,7 +559,11 @@ def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scale
             D_fake = D(x, fake)
 
             # Loss del generatore in WGAN
-            loss_G = -torch.mean(D_fake) + l1_loss(fake, y) * 25  # puoi tenere il tuo L1
+            # loss_G = -torch.mean(D_fake) + l1_loss(fake, y) * 25  # puoi tenere il tuo L1
+            real_labels = torch.ones_like(D_fake, device=device)
+            adv_loss = bce_loss(D_fake, real_labels)
+            loss_G = adv_loss + l1_loss(fake, y) * 25
+
 
         # Ottimizzazione del generatore
         opt_G.zero_grad() # zero_grad() azzera i gradienti accumulati
@@ -615,6 +647,7 @@ def main():
     for file in os.listdir("Materiale/Locale/Pix2Pix+/output_train"):
         os.remove(os.path.join("Materiale/Locale/Pix2Pix+/output_train", file))
 
+
     # Checkpoint
     start_epoch = 0
     if use_checkpoint:
@@ -634,13 +667,14 @@ def main():
     progress_tracker.start()
 
     # Inizio allenamento
+    bce_loss = nn.BCEWithLogitsLoss()
     log_message("Inizio allenamento", log_file)
     for epoch in range(start_epoch, n_epochs):
         log_message(f"Inizio epoca {epoch}", log_file)
 
         # ---------- ALLENAMENTO (una epoca) ----------
         train_one_epoch(generator, discriminator, training_loader, device, opt_G, opt_D, scaler_G, scaler_D,
-                        l1_loss, epoch, log_file, progress_tracker)
+                        l1_loss, bce_loss, epoch, log_file, progress_tracker)
 
         # Log fine epoca
         log_message(f"Fine epoca {epoch}", log_file)
@@ -655,7 +689,7 @@ def main():
 
         # ---------- VALIDATION (in corrispondenza con checkpoint_rate) ----------
         if(epoch + 1) % validate_rate == 0:
-            validate(generator, discriminator, validation_loader, device, l1_loss, epoch, log_file)
+            validate(generator, discriminator, validation_loader, device, l1_loss, bce_loss, epoch, log_file)
 
     # Fine allenamento
     end_time = time.time()
