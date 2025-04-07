@@ -64,9 +64,11 @@ if __name__ == "__main__":
         # Percorsi delle cartelle
         output_folder = "Materiale/Locale/Pix2Pix/output_test"
         save_path = "Materiale/Locale/Pix2Pix/graphs_test"
+        main()
     elif (len(sys.argv) >= 2 and sys.argv[1] == "Pix2Pix+"):
         # Percorsi delle cartelle
         output_folder = "Materiale/Locale/Pix2Pix+/output_test"
         save_path = "Materiale/Locale/Pix2Pix+/graphs_test"
+        main()
     else:
         print("Specificare il tipo di modello: Pix2Pix o Pix2Pix+")
