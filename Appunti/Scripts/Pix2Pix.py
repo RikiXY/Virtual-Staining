@@ -14,11 +14,11 @@ import sys
 # =========================
 # PARAMETRI IMPORTANTI
 # ----------------------
-n_epochs = 5 # Numero di epoche da eseguire
+n_epochs = 150 # Numero di epoche da eseguire
 log_rate = 15 # Ogni quanto loggare (es. ogni 10 batch)
 use_checkpoint = True # Se vuoi riprendere da un checkpoint esistente, metti True       Bisognerebbe creare create_checkpoint e load_checkpoint così si possono distinguere le casiistiche
-checkpoint_rate = 15 # Ogni quanto salvare i checkpoint (es. ogni 10 epoche)
-restore_checkpoint_path = "Materiale/Locale/Pix2Pix/checkpoints/PASTE_HERE_THE_CHECKPOINT_NAME" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
+checkpoint_rate = 10 # Ogni quanto salvare i checkpoint (es. ogni 10 epoche)
+restore_checkpoint_path = "Materiale/Locale/Pix2Pix/checkpoints/checkpoint_Pix2Pix_epoca109_2025-04-04_12-38-26.pth" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
 validate_rate = 1 # Ogni quanto validare (es. ogni 5 epoche), prendiamo per buono al momento come valore standard =checkpoint_rate
 seed = 42 # Seed per la riproducibilità
 # -----------------------
@@ -82,8 +82,8 @@ class Down(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(Down, self).__init__()
         self.maxpool_conv = nn.Sequential(
-            nn.MaxPool2d(kernel_size=2),
-            DoubleConv(in_channels, out_channels)
+            DoubleConv(in_channels, out_channels),
+            nn.MaxPool2d(kernel_size=2)
         )
 
     def forward(self, x):
