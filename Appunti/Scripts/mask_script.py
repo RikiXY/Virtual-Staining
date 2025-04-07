@@ -131,8 +131,8 @@ def find_mask_with_grid(img, sub_shape, grid):
     return mask
 
 def main():
-    label_free = cv2.imread("Materiale/Locale/fullsize_label_free.tif")
-    stained = cv2.imread("Materiale/Locale/fullsize_stained.tif")
+    label_free = cv2.imread("Materiale/Locale/liver_label_free.tif")
+    stained = cv2.imread("Materiale/Locale/liver_stained.tif")
 
     mask_lf = np.ones((label_free.shape[0], label_free.shape[1]), dtype=np.uint8) * 255
     mask_st = np.ones((stained.shape[0], stained.shape[1]), dtype=np.uint8) * 255
@@ -156,8 +156,8 @@ def main():
     masked_st = cv2.bitwise_and(stained, stained, mask=mask_st)
 
     # Si salvano le immagini
-    cv2.imwrite("Materiale/Immagini/mask_label_free.tif", mask_lf)
-    cv2.imwrite("Materiale/Immagini/mask_stained.tif", mask_st)
+    cv2.imwrite("Materiale/Immagini/liver/mask_label_free.tif", mask_lf)
+    cv2.imwrite("Materiale/Immagini/liver/mask_stained.tif", mask_st)
 
     # Si abbassa la risoluzione delle immagini per visualizzarle
     label_free = cv2.resize(label_free, (label_free.shape[1]//4, label_free.shape[0]//4))

@@ -713,7 +713,7 @@ if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "test":
         # Esegui il test con un checkpoint esistente
         print(f"Inizio test con il checkpoint in: {restore_checkpoint_path}")
-        test_inference(restore_checkpoint_path, test_folder="Materiale/Locale/dataset_split/test", output_folder="Materiale/Locale/Pix2Pix/output_test", image_size=image_size, device="cuda")
+        test_inference(restore_checkpoint_path, test_folder="Materiale/Locale/liver/grid/label_free", output_folder="Materiale/Locale/Pix2Pix/output_test", image_size=image_size, device="cuda")
     elif len(sys.argv) >= 2 and sys.argv[1] == "train":
         print(f"Inizio allenamento.")
         main()

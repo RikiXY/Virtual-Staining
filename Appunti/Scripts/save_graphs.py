@@ -58,7 +58,7 @@ def main():
 
 if __name__ == "__main__":
     # Path comune
-    test_folder = "Materiale/Locale/dataset_split/test/"
+    test_folder = "Materiale/Locale/liver/grid"
 
     if(len(sys.argv) >= 2 and sys.argv[1] == "Pix2Pix"):
         # Percorsi delle cartelle
