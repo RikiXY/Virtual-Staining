@@ -104,15 +104,62 @@ Dai test svolti abbiamo deciso di usare la normalizzazione <span style="color:#9
 *Spiegazione*: All'interno del notebook è riportato un breve script che crea tre cartelle `train/`, `val/` e `test/` contenenti le coppie di immagini adibite rispettivamente al  un <span style="color:#f4d35e"><b>training</b></span>, <span style="color:#f4d35e"><b>validation</b></span> e <span style="color:#f4d35e"><b>testing</b></span>. La cartelle conterranno il 70%-15%-15% delle coppie originali. Le immagini inserite all'interno delle cartelle non sono contigue, ma bensì prese casualmente.
 
 - **Sviluppo idea per la coregistrazione delle immagini intere**  
-\[DA INSERIRE\]
+<span style="color:#e15c64"><b>Problema riscontrato</b></span>: la coregistrazione delle singole sotto immagini non ci avrebbe permesso di ricostruire l'immagine originale allineata, per via delle trasformazioni applicate.
+<span style="color:#71c78c"><b>Soluzione attuata</b></span>: abbiamo allineato l'immagine originale applicando la matrice omografica, calcolata sull'immagine originale scalata (metà risoluzione), sull'immagine stessa.
 
 - **Impostazione dell'ambiente di sviluppo per PyTorch**  
 *Spiegazione*: durante il pomeriggio della giornata abbiamo provato a lavorare parallelamente alle due voci dell'elenco puntato (idea per la coregistrazione e settaggio per PyTorch). Abbiamo verificato come scaricare <span style="color:#f4d35e"><b>PyTorch</b></span> e come impostarlo affinché potesse girare su GPU (Nvidia RTX 3060Ti) sfruttando i <span style="color:#f4d35e"><b>Cuda Cores</b></span>.  Abbiamo provato precedentemente a far girare anche alcune istruzioni di <span style="color:#f4d35e"><b>OpenCV</b></span> su scheda grafica, ma senza successo; <span style="color:#f7b267"><b>bisognerebbe compilare manualmente il pacchetto per poter sfruttare questa funzionalità; si potrebbe fare in futuro per velocizzare il processo iniziale</b></span>.
 
 ## 1 Aprile
 - **Creazione script di prova per vedere il funzionamento generale di PyTorch**  
-*Spiegazione*: trasportati dalla pura curiosità ci siamo messi a verificare il comportamento di una semplice rete di convoluzione (collocata all'interno dello script `prova_pytorch.py`. Volevamo capire la struttura fondamentale di un algoritmo scritto in PyTorch e se il tentativo svolto il giorno prima (per farlo girare su GPU) funzionasse.  
+*Spiegazione*: presi dalla curiosità ci siamo messi a verificare il comportamento di una semplice rete di convoluzione (collocata all'interno dello script `prova_pytorch.py`). Volevamo capire la struttura fondamentale di un algoritmo scritto in PyTorch e se il tentativo svolto il giorno prima (per farlo girare su GPU) funzionasse.  
 
 - **Creazione script di prova per vedere il funzionamento di pix2pix**  
-*Spiegazione*: dato il successo di esecuzione dello script precedente, abbiamo provato a creare un semplice script basato sul modello GAN, quindi con un <span style="color:#f4d35e"><b>Generator</b></span> e un <span style="color:#f4d35e"><b>Discriminator</b></span>, creati con reti differenti (UNet-like e PatchGAN). I risultati ottenuti in fase di training sembrano positivi e sulla giusta strada, ma ancora ben distanti dai risultati che vogliamo ottenere (dato che i colori non sono assegnati correttamente). <span style="color:#f7b267"><b>I prossimi passi dovrebbero essere quelli che ci permettono di migliorare questo prototipo (inserendo più layer o modelli più approfonditi per Generator e Discriminator)</b></span>.
+*Spiegazione*: dato il "successo" di esecuzione dello script precedente, abbiamo provato a creare un semplice script basato sul modello <span style="color:#9bb1ff"><b>GAN</b></span>, quindi con un <span style="color:#f4d35e"><b>Generator</b></span> e un <span style="color:#f4d35e"><b>Discriminator</b></span>, creati con reti differenti (<span style="color:#9bb1ff"><b>UNet-like e PatchGAN</b></span>). I risultati ottenuti in fase di training sembrano positivi e sulla giusta strada, ma ancora ben distanti dai risultati che vogliamo ottenere (dato che i colori non sono sempre assegnati correttamente). <span style="color:#f7b267"><b>I prossimi passi dovrebbero essere quelli che ci permettono di migliorare questo prototipo (inserendo più layer o modelli più approfonditi per Generator e Discriminator)</b></span>.
+
+## 2 Aprile
+- **Ricerca sul funzionamento algoritmi**
+
+- **UNet e PatchGAN aggiornati**
+*Spiegazione*: Le reti del generatore e del discriminatore sono state aggiornate per essere più profonde e per permetterci di ottenere risultati più accurati. Abbiamo aumentato il numero dei <span style="color:#f4d35e"><b>layer</b></span> della rete, arrivando a 4, e aggiungendo <span style="color:#f4d35e"><b>skip connections</b></span>. Anche il discriminatore ha ricevuto più layer. 
+
+- **Ottimizzazione rete con Automatic Mixed Precision (AMP)**
+<span style="color:#e15c64"><b>Problema riscontrato</b></span>: l'allenamento della rete era troppo lento per poter procedere a passo sostenuto con lo sviluppo.
+<span style="color:#71c78c"><b>Soluzione attuata</b></span>: abbiamo eseguito un processo di ottimizzazione della rete implementando <span style="color:#9bb1ff"><b>AMP</b></span>, il quale sfrutta i <span style="color:#f4d35e"><b>Tensor Cores</b></span> della scheda video NVidia, applicando a determinate operazioni la precisione a 16 bit invece che a 32. I risultati ottenuti sono stati soddisfacenti e i tempi sono notevolmente diminuiti.
+
+## 3 Aprile
+- **Aggiunta commenti sullo script**
+
+- **Aggiunti i checkpoint della rete**
+*Spiegazione*: ogni _n_ volte (`checkpoint_rate`) la rete crea un checkpoint (implementato tramite un dizionario) il quale ci permette di salvare lo stato attuale della rete e di ricaricarlo per, o riprendere l'allenamento, o eseguire la fase di Test.
+
+- **Aggiunta funzione di validation**
+*Spiegazione*: ogni _m_ volte (`validation_rate`) la rete crea esegue un test di validazione su delle apposite immagini contenute nella cartella _dataset_split/val/_. Questa operazione ci permette di monitorare l'andamento della fase di training della rete.
+
+- **Parametrizzazione codice**
+*Spiegazione*: per comodità abbiamo inserito dei parametri a inizio codice che sostituiscono i numeri inseriti nel codice. In questo modo possiamo modificare i parametri più facilmente e velocemente ed eseguire diversi test in diverse condizioni.
+
+- **Diverse prove di training**
+
+## 4 Aprile
+- **Aggiunta documentazione sull'avvio sequenziale degli scripts**
+*Spiegazione*: data la complessità degli script, e dato che stavamo iniziando a confonderci, abbiamo deciso di scrivere sul file `README.md` una sezione apposita per descrivere il processo di creazione. <span style="color:#f7b267"><b>In futuro dovremo creare un singolo file eseguibile che fa tutto</b></span>.
+
+- **Creazione script per il confronto delle immagini di test generate**
+*Spiegazione*: è stato creato uno script base per creare immagini formate da \|input\|output\|target\|. Le prime sono le immagini _label\_free_, le seconde indicano i risultati generati dalla rete, mentre gli ultimi sono le immagini _stained_ reali.
+
+- **Inizio sviluppo UNet 3+ e Advanced PatchGAN** 
+*Spiegazione*: dopo svariate prove abbiamo raggiunto quello che riteniamo sia il limite massimo di apprendimento della rete neurale composta da UNet e PatchGAN. Di conseguenza abbiamo provato a sviluppare una seconda rete neurale sfruttando i modelli UNet 3+ e Advanced PatchGAN. Il file tentativo che contiene questa rete è `Pix2Pix++.py`. Il nome della rete è dovuto all'ispirazione dal C e dal C++.
+
+## 5 Aprile
+- **Test Pix2Pix++**
+*Spiegazione*: abbiamo testato la rete per verificare i risultati ottenuti e non hanno minimamente rispettato le aspettative. <span style="color:#f7b267"><b>Probabilmente i risultati scarsi sono dovuti a una metrica implementata male. In futuro dovremo o sistemarla o rimuoverla</b></span>.
+
+## 6 Aprile
+- **Rimozione metrica WGAN-GP da Pix2Pix+**
+*Spiegazione*: abbiamo rimosso la metrica che creava problemi.
+
+## 7 Aprile
+- **Creazione script `ollie_wan_kenobi.py`**
+*Lore*: data la presenza di troppi file abbiamo deciso di creare un unico file contenente tutte le precedenti operazioni (allineamento, creazione dataset...). Non sapendo che nome dargli abbiamo optato per un'ispirazione al mondo tech, più precisamente ai computer, infatti il primo nome proposto è stato `all_in_one.py`. Dato che siamo dei burloni abbiamo trasposto il nome in `ollie_wan.py`. Il nome però faceva chiaramente pensare a un personaggio iconico del mondo cinematografico e ludico, di conseguenza il nome finale proposto per lo script che sarà eseguito in preparazione alla rete è `ollie_wan_kenobi.py`. Nessuno dei due creatori di questo file e repository è fan, e tanto meno ha visto, Star Wars.
 
