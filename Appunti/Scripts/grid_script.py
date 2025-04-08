@@ -18,19 +18,19 @@ def extract_image(img, x, y, w, h):
 
 def main():
     # Controllo dell'esistenza della cartella Materiale/Locale/grid
-    if not os.path.exists("Materiale/Locale/grid"):
-        os.makedirs("Materiale/Locale/grid")
+    if not os.path.exists("Materiale/Locale/liver/grid"):
+        os.makedirs("Materiale/Locale/liver/grid")
         print("Cartella creata")
     # Cancella le immagini presenti nella cartella
-    for file in os.listdir("Materiale/Locale/grid"):
-        os.remove(f"Materiale/Locale/grid/{file}")
+    for file in os.listdir("Materiale/Locale/liver/grid"):
+        os.remove(f"Materiale/Locale/liver/grid/{file}")
     print("Immagini rimosse")
 
     # Apertura delle immagini
-    label_free = cv2.imread("Materiale/Locale/fullsize_label_free.tif")
-    mask_lf = cv2.imread("Materiale/Immagini/mask_label_free.tif", cv2.IMREAD_GRAYSCALE)
-    stained = cv2.imread("Materiale/Locale/fullsize_stained.tif")
-    mask_st = cv2.imread("Materiale/Immagini/mask_stained.tif", cv2.IMREAD_GRAYSCALE)
+    label_free = cv2.imread("Materiale/Locale/liver_label_free.tif")
+    mask_lf = cv2.imread("Materiale/Immagini/liver/mask_label_free.tif", cv2.IMREAD_GRAYSCALE)
+    stained = cv2.imread("Materiale/Locale/liver_stained.tif")
+    mask_st = cv2.imread("Materiale/Immagini/liver/mask_stained.tif", cv2.IMREAD_GRAYSCALE)
     if label_free is None or mask_lf is None or stained is None or mask_st is None:
         print("Errore nel caricamento delle immagini")
         return
@@ -56,8 +56,8 @@ def main():
                 continue
             # Estrazione della regione di interesse dell'immagine
             roi_image = extract_image(label_free, x, y, image_size[0], image_size[1])
-            cv2.imwrite(f"Materiale/Locale/grid/{x:>05}_{y:>05}_label_free.tif", roi_image)
-            cv2.imwrite(f"Materiale/Locale/grid/mask_{x:>05}_{y:>05}_label_free.tif", roi_mask)
+            cv2.imwrite(f"Materiale/Locale/liver/grid/{x:>05}_{y:>05}_label_free.tif", roi_image)
+            cv2.imwrite(f"Materiale/Locale/grid/liver/mask_{x:>05}_{y:>05}_label_free.tif", roi_mask)
             positions.append((x, y))
     print(f"{len(positions)} immagini estratte da label_free")
 
@@ -67,8 +67,8 @@ def main():
         roi_mask = extract_image(mask_st, x, y, image_size[0], image_size[1])
         # Estrazione della regione di interesse dell'immagine
         roi_image = extract_image(stained, x, y, image_size[0], image_size[1])
-        cv2.imwrite(f"Materiale/Locale/grid/{x:>05}_{y:>05}_stained.tif", roi_image)
-        cv2.imwrite(f"Materiale/Locale/grid/mask_{x:>05}_{y:>05}_stained.tif", roi_mask)
+        cv2.imwrite(f"Materiale/Locale/liver/grid/{x:>05}_{y:>05}_stained.tif", roi_image)
+        cv2.imwrite(f"Materiale/Locale/grid/liver/mask_{x:>05}_{y:>05}_stained.tif", roi_mask)
     print(f"{len(positions)} immagini estratte da stained")
 
 if __name__ == "__main__":

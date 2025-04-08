@@ -18,7 +18,7 @@ n_epochs = 150 # Numero di epoche da eseguire
 log_rate = 15 # Ogni quanto loggare (es. ogni 10 batch)
 use_checkpoint = True # Se vuoi riprendere da un checkpoint esistente, metti True       Bisognerebbe creare create_checkpoint e load_checkpoint così si possono distinguere le casiistiche
 checkpoint_rate = 10 # Ogni quanto salvare i checkpoint (es. ogni 10 epoche)
-restore_checkpoint_path = "Materiale/Locale/Pix2Pix/checkpoints/checkpoint_Pix2Pix_epoca109_2025-04-04_12-38-26.pth" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
+restore_checkpoint_path = "Materiale/Locale/Pix2Pix/checkpoints/checkpoint_Pix2Pix_epoca149_2025-04-07_08-25-12.pth" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
 validate_rate = 1 # Ogni quanto validare (es. ogni 5 epoche), prendiamo per buono al momento come valore standard =checkpoint_rate
 seed = 42 # Seed per la riproducibilità
 # -----------------------
@@ -82,8 +82,8 @@ class Down(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(Down, self).__init__()
         self.maxpool_conv = nn.Sequential(
-            DoubleConv(in_channels, out_channels),
-            nn.MaxPool2d(kernel_size=2)
+            nn.MaxPool2d(kernel_size=2),
+            DoubleConv(in_channels, out_channels)
         )
 
     def forward(self, x):
@@ -460,7 +460,7 @@ def test_inference(checkpoint_path, test_folder, output_folder="Materiale/Locale
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     G.load_state_dict(checkpoint['generator_state_dict'])
     G.eval()
-    log_message(f"Checkpoint caricato.")
+    # log_message(f"Checkpoint caricato.")
 
     # Trasformazioni da applicare alle immagini di test
     transform = transforms.Compose([
@@ -713,7 +713,7 @@ if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "test":
         # Esegui il test con un checkpoint esistente
         print(f"Inizio test con il checkpoint in: {restore_checkpoint_path}")
-        test_inference(restore_checkpoint_path, test_folder="Materiale/Locale/dataset_split/test", output_folder="Materiale/Locale/Pix2Pix/output_test", image_size=image_size, device="cuda")
+        test_inference(restore_checkpoint_path, test_folder="Materiale/Locale/liver/grid/label_free", output_folder="Materiale/Locale/Pix2Pix/output_test", image_size=image_size, device="cuda")
     elif len(sys.argv) >= 2 and sys.argv[1] == "train":
         print(f"Inizio allenamento.")
         main()

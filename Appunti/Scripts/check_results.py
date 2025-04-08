@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 # Percorsi base
 target_dir = 'Materiale/Locale/dataset_split/test'
-output_dir = 'Materiale/Locale/output_test'
+output_dir = 'Materiale/Locale/Pix2Pix/output_test'
 
 def compute_similarity_score(ssim_val, delta_e_mean, w_ssim=0.5, w_deltae=0.5):
     # Normalizza deltaE (max valore percepibile = 10)
