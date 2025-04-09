@@ -151,7 +151,7 @@ def calculate_mask_with_grid(img: np.ndarray, sub_shape: tuple[int, int], grid: 
             mask = cv2.bitwise_and(mask, roi_mask)
     return mask
 
-def calculate_mask_with_mutliple_parameters(img: np.ndarray, divisors: list[int], grids: list[int]) -> np.ndarray:
+def calculate_mask_with_mutliple_parameters(img: np.ndarray, parameters: list[tuple[int, int]]) -> np.ndarray:
     """
     Calcola la maschera per l'immagine di input
     
@@ -159,18 +159,14 @@ def calculate_mask_with_mutliple_parameters(img: np.ndarray, divisors: list[int]
     ----------
     img : np.ndarray
         Immagine di input
-    divisors : list[int]
-        Lista di divisori per l'immagine
-    grids : list[int]
-        Lista di griglie per l'immagine
+    parameters : list[int, int]
+        Le coppie divisore-griglia con cui calcolare le maschere
     
     Returns
     -------
     mask : np.ndarray
         Maschera dell'immagine
     """
-    # Unisce i divisori e le griglie in un'unica lista di tuple
-    parameters = zip(divisors, grids)
     # Crea una maschera vuota
     mask = np.ones((img.shape[0], img.shape[1]), dtype=np.uint8) * 255
     # Si usano diversi parametri sub_shape (2=metà del lato) e grid per trovare la maschera (3=3 quadri per lato)
@@ -434,9 +430,10 @@ def main(path: str, save_masks: bool = False, seed: Optional[int] = None) -> Non
     # Imposta il seed per ottenere sempre la stessa suddivisione, se necessario
     if seed is not None:
         random.seed(seed)
-        print(f"Seed impostato a: {seed}")
+        print(f"Seed impostato a {seed}")
 
     # Caricamento delle immagini
+    print(f"Caricamento delle immagini da {path}")
     label_free = cv2.imread(os.path.join(path, "label_free.tif"))
     stained = cv2.imread(os.path.join(path, "stained.tif"))
     if label_free is None or stained is None:
@@ -445,8 +442,9 @@ def main(path: str, save_masks: bool = False, seed: Optional[int] = None) -> Non
     print(f"Immagini caricate: {label_free.shape}, {stained.shape}")
 
     # Calcolo delle maschere
-    mask_lf = calculate_mask_with_mutliple_parameters(label_free, [2, 4, 6, 8], [3, 6, 9, 15])
-    mask_st = calculate_mask_with_mutliple_parameters(stained, [2, 4, 6, 8], [3, 6, 9, 15])
+    print("Calcolo delle maschere")
+    mask_lf = calculate_mask_with_mutliple_parameters(label_free, [(2, 3), (4, 6), (6, 9), (8, 15)])
+    mask_st = calculate_mask_with_mutliple_parameters(stained, [(2, 3), (4, 6), (6, 9), (8, 15)])
     print("Maschere calcolate")
 
     # Salvataggio delle maschere
@@ -455,6 +453,7 @@ def main(path: str, save_masks: bool = False, seed: Optional[int] = None) -> Non
     print("Maschere salvate")
 
     # Allineameanto delle immagini
+    print("Allineamento delle immagini")
     aligned_stained, aligned_mask_st, warp_matrix = align_from_scaled(label_free, stained, mask1=mask_lf, mask2=mask_st, scale=0.5)
     print("Immagini allineate")
 
@@ -464,6 +463,7 @@ def main(path: str, save_masks: bool = False, seed: Optional[int] = None) -> Non
     print("Immagini allineate salvate")
 
     # Estrazione delle sottoimmagini
+    print("Estrazione delle sottoimmagini")
     image_size = (512, 512)
     grid_movement = (300, 300)
     lf_images, lf_masks, positions = divide_image_with_grid(label_free, image_size, grid_movement, mask_lf)
@@ -484,6 +484,7 @@ def main(path: str, save_masks: bool = False, seed: Optional[int] = None) -> Non
     print("Coppie rinominate")
 
     # Salvataggio delle sottoimmagini
+    print("Salvataggio delle coppie")
     os.makedirs(os.path.join(path, "subimages"), exist_ok=True)
     for lf_img, lf_mask, st_img, st_mask in zip(named_lf_images, named_lf_masks, named_st_images, named_st_masks):
         cv2.imwrite(os.path.join(path, "subimages", f"{lf_img[1]}.tif"), lf_img[0])
@@ -494,6 +495,7 @@ def main(path: str, save_masks: bool = False, seed: Optional[int] = None) -> Non
     print("Coppie salvate")
 
     # Suddivisione del dataset in training, validation e testing
+    print("Suddivisione del dataset")
     images = list(zip(named_lf_images, named_st_images))
     split = split_input(images, [0.7, 0.15, 0.15])
     print(f"Coppie suddivise in: {len(split[0])} train, {len(split[1])} val, {len(split[2])} test")
