@@ -464,11 +464,12 @@ def main(path: str, save_masks: bool = False, seed: Optional[int] = None) -> Non
 
     # Estrazione delle sottoimmagini
     print("Estrazione delle sottoimmagini")
+    margin = 200
     image_size = (512, 512)
     grid_movement = (300, 300)
-    lf_images, lf_masks, positions = divide_image_with_grid(label_free, image_size, grid_movement, mask_lf)
-    st_images = divide_image_with_positions(aligned_stained, image_size, positions)
-    st_masks = divide_image_with_positions(aligned_mask_st, image_size, positions)
+    lf_images, lf_masks, positions = divide_image_with_grid(label_free[margin:-margin, margin:-margin], image_size, grid_movement, mask_lf[margin:-margin, margin:-margin])
+    st_images = divide_image_with_positions(aligned_stained[margin:-margin, margin:-margin], image_size, positions)
+    st_masks = divide_image_with_positions(aligned_mask_st[margin:-margin, margin:-margin], image_size, positions)
     print(f"Totale coppie estratte: {len(lf_images)}")
 
     # Combinazione delle immagini con il nome
