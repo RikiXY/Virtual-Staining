@@ -343,10 +343,10 @@ def divide_image_with_grid(img: np.ndarray, img_size: tuple[int, int], grid_move
         for y in range(0, img.shape[0], grid_movement[1]):
             # Estrazione della regione di interesse dell'immagine
             roi_img = extract_image(img, x, y, img_size[0], img_size[1])
-            # Se l'immagine è troppo piccola salto il quadrato
+            # Se l'immagine è troppo piccola salto la salto
             if roi_img.shape[0] < img_size[1] or roi_img.shape[1] < img_size[0]:
                 continue
-            # Se tutta la maschera è al 60% nera salto il quadrato in quanto è sfondo
+            # Se la maschera è al troppo nera salto l'immagine in quanto è per la maggior parte sfondo
             roi_mask = None
             if mask is not None:
                 roi_mask = extract_image(mask, x, y, img_size[0], img_size[1])
@@ -437,9 +437,9 @@ def main(path: str, save_masks: bool = False, seed: Optional[int] = None) -> Non
     label_free = cv2.imread(os.path.join(path, "label_free.tif"))
     stained = cv2.imread(os.path.join(path, "stained.tif"))
     if label_free is None or stained is None:
-        print("Impossibile caricare le immagini. Devono esssere chiamate label_free.tif e stained.tif")
+        print("Impossibile caricare le immagini. Devono essere chiamate label_free.tif e stained.tif")
         sys.exit(1)
-    print(f"Immagini caricate: {label_free.shape}, {stained.shape}")
+    print(f"Immagini caricate: lf={label_free.shape}, st={stained.shape}")
 
     # Calcolo delle maschere
     print("Calcolo delle maschere")
@@ -480,8 +480,8 @@ def main(path: str, save_masks: bool = False, seed: Optional[int] = None) -> Non
     for (x, y), lf_img, lf_mask, st_img, st_mask in zip(positions, lf_images, lf_masks, st_images, st_masks):
         named_lf_images.append((lf_img, f"{x:>05}_{y:>05}_label_free"))
         named_st_images.append((st_img, f"{x:>05}_{y:>05}_stained"))
-        named_lf_masks.append((lf_mask, f"{x:>05}_{y:>05}_mask_label_free"))
-        named_st_masks.append((st_mask, f"{x:>05}_{y:>05}_mask_stained"))
+        named_lf_masks.append((lf_mask, f"{x:>05}_{y:>05}_mask_lf"))
+        named_st_masks.append((st_mask, f"{x:>05}_{y:>05}_mask_st"))
     print("Coppie rinominate")
 
     # Salvataggio delle sottoimmagini
