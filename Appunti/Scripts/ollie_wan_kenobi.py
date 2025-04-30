@@ -465,8 +465,8 @@ def main(path: str, save_masks: bool = False, seed: Optional[int] = None) -> Non
     # Estrazione delle sottoimmagini
     print("Estrazione delle sottoimmagini")
     margin = 200
-    image_size = (512, 512)
-    grid_movement = (300, 300)
+    image_size = (256, 256)
+    grid_movement = (256, 256)
     lf_images, lf_masks, positions = divide_image_with_grid(label_free[margin:-margin, margin:-margin], image_size, grid_movement, mask_lf[margin:-margin, margin:-margin])
     st_images = divide_image_with_positions(aligned_stained[margin:-margin, margin:-margin], image_size, positions)
     st_masks = divide_image_with_positions(aligned_mask_st[margin:-margin, margin:-margin], image_size, positions)
@@ -498,7 +498,7 @@ def main(path: str, save_masks: bool = False, seed: Optional[int] = None) -> Non
     # Suddivisione del dataset in training, validation e testing
     print("Suddivisione del dataset")
     images = list(zip(named_lf_images, named_st_images))
-    split = split_input(images, [0.7, 0.15, 0.15])
+    split = split_input(images, [0.8, 0.05, 0.15])
     print(f"Coppie suddivise in: {len(split[0])} train, {len(split[1])} val, {len(split[2])} test")
 
     # Salvataggio delle immagini suddivise

@@ -18,7 +18,7 @@ n_epochs = 150 # Numero di epoche da eseguire
 log_rate = 15 # Ogni quanto loggare (es. ogni 10 batch)
 use_checkpoint = True # Se vuoi riprendere da un checkpoint esistente, metti True       Bisognerebbe creare create_checkpoint e load_checkpoint così si possono distinguere le casiistiche
 checkpoint_rate = 10 # Ogni quanto salvare i checkpoint (es. ogni 10 epoche)
-restore_checkpoint_path = "Materiale/Locale/Pix2Pix/checkpoints/checkpoint_Pix2Pix_epoca149_2025-04-07_08-25-12.pth" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
+restore_checkpoint_path = "Materiale/Locale/Pix2Pix/checkpoints/checkpoint_Pix2Pix_epoca109_2025-04-30_12-04-29.pth" # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
 validate_rate = 1 # Ogni quanto validare (es. ogni 5 epoche), prendiamo per buono al momento come valore standard =checkpoint_rate
 seed = 42 # Seed per la riproducibilità
 # -----------------------
@@ -26,7 +26,7 @@ batch_size = 8 # Batch size per il DataLoader (8 è un buon valore, ma dipende d
 training_shuffle = True # Se vuoi mescolare i dati ad ogni epoca del training, metti True
 validation_shuffle = False # Se vuoi mescolare i dati ad ogni epoca del validation, metti True
 n_workers = 12 # Numero di worker per il DataLoader (12 è un buon valore, ma dipende dalla GPU)
-image_size = (512, 512) # Risoluzione delle immagini (512x512 è un buon valore per Pix2Pix), si può pensare anche a 256x256
+image_size = (256, 256) # Risoluzione delle immagini (512x512 è un buon valore per Pix2Pix), si può pensare anche a 256x256
 # =========================
 
 
@@ -629,7 +629,7 @@ def main():
         transforms.Normalize([0.5]*3, [0.5]*3)
     ])
 
-    training_dataset = PairedHistologyDataset("Materiale/Locale/dataset_split/train", transform)
+    training_dataset = PairedHistologyDataset("Materiale/Locale/fullsize_256/train", transform)
     training_loader = DataLoader(training_dataset, batch_size=batch_size, shuffle=training_shuffle, num_workers=n_workers, pin_memory=True) # prima num_workers era a 0 e pin_memory non c'era e batch_size a 4, Shuffle era a Flase
     # andrebbero presi i tempi precisi per ogni configurazione (profiling(?)), ma in linea di massima:
     # con num_workers=12 impiega circa 1.27 minuti, 1.28 e 1.22
@@ -637,7 +637,7 @@ def main():
     # con num_workers=4 impega circa 1.41 minuti, 1.41 e 1.38
     # con num_workers=0 impiega circa 1.27 minuti, 1.23 e 1.29
 
-    validation_dataset = PairedHistologyDataset("Materiale/Locale/dataset_split/val", transform)
+    validation_dataset = PairedHistologyDataset("Materiale/Locale/fullsize_256/val", transform)
     validation_loader = DataLoader(validation_dataset, batch_size=batch_size, shuffle=validation_shuffle, num_workers=n_workers, pin_memory=True)
 
     # Inizializzazione del modello
@@ -657,9 +657,9 @@ def main():
     l1_loss = nn.L1Loss()
 
     # Creazione cartella per le immagini di preview e cancellazione dei file esistenti
-    os.makedirs("Materiale/Locale/Pix2Pix/output_train", exist_ok=True)
-    for file in os.listdir("Materiale/Locale/Pix2Pix/output_train"):
-        os.remove(os.path.join("Materiale/Locale/Pix2Pix/output_train", file))
+    os.makedirs("Materiale/Locale/fullsize_256/output_train", exist_ok=True)
+    for file in os.listdir("Materiale/Locale/fullsize_256/output_train"):
+        os.remove(os.path.join("Materiale/Locale/fullsize_256/output_train", file))
 
     # Checkpoint
     start_epoch = 0
@@ -713,7 +713,7 @@ if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "test":
         # Esegui il test con un checkpoint esistente
         print(f"Inizio test con il checkpoint in: {restore_checkpoint_path}")
-        test_inference(restore_checkpoint_path, test_folder="Materiale/Locale/liver/grid/label_free", output_folder="Materiale/Locale/Pix2Pix/output_test", image_size=image_size, device="cuda")
+        test_inference(restore_checkpoint_path, test_folder="Materiale/Locale/fullsize_256/test", output_folder="Materiale/Locale/fullsize_256/output_test", image_size=image_size, device="cuda")
     elif len(sys.argv) >= 2 and sys.argv[1] == "train":
         print(f"Inizio allenamento.")
         main()

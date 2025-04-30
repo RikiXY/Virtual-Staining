@@ -58,12 +58,12 @@ def main():
 
 if __name__ == "__main__":
     # Path comune
-    test_folder = "Materiale/Locale/liver/grid"
+    test_folder = "Materiale/Locale/fullsize_256/test"
 
     if(len(sys.argv) >= 2 and sys.argv[1] == "Pix2Pix"):
         # Percorsi delle cartelle
-        output_folder = "Materiale/Locale/Pix2Pix/output_test"
-        save_path = "Materiale/Locale/Pix2Pix/graphs_test"
+        output_folder = "Materiale/Locale/fullsize_256/output_test"
+        save_path = "Materiale/Locale/fullsize_256/graphs_test"
         main()
     elif (len(sys.argv) >= 2 and sys.argv[1] == "Pix2Pix+"):
         # Percorsi delle cartelle
