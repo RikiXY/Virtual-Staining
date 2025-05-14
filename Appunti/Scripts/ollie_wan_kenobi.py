@@ -81,7 +81,7 @@ def calculate_mask(img: np.ndarray) -> np.ndarray:
     # Binarizza l'immagine con una soglia
     _, binary = cv2.threshold(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 230, 255, cv2.THRESH_BINARY)
     # Trova i componenti connessi
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
 
     # Ordina in modo decrescente i componenti per area
     n_filtered = 10
