@@ -514,7 +514,7 @@ def main(path: str, save_masks: bool = False, seed: Optional[int] = None) -> Non
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Uso: python ollie_wan_kenobi.py <path> [seed] [--save_masks]")
-        print("Esempio: python ollie_wan_kenobi.py /Materiale/Locale/liver --save_masks")
+        print("Esempio: python ollie_wan_kenobi.py Materiale/Locale/liver --save_masks")
         sys.exit(1)
     path = sys.argv[1]
     seed = None
