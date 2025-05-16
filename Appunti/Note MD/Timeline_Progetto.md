@@ -163,3 +163,10 @@ Dai test svolti abbiamo deciso di usare la normalizzazione <span style="color:#9
 - **Creazione script `ollie_wan_kenobi.py`**
 *Lore*: data la presenza di troppi file abbiamo deciso di creare un unico file contenente tutte le precedenti operazioni (allineamento, creazione dataset...). Non sapendo che nome dargli abbiamo optato per un'ispirazione al mondo tech, più precisamente ai computer, infatti il primo nome proposto è stato `all_in_one.py`. Dato che siamo dei burloni abbiamo trasposto il nome in `ollie_wan.py`. Il nome però faceva chiaramente pensare a un personaggio iconico del mondo cinematografico e ludico, di conseguenza il nome finale proposto per lo script che sarà eseguito in preparazione alla rete è `ollie_wan_kenobi.py`. Nessuno dei due creatori di questo file e repository è fan, e tanto meno ha visto, Star Wars.
 
+## 8-9-10 Aprile
+- **Refactoring codice**
+
+## 14 Maggio
+- **Riorganizzazione repository**
+_Spiegazione:_ dopo un periodo di interruzione dovuto a impegni non rimandabili di natura universitaria e personale, abbiamo ripreso in mano il progetto con l'idea di riorganizzare la repository, "pulendola" da file inutili e tentativi momentanei di idee mai sviluppate. <span style="color:#f7b267"><b>Essa presenterà 2 scripts (</b></span>`ollie_wan_kenobi.py`<span style="color:#f7b267"><b> e </b></span>`Pix2Pix.py`<span style="color:#f7b267"><b>) e 3 notebook di spiegazione approfondita su essi (</b></span>`allineamento.ipynb`<span style="color:#f7b267"><b>, </b></span>`ollie_wan_kenobi.ipynb`<span style="color:#f7b267"><b> e </b></span>`Pix2Pix.ipynb`<span style="color:#f7b267"><b>).</b></span> Tale giorno abbiamo finito la stesura del primo notebook nominato e scritto la relazione finale del progetto ai fini di terminarlo formalmente.
+
