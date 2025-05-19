@@ -11,14 +11,12 @@
             "id": "e09c126599e42dd0",
             "type": "leaf",
             "state": {
-              "type": "markdown",
+              "type": "pdf",
               "state": {
-                "file": "Appunti/Note MD/Timeline_Progetto.md",
-                "mode": "source",
-                "source": false
+                "file": "Relazione Progetto Virtual Staining.pdf"
               },
-              "icon": "lucide-file",
-              "title": "Timeline_Progetto"
+              "icon": "lucide-file-text",
+              "title": "Relazione Progetto Virtual Staining"
             }
           }
         ]
@@ -170,21 +168,22 @@
   },
   "active": "e09c126599e42dd0",
   "lastOpenFiles": [
+    "Appunti/Note MD/Relazione Progetto Virtual Staining.md",
+    "Appunti/Note MD/Timeline_Progetto.md",
+    "Appunti/Note MD/Timeline_Progetto_tmp.html",
+    "Appunti/Note MD/Timeline_Progetto.pdf",
+    "repo/ollie_wan_kenobi.ipynb",
+    "Relazione Progetto Virtual Staining.pdf",
+    "Appunti/Note MD/Pasted image 20250516125608.png",
     "Appunti/Scripts/Pix2Pix#.py",
     "Appunti/Scripts/Pix2Pix++.py",
     "README.md",
-    "Appunti/Note MD/Timeline_Progetto.md",
     "Appunti/Scripts/check_results.py",
     "Appunti/Scripts/Pix2Pix+.py",
     "Appunti/Notebooks/Pix2Pix+_Notebook.ipynb",
     "Timeline_Progetto.pdf",
-    "Materiale/Deep_learning-enable_virtual_histological_staining_of_biological_samples.pdf",
-    "Appunti/Note MD/Timeline_Progetto.pdf",
-    "Appunti/Note MD/Timeline_Progetto_tmp.html",
     "Materiale/Immagini/non_colorato_2.png",
     "Materiale/Immagini/non_colorato.png",
-    "Materiale/Immagini/mask_stained.tif",
-    "Materiale/Immagini/mask_label_free.tif",
     "Materiale/Immagini/colorato_2.png",
     "Materiale/Immagini/colorato.png",
     "Timeline_Progetto_GitHub_Compatible.md",
