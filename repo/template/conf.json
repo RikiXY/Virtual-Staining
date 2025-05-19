@@ -7,7 +7,9 @@
     },
     "TemplateExporter": {
         "exclude_input_prompt": true,
-        "exclude_output_prompt": true,
-        "exclude_prompt": true
+        "exclude_output_prompt": true
+    },
+    "LatexPreprocessor": {
+        "style": "xcode"
     }
 }
