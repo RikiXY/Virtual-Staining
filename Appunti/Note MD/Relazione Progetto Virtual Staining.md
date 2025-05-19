@@ -5,13 +5,9 @@ Per raggiungere questo scopo, abbiamo progettato una pipeline che parte dall’*
 ---
 ### Fasi del lavoro svolto
 Il progetto prevede una pipeline articolata in più fasi distinte, ciascuna delle quali è risultata fondamentale per il corretto apprendimento e la generazione delle immagini colorate. Di seguito si riportano le principali tappe operative:
-
 1. **Allineamento delle immagini:** La prima fase ha riguardato l’allineamento spaziale tra le immagini _label-free_ e le corrispondenti immagini colorate H&E. Poiché le due immagini possono presentare disallineamenti dovuti al processo di acquisizione, è stato necessario calcolare una trasformazione affine basata su feature locali ottenute attraverso l'ausilio di algoritmi come **ORB** e **SIFT**. A tal fine, si è utilizzato l’algoritmo **SIFT** per l’estrazione dei _keypoints_, associato a un sistema di normalizzazione del contrasto (**CLAHE**), sviluppo di maschere e filtraggio euclideo, al fine di migliorare la qualità delle corrispondenze. La matrice di trasformazione risultante è stata poi applicata all’intera immagine colorata e alla relativa maschera.
-
 2. **Suddivisione in _patch_:**  Una volta ottenuta l’immagine allineata, si è proceduto a suddividerla in sottoregioni regolari (_patch_) di dimensione 512×512 pixel, con passo di 300 pixel. Questa suddivisione ha permesso di generare un numero consistente di coppie immagine _label free_-_stained_ da utilizzare durante l’addestramento. Per garantire la qualità del dataset, sono stati esclusi automaticamente i quadranti contenenti prevalentemente sfondo.
-
 3. **Creazione del dataset strutturato:** Le patch ottenute sono state organizzate in un dataset strutturato secondo la convenzione **train/val/test**, rispettando una suddivisione **70/15/15**. Durante questa fase è stata verificata la coerenza tra ciascuna immagine _label-free_ e la sua corrispondente _stained_, assicurando che ogni coppia fosse completa e correttamente nominata. L’uso di un seme randomico fisso ha garantito la riproducibilità della partizione.
-
 4. **Addestramento del modello Pix2Pix:** Per la fase di colorazione virtuale è stata adottata una rete generativa condizionata basata sull’architettura **Pix2Pix**, composta da un generatore tipo **UNet** e da un discriminatore **PatchGAN**. Il modello è stato addestrato in modalità supervisionata, ottimizzando una combinazione di metriche di loss come **Binary Cross Entropy** (**BCE**) e **Mean Absolute Error** (**L1**). Durante l’addestramento è stata eseguita una validazione periodica per monitorare l’andamento delle prestazioni su dati non visti.
 
 ---
@@ -33,3 +29,14 @@ Infine, il progetto ha richiesto una buona **organizzazione della pipeline speri
 L’esperienza progettuale si è rivelata estremamente formativa sia dal punto di vista tecnico che metodologico. Ha permesso di applicare concetti teorici a un problema reale e attuale, affrontando sfide pratiche legate alla qualità del dato, all’efficienza computazionale e alla progettazione di modelli generativi condizionati.
 
 In prospettiva, questo lavoro potrebbe rappresentare un punto di partenza utile per chiunque voglia approfondire l’applicazione di tecniche di deep learning alla colorazione virtuale di immagini biomediche. La struttura modulare della pipeline e la chiarezza del codice la rendono facilmente adattabile ad altri contesti o a nuovi dataset. L’intero progetto è stato reso disponibile pubblicamente nella repository GitHub: [https://github.com/RikiXY/Virtual-Staining](https://github.com/RikiXY/Virtual-Staining), con l’obiettivo di condividerne i risultati e favorire possibili estensioni o contributi futuri da parte della comunità.
+
+
+
+
+<p align="right">
+Università degli Studi di Cagliari<br>
+Corso di Laurea in Ingegneria Elettronica, Informatica e delle Telecomunicazioni<br>
+A.A. 2024/2025<br>
+<br>
+<strong>Riccardo Giuseppe Amato</strong> e <strong>Andrea Mura</strong>
+</p>
