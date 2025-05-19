@@ -4,7 +4,6 @@
         "text/latex": true,
         "text/tex": true,
         "application/pdf": true
-<<<<<<< HEAD
     },
     "TemplateExporter": {
         "exclude_input_prompt": true,
@@ -12,7 +11,5 @@
     },
     "LatexPreprocessor": {
         "style": "xcode"
-=======
->>>>>>> 4afd83b291353ee9ff4078ae32c67693d8fc8f08
     }
 }
