@@ -4,10 +4,5 @@
         "text/latex": true,
         "text/tex": true,
         "application/pdf": true
-    },
-    "TemplateExporter": {
-        "exclude_input_prompt": true,
-        "exclude_output_prompt": true,
-        "exclude_prompt": true
     }
 }
