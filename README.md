@@ -93,3 +93,8 @@ _Funzionamento_: training completo, validazione e test integrati. Bilanciamento 
 _Funzionamento_: salva i confronti input/output/target per ogni patch del test set.
 **Migliorie**:
 - [ ] Mostrare il numero totale di immagini processate.
+
+---
+## License
+This project is licensed under the [MIT License](../LICENSE) – see the file for details.  
+© 2025 Riccardo Giuseppe Amato ([@RikiXY](https://github.com/RikiXY)), Andrea Mura ([@andreamura](https://github.com/andreamura))
