@@ -1,6 +1,7 @@
 import os, random, time, datetime, sys
+from PIL import Image
 import numpy as np
-import cv2
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -47,8 +48,8 @@ class PairedHistologyDataset(Dataset):
 
     def __getitem__(self, idx):
         prefix = self.pairs[idx]
-        lf = cv2.cvtColor(cv2.imread(os.path.join(self.folder_path, prefix + '_label_free.tif')), cv2.COLOR_BGR2RGB)
-        st = cv2.cvtColor(cv2.imread(os.path.join(self.folder_path, prefix + '_stained.tif')), cv2.COLOR_BGR2RGB)
+        lf = Image.open(os.path.join(self.folder_path, prefix + '_label_free.tif')).convert('RGB')
+        st = Image.open(os.path.join(self.folder_path, prefix + '_stained.tif')).convert('RGB')
         if self.transform:
             lf = self.transform(lf)
             st = self.transform(st)
@@ -481,7 +482,7 @@ def test_inference(checkpoint_path, test_folder, output_folder="Materiale/Locale
 
             # Carico l'immagine di test label-free
             img_path = os.path.join(test_folder, filename)
-            img = cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB)
+            img = Image.open(img_path).convert('RGB')
 
             # Applico la trasfromazione
             img_tensor = transform(img).unsqueeze(0).to(device)  # shape: (1, 3, H, W)
