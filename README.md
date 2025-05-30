@@ -98,3 +98,7 @@ _Funzionamento_: salva i confronti input/output/target per ogni patch del test s
 ## License
 This project is licensed under the [MIT License](../LICENSE) – see the file for details.  
 © 2025 Riccardo Giuseppe Amato ([@RikiXY](https://github.com/RikiXY)), Andrea Mura ([@andreamura](https://github.com/andreamura))
+
+
+## MODIFICHE DA FARE
+al momento stiamo scrivendo codice e commenti partendo dalla cartella _Virtual-Staining/repo/_ ma in realtà quest'ultima non sarà poi presente, quindi bisogna ricontrollare che `ollie_wan_kenobi.py` funzioni e i commenti del suo notebook (specialmente i parametri)
