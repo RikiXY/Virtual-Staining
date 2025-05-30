@@ -113,7 +113,7 @@ lang = "it"  # Default language is Italian, can be changed to "en" for English
 # }
 
 import json
-with open("messages.json", "r", encoding="utf-8") as f:
+with open("messages/messages.json", "r", encoding="utf-8") as f:
     MESSAGES = json.load(f)
 
 def pad_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
