@@ -14,8 +14,8 @@ from typing import Optional
 
 # [ITA] Importo il file messages.json che contiene i messaggi in italiano e inglese
 # [EN] Import the messages.json file that contains messages in Italian and English
-script_dir = Path(__file__).parent.resolve()
-messages_path = script_dir / "json" / "messages.json"
+script_dir = Path(__file__).resolve()
+messages_path = script_dir.parent / "json" / "messages.json"
 with messages_path.open("r", encoding="utf-8") as m:
     MESSAGES = json.load(m)
 
@@ -652,7 +652,7 @@ if __name__ == "__main__":
 
     # [ITA] Caricamento dei messaggi in base alla lingua scelta
     # [EN] Loading messages based on the chosen language
-    help_path = script_dir / "json" / "help.json"
+    help_path = script_dir.parent / "json" / "help.json"
     with help_path.open("r", encoding="utf-8") as h:
         HELP = json.load(h)
 
