@@ -1,0 +1,22 @@
+{
+    "description": {
+        "it": "Prepara maschere, allinea immagini, estrae sottoimmagini e divide il dataset",
+        "en": "Prepares masks, aligns images, extracts subimages, and splits the dataset"
+    },
+    "path": {
+        "it": "Percorso alla cartella con label_free.tif e stained.tif",
+        "en": "Path to folder with label_free.tif and stained.tif"
+    },
+    "seed": {
+        "it": "Seed casuale per la riproducibilità (opzionale)",
+        "en": "Random seed for reproducibility (optional)"
+    },
+    "save_masks": {
+        "it": "Se attivo, salva anche le maschere binarie",
+        "en": "If set, also saves the binary masks"
+    },
+    "lang": {
+        "it": "Lingua dei messaggi: en (default) o it",
+        "en": "Language of messages: en (default) or it"
+    }
+}

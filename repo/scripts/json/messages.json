@@ -4,8 +4,8 @@
         "en": "Seed set to {seed}"
     },
     "no_seed": {
-        "it": "Nessun seed specificato, le immagini saranno diverse ad ogni esecuzione",
-        "en": "No seed specified, images will be different every time"
+        "it": "Nessun seed specificato",
+        "en": "No seed specified"
     },
     "loading_images": {
         "it": "Caricamento delle immagini da {path}",
@@ -24,8 +24,8 @@
         "en": "Images loaded. Sizes: label_free={lf_shape}, stained={st_shape}"
     },
     "calculate_masks": {
-        "it": "Calcolo delle maschere",
-        "en": "Calculating masks"
+        "it": "Calcolo delle maschere. Ci vorrà un po' di tempo...",
+        "en": "Calculating masks. This will take some time..."
     },
     "masks_calculated": {
         "it": "Maschere calcolate",
@@ -40,8 +40,8 @@
         "en": "The images do not have the same size, cannot align them"
     },
     "aligning_images": {
-        "it": "Allineamento delle immagini",
-        "en": "Aligning images"
+        "it": "Allineamento delle immagini. Anche questo richiederà un po' di tempo...",
+        "en": "Aligning images. This will also take some time..."
     },
     "images_aligned": {
         "it": "Immagini allineate",
@@ -72,15 +72,15 @@
         "en": "Total pairs extracted: {count}"
     },
     "pair_renamed": {
-        "it": "Coppia rinominata",
+        "it": "Coppie rinominata",
         "en": "Pair renamed"
     },
     "pair_saving": {
-        "it": "Salvataggio della coppia",
+        "it": "Salvataggio delle coppie",
         "en": "Saving pair"
     },
     "pair_saved": {
-        "it": "Coppia salvata",
+        "it": "Coppie salvata",
         "en": "Pair saved"
     },
     "dataset_subdivision": {
