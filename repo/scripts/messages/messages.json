@@ -1,0 +1,98 @@
+{
+    "seed_set": {
+        "it": "Seed impostato a {seed}",
+        "en": "Seed set to {seed}"
+    },
+    "no_seed": {
+        "it": "Nessun seed specificato, le immagini saranno diverse ad ogni esecuzione",
+        "en": "No seed specified, images will be different every time"
+    },
+    "loading_images": {
+        "it": "Caricamento delle immagini da {path}",
+        "en": "Loading images from {path}"
+    },
+    "check_path": {
+        "it": "Il percorso {path} non esiste.",
+        "en": "The path {path} does not exist."
+    },
+    "check_images": {
+        "it": "Impossibile caricare le immagini. Devono essere chiamate label_free.tif e stained.tif",
+        "en": "Cannot load images. They must be named label_free.tif and stained.tif"
+    },
+    "images_loaded": {
+        "it": "Immagini caricate. Dimensioni: label_free={lf_shape}, stained={st_shape}",
+        "en": "Images loaded. Sizes: label_free={lf_shape}, stained={st_shape}"
+    },
+    "calculate_masks": {
+        "it": "Calcolo delle maschere",
+        "en": "Calculating masks"
+    },
+    "masks_calculated": {
+        "it": "Maschere calcolate",
+        "en": "Masks calculated"
+    },
+    "mask_saved": {
+        "it": "Maschera salvata",
+        "en": "Mask saved in"
+    },
+    "images_size_mismatch": {
+        "it": "Le immagini non hanno le stesse dimensioni, impossibile allinearle",
+        "en": "The images do not have the same size, cannot align them"
+    },
+    "aligning_images": {
+        "it": "Allineamento delle immagini",
+        "en": "Aligning images"
+    },
+    "images_aligned": {
+        "it": "Immagini allineate",
+        "en": "Images aligned"
+    },
+    "scaled_mask_error": {
+        "it": "Errore: la maschera scalata è None. Non posso allineare le immagini.",
+        "en": "Error: the scaled mask is None. Cannot align images."
+    },
+    "not_enough_features": {
+        "it": "Non ci sono abbastanza features per l'allineamento",
+        "en": "Not enough features for alignment"
+    },
+    "not_enough_matches": {
+        "it": "Non ci sono abbastanza match per l'allineamento",
+        "en": "Not enough matches for alignment"
+    },
+    "images_aligned_saved": {
+        "it": "Immagini allineate salvate",
+        "en": "Aligned images saved"
+    },
+    "extracting_subimages": {
+        "it": "Estrazione delle sottoimmagini",
+        "en": "Extracting sub-images"
+    },
+    "total_subimages": {
+        "it": "Totale coppie estratte: {count}",
+        "en": "Total pairs extracted: {count}"
+    },
+    "pair_renamed": {
+        "it": "Coppia rinominata",
+        "en": "Pair renamed"
+    },
+    "pair_saving": {
+        "it": "Salvataggio della coppia",
+        "en": "Saving pair"
+    },
+    "pair_saved": {
+        "it": "Coppia salvata",
+        "en": "Pair saved"
+    },
+    "dataset_subdivision": {
+        "it": "Suddivisione del dataset in training, validation e test",
+        "en": "Dividing dataset into training, validation, and test"
+    },
+    "pair_number_division": {
+        "it": "Numero di coppie per training: {train}, validation: {val}, test: {test}",
+        "en": "Number of pairs for training: {train}, validation: {val}, test: {test}"
+    },
+    "dataset_saved": {
+        "it": "Dataset salvato",
+        "en": "Dataset saved"
+    }
+}
