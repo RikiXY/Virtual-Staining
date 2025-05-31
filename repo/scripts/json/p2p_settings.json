@@ -1,0 +1,9 @@
+{
+    "double_conv": {
+        "kernel_size": 3,
+        "stride": 1,
+        "padding": 1,
+        "bias": false,
+        "inplace": true
+    }
+}
