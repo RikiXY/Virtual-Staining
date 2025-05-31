@@ -5,5 +5,14 @@
         "padding": 1,
         "bias": false,
         "inplace": true
-    }
+    },
+    "down": {
+        "kernel_size": 2,
+        "stride": 2
+    },
+    "up": {
+        "scale_factor": 2,
+        "mode": "bilinear",
+        "align_corners": true
+    },
 }

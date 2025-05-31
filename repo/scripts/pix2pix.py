@@ -120,9 +120,10 @@ class Down(nn.Module):
                       (batch_size, out_channels, H/2, W/2).
     """
     def __init__(self, in_channels, out_channels):
+        down_params = SETTINGS["down"]
         super(Down, self).__init__()
         self.maxpool_conv = nn.Sequential(
-            nn.MaxPool2d(kernel_size=2),
+            nn.MaxPool2d(kernel_size=down_params["kernel_size"], stride=down_params["stride"]),
             DoubleConv(in_channels, out_channels)
         )
 
