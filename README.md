@@ -102,3 +102,8 @@ This project is licensed under the [MIT License](../LICENSE) – see the file fo
 
 ## MODIFICHE DA FARE
 al momento stiamo scrivendo codice e commenti partendo dalla cartella _Virtual-Staining/repo/_ ma in realtà quest'ultima non sarà poi presente, quindi bisogna ricontrollare che `ollie_wan_kenobi.py` funzioni e i commenti del suo notebook (specialmente i parametri)
+
+## MIGLIORAMENTI FUTURI DELLA RETE
+- da `ReLU` → `Leaky ReLU` → `Parametric ReLU (PReLU)` 
+- Per semplicità e coerenza con l’architettura standard delle U-Net, abbiamo adottato un blocco basato su due convoluzioni consecutive (`DoubleConv`), che rappresenta la scelta più comune in letteratura. Tuttavia, nulla vieta, in presenza di dataset molto ampi o di particolari esigenze di rappresentazione, di estendere questo schema a tre o più convoluzioni (`TripleConv`, ecc.), incrementando così la capacità espressiva della rete. È importante, però, essere consapevoli che un aumento del numero di convoluzioni comporta un maggior costo computazionale e un rischio più elevato di overfitting, soprattutto in contesti con dati limitati.
+
