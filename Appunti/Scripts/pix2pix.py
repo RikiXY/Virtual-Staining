@@ -1,5 +1,6 @@
 import os, random, time, datetime, sys
 from PIL import Image
+
 import numpy as np
 
 import torch
@@ -29,7 +30,7 @@ image_size = (256, 256) # Risoluzione delle immagini (512x512 è un buon valore 
 # =========================
 
 
-# --------------------- Dataset ---------------------
+# ====================[DATASET]====================
 class PairedHistologyDataset(Dataset):
     def __init__(self, folder_path, transform=None):
         self.folder_path = folder_path
@@ -54,11 +55,26 @@ class PairedHistologyDataset(Dataset):
             lf = self.transform(lf)
             st = self.transform(st)
         return lf, st
+# =================================================
 
-# --------------------- Generatore (UNet-like) ---------------------
+
+# ====================[GENERATOR (U-NET)]====================
 class DoubleConv(nn.Module):
     """
-    A building block: (Conv -> BatchNorm -> ReLU) x 2
+    A PyTorch module that applies two consecutive convolutional layers, each followed by batch normalization and a ReLU activation.
+    
+    Args:
+        in_channels (int): Number of input channels.
+        out_channels (int): Number of output channels.
+
+    Forward Input:
+        x (torch.Tensor): Input tensor of shape (N, in_channels, H, W).
+
+    Forward Output:
+        torch.Tensor: Output tensor of shape (N, out_channels, H, W).
+    
+    This block is commonly used in encoder-decoder architectures such as U-Net and Pix2Pix for feature extraction and transformation.
+
     """
     def __init__(self, in_channels, out_channels):
         super(DoubleConv, self).__init__()
