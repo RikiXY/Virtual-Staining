@@ -7,10 +7,11 @@
 
 import cv2, os, random
 import argparse
-import numpy as np
 import json
 from pathlib import Path
 from typing import Optional
+
+import numpy as np
 
 # [ITA] Importo il file messages.json che contiene i messaggi in italiano e inglese
 # [EN] Import the messages.json file that contains messages in Italian and English
@@ -21,25 +22,25 @@ with messages_path.open("r", encoding="utf-8") as m:
 
 def pad_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
     """
-        Expands the image with a white border.
+    Expands the image with a white border.
 
-        Parameters
-        ----------
-        img : np.ndarray
-            Input image.
-        x : int
-            X coordinate of the border.
-        y : int
-            Y coordinate of the border.
-        w : int
-            Width of the output image.
-        h : int
-            Height of the output image.
+    Parameters
+    ----------
+    img : np.ndarray
+        Input image.
+    x : int
+        X coordinate of the border.
+    y : int
+        Y coordinate of the border.
+    w : int
+        Width of the output image.
+    h : int
+        Height of the output image.
 
-        Returns
-        -------
-        padded_image : np.ndarray
-            Expanded (padded) image.
+    Returns
+    -------
+    padded_image : np.ndarray
+        Expanded (padded) image.
     """
     
     top = y
@@ -54,17 +55,17 @@ def pad_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
 
 def calculate_mask(img: np.ndarray) -> np.ndarray:
     """
-        Finds the mask for the connected components in the image.
+    Finds the mask for the connected components in the image.
 
-        Parameters
-        ----------
-        img : np.ndarray
-            Input image.
+    Parameters
+    ----------
+    img : np.ndarray
+        Input image.
 
-        Returns
-        -------
-        mask : np.ndarray
-            Image mask.
+    Returns
+    -------
+    mask : np.ndarray
+        Image mask.
     """
     
     # [ITA] Binarizza l'immagine con una soglia
@@ -123,21 +124,21 @@ def calculate_mask(img: np.ndarray) -> np.ndarray:
 
 def calculate_mask_with_grid(img: np.ndarray, sub_shape: tuple[int, int], grid: int) -> np.ndarray:
     """
-        Finds the mask for the connected components of the image using a grid.
+    Finds the mask for the connected components of the image using a grid.
 
-        Parameters
-        ----------
-        img : np.ndarray
-            Input image.
-        sub_shape : tuple[int, int]
-            Size of the region of interest.
-        grid : int
-            Number of regions per side of the grid.
+    Parameters
+    ----------
+    img : np.ndarray
+        Input image.
+    sub_shape : tuple[int, int]
+        Size of the region of interest.
+    grid : int
+        Number of regions per side of the grid.
 
-        Returns
-        -------
-        mask : np.ndarray
-            Mask of the image.
+    Returns
+    -------
+    mask : np.ndarray
+        Mask of the image.
     """
     
     # [ITA] Maschera totale
@@ -165,19 +166,19 @@ def calculate_mask_with_grid(img: np.ndarray, sub_shape: tuple[int, int], grid: 
 
 def calculate_mask_with_mutliple_parameters(img: np.ndarray, parameters: list[tuple[int, int]]) -> np.ndarray:
     """
-        Calculates the mask for the input image using multiple parameter pairs.
+    Calculates the mask for the input image using multiple parameter pairs.
 
-        Parameters
-        ----------
-        img : np.ndarray
-            Input image.
-        parameters : list[tuple[int, int]]
-            List of (divisor, grid) pairs used to calculate the masks.
+    Parameters
+    ----------
+    img : np.ndarray
+        Input image.
+    parameters : list[tuple[int, int]]
+        List of (divisor, grid) pairs used to calculate the masks.
 
-        Returns
-        -------
-        mask : np.ndarray
-            Mask of the image.
+    Returns
+    -------
+    mask : np.ndarray
+        Mask of the image.
     """
     
     # [ITA] Crea una maschera vuota
@@ -204,31 +205,31 @@ def calculate_mask_with_mutliple_parameters(img: np.ndarray, parameters: list[tu
 
 def align_images(img1: np.ndarray, img2: np.ndarray, mask1: Optional[np.ndarray] = None, mask2: Optional[np.ndarray] = None, nfeatures: int = 10000, ed_distance: int = 200) -> tuple[np.ndarray, Optional[np.ndarray], np.ndarray]:
     """
-        Align two images.
+    Align two images.
 
-        Parameters
-        ----------
-        img1 : np.ndarray
-            The first image.
-        img2 : np.ndarray
-            The second image.
-        mask1 : np.ndarray, optional
-            The mask for the first image. Default is None.
-        mask2 : np.ndarray, optional
-            The mask for the second image. Default is None.
-        nfeatures : int, optional
-            Number of features for SIFT computation. Default is 10000.
-        ed_distance : int, optional
-            Inclusive Euclidean distance threshold for filtering matches. Default is 200.
+    Parameters
+    ----------
+    img1 : np.ndarray
+        The first image.
+    img2 : np.ndarray
+        The second image.
+    mask1 : np.ndarray, optional
+        The mask for the first image. Default is None.
+    mask2 : np.ndarray, optional
+        The mask for the second image. Default is None.
+    nfeatures : int, optional
+        Number of features for SIFT computation. Default is 10000.
+    ed_distance : int, optional
+        Inclusive Euclidean distance threshold for filtering matches. Default is 200.
 
-        Returns
-        -------
-        img2_aligned : np.ndarray
-            The aligned second image.
-        mask2_aligned : np.ndarray, optional
-            The aligned mask for the second image.
-        warp_matrix : np.ndarray
-            The transformation matrix.
+    Returns
+    -------
+    img2_aligned : np.ndarray
+        The aligned second image.
+    mask2_aligned : np.ndarray, optional
+        The aligned mask for the second image.
+    warp_matrix : np.ndarray
+        The transformation matrix.
     """
     
     # [ITA] Applicazione CLAHE (Contrast Limited Adaptive Histogram Equalization)
@@ -302,33 +303,33 @@ def align_from_scaled(img1: np.ndarray, img2: np.ndarray, scale: int = 0.5, mask
     # vogliamo mettere la soglia di distanza euclidea come parametro?
     # vogliamo mettere il numero di features come parametro?
     """
-        Aligns two images by first scaling them, estimating the transformation on the scaled images, and then applying the transformation to the original images.
-        
-        Parameters
-        ----------
-        img1 : np.ndarray
-            First input image (reference image).
-        img2 : np.ndarray
-            Second input image to be aligned to the first.
-        scale : int, optional
-            Scaling factor to resize images before alignment (default is 0.5).
-        mask1 : Optional[np.ndarray], optional
-            Optional mask for the first image.
-        mask2 : Optional[np.ndarray], optional
-            Optional mask for the second image.
-        nfeatures : int, optional
-            Number of features to use for alignment (default is 10000).
-        ed_distance : int, optional
-            Euclidean distance threshold for feature matching (default is 200).
+    Aligns two images by first scaling them, estimating the transformation on the scaled images, and then applying the transformation to the original images.
+    
+    Parameters
+    ----------
+    img1 : np.ndarray
+        First input image (reference image).
+    img2 : np.ndarray
+        Second input image to be aligned to the first.
+    scale : int, optional
+        Scaling factor to resize images before alignment (default is 0.5).
+    mask1 : Optional[np.ndarray], optional
+        Optional mask for the first image.
+    mask2 : Optional[np.ndarray], optional
+        Optional mask for the second image.
+    nfeatures : int, optional
+        Number of features to use for alignment (default is 10000).
+    ed_distance : int, optional
+        Euclidean distance threshold for feature matching (default is 200).
 
-        Returns
-        -------
-        img2_aligned : np.ndarray
-            The second image aligned to the first.
-        mask2_aligned : Optional[np.ndarray]
-            The aligned mask for the second image, if provided.
-        warp_matrix : np.ndarray
-            The affine transformation matrix used for alignment.
+    Returns
+    -------
+    img2_aligned : np.ndarray
+        The second image aligned to the first.
+    mask2_aligned : Optional[np.ndarray]
+        The aligned mask for the second image, if provided.
+    warp_matrix : np.ndarray
+        The affine transformation matrix used for alignment.
     """
     
     # [ITA] Scala le immagini per l'allineamento con un fattore di scala di 0.5 (ovvero dimezza le dimensioni)
@@ -363,25 +364,25 @@ def align_from_scaled(img1: np.ndarray, img2: np.ndarray, scale: int = 0.5, mask
 
 def extract_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
     """
-        Extracts a region from the image.
+    Extracts a region from the image.
 
-        Parameters
-        ----------
-        img : np.ndarray
-            Input image
-        x : int
-            x-coordinate of the top-left corner
-        y : int
-            y-coordinate of the top-left corner
-        w : int
-            Width of the region
-        h : int
-            Height of the region
+    Parameters
+    ----------
+    img : np.ndarray
+        Input image
+    x : int
+        x-coordinate of the top-left corner
+    y : int
+        y-coordinate of the top-left corner
+    w : int
+        Width of the region
+    h : int
+        Height of the region
 
-        Returns
-        -------
-        roi : np.ndarray
-            Region of the image
+    Returns
+    -------
+    roi : np.ndarray
+        Region of the image
     """
     
     return img[y:y+h, x:x+w]
@@ -390,29 +391,29 @@ def divide_image_with_grid(img: np.ndarray, img_size: tuple[int, int], grid_move
     # ----- DA FAR VEDERE AD ANDREA -----
     # Vogliamo mettere la max_mask_percentage come parametro?
     """
-        Divide the input image into a grid of sub-images of size `img_size`.
+    Divide the input image into a grid of sub-images of size `img_size`.
 
-        Parameters
-        ----------
-        img : np.ndarray
-            Input image.
-        img_size : tuple[int, int]
-            Size of the region of interest (width, height).
-        grid_movement : tuple[int, int]
-            Step size for moving the grid (x, y).
-        mask : np.ndarray, optional
-            Image mask for filtering. Default is None.
-        max_mask_percentage : float, optional
-            Maximum allowed percentage of masked (non-zero) pixels for a region to be included. Default is 0.4.
-        
-        Returns
-        -------
-        images : list[np.ndarray]
-            List of extracted sub-images.
-        masks : list[np.ndarray] or None
-            List of extracted mask regions, or None if no mask is provided.
-        positions : list[tuple[int, int]]
-            List of positions (x, y) of the top-left corner of each extracted sub-image.
+    Parameters
+    ----------
+    img : np.ndarray
+        Input image.
+    img_size : tuple[int, int]
+        Size of the region of interest (width, height).
+    grid_movement : tuple[int, int]
+        Step size for moving the grid (x, y).
+    mask : np.ndarray, optional
+        Image mask for filtering. Default is None.
+    max_mask_percentage : float, optional
+        Maximum allowed percentage of masked (non-zero) pixels for a region to be included. Default is 0.4.
+    
+    Returns
+    -------
+    images : list[np.ndarray]
+        List of extracted sub-images.
+    masks : list[np.ndarray] or None
+        List of extracted mask regions, or None if no mask is provided.
+    positions : list[tuple[int, int]]
+        List of positions (x, y) of the top-left corner of each extracted sub-image.
     """
     
     images = []
@@ -453,21 +454,21 @@ def divide_image_with_grid(img: np.ndarray, img_size: tuple[int, int], grid_move
 
 def divide_image_with_positions(img: np.ndarray, img_size: tuple[int, int], positions: list[tuple[int, int]]) -> list[np.ndarray]:
     """
-        Splits the image into a grid of images of size img_size using the specified positions.
+    Splits the image into a grid of images of size img_size using the specified positions.
 
-        Parameters
-        ----------
-        img : np.ndarray
-            Input image.
-        img_size : tuple[int, int]
-            Size of the region of interest.
-        positions : list[tuple[int, int]]
-            List of positions for the split images.
+    Parameters
+    ----------
+    img : np.ndarray
+        Input image.
+    img_size : tuple[int, int]
+        Size of the region of interest.
+    positions : list[tuple[int, int]]
+        List of positions for the split images.
 
-        Returns
-        -------
-        images : list[np.ndarray]
-            List of the split images.
+    Returns
+    -------
+    images : list[np.ndarray]
+        List of the split images.
     """
     
     images = []
@@ -521,7 +522,7 @@ def split_input(input: list, ratios: list[int]) -> list[list]:
 
 def main(path: str, seed: Optional[int] = None, save_masks: bool = False) -> None:
 
-    # ======[SET SEED]======
+    # ====================[SET SEED]====================
     # [ITA] Imposta il seed per ottenere sempre la stessa suddivisione, se necessario
     # [EN] Set seed for reproducibility
     if seed is not None:
@@ -529,9 +530,10 @@ def main(path: str, seed: Optional[int] = None, save_masks: bool = False) -> Non
         print(MESSAGES["seed_set"][lang].format(seed=seed))
     else:
         print(MESSAGES["no_seed"][lang])
-    # ======================
+    # ==================================================
 
-    # ======[LOAD IMAGES]======
+
+    # ====================[LOAD IMAGES]====================
     # [ITA]  Caricamento delle immagini
     # [EN] Loading images
     print(MESSAGES["loading_images"][lang].format(path=path))
@@ -542,9 +544,10 @@ def main(path: str, seed: Optional[int] = None, save_masks: bool = False) -> Non
     if label_free is None or stained is None:
         raise FileNotFoundError(MESSAGES["check_images"][lang])
     print(MESSAGES["images_loaded"][lang].format(lf_shape=label_free.shape, st_shape=stained.shape))
-    # =========================
+    # =====================================================
 
-    # ======[MASK PROCESSING]====== 
+
+    # ====================[MASK PROCESSING]====================
     # [ITA] Calcolo delle maschere per le immagini label-free e stained
     # [EN] Calculate masks for label-free and stained images
     print(MESSAGES["calculate_masks"][lang])
@@ -561,9 +564,10 @@ def main(path: str, seed: Optional[int] = None, save_masks: bool = False) -> Non
     cv2.imwrite(os.path.join(path, "mask_lf.tif"), mask_lf)
     cv2.imwrite(os.path.join(path, "mask_st.tif"), mask_st)
     print(MESSAGES["mask_saved"][lang])
-    # =============================
+    # =========================================================
 
-    # ======[IMAGE ALIGNMENT]====== 
+
+    # ====================[IMAGE ALIGNMENT]==================== 
     # [ITA] Allineamento delle immagini
     # [EN] Aligning images
     print(MESSAGES["aligning_images"][lang])
@@ -574,9 +578,10 @@ def main(path: str, seed: Optional[int] = None, save_masks: bool = False) -> Non
     cv2.imwrite(os.path.join(path, "aligned_stained.tif"), aligned_stained)
     cv2.imwrite(os.path.join(path, "aligned_mask_st.tif"), aligned_mask_st)
     print(MESSAGES["images_aligned_saved"][lang])
-    # =============================
+    # =========================================================
 
-    # ======[DATASET CREATION]====== 
+
+    # ====================[DATASET CREATION]==================== 
     # [ITA] Estrazione delle sottoimmagini
     # [EN] Extracting sub-images
     print(MESSAGES["extracting_subimages"][lang])
@@ -629,7 +634,7 @@ def main(path: str, seed: Optional[int] = None, save_masks: bool = False) -> Non
             cv2.imwrite(os.path.join(path, subset_name, f"{lf_img[1]}.tif"), lf_img[0])
             cv2.imwrite(os.path.join(path, subset_name, f"{st_img[1]}.tif"), st_img[0])
     print(MESSAGES["dataset_saved"][lang])
-    # ==============================  
+    # ==========================================================
 
 if __name__ == "__main__":
 
@@ -637,7 +642,7 @@ if __name__ == "__main__":
     # dato che il --help è generato automaticamente da argparse, non tutto è in italiano
     # Vogliamo fare in modo che sia solo in inglese --help? possiamo farlo anche in italiano ma dobbiamo aggiungere un paio di cose al codice non velocissime
 
-
+    # ====================[ARGUMENT PARSING]====================
     # [ITA] Parsing degli argomenti della riga di comando. Il primo parser serve per la lingua, il secondo per gli argomenti principali
     # [EN] Parsing command line arguments. The first parser is for the language, the second for the main arguments
     lang_parser = argparse.ArgumentParser(add_help=False)
@@ -649,13 +654,11 @@ if __name__ == "__main__":
         help="Language for messages (default: en)"
     )
     lang_args, _ = lang_parser.parse_known_args()
-
     # [ITA] Caricamento dei messaggi in base alla lingua scelta
     # [EN] Loading messages based on the chosen language
     help_path = script_dir.parent / "json" / "help.json"
     with help_path.open("r", encoding="utf-8") as h:
         HELP = json.load(h)
-
     # [ITA] Parser principale per gli argomenti
     # [EN] Main parser for the arguments
     parser = argparse.ArgumentParser(
@@ -681,6 +684,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     lang = args.lang
+    # ==========================================================
 
 
     # [ITA] Esecuzione della funzione principale con gli argomenti specificati
