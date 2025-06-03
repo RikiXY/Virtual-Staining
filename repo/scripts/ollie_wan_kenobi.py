@@ -71,7 +71,7 @@ def calculate_mask(img: np.ndarray) -> np.ndarray:
     # [ITA] Binarizza l'immagine con una soglia
     # [EN] Binarizes the image with a threshold
     # ----- DA FAR VEDERE AD ANDREA ----- 
-    # Vogliamo rendere la soglia un parametro?
+    # Vogliamo rendere la soglia un parametro? Sì
     _, binary = cv2.threshold(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 230, 255, cv2.THRESH_BINARY)
 
     # [ITA] Trova i componenti connessi
@@ -299,9 +299,9 @@ def align_images(img1: np.ndarray, img2: np.ndarray, mask1: Optional[np.ndarray]
 
 def align_from_scaled(img1: np.ndarray, img2: np.ndarray, scale: int = 0.5, mask1: Optional[np.ndarray] = None, mask2: Optional[np.ndarray] = None, nfeatures: int = 10000, ed_distance: int = 200) -> tuple[np.ndarray, Optional[np.ndarray], np.ndarray]:
     # ----- DA FAR VEDERE AD ANDREA -----
-    # vogliamo mettere il fattore di scala come parametro?
-    # vogliamo mettere la soglia di distanza euclidea come parametro?
-    # vogliamo mettere il numero di features come parametro?
+    # vogliamo mettere il fattore di scala come parametro? Sì
+    # vogliamo mettere la soglia di distanza euclidea come parametro? Sì
+    # vogliamo mettere il numero di features come parametro? Sì
     """
     Aligns two images by first scaling them, estimating the transformation on the scaled images, and then applying the transformation to the original images.
     
@@ -389,7 +389,7 @@ def extract_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray
 
 def divide_image_with_grid(img: np.ndarray, img_size: tuple[int, int], grid_movement: tuple[int, int], mask: Optional[np.ndarray] = None, max_mask_percentage = 0.4) -> list[np.ndarray]:
     # ----- DA FAR VEDERE AD ANDREA -----
-    # Vogliamo mettere la max_mask_percentage come parametro?
+    # Vogliamo mettere la max_mask_percentage come parametro? Sì
     """
     Divide the input image into a grid of sub-images of size `img_size`.
 
@@ -554,11 +554,6 @@ def main(path: str, seed: Optional[int] = None, save_masks: bool = False) -> Non
     mask_lf = calculate_mask_with_mutliple_parameters(label_free, [(2, 3), (4, 6), (6, 9), (8, 15)])
     mask_st = calculate_mask_with_mutliple_parameters(stained, [(2, 3), (4, 6), (6, 9), (8, 15)])
     print(MESSAGES["masks_calculated"][lang])
-    # ----- DA FAR VEDERE AD ANDREA ----- 
-    # Se le maschere sono vuote, non si può procedere
-    # if cv2.countNonZero(mask_lf) == 0 or cv2.countNonZero(mask_st) == 0:
-    #     print("Le maschere sono vuote, non si può procedere")
-    #     sys.exit(1)
     # [ITA] Salvataggio delle maschere
     # [EN] Saving masks
     cv2.imwrite(os.path.join(path, "mask_lf.tif"), mask_lf)
@@ -586,9 +581,9 @@ def main(path: str, seed: Optional[int] = None, save_masks: bool = False) -> Non
     # [EN] Extracting sub-images
     print(MESSAGES["extracting_subimages"][lang])
     # ----- DA FAR VEDERE AD ANDREA -----
-    # Vogliamo mettere il margine come parametro?
-    # Vogliamo mettere le dimensioni delle sottoimmagini come parametro?
-    # Vogliamo mettere lo spostamento della griglia come parametro?
+    # Vogliamo mettere il margine come parametro? Sì
+    # Vogliamo mettere le dimensioni delle sottoimmagini come parametro? Sì
+    # Vogliamo mettere lo spostamento della griglia come parametro? Sì
     margin = 200
     image_size = (256, 256)
     grid_movement = (256, 256)
@@ -637,11 +632,6 @@ def main(path: str, seed: Optional[int] = None, save_masks: bool = False) -> Non
     # ==========================================================
 
 if __name__ == "__main__":
-
-    # ----- DA FAR VEDERE AD ANDREA -----
-    # dato che il --help è generato automaticamente da argparse, non tutto è in italiano
-    # Vogliamo fare in modo che sia solo in inglese --help? possiamo farlo anche in italiano ma dobbiamo aggiungere un paio di cose al codice non velocissime
-
     # ====================[ARGUMENT PARSING]====================
     # [ITA] Parsing degli argomenti della riga di comando. Il primo parser serve per la lingua, il secondo per gli argomenti principali
     # [EN] Parsing command line arguments. The first parser is for the language, the second for the main arguments
