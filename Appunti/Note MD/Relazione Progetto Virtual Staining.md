@@ -40,3 +40,9 @@ A.A. 2024/2025<br>
 <br>
 <strong>Riccardo Giuseppe Amato</strong> e <strong>Andrea Mura</strong>
 </p>
+---
+### Bibliografia
+- Bijie Bai, Xilin Yang, Yuzhu Li, Yijie Zhang, Nir Pillar, Aydogan Ozcan - _Deep learning-enabled virtual histological staining of biological samples_ [link](https://www.nature.com/articles/s41377-023-01104-7)
+- Umair Khan, Sonja Koivukoski, Mira Valkonen, Leena Latonen, Pekka Ruusuvuori - _The effect of neural network architecture on virtual H&E staining: Systematic assessment of histological feasibility_ [link](https://www.sciencedirect.com/science/article/pii/S266638992300065X)
+- OpenCV library – [https://opencv.org/](https://opencv.org/)  
+- PyTorch library – [https://pytorch.org/](https://pytorch.org/)  
