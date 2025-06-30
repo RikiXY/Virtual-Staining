@@ -40,6 +40,7 @@ A.A. 2024/2025<br>
 <br>
 <strong>Riccardo Giuseppe Amato</strong> e <strong>Andrea Mura</strong>
 </p>
+
 ---
 ### Bibliografia
 - Bijie Bai, Xilin Yang, Yuzhu Li, Yijie Zhang, Nir Pillar, Aydogan Ozcan - _Deep learning-enabled virtual histological staining of biological samples_ [link](https://www.nature.com/articles/s41377-023-01104-7)
