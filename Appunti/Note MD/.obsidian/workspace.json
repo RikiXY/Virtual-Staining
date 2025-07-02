@@ -11,14 +11,10 @@
             "id": "8679016775b92159",
             "type": "leaf",
             "state": {
-              "type": "markdown",
-              "state": {
-                "file": "Relazione Progetto Virtual Staining.md",
-                "mode": "source",
-                "source": false
-              },
+              "type": "empty",
+              "state": {},
               "icon": "lucide-file",
-              "title": "Relazione Progetto Virtual Staining"
+              "title": "Nuova scheda"
             }
           }
         ]
@@ -170,7 +166,12 @@
   },
   "active": "8679016775b92159",
   "lastOpenFiles": [
+    "Relazione Progetto Virtual Staining RGA.md",
     "Pasted image 20250629170507.png",
+    "Pasted image 20250516125608.png",
+    "Relazione Progetto Virtual Staining.md",
+    "Relazione Progetto Virtual Staining-md",
+    "logo_unica.png",
     "Timeline_Progetto.pdf"
   ]
 }
