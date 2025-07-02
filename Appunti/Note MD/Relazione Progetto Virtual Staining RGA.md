@@ -38,7 +38,7 @@ Università degli Studi di Cagliari<br>
 Corso di Laurea in Ingegneria Elettronica, Informatica e delle Telecomunicazioni<br>
 A.A. 2024/2025<br>
 <br>
-<strong>Riccardo Giuseppe Amato</strong> e <strong>Andrea Mura</strong>
+<strong>Riccardo Giuseppe Amato</strong>
 </p>
 
 ---
