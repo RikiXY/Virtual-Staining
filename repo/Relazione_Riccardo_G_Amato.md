@@ -1,3 +1,8 @@
+<div align="center">
+<h1><em>Relazione Progetto</em>: Virtual Staining</h1>
+<h4>Riccardo Giuseppe Amato</h4>
+</div>
+
 Il progetto di **_Virtual Staining_** nasce dall’esigenza di semplificare e velocizzare il processo di analisi istopatologica attraverso tecniche di **colorazione virtuale**. In ambito medico, le immagini ottenute tramite microscopia _label-free_ (generalmente in scala di grigi), pur essendo meno invasive e più rapide da acquisire, risultano di difficile interpretazione senza una colorazione specifica come quella H&E (ematossilina-eosina). L’obiettivo di questo lavoro è stato quindi quello di sviluppare un sistema in grado di trasformare automaticamente un’immagine _label-free_ in una sua controparte virtualmente colorata (_stained_), riducendo i tempi di attesa e di valutazione da parte di specialisti, oltre al riuso della stessa immagine per altre tecniche di colorazione \[1\]. L’idea si basa sul lavoro svolto in \[2\], dove una rete neurale è stata addestrata per trasformare immagini di autofluorescenza in immagini istologiche realistiche.
 
 Per raggiungere questo scopo, abbiamo progettato una pipeline che parte dall’**allineamento** tra immagini _label-free_ e colorate reali, passa per la **suddivisione in sottosezioni** e culmina nell’addestramento di un modello di deep learning basato sull’architettura **Pix2Pix** \[3\]. Quest’ultima, composta da un **generatore** e da un **discriminatore**, è in grado di apprendere la trasformazione da un dominio all’altro attraverso un approccio supervisionato. Il risultato finale è un sistema in grado di generare immagini realisticamente colorate a partire da input privi di colorazione, con applicazioni potenzialmente molto rilevanti in ambito diagnostico \[4\]. Sarebbe possibile, per esempio, combinare le varie tecniche di colorazione in un’unica immagine, ottenendo così un risultato che potrebbe essere utilizzato per una diagnosi più accurata e veloce \[5\].
@@ -11,7 +16,6 @@ Il progetto prevede una pipeline articolata in più fasi distinte, ciascuna dell
 4. **Addestramento del modello Pix2Pix:** Per la fase di colorazione virtuale è stata adottata una rete generativa condizionata basata sull’architettura **Pix2Pix**, composta da un generatore tipo **UNet** e da un discriminatore **PatchGAN**, implementata sul framework **PyTorch** \[7\]. Il modello è stato addestrato in modalità supervisionata, ottimizzando una combinazione di metriche di loss **Binary Cross Entropy** (**BCE**) e **Mean Absolute Error** (**L1**), come proposto in \[3\]. Durante l’addestramento è stata eseguita una validazione periodica per monitorare l’andamento delle prestazioni su dati non visti.
 
 ---
-
 ### Risultati ottenuti
 L’addestramento e la successiva fase di testing hanno permesso di ottenere immagini virtualmente colorate che, in molti casi, riproducono fedelmente le strutture e le cromie delle rispettive immagini target. La qualità visiva degli output è stata valutata principalmente attraverso un confronto diretto tra triple di immagini (_input, output, target_), rese disponibili grazie a uno script di visualizzazione automatica.  
 
@@ -31,17 +35,16 @@ L’esperienza progettuale si è rivelata estremamente formativa sia dal punto d
 
 In prospettiva, questo lavoro potrebbe rappresentare un punto di partenza utile per chiunque voglia approfondire l’applicazione di tecniche di deep learning alla colorazione virtuale di immagini biomediche. La struttura modulare della pipeline e la chiarezza del codice la rendono facilmente adattabile ad altri contesti o a nuovi dataset. L’intero progetto è stato reso disponibile pubblicamente nella repository GitHub: [https://github.com/RikiXY/Virtual-Staining](https://github.com/RikiXY/Virtual-Staining), con l’obiettivo di condividerne i risultati e favorire possibili estensioni o contributi futuri da parte della comunità.
 
-
-
-<p align="right">
-Università degli Studi di Cagliari<br>
-Corso di Laurea in Ingegneria Elettronica, Informatica e delle Telecomunicazioni<br>
-A.A. 2024/2025<br>
-<br>
-<strong>Riccardo Giuseppe Amato</strong>
-</p>
+<div align="center">
+  <img src="logo_unica.png" alt="Logo UNICA" width="100"/><br>
+  <strong>Università degli Studi di Cagliari</strong><br>
+  Corso di Laurea in Ingegneria Elettronica, Informatica e delle Telecomunicazioni<br>
+  A.A. 2024/2025<br>
+  <h4><em>Riccardo Giuseppe Amato</em></h4>
+</div>
 
 ---
+
 ### Bibliografia
 
 \[1\] L. Latonen, S. Koivukoski, U. Khan, and P. Ruusuvuori, "Virtual staining for histology by deep learning," *Trends in Biotechnology*, vol. 42, no. 9, pp. 1177–1186, 2024. doi: [10.1016/j.tibtech.2024.02.009](https://doi.org/10.1016/j.tibtech.2024.02.009)
