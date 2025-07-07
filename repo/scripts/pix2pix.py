@@ -130,6 +130,7 @@ class Down(nn.Module):
     def forward(self, x):
         return self.maxpool_conv(x)
 
+# RIPRENDI A IMPLEMENTARE IL JSON DA QUI
 class Up(nn.Module):
     """
     Upscaling using transposed convolution, then DoubleConv.
