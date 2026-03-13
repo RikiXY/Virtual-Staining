@@ -4,3 +4,5 @@
 /Locale/*
 !/Locale/.gitkeep
 /repo/prove/*
+/archive/local_workspace/*
+!/archive/local_workspace/.gitkeep

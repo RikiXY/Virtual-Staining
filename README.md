@@ -55,8 +55,8 @@ The repository includes qualitative comparison panels built from test outputs. E
 - generated stained prediction;
 - real stained target.
 
-![Qualitative results](repo/tripla_immagini_test_AM_1.png)
-![Qualitative results](repo/tripla_immagini_test_RGA.png)
+![Qualitative results](docs/assets/qualitative_result_1.png)
+![Qualitative results](docs/assets/qualitative_result_2.png)
 
 ## Current Workflow
 
