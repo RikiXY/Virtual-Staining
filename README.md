@@ -47,6 +47,17 @@ python repo/scripts/pix2pix.py test
 ```
 Note: preprocessing is exposed through a CLI-oriented workflow, while training and testing may still require manual path editing inside `repo/scripts/pix2pix.py`.
 
+## Qualitative Results
+
+The repository includes qualitative comparison panels built from test outputs. Each panel compares:
+
+- input label-free patch;
+- generated stained prediction;
+- real stained target.
+
+![Qualitative results](repo/tripla_immagini_test_AM_1.png)
+![Qualitative results](repo/tripla_immagini_test_RGA.png)
+
 ## Current Workflow
 
 The current executable workflow is concentrated in two scripts inside [`repo/scripts/`](./repo/scripts):
@@ -228,16 +239,6 @@ python repo/scripts/pix2pix.py test
 
 Before training or testing, verify dataset paths and checkpoint settings inside `repo/scripts/pix2pix.py`.
 
-## Qualitative Results
-
-The repository includes qualitative comparison panels built from test outputs. Each panel compares:
-
-- input label-free patch;
-- generated stained prediction;
-- real stained target.
-
-![Qualitative results](repo/tripla_immagini_test_AM_1.png)
-![Qualitative results](repo/tripla_immagini_test_RGA.png)
 
 ## Limitations/Current State
 
