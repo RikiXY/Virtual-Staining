@@ -17,26 +17,27 @@ The project therefore combines **classical image processing** and **paired deep 
 
 ### 1. Prepare input data
 
-Create a folder containing a paired full-size sample:
+Create a sample folder inside `local_workspace/` containing a paired full-size sample:
 
 ```text
-your_sample/
-├── label_free.tif
-└── stained.tif
+local_workspace/
+└── your_sample/
+    ├── label_free.tif
+    └── stained.tif
 ```
 
 ### 2. Run preprocessing and dataset creation
 
 ```bash
-python repo/scripts/ollie_wan_kenobi.py your_sample --lang en --seed 42
+python src/ollie_wan_kenobi.py local_workspace/your_sample --lang en --seed 42
 ```
 
 ### 3. Train the model
 
-Before training, verify the dataset and checkpoint paths configured inside `repo/scripts/pix2pix.py`.
+Before training or testing, verify the checkpoint path and output settings inside src/pix2pix.py. The dataset path is passed as a command-line argument.
 
 ```bash
-python repo/scripts/pix2pix.py train
+python src/pix2pix.py train local_workspace/your_sample
 ```
 
 ### 4. Run test inference
@@ -44,10 +45,10 @@ python repo/scripts/pix2pix.py train
 After setting the desired checkpoint path in the script:
 
 ```bash
-python repo/scripts/pix2pix.py test
+python src/pix2pix.py test local_workspace/your_sample
 ```
 
-Note: preprocessing is exposed through a CLI-oriented workflow, while training and testing may still require manual path editing inside `repo/scripts/pix2pix.py`.
+Note: preprocessing is exposed through a CLI-oriented workflow, while training and testing may still require manual path editing inside `src/pix2pix.py`.
 
 ## Qualitative Results
 
@@ -62,11 +63,11 @@ The repository includes qualitative comparison panels built from test outputs. E
 
 ## Current Workflow
 
-The current executable workflow is concentrated in two scripts inside [`repo/scripts/`](./repo/scripts):
+The current executable workflow is concentrated in two scripts inside [`src/`](./src):
 
-1. [`repo/scripts/ollie_wan_kenobi.py`](./repo/scripts/ollie_wan_kenobi.py)  
+1. [`src/ollie_wan_kenobi.py`](./src/ollie_wan_kenobi.py)  
    Preprocessing pipeline for mask generation, alignment, patch extraction, and dataset split creation.
-2. [`repo/scripts/pix2pix.py`](./repo/scripts/pix2pix.py)  
+2. [`src/pix2pix.py`](./src/pix2pix.py)  
    Training and inference script for a Pix2Pix-style paired image-to-image translation model.
 
 Workflow summary:
@@ -81,35 +82,36 @@ Workflow summary:
 
 ## Repository Structure
 
-The repository includes both the current workflow and older experimental material accumulated during development. For day-to-day use, the main entry point is `repo/scripts/`.
+The repository includes both the current workflow and older experimental material accumulated during development. For day-to-day use, the main entry point is `src/`.
 
 ```text
 Virtual-Staining/
-├── repo/
-│   ├── scripts/
-│   │   ├── ollie_wan_kenobi.py
-│   │   ├── pix2pix.py
-│   │   └── json/
-│   ├── template/
-│   └── *.ipynb / *.pdf / *.md / *.png
-├── Appunti/
-├── Materiale/
-├── Locale/
+├── archive/
+├── docs/
+├── examples/
+├── local_workspace/
+├── src/
+│   ├── json/
+│   ├── ollie_wan_kenobi.py
+│   └── pix2pix.py
 ├── requirements.txt
 └── README.md
 ```
 
 Main paths:
 
-- `repo/` contains the main executable code.
-- `repo/scripts/ollie_wan_kenobi.py` handles preprocessing and dataset creation.
-- `repo/scripts/pix2pix.py` handles training, validation, checkpoints, and test inference.
-- `repo/scripts/json/` contains support configuration and message files.
-- `Appunti/`, `Materiale/` and `Locale/` contain historical notes, experiments, and working material.
+- `src/` contains the main executable code.
+- `src/ollie_wan_kenobi.py` handles preprocessing and dataset creation.
+- `src/pix2pix.py` handles training, validation, checkpoints, and test inference.
+- `src/json/` contains support configuration and message files.
+- `local_workspace/` is the working area used during execution, where input samples and execution-generated folders such as datasets, checkpoints, logs, and output images are stored.
+- `docs/` contains project documentation and static assets used in the README or related explanatory material.
+- `examples/` contains example images or sample materials useful to illustrate the pipeline and its outputs.
+- `archive/` contains historical notes, experiments, and legacy working material collected during development.
 
 ## Main Scripts
 
-### `repo/scripts/ollie_wan_kenobi.py`
+### `src/ollie_wan_kenobi.py`
 
 Integrated preprocessing entry point.
 
@@ -124,7 +126,7 @@ Integrated preprocessing entry point.
 **CLI usage**
 
 ```bash
-python repo/scripts/ollie_wan_kenobi.py path [--seed SEED] [--save_masks] [--lang {en,it}]
+python src/ollie_wan_kenobi.py path [--seed SEED] [--save_masks] [--lang {en,it}]
 ```
 
 **Typical outputs**
@@ -138,7 +140,7 @@ python repo/scripts/ollie_wan_kenobi.py path [--seed SEED] [--save_masks] [--lan
 - `val/`
 - `test/`
 
-### `repo/scripts/pix2pix.py`
+### `src/pix2pix.py`
 
 Learning and inference stage of the pipeline.
 
@@ -153,8 +155,8 @@ Learning and inference stage of the pipeline.
 **CLI usage**
 
 ```bash
-python repo/scripts/pix2pix.py train
-python repo/scripts/pix2pix.py test
+python src/pix2pix.py train local_workspace/your_sample
+python src/pix2pix.py test local_workspace/your_sample
 ```
 
 **Practical note**:
@@ -225,28 +227,28 @@ The repository includes a minimal [`requirements.txt`](./requirements.txt), but 
 **Preprocessing:**
 
 ```bash
-python repo/scripts/ollie_wan_kenobi.py Materiale/Locale/liver --lang en --seed 42 --save_masks
+python src/ollie_wan_kenobi.py local_workspace/liver --lang en --seed 42 --save_masks
 ```
 
 **Training:**
 
 ```bash
-python repo/scripts/pix2pix.py train
+python src/pix2pix.py train local_workspace/liver
 ```
 
 **Testing/Inference:**
 
 ```bash
-python repo/scripts/pix2pix.py test
+python src/pix2pix.py test local_workspace/liver
 ```
 
-Before training or testing, verify dataset paths and checkpoint settings inside `repo/scripts/pix2pix.py`.
+Before training or testing, verify dataset paths and checkpoint settings inside `src/pix2pix.py`.
 
 ## Limitations/Current State
 
 The project is structured and usable, but still experimental in several practical respects.
 
-- Some dataset paths and checkpoint names still need manual editing in `repo/scripts/pix2pix.py`.
+- Some dataset paths and checkpoint names still need manual editing in `src/pix2pix.py`.
 - Configuration is only partially centralized.
 - The repository includes historical material alongside the current main workflow.
 - Dependency management is minimal and not yet tightly pinned.

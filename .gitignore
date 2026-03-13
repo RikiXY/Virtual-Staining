@@ -1,8 +1,2 @@
-/Materiale/Images/*
-/Materiale/Locale/*
-!/Materiale/Locale/.gitkeep
-/Locale/*
-!/Locale/.gitkeep
-/repo/prove/*
-/archive/local_workspace/*
-!/archive/local_workspace/.gitkeep
+/local_workspace/*
+!/local_workspace/.gitkeep

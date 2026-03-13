@@ -1,0 +1,121 @@
+Elenco del percorso delle cartelle per il volume Windows
+Numero di serie del volume: 806C-6DA4
+C:.
+¦   .gitignore
+¦   LICENSE
+¦   README.md
+¦   requirements.txt
+¦   struttura.txt
+¦   
++---.obsidian
+¦       app.json
+¦       appearance.json
+¦       core-plugins.json
+¦       workspace.json
+¦       
++---.vscode
+¦       settings.json
+¦       
++---archive
+¦   ¦   build_pdf.bat
+¦   ¦   build_pdf.sh
+¦   ¦   Relazione_Andrea_Mura.tex
+¦   ¦   Relazione_Riccardo_G_Amato.md
+¦   ¦   
+¦   +---.obsidian
+¦   ¦       app.json
+¦   ¦       appearance.json
+¦   ¦       core-plugins.json
+¦   ¦       workspace.json
+¦   ¦       
+¦   +---old_notebooks
+¦   ¦       alignment-images.ipynb
+¦   ¦       allineamento_fullsize.ipynb
+¦   ¦       allineamento_maschera.ipynb
+¦   ¦       confronti.ipynb
+¦   ¦       confronto_fullsize_grid.ipynb
+¦   ¦       maschera.ipynb
+¦   ¦       mask.ipynb
+¦   ¦       Pix2Pix+_Notebook.ipynb
+¦   ¦       presentazione_coregistrazione.ipynb
+¦   ¦       start_neural_network.ipynb
+¦   ¦       test_metodi_allineamento.ipynb
+¦   ¦       
+¦   +---old_notes
+¦   ¦   ¦   Annotazioni importanti.md
+¦   ¦   ¦   Deep_learning-enable_virtual_histological_staining_of_biological_samples-NOTE.md
+¦   ¦   ¦   Deep_learning-enable_virtual_histological_staining_of_biological_samples-NOTE.pdf
+¦   ¦   ¦   Informazioni.md
+¦   ¦   ¦   Timeline_Progetto.md
+¦   ¦   ¦   Timeline_Progetto.pdf
+¦   ¦   ¦   
+¦   ¦   +---.obsidian
+¦   ¦           app.json
+¦   ¦           appearance.json
+¦   ¦           core-plugins.json
+¦   ¦           workspace.json
+¦   ¦           
+¦   +---old_reports
+¦   ¦       OLD_Presentazione.pdf
+¦   ¦       OLD_Relazione.pdf
+¦   ¦       
+¦   +---old_scripts
+¦   ¦       check_results.py
+¦   ¦       comparison_image_NN.py
+¦   ¦       create_dataset.py
+¦   ¦       create_grid.py
+¦   ¦       creazione_immagine_presentazione.py
+¦   ¦       crop.py
+¦   ¦       fullsize_alignment.py
+¦   ¦       generate_patched.py
+¦   ¦       mask_script.py
+¦   ¦       mostra_griglia.py
+¦   ¦       mostra_perdite.py
+¦   ¦       mostra_validazione.py
+¦   ¦       ollie_wan_kenobi.py
+¦   ¦       Pix2Pix++.py
+¦   ¦       pix2pix.py
+¦   ¦       prova_pytorch.py
+¦   ¦       save_graphs.py
+¦   ¦       
+¦   +---template
+¦           conf.json
+¦           index.tex.j2
+¦           
++---docs
+¦   +---assets
+¦   ¦       logo_unica.png
+¦   ¦       qualitative_result_1.png
+¦   ¦       qualitative_result_2.png
+¦   ¦       qualitative_result_3.png
+¦   ¦       
+¦   +---notebooks
+¦   ¦       allineamento.ipynb
+¦   ¦       ollie_wan_kenobi.ipynb
+¦   ¦       pix2pix.ipynb
+¦   ¦       
+¦   +---reports
+¦           allineamento.pdf
+¦           ollie_wan_kenobi.pdf
+¦           Presentazione.pdf
+¦           Relazione_Andrea_Mura.pdf
+¦           Relazione_Riccardo_G_Amato.pdf
+¦           
++---examples
+¦       label_free_0.png
+¦       label_free_1.png
+¦       stained_0.png
+¦       stained_1.png
+¦       
++---local_workspace
+¦       .gitkeep
+¦       
++---src
+    ¦   ollie_wan_kenobi.py
+    ¦   pix2pix.py
+    ¦   
+    +---json
+            help.json
+            messages.json
+            p2p_settings.json
+            
