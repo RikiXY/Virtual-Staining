@@ -1,4 +1,5 @@
 # Virtual-Staining
+
 Paired virtual staining pipeline for histopathology images
 
 ## Overview
@@ -45,6 +46,7 @@ After setting the desired checkpoint path in the script:
 ```bash
 python repo/scripts/pix2pix.py test
 ```
+
 Note: preprocessing is exposed through a CLI-oriented workflow, while training and testing may still require manual path editing inside `repo/scripts/pix2pix.py`.
 
 ## Qualitative Results
@@ -154,6 +156,7 @@ Learning and inference stage of the pipeline.
 python repo/scripts/pix2pix.py train
 python repo/scripts/pix2pix.py test
 ```
+
 **Practical note**:
 dataset folders, output folders, and checkpoint paths are still configured directly in the script, so they may need manual editing before training or inference on a new setup.
 
@@ -238,7 +241,6 @@ python repo/scripts/pix2pix.py test
 ```
 
 Before training or testing, verify dataset paths and checkpoint settings inside `repo/scripts/pix2pix.py`.
-
 
 ## Limitations/Current State
 

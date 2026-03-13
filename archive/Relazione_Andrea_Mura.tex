@@ -1,0 +1,74 @@
+\documentclass[a4paper,10pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[italian]{babel}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+\usepackage{amsmath}
+\usepackage{geometry}
+\geometry{margin=1in}
+
+\title{\textbf{\textit{Virtual Staining}}: Colorazione Istologica Virtuale}
+\author{Andrea~Mura\\Università~degli~Studi~di~Cagliari\\Corso~di~Laurea~in~Ingegneria~Elettronica,~Informatica~e~delle~Telecomunicazioni\\A.A.~2024/2025}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section*{Introduzione}
+Nel contesto dell'analisi istopatologica, è necessario colorare chimicamente i campioni per evidenziare le strutture cellulari e tessutali. Tuttavia, le tecniche di colorazione tradizionali, come l'ematossilina--eosina (H\&E), richiedono tempo e risorse significative, rendendo il processo di diagnosi più lungo e complesso. Da questo problema è nato il progetto di \textbf{\textit{Virtual Staining}}, con l'obiettivo di rendere meno laborioso e più rapido il processo di analisi istopatologica utilizzando la colorazione virtuale.
+
+Il progetto è ispirato a studi precedenti, come quello presentato in \cite{rivenson2019}, nel quale viene addestrata una rete neurale per trasformare immagini in autofluorescenza in immagini istologiche realistiche. Si è sviluppato un sistema capace di ottenere da un'immagine \textit{label-free}, quindi non colorata, la sua controparte \textit{stained}, riducendo i costi di produzione e i tempi di attesa necessari per permettere agli specialisti di effettuare l'analisi, permettendo inoltre il riuso della stessa immagine \textit{label-free} e del campione per altre tecniche di colorazione, dato che non viene alterata irreversibilmente \cite{latonen2024}.
+
+\medskip
+È stata progettata una pipeline che parte dall'\textbf{allineamento} tra immagini \textit{label-free} e la controparte \textit{stained}, procede con la \textbf{suddivisione in sottosezioni} e la creazione di un dataset strutturato, terminando con l'addestramento di una rete neurale \textbf{Pix2Pix} \cite{isola2017}. Questa architettura, composta da un \textbf{generatore} e da un \textbf{discriminatore}, permette alla rete neurale di apprendere come trasformare un'immagine dal dominio originale \textit{label-free} a un dominio \textit{stained} attraverso un approccio supervisionato. Si ottiene così un sistema in grado di generare immagini colorate in modo realistico a partire da immagini non colorate e inalterate, con importanti applicazioni in ambito diagnostico \cite{lin2025}. Una conseguenza di questo metodo è la possibilità di combinare varie tecniche di colorazione in un'unica immagine, mettendo in risalto vari componenti che con metodi tradizionali sarebbe impossibile ottenere, permettendo un'analisi più rapida e accurata \cite{kawai2024}.
+
+\section{Fasi del lavoro svolto}
+\begin{enumerate}
+    \item \textbf{Coregistrazione delle immagini}: dato che le scansioni originali \textit{label-free} e \textit{stained} presentavano un inevitabile disallineamento, con l'ausilio di \texttt{OpenCV} \cite{opencv} e degli algoritmi \textit{SIFT} e \textit{ORB} è stata calcolata la matrice di trasformazione attraverso il rilevamento di punti distintivi dell'immagine. Dopo vari test, è stato utilizzato l'algoritmo \textit{SIFT} per l'estrazione dei \textit{keypoints} da un'immagine normalizzata tramite \textit{CLAHE}, con l'ausilio di maschere e di filtri di distanza per estrarre corrispondenze più forti. La matrice di trasformazione calcolata è stata applicata all'intera immagine \textit{stained} e alla relativa maschera, ottenendo così un'immagine allineata pixel per pixel con la corrispondente immagine \textit{label-free}.
+    \item \textbf{Suddivisione in sottosezioni}: dopo aver ottenuto l'immagine allineata, si è proceduto a suddividerla in sottosezioni da $512\times512$~pixel, utilizzando una griglia con passo di 300~pixel. L'utilizzo di questa tecnica, che causa sovrapposizione tra sezioni, ha permesso di generare un numero di coppie \textit{label-free}/\textit{stained} sufficiente per l'addestramento della rete neurale. Per garantire la qualità del dataset, sono state filtrate le sottosezioni che contenevano prevalentemente sfondo, escludendo quindi le regioni non informative.
+    \item \textbf{Creazione del dataset strutturato}: le sottosezioni ottenute sono state suddivise casualmente in un dataset strutturato secondo la convenzione \texttt{train/val/test}, con percentuali rispettivamente del 70\,\%, 15\,\% e 15\,\%. Per garantire il determinismo della partizione è stato utilizzato un seme randomico fissato.
+    \item \textbf{Addestramento della rete Pix2Pix}: la rete neurale è stata implementata sul framework \texttt{PyTorch} \cite{pytorch} sfruttando l'architettura \textit{Pix2Pix}, formata da un generatore \textit{UNet} e da un discriminatore \textit{PatchGAN}. È stata utilizzata una combinazione di funzioni di perdita \textit{Binary Cross Entropy} e \textit{Mean Absolute Error} (L1), come proposto in \cite{isola2017}, per influenzare l'apprendimento del generatore e del discriminatore. Alla fine di ogni epoca di addestramento è stata eseguita una validazione per monitorare l'andamento delle prestazioni sui dati di \textit{validation}, permettendo così di verificare se stesse avvenendo overfitting.
+\end{enumerate}
+
+\section{Risultati ottenuti}
+La fase di testing ha permesso di confermare l'efficacia del modello addestrato, ottenendo immagini colorate di output che, nella maggior parte dei casi, presentano le strutture e le colorazioni delle rispettive immagini \textit{stained} reali. La fedeltà tra immagini è stata valutata principalmente attraverso un confronto diretto tra triple formate da immagine \textit{label-free}, immagine colorata virtualmente e immagine \textit{stained} reale, generate automaticamente.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{tripla_immagini_test_AM_1.png}
+    \includegraphics[width=\textwidth]{tripla_immagini_test_AM_2.png}
+    \caption{Esempi di triple di immagini: \textit{label-free}, colorazione virtuale e immagine \textit{stained} reale.}
+    \label{fig:triple}
+\end{figure}
+
+Due esempi sono mostrati in Figura~\ref{fig:triple}, dove si può notare come l'immagine generata sia molto simile a quella reale, con una buona corrispondenza delle strutture e dei colori.
+
+\section{Competenze acquisite}
+Durante lo svolgimento del progetto sono state acquisite competenze tecniche e organizzative sia nell'ambito del processamento delle immagini e del deep learning, sia nella suddivisione del lavoro e nel brainstorming. In particolare, sono state apprese tecniche di \textit{preprocessing} e \textit{allineamento}, manipolazione di immagini tramite matrici, e l'uso di algoritmi di deep learning per la generazione di immagini, come il framework \texttt{PyTorch}.
+
+È stato possibile osservare il rapporto causa--effetto tra i modelli e i parametri delle reti neurali e le immagini generate. Sono state sperimentate varianti più avanzate del modello, come l'uso di \textit{UNet} e di un discriminatore migliorato, simile a quanto proposto in \cite{bai2023,khan2023}. Inoltre, per la gestione dei tempi, si è compreso come l'impostazione dei batch su GPU, l'impiego di tecnologia NVIDIA come \textit{AMP}, l'ottimizzazione di più funzioni di perdita, e il salvataggio dei checkpoint abbiano permesso un monitoraggio efficace dell'apprendimento.
+
+Infine sono state acquisite competenze trasversali che hanno favorito una migliore organizzazione, come la gestione del logging sia per l'allineamento delle immagini che per l'addestramento della rete neurale, la validazione periodica e la generazione automatica dei risultati grafici. Queste abilità hanno contribuito ad affinare le capacità di documentazione e di valutazione del comportamento della pipeline.
+
+\section{Considerazioni finali}
+Le sfide affrontate durante il progetto hanno permesso di applicare concetti teorici a un problema reale, affrontando questioni pratiche legate alla qualità dei dati in origine, alla progettazione di modelli di deep learning e, in generale, alla ricerca su un argomento innovativo.
+
+Riteniamo che questo progetto, nella sua interezza, possa rappresentare un punto di partenza per chi voglia approfondire il tema della \textbf{\textit{Virtual Staining}}. La presenza di notebook e script modulari rende la pipeline facilmente adattabile a modifiche e a nuovi dataset. Il codice è reso disponibile pubblicamente nella repository GitHub: \url{https://github.com/RikiXY/Virtual-Staining}, con l'intento di favorire la condivisione dei risultati e contributi futuri.
+
+
+\appendix
+\begin{thebibliography}{99}
+\bibitem{rivenson2019} Y.~Rivenson \emph{et al.}, ``Virtual histological staining of unlabelled tissue-autofluorescence images via deep learning,'' \emph{Nature Biomedical Engineering}, vol.~3, n.~6, pp.~466--477, 2019. doi: \href{https://doi.org/10.1038/s41551-019-0362-y}{10.1038/s41551-019-0362-y}.
+\bibitem{latonen2024} L.~Latonen, S.~Koivukoski, U.~Khan e P.~Ruusuvuori, ``Virtual staining for histology by deep learning,'' \emph{Trends in Biotechnology}, vol.~42, n.~9, pp.~1177--1186, 2024. doi: \href{https://doi.org/10.1016/j.tibtech.2024.02.009}{10.1016/j.tibtech.2024.02.009}.
+\bibitem{isola2017} P.~Isola, J.-Y.~Zhu, T.~Zhou e A.~A.~Efros, ``Image-to-image translation with conditional adversarial networks,'' in \emph{Proc. IEEE Conf. Comput. Vis. Pattern Recognit.~(CVPR)}, Honolulu, HI, USA, pp.~1125--1134, 2017. doi: \href{https://doi.org/10.1109/CVPR.2017.632}{10.1109/CVPR.2017.632}.
+\bibitem{lin2025} W.~Lin, Y.~Hu, R.~Zhu, B.~Wang e L.~Wang, ``Virtual staining for pathology: Challenges, limitations and perspectives,'' \emph{Intelligent Oncology}, vol.~1, n.~1, pp.~105--119, 2025. doi: \href{https://doi.org/10.1016/j.intonc.2025.03.005}{10.1016/j.intonc.2025.03.005}.
+\bibitem{kawai2024} M.~Kawai \emph{et al.}, ``Virtual multi-staining in a single-section view for renal pathology using generative adversarial networks,'' \emph{Computers in Biology and Medicine}, vol.~182, p.~109149, 2024. doi: \href{https://doi.org/10.1016/j.compbiomed.2024.109149}{10.1016/j.compbiomed.2024.109149}.
+\bibitem{opencv} OpenCV Developers, ``OpenCV: Open Source Computer Vision Library,'' \url{https://opencv.org}.
+\bibitem{pytorch} PyTorch Developers, ``PyTorch: Open source machine learning framework,'' \url{https://pytorch.org}.
+\bibitem{bai2023} B.~Bai \emph{et al.}, ``Deep learning-enabled virtual histological staining of biological samples,'' \emph{Light: Science \& Applications}, vol.~12, n.~57, pp.~1--20, 2023. doi: \href{https://doi.org/10.1038/s41377-023-01104-7}{10.1038/s41377-023-01104-7}.
+\bibitem{khan2023} U.~Khan \emph{et al.}, ``The effect of neural network architecture on virtual H\&E staining: Systematic assessment of histological feasibility,'' \emph{Patterns}, vol.~4, p.~100725, 2023. doi: \href{https://doi.org/10.1016/j.patter.2023.100725}{10.1016/j.patter.2023.100725}.
+\end{thebibliography}
+
+\end{document}
