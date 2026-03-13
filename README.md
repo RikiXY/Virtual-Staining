@@ -1,109 +1,386 @@
-# Virtual Staining - Deep Learning per la Colorazione Istologica
-A cura di Riccardo Giuseppe Amato, Andrea Mura
-## Introduzione
-Questo progetto è sviluppato nell'ambito di un **progetto universitario** e si concentra sull'implementazione di un sistema di **Virtual Staining** basato su **Deep Learning**. L'obiettivo è trasformare immagini non colorate di tessuti biologici in immagini virtualmente colorate, simulando tecniche istologiche tradizionali come **Hematoxylin & Eosin (H&E)**. Il Virtual Staining rappresenta un'alternativa innovativa alla colorazione chimica, riducendo tempi e costi e migliorando l'integrità dei campioni per l'analisi istopatologica.
+# Virtual-Staining
 
-L'obiettivo di questo progetto è sviluppare un modello di **Machine Learning** in **Python** per applicare la colorazione virtuale a immagini di campioni biologici, migliorando l'accuratezza e la velocità delle diagnosi mediche.
+Virtual staining pipeline for histopathology images, combining classical image processing and Pix2Pix-based image-to-image translation.
 
-All'interno della repository è presente il file _.gitignore_ che esclude (per questioni di dimensioni di caricamento) le immagini contenute nella cartella locale _Materiale/Images/_  
+## Overview
 
-Dato che GitHub non consente la corretta visualizzazione di un file markdown è consigliabile (per un'esperienza migliore) scarica il suo associato file .pdf (es: Timeline_Progetto)
+This repository implements a computational histopathology workflow for transforming paired **label-free** tissue images into **virtually stained** images. The project is structured as a full supervised pipeline rather than as an isolated neural network experiment: it prepares coherent input-target pairs through preprocessing, mask generation, image alignment, patch extraction, and dataset splitting, then trains a Pix2Pix-style model on the resulting paired patches.
 
----
-## File importanti
-All'interno della repository sono riportati una serie di file contenuti in varie cartelle:
-- La cartella _Materiale/_ contiene i file sui quali basiamo test (es: _Materiale/Prove/_) e documenti
-- La cartella _Appunti/_ invece contiene tre sotto cartelle:
-	- _"Note MD"/_ contiene alcuni file .md (e occasionalmente i corrispettivi .pdf) in cui sono presenti pensieri e annotazioni 
-	- _Scripts/_ contiene dei tentativi di script python
-	- _Notebooks/_ infine forse è la directory **più importante** e contiene i notebook jupyter in cui sono presenti:
-		- **_allineamento_immagini_**: confronta l'allineamento (mostrando anche i grafici\*) dell'allineamento eseguito attraverso differenti modalità (es: differenti normalizzazioni) 
-		- **_confronti_**: il nome è auto esplicativo, contiene una serie di confronti tra metodi e combinazioni di filtri; è presente il primo plot di allineamento delle immagini
-		- **_presentazione_coregistrazione_**: è il file presentato all'appuntamento del 19/03 (insieme al **_confronti_**) e contiene spiegazioni e chiarimenti su alcune parti del codice che hanno svolto un ruolo cruciale nella prima parte dei test
-		- **_ritaglio_immagini_**: test di automatizzazione del ritaglio di una sotto immagine per i test
-		- e molti altri
+The supervised learning stage relies on real stained images as targets. Because the method depends on paired data, spatial alignment between the label-free and stained views is a critical preprocessing step, not an optional refinement.
 
-\* nel caso in cui i grafici o gli output non dovessero comparire basta runnare nuovamente le celle necessarie
+## Why This Repository Matters
 
----  
-## Ordine esecuzione
-Avviare dalla cartella root \(_Virtual-Staining/_\) nel seguente ordine:  
-- Per addestramento:
-	1. `python Appunti\Scripts\mask_script.py`
-	2. `python Appunti\Scripts\fullsize_alignment_lower_resolution.py`: esegue l'allineamento;  
-	3. `python Appunti\Scripts\divide_fullsize_script.py`: divide in _n_ coppie allineate (in _aligned/_);  
-	4. `python Appunti\Scripts\create_dataset.py`: suddivide in 3 sottocartelle \(_test/_, _train/_ e _val/_\) le _n_ coppie;  
-	5. `python Appunti\Scripts\Pix2Pix.py`: addestra la rete neurale sulla cartelle _train/_ ed esegue valutazioni grazie a _val/_, i risultati della valutazioni vengono salvati in _output\_val/_;  
-- Per testare:
-	1. `python Appunti\Scripts\Pix2Pix.py test`: testa la rete sulle immagini della cartella _test/_ utilizzando il checkpoint di addestramento (da impostare manualmente nello script) e restituisce i risultati in _output\_test/_;  
-	2. `python Appunti\Scripts\save_graphs.py`: mi salva delle immagini basate sulla tripla input/output/target nella cartella _graphs\_test/_;  
+Virtual staining is relevant in computational pathology because it explores a digital alternative, complement, or preprocessing aid to conventional chemical staining workflows. In supervised settings, however, the quality of the learned mapping depends heavily on the quality of the paired data. This repository addresses that practical requirement by combining:
 
----
-## To Do List
-- [x] Crea repository e carica i file attuali
-- [x] Coregistrazione immagini (*SIFT*)
-	- [x] Selezione di una regione comune
-	- [x] Valutazione metodi normalizzazione (equalizeHist, normalize o *CLAHE*)
-	- [x] Valutazione algoritmo di **featuring match** (ORB/SIFT) da applicare e in che modalità (matcher, filtri, ...)
-	- [x] Filtraggio ulteriore dei risultati con RANSAC (metodo di stima)
-	- [ ] ~~Refinement con ECC~~ 
-	- [x] Applicazione filtro di distanza euclidea
-	- [x] Verifica della coregistrazione (differenza assoluta e istogrammi)
-	- [x] Ritaglio finale
-	- [x] Creazione maschera per risolvere problema sfondo per migliorare allineamento
-	- [x] Automatizzare divisioni in sub images per il dataset. Se sono allineate ok, sennò vanno segnalate.
-	- [x] Valutazione tramite miglioramento percentuale dell'istogramma (risultato ottenuto: incremento minimo)
-	- [x] Sistemare i bordi perché creano conflitti con la normalizzazione e la coregistrazione
-	- [x] Testare e trovare un metodo efficace per coregistrare immagini 20kx20k
-- [X] Verifica del dataset
-	- [X] creazione script per verificare che le dimensioni delle immagini siano coerenti
-	- [X] verifica che siano abbastanza allineate (differenza assoluta)
-- [ ] Sviluppo rete neurale (supervisionato)
-	- [X] Suddivisione dataset 70-15-15 (Training, Validation e Test)
-	- [ ] Valutazione di rete da usare (probabilmente GAN dato che viene già utilizzata. Pix2Pix; implementata in PyTorch)
-	- [ ] Controlla i diffusion model
-- [ ] Tutto il resto che andrà aggiunto
+- foreground isolation through mask generation;
+- classical registration of stained and label-free images;
+- patch-based dataset preparation for paired learning;
+- conditional GAN training with a Pix2Pix-style architecture.
 
----
-## Possibili migliorie:
-1. fullsize_alignment_lower_resolution.py
-_Funzionamento_: usa SIFT con maschere, filtro su distanza euclidea e AffinePartial2D per stimare la trasformazione.
-**Migliorie**:
-- [ ] Aggiunta di un parametro `--scale` da riga di comando per testare facilmente con scale diverse.
-- [ ] Loggare anche il numero di match filtrati prima e dopo il filtro euclideo.
+As a result, the repository is useful both as an experimental research codebase and as a structured end-to-end project in computational imaging and deep learning.
 
-2. divide_fullsize_script.py
-_Funzionamento_: ritaglia i bordi, applica griglia con passo 300x300, controlla maschere e salva solo patch rilevanti.
-**Migliorie**:
-- [ ] Loggare quante patch sono state scartate per motivi diversi (dimensioni, maschera nera).
-- [ ] Parametrizzare margin, grid_movement, image_size in testa o con `argparse`.
+## Current Pipeline
 
-3. create_dataset.py
-_Funzionamento_: suddivide perfettamente il dataset in train/val/test mantenendo le coppie coerenti.
-**Migliorie**:
-- [ ] Gestione automatica dei file esistenti (opzione per overwrite=True/False).
+The current workflow is centered on two main scripts in [`repo/scripts/`](./repo/scripts):
 
-4. Pix2Pix.py
-_Funzionamento_: training completo, validazione e test integrati. Bilanciamento tra L1 e BCE. Uso di AMP (autocast, GradScaler). Salvataggio e caricamento checkpoint. Logging dettagliato con timestamp.
-**Migliorie**:
-- [ ] Aggiungere una funzione main_test() separata, richiamata in if \_\_name\_\_ == "\_\_main\_\_" se `sys.argv[1] == "test"`, così da evitare logiche duplicate.
-- [ ] Parametri come `lambda_l1 = 25` possono diventare variabili in testa allo script per più chiarezza.
+1. Provide a folder containing a paired full-size input sample, typically `label_free.tif` and `stained.tif`.
+2. Run [`repo/scripts/ollie_wan_kenobi.py`](./repo/scripts/ollie_wan_kenobi.py) to generate foreground masks.
+3. Use the same script to align the stained image to the label-free reference.
+4. Extract aligned patches from tissue regions.
+5. Split the extracted paired patches into `train`, `val`, and `test`.
+6. Run [`repo/scripts/pix2pix.py`](./repo/scripts/pix2pix.py) in training mode to train the model on paired patches.
+7. During training, validation outputs and checkpoints are saved.
+8. Run the same script in test mode to generate virtual staining predictions on the test split.
 
-5. save_graphs.py
-_Funzionamento_: salva i confronti input/output/target per ogni patch del test set.
-**Migliorie**:
-- [ ] Mostrare il numero totale di immagini processate.
+In short:
 
----
-## License
-This project is licensed under the [MIT License](../LICENSE) – see the file for details.  
-© 2025 Riccardo Giuseppe Amato ([@RikiXY](https://github.com/RikiXY)), Andrea Mura ([@andreamura](https://github.com/andreamura))
+- `ollie_wan_kenobi.py` handles preprocessing and dataset creation.
+- `pix2pix.py` handles model training, validation, checkpoints, and test inference.
 
+## Repository Structure
 
-## MODIFICHE DA FARE
-al momento stiamo scrivendo codice e commenti partendo dalla cartella _Virtual-Staining/repo/_ ma in realtà quest'ultima non sarà poi presente, quindi bisogna ricontrollare che `ollie_wan_kenobi.py` funzioni e i commenti del suo notebook (specialmente i parametri)
+The repository contains both the current executable workflow and older project material accumulated during development. The main operational path is concentrated in `repo/scripts/`.
 
-## MIGLIORAMENTI FUTURI DELLA RETE
-- da `ReLU` → `Leaky ReLU` → `Parametric ReLU (PReLU)` 
-- Per semplicità e coerenza con l’architettura standard delle U-Net, abbiamo adottato un blocco basato su due convoluzioni consecutive (`DoubleConv`), che rappresenta la scelta più comune in letteratura. Tuttavia, nulla vieta, in presenza di dataset molto ampi o di particolari esigenze di rappresentazione, di estendere questo schema a tre o più convoluzioni (`TripleConv`, ecc.), incrementando così la capacità espressiva della rete. È importante, però, essere consapevoli che un aumento del numero di convoluzioni comporta un maggior costo computazionale e un rischio più elevato di overfitting, soprattutto in contesti con dati limitati.
+```text
+Virtual-Staining/
+├── repo/
+│   ├── scripts/
+│   │   ├── ollie_wan_kenobi.py
+│   │   ├── pix2pix.py
+│   │   └── json/
+│   │       ├── help.json
+│   │       ├── messages.json
+│   │       └── p2p_settings.json
+│   ├── template/
+│   ├── *.ipynb / *.pdf / *.md
+│   └── build_pdf.*
+├── Appunti/
+├── Materiale/
+├── Locale/
+├── requirements.txt
+└── README.md
+```
 
+### Main folders and files
+
+- `repo/`
+  Contains the current project package, including the main scripts, configuration JSON files, and supporting project material.
+- `repo/scripts/`
+  Main executable code for preprocessing and model training/testing.
+- `repo/scripts/ollie_wan_kenobi.py`
+  Integrated preprocessing pipeline for mask generation, alignment, patch extraction, and dataset split creation.
+- `repo/scripts/pix2pix.py`
+  Pix2Pix training and inference script for paired histology patches.
+- `repo/scripts/json/`
+  Support files used by the scripts, including CLI/help messages and some model block settings.
+- `Appunti/`
+  Historical notes, notebooks, and earlier development scripts.
+- `Materiale/`, `Locale/`
+  Project material and local data/output areas used during experimentation.
+
+Top-level folders such as `Appunti/` and parts of `Materiale/` remain useful as historical and experimental context, but they are not the main entry point for the current workflow.
+
+## Main Scripts
+
+### `repo/scripts/ollie_wan_kenobi.py`
+
+This is the integrated preprocessing script for building a paired dataset from full-size histology images.
+
+**Role**
+
+- loads a folder containing `label_free.tif` and `stained.tif`;
+- generates foreground masks for both images;
+- estimates an affine alignment of the stained image onto the label-free reference;
+- extracts subimages from aligned tissue regions;
+- saves patch pairs and creates `train`, `val`, and `test` splits.
+
+**Input expectations**
+
+- one directory per sample or processing run;
+- inside that directory:
+  - `label_free.tif`
+  - `stained.tif`
+
+**Typical outputs**
+
+- `mask_lf.tif`
+- `mask_st.tif`
+- `aligned_stained.tif`
+- `aligned_mask_st.tif`
+- `subimages/`
+- `train/`
+- `val/`
+- `test/`
+
+**CLI role**
+
+The script exposes a simple CLI with:
+
+- a required input path;
+- an optional random seed;
+- an optional `--save_masks` flag;
+- an optional `--lang {en,it}` switch for messages.
+
+### `repo/scripts/pix2pix.py`
+
+This script handles the neural network stage of the project.
+
+**Role**
+
+- loads paired patch datasets;
+- trains a Pix2Pix-style conditional GAN;
+- runs validation during training;
+- saves checkpoints;
+- performs test-time inference from a saved checkpoint.
+
+**Dataset convention**
+
+The dataset is based on paired filenames such as:
+
+- `00000_00000_label_free.tif`
+- `00000_00000_stained.tif`
+
+The script expects paired files sharing the same prefix and different suffixes.
+
+**Train vs test**
+
+- `train` mode: trains the generator and discriminator, logs losses, validates, and saves checkpoints.
+- `test` mode: loads a checkpoint and generates virtual staining outputs for test images.
+
+**Current practical limitation**
+
+Some internal paths are still defined directly in the script, including dataset folders and checkpoint locations. In practice, users may still need to edit those variables before running training or inference on a new setup.
+
+## How the Method Works
+
+The method combines deterministic image processing with paired supervised deep learning.
+
+### 1. Mask generation and foreground selection
+
+The preprocessing script estimates binary masks to isolate relevant tissue regions and reduce the influence of large background areas. The current implementation uses thresholding, connected components, contour filling, and repeated grid-based mask estimation to retain useful foreground regions.
+
+### 2. Image alignment
+
+The stained image is aligned to the label-free image before patch extraction. This is essential because supervised image-to-image translation requires spatially coherent input-target pairs. The script uses classical feature-based registration with CLAHE-enhanced grayscale images, SIFT feature detection, brute-force matching, Euclidean-distance filtering, and affine transformation estimation.
+
+### 3. Patch extraction
+
+Once alignment is complete, the pipeline crops the images into fixed-size patches. Foreground masks are used to discard regions that are mostly background, improving the quality of the training data and reducing useless pairs.
+
+### 4. Train/validation/test split
+
+The extracted paired patches are shuffled and divided into `train`, `val`, and `test` subsets. The current preprocessing script creates these splits directly from the extracted patch pairs.
+
+### 5. Paired supervised learning with Pix2Pix
+
+The learning stage treats the label-free patch as input and the stained patch as target. The generator learns to synthesize a stained-like image from the label-free image, while the discriminator evaluates whether the generated result is consistent with the target distribution in a conditional setting.
+
+## Requirements
+
+The project currently targets:
+
+- **Python 3.11**
+
+Main libraries used in the codebase include:
+
+- OpenCV
+- NumPy
+- Pillow
+- PyTorch
+- torchvision
+- Matplotlib
+
+The repository includes a minimal [`requirements.txt`](./requirements.txt), but dependency management is not yet fully polished or tightly pinned. Depending on the environment, some packages used by the scripts may need to be installed manually.
+
+## Expected Input Data
+
+The project expects **paired histology images**.
+
+### For preprocessing
+
+You should provide a folder containing:
+
+- `label_free.tif`
+- `stained.tif`
+
+These are full-size paired images of the same sample, where:
+
+- `label_free.tif` is the unstained or label-free image used as model input;
+- `stained.tif` is the stained counterpart used as supervision target.
+
+### For model training and testing
+
+The Pix2Pix script expects paired patches named with a shared prefix and suffixes such as:
+
+- `xxxxx_yyyyy_label_free.tif`
+- `xxxxx_yyyyy_stained.tif`
+
+Only filenames that form valid pairs are used by the dataset loader.
+
+## Quick Start
+
+For users who want the shortest path:
+
+### 1. Prepare paired full-size input images
+
+Create a folder containing:
+
+```text
+your_sample/
+├── label_free.tif
+└── stained.tif
+```
+
+### 2. Run preprocessing
+
+```bash
+python repo/scripts/ollie_wan_kenobi.py your_sample --lang en --seed 42
+```
+
+### 3. Train the model
+
+Before training, check the dataset and checkpoint paths configured inside `repo/scripts/pix2pix.py`.
+
+```bash
+python repo/scripts/pix2pix.py train
+```
+
+### 4. Run test inference
+
+After setting the desired checkpoint path in the script:
+
+```bash
+python repo/scripts/pix2pix.py test
+```
+
+## Detailed Usage
+
+### Preprocessing with `ollie_wan_kenobi.py`
+
+Basic usage:
+
+```bash
+python repo/scripts/ollie_wan_kenobi.py <path>
+```
+
+Example:
+
+```bash
+python repo/scripts/ollie_wan_kenobi.py Materiale/Locale/liver --lang en --seed 42 --save_masks
+```
+
+What it does:
+
+- loads `label_free.tif` and `stained.tif` from the given folder;
+- computes masks for both images;
+- aligns the stained image to the label-free image;
+- extracts patch pairs;
+- saves the extracted dataset into `train`, `val`, and `test`.
+
+Available CLI options:
+
+```bash
+python repo/scripts/ollie_wan_kenobi.py path [--seed SEED] [--save_masks] [--lang {en,it}]
+```
+
+### Training with `pix2pix.py`
+
+Training mode:
+
+```bash
+python repo/scripts/pix2pix.py train
+```
+
+Current behavior:
+
+- loads paired images from configured training and validation folders;
+- trains a U-Net-like generator and PatchGAN discriminator;
+- logs progress and losses;
+- saves validation outputs;
+- saves checkpoints at configured intervals.
+
+Important note:
+
+- dataset root paths, checkpoint paths, and some training settings are still hard-coded in the script and may need to be adjusted manually before execution.
+
+### Testing / inference with `pix2pix.py`
+
+Test mode:
+
+```bash
+python repo/scripts/pix2pix.py test
+```
+
+Current behavior:
+
+- loads a configured checkpoint;
+- scans the configured test folder for `*_label_free.tif` files;
+- generates corresponding virtual staining predictions;
+- saves outputs to the configured output directory.
+
+Important note:
+
+- the checkpoint path is currently defined inside the script and should be verified before running inference.
+
+## Outputs
+
+After preprocessing with `ollie_wan_kenobi.py`, the sample folder typically contains:
+
+- generated masks:
+  - `mask_lf.tif`
+  - `mask_st.tif`
+- aligned artifacts:
+  - `aligned_stained.tif`
+  - `aligned_mask_st.tif`
+- extracted patches:
+  - `subimages/`
+- dataset splits:
+  - `train/`
+  - `val/`
+  - `test/`
+
+After training with `pix2pix.py`, the workflow can generate:
+
+- log files;
+- validation predictions;
+- model checkpoints;
+- training preview outputs, depending on the configured paths.
+
+After test inference with `pix2pix.py`, the workflow generates:
+
+- predicted virtually stained images for the test set.
+
+## Model
+
+The learning component is a **Pix2Pix-style conditional GAN** trained on paired histology patches.
+
+- **Generator**: a U-Net-like encoder-decoder architecture with skip connections.
+- **Discriminator**: a PatchGAN-style discriminator operating on conditional image pairs.
+- **Training objective**: adversarial supervision combined with pixel-level reconstruction loss.
+
+This design is appropriate for paired image-to-image translation, where the goal is to synthesize a stained image while preserving the spatial structure present in the label-free input.
+
+## Limitations / Current State
+
+The repository is structured and usable, but still experimental in several practical aspects.
+
+- Some dataset paths and checkpoint paths are still configured directly inside the code.
+- Configuration is only partially centralized.
+- The repository contains historical folders, notes, and experimental material alongside the current main workflow.
+- Dependency specification is minimal and may require manual environment setup.
+- The preprocessing and training scripts are functional entry points, but the codebase is still evolving rather than packaged as a finalized tool.
+
+## Future Improvements
+
+Plausible next steps for the repository include:
+
+- centralized configuration for paths and hyperparameters;
+- cleaner CLI unification across preprocessing and model scripts;
+- stronger reproducibility controls and dataset bookkeeping;
+- clearer separation between active code, generated artifacts, and historical material;
+- more modular packaging of preprocessing, training, and evaluation code;
+- expanded evaluation, visualization, and reporting utilities.
+
+## Academic Context
+
+This project was developed in a university and research-oriented context focused on **virtual staining**, **computational histopathology**, and **paired image-to-image translation**. It reflects both the methodological requirements of the domain, especially the need for coherent aligned supervision, and the practical engineering work needed to turn full-size microscopy images into usable learning data.
