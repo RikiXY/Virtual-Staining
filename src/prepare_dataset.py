@@ -1,9 +1,15 @@
-# ==========================================================================
-# Il file crea le maschere delle immagini di label-free e stained,
-# allinea le immagini, crea una griglia, e le suddivide in training, validation e test.
-# Ollie Wan Kenobi è il nome del file perché sembra di dire "All in one", Kenobi ci stava bene.
-# (non abbiamo mai visto Star Wars)
-# ==========================================================================
+"""
+Integrated preprocessing pipeline for paired histopathology samples.
+
+This script loads `label_free.tif` and `stained.tif`, computes tissue masks,
+aligns the stained image to the label-free reference, extracts paired patches,
+and creates the dataset splits used for training, validation, and testing.
+"""
+
+# The original filename was `ollie_wan_kenobi`, born from an internal joke:
+# we needed an "all-in-one" script, which gradually turned into "Ollie Wan",
+# and from there "Kenobi" felt like the only possible ending.
+# Ironically, none of the collaborators had even seen Star Wars.
 
 import cv2, os, random
 import argparse
