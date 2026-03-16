@@ -1,8 +1,12 @@
-import os, random, time, datetime, sys
-from PIL import Image
+import os
+import random
+import time
+import datetime
 import json
+import argparse
 from pathlib import Path
 
+from PIL import Image
 import numpy as np
 
 import torch
@@ -13,88 +17,221 @@ from torch.amp import autocast, GradScaler
 from torchvision import transforms
 from torchvision.utils import save_image
 
-# =========================
-# PARAMETRI IMPORTANTI
-# ----------------------
-workspace_root = "local_workspace"
-logs_dir = os.path.join(workspace_root, "logs")
-checkpoints_dir = os.path.join(workspace_root, "checkpoints")
-output_val_dir = os.path.join(workspace_root, "output_val")
-output_test_dir = os.path.join(workspace_root, "output_test")
-output_train_dir = os.path.join(workspace_root, "output_train")
-n_epochs = 150 # Numero di epoche da eseguire
-log_rate = 15 # Ogni quanto loggare (es. ogni 10 batch)
-use_checkpoint = True # Se vuoi riprendere da un checkpoint esistente, metti True       Bisognerebbe creare create_checkpoint e load_checkpoint così si possono distinguere le casiistiche
-checkpoint_rate = 10 # Ogni quanto salvare i checkpoint (es. ogni 10 epoche)
-restore_checkpoint_path = os.path.join(
-    checkpoints_dir,
-    "checkpoint_Pix2Pix_epoca109_2025-04-30_12-04-29.pth"
-) # Percorso del checkpoint (se esiste), ricordati di cambiare il nome
-validate_rate = 1 # Ogni quanto validare (es. ogni 5 epoche), prendiamo per buono al momento come valore standard =checkpoint_rate
-seed = 42 # Seed per la riproducibilità
-# -----------------------
-batch_size = 8 # Batch size per il DataLoader (8 è un buon valore, ma dipende dalla GPU)
-training_shuffle = True # Se vuoi mescolare i dati ad ogni epoca del training, metti True
-validation_shuffle = False # Se vuoi mescolare i dati ad ogni epoca del validation, metti True
-n_workers = 12 # Numero di worker per il DataLoader (12 è un buon valore, ma dipende dalla GPU)
-image_size = (256, 256) # Risoluzione delle immagini (512x512 è un buon valore per Pix2Pix), si può pensare anche a 256x256
-# =========================
+
+# --------------------- Percorsi di lavoro ---------------------
+# Questa funzione costruisce tutti i percorsi principali del progetto
+# partendo da una sola root. Evita di spargere stringhe hardcoded nel
+#  resto del file.
+def build_workspace_paths(dataset_root: str) -> dict:
+    root = Path(dataset_root)
+
+    return {
+        "workspace_root": root,
+        "logs_dir": root / "logs",
+        "checkpoints_dir": root / "checkpoints",
+        "output_val_dir": root / "output_val",
+        "output_test_dir": root / "output_test",
+        "output_train_dir": root / "output_train",
+    }
+
+
+# --------------------- Argomenti da riga di comando ---------------------
+# Separiamo parser e logica. 
+# Lo script supporta due modalità distinte: addestramento e test.
+def build_parser():
+    parser = argparse.ArgumentParser(
+    prog="python pix2pix.py",
+    description="Train or test the Pix2Pix model on a paired histology dataset.",
+    epilog=(
+        "Examples:\n"
+        "  python pix2pix.py train local_workspace/sample --epochs 150\n"
+        "  python pix2pix.py test local_workspace/sample --checkpoint local_workspace/sample/checkpoints/model.pth\n"
+        "\n"
+        "Use 'python pix2pix.py <command> --help' to see the options for a specific command."
+    ),
+    formatter_class=argparse.RawTextHelpFormatter
+)
+
+    # I subparser permettono di avere sottocomandi diversi all'interno
+    # dello stesso script, ciascuno con i propri argomenti.
+    subparsers = parser.add_subparsers(dest="mode", required=True)
+
+    train_parser = subparsers.add_parser(
+        "train",
+        help="Train the Pix2Pix model",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    train_parser.add_argument(
+        "dataset_root",
+        type=str,
+        help="Path to the dataset root containing train/, val/, and test/"
+    )
+    train_parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducibility (default: 42)"
+    )
+    train_parser.add_argument(
+        "--epochs",
+        type=int,
+        default=150,
+        help="Number of training epochs (default: 150)"
+    )
+    train_parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=8,
+        help="Batch size for the DataLoader (default: 8)"
+    )
+    train_parser.add_argument(
+        "--num_workers",
+        type=int,
+        default=12,
+        help="Number of DataLoader workers (default: 12)"
+    )
+    train_parser.add_argument(
+        "--image_size",
+        type=int,
+        nargs=2,
+        metavar=("WIDTH", "HEIGHT"),
+        default=(256, 256),
+        help="Resize images before training, e.g. --image_size 256 256"
+    )
+    train_parser.add_argument(
+        "--log_rate",
+        type=int,
+        default=15,
+        help="Log every N batches (default: 15)"
+    )
+    train_parser.add_argument(
+        "--checkpoint_rate",
+        type=int,
+        default=10,
+        help="Save a checkpoint every N epochs (default: 10)"
+    )
+    train_parser.add_argument(
+        "--validate_rate",
+        type=int,
+        default=1,
+        help="Run validation every N epochs (default: 1)"
+    )
+    train_parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Optional checkpoint path to resume training from"
+    )
+
+    test_parser = subparsers.add_parser(
+        "test",
+        help="Run inference on the test set",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    test_parser.add_argument(
+        "dataset_root",
+        type=str,
+        help="Path to the dataset root containing train/, val/, and test/"
+    )
+    test_parser.add_argument(
+        "--checkpoint",
+        type=str,
+        required=True,
+        help="Path to the checkpoint to use for inference"
+    )
+    test_parser.add_argument(
+        "--image_size",
+        type=int,
+        nargs=2,
+        metavar=("WIDTH", "HEIGHT"),
+        default=(256, 256),
+        help="Resize images before inference, e.g. --image_size 256 256"
+    )
+
+    return parser
 
 # ====================[DATASET]====================
+# Questo dataset contiene coppie label-free e stained.
+# A ogni immagine label-free deve corrispondere la sua versione stained.
+#
+# Implementare `__len__` e `__getitem__` è il requisito minimo richiesto
+# da PyTorch per una classe `Dataset`: il DataLoader usa questi metodi per
+# sapere quanti campioni esistono e come recuperarli quando costruisce i batch.
 class PairedHistologyDataset(Dataset):
     def __init__(self, folder_path, transform=None):
         self.folder_path = folder_path
         self.transform = transform
+        # Le coppie vengono costruite una volta sola all'inizio, così
+        # durante training e validation non dobbiamo esplorare la cartella
+        # ogni volta.
         self.pairs = self._get_pairs()
 
     def _get_pairs(self):
         files = os.listdir(self.folder_path)
+        # Qui cerchiamo tutti i file `_label_free.tif` che hanno il corrispondente `_stained.tif`.
+        # Se una coppia è incompleta, viene esclusa dal dataset.
         prefixes = [f.replace('_label_free.tif', '')
                     for f in files if f.endswith('_label_free.tif')
                     and f.replace('_label_free.tif', '') + '_stained.tif' in files]
         return sorted(prefixes)
 
     def __len__(self):
+        # Restituiamo quante coppie valide sono state trovate.
         return len(self.pairs)
 
     def __getitem__(self, idx):
+        # Dato un indice, recuperiamo il prefisso comune e apriamo entrambe le immagini della coppia.
         prefix = self.pairs[idx]
         lf = Image.open(os.path.join(self.folder_path, prefix + '_label_free.tif')).convert('RGB')
         st = Image.open(os.path.join(self.folder_path, prefix + '_stained.tif')).convert('RGB')
         if self.transform:
+            # La stessa trasformazione viene applicata a input e target.
             lf = self.transform(lf)
             st = self.transform(st)
         return lf, st
 # =================================================
 
+def is_amp_enabled(device):
+    # La mixed precision con `autocast` e `GradScaler` ha senso soprattutto
+    # su GPU CUDA. Su CPU lasciamo tutto disattivato per evitare complessità
+    # inutile e mantenere il comportamento più lineare possibile.
+    return isinstance(device, torch.device) and device.type == "cuda"
+
 # ====================[CONFIGURAZIONE]====================
-script_dir = Path(__file__).resolve()
-settings_path = script_dir.parent / "json" / "p2p_settings.json"
+# Alcuni parametri dei blocchi convoluzionali vengono letti da JSON.
+# è una scelta pratica: i dettagli architetturali restano centralizzati
+# e modificabili senza dover ritoccare il codice del modello.
+script_dir = Path(__file__).resolve().parent
+settings_path = script_dir / "json" / "p2p_settings.json"
+
 with settings_path.open("r", encoding="utf-8") as s:
     SETTINGS = json.load(s)
 # ========================================================
 
 # ====================[GENERATOR (U-NET)]====================
+# Il generatore segue la struttura classica della U-Net:
+# encoder -> bottleneck -> decoder, con skip connections tra livelli simmetrici.
+#
+# L'idea è questa:
+# - l'encoder comprime e amplia il contesto;
+# - il bottleneck conserva una rappresentazione più astratta;
+# - il decoder ricostruisce l'immagine;
+# - le skip connections riportano indietro dettagli fini che altrimenti
+#   andrebbero persi nella discesa.
 class DoubleConv(nn.Module):
     """
-    A PyTorch module that applies two consecutive convolutional layers, each followed by batch normalization and a ReLU activation.
-    
+    Blocco composto da due convoluzioni consecutive, ciascuna seguita
+    da batch normalization e attivazione ReLU.
+
     Args:
-        in_channels (int): Number of input channels.
-        out_channels (int): Number of output channels.
-
-    Forward Input:
-        x (torch.Tensor): Input tensor of shape (N, in_channels, H, W).
-
-    Forward Output:
-        torch.Tensor: Output tensor of shape (N, out_channels, H, W).
-    
-    This block is commonly used in encoder-decoder architectures such as U-Net and Pix2Pix for feature extraction and transformation.
-
+        in_channels (int): Numero di canali in ingresso.
+        out_channels (int): Numero di canali in uscita.
     """
     def __init__(self, in_channels, out_channels):
         conv_params = SETTINGS["double_conv"]
         super(DoubleConv, self).__init__()
+        # Due convoluzioni di fila sono un blocco molto usato nelle U-Net:
+        # la prima inizia a trasformare le feature, la seconda le rifinisce.
         self.double_conv = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=conv_params['kernel_size'], stride=conv_params["stride"], padding=conv_params['padding'], bias=conv_params['bias']),
             nn.BatchNorm2d(out_channels),
@@ -109,28 +246,17 @@ class DoubleConv(nn.Module):
 
 class Down(nn.Module):
     """
-    Downscaling module for U-Net-like architectures.
-    This class performs spatial downsampling on input feature maps using a max pooling layer,
-    followed by a double convolution block. It is typically used in the encoder path of
-    convolutional neural networks for image-to-image tasks.
+    Blocco di downsampling per architetture in stile U-Net.
 
-    Args:
-        in_channels (int): Number of input channels.
-        out_channels (int): Number of output channels after convolution.
-
-    Attributes:
-        maxpool_conv (nn.Sequential): Sequential container of MaxPool2d and DoubleConv layers.
-
-    Forward Args:
-        x (torch.Tensor): Input tensor of shape (batch_size, in_channels, H, W).
-
-    Returns:
-        torch.Tensor: Output tensor after downsampling and convolution, with shape
-                      (batch_size, out_channels, H/2, W/2).
+    Riduce la risoluzione spaziale tramite max pooling e poi applica
+    un blocco `DoubleConv` per estrarre feature più ricche.
     """
     def __init__(self, in_channels, out_channels):
         down_params = SETTINGS["down"]
         super(Down, self).__init__()
+        # Qui dimezziamo la risoluzione spaziale e poi aumentiamo il numero
+        # di canali. è il compromesso tipico dell'encoder: meno dettaglio
+        # pixel per pixel, ma più capacità di rappresentare pattern complessi.
         self.maxpool_conv = nn.Sequential(
             nn.MaxPool2d(kernel_size=down_params["kernel_size"], stride=down_params["stride"]),
             DoubleConv(in_channels, out_channels)
@@ -139,16 +265,26 @@ class Down(nn.Module):
     def forward(self, x):
         return self.maxpool_conv(x)
 
-# RIPRENDI A IMPLEMENTARE IL JSON DA QUI
+#TODO RIPRENDI A IMPLEMENTARE IL JSON DA QUI
 class Up(nn.Module):
     """
-    Upscaling using transposed convolution, then DoubleConv.
-    Skip connection is concatenated with the upsampled feature map.
+    Blocco di upsampling seguito da `DoubleConv`.
+
+    La feature map risalita viene concatenata con la skip connection
+    dell'encoder prima della convoluzione finale.
     """
     def __init__(self, in_channels, out_channels, bilinear=True):
         super(Up, self).__init__()
 
-        # if bilinear, use the normal convolutions to reduce the number of channels
+        # Questo blocco appartiene al decoder. Prima si risale di risoluzione,
+        # poi si combinano le feature del decoder con la skip connection
+        # proveniente dall'encoder.
+        
+        # Il codice supporta due strategie di upsampling:
+        # - bilinear: semplice e senza parametri addestrabili;
+        # - transposed convolution: più flessibile, ma con pesi da imparare.
+        # In bilinear usiamo un semplice upsampling seguito da una convoluzione per ridurre i canali.
+        # In transposed convolution invece la convoluzione stessa fa anche da upsampling, dimezzando i canali in uscita.
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
             self.conv = DoubleConv(in_channels, out_channels)
@@ -158,17 +294,21 @@ class Up(nn.Module):
             self.conv = DoubleConv(in_channels, out_channels)
 
     def forward(self, x1, x2):
-        # x1 is the current upsampled feature map
-        # x2 is the skip connection from the encoder
+        # `x1` è la feature map corrente del decoder, che stiamo riallargando.
+        # `x2` è la skip connection corrispondente arrivata dall'encoder.
         x1 = self.up(x1)
         
-        # Concatenate along the channels axis
+        # Concateniamo i canali, ovvero li uniamo nello stesso punto della rete,
+        # con l'obiettivo di combinare insieme due tipi di informazione:
+        # - il contesto appreso in profondità dal decoder, che ha visto l'immagine in modo più globale;
+        # - i dettagli locali conservati dal ramo encoder.
         x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
 
 class OutConv(nn.Module):
     """
-    Final 1x1 convolution for output
+    Convoluzione finale 1x1 che porta le feature
+    al numero di canali richiesto in output.
     """
     def __init__(self, in_channels, out_channels):
         super(OutConv, self).__init__()
@@ -181,17 +321,18 @@ class UNetGenerator(nn.Module):
     def __init__(self, n_channels=3, n_classes=3, bilinear=False):
         """
         Args:
-            n_channels (int): Number of input channels. For RGB, use 3. 
-                              For single-channel (grayscale), use 1, etc.
-            n_classes (int): Number of output channels/classes. 
-                             For RGB output, use 3.
-            bilinear (bool): Whether to use bilinear upsampling or transposed conv.
+            n_channels (int): Numero di canali in input.
+            n_classes (int): Numero di canali in output.
+            bilinear (bool): Se usare upsampling bilineare o transposed convolution.
         """
         super(UNetGenerator, self).__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes
         self.bilinear = bilinear
 
+        # Encoder: man mano che scendiamo, la risoluzione cala e i canali
+        # aumentano. è il modo con cui la rete guadagna contesto senza
+        # dover mantenere tutto il dettaglio spaziale a ogni livello.
         # Encoders, versione da 64 a 1024
         self.inc = DoubleConv(n_channels, 64) # Convoluzione iniziale
         self.down1 = Down(64, 128)
@@ -199,6 +340,8 @@ class UNetGenerator(nn.Module):
         self.down3 = Down(256, 512)
         self.down4 = Down(512, 1024)          # Bottleneck
 
+        # Decoder: qui il processo si inverte e l'informazione viene riportata
+        # gradualmente verso una forma di nuovo "immagine-like".
         # Decoders, versione da 1024 a 64
         self.up1 = Up(1024, 512, bilinear)
         self.up2 = Up(512, 256, bilinear)
@@ -209,6 +352,11 @@ class UNetGenerator(nn.Module):
         self.outc = OutConv(64, n_classes)
 
     def forward(self, x):
+        # Il forward della U-Net ha una logica molto regolare:
+        # prima si scende nell'encoder salvando le feature intermedie,
+        # poi si risale nel decoder riusando quelle stesse feature
+        # tramite le skip connections.
+
         # Per immagini RGB, N vale 3
         # Per immagini grayscale, N vale 1
 
@@ -219,47 +367,51 @@ class UNetGenerator(nn.Module):
         x4 = self.down3(x3)    # Shape: [N, 512, 64, 64]
         x5 = self.down4(x4)    # Shape: [N, 1024, 32, 32]
 
+        # `x5` è il bottleneck: la rappresentazione più compressa e più astratta.
+        # Qui la rete conserva il contesto globale dell'immagine.
         # Decoder
         x = self.up1(x5, x4)   # Shape: [N, 512, 64, 64]
         x = self.up2(x, x3)    # Shape: [N, 256, 128, 128]
         x = self.up3(x, x2)    # Shape: [N, 128, 256, 256]
         x = self.up4(x, x1)    # Shape: [N, 64, 512, 512]
         
+        # Il layer finale trasforma le feature ricostruite nell'output vero e proprio.
         logits = self.outc(x)  # Shape: [N, n_classes, 512, 512]
         return logits
 
 # --------------------- Discriminatore (PatchGAN) ---------------------
+# Il discriminatore riceve input e target/output concatenati sui canali.
+# Questo gli permette di giudicare non solo se l'immagine sembra realistica,
+# ma se è plausibile proprio in relazione all'input label-free da cui deriva.
 class PatchGANDiscriminator(nn.Module):
     """
-    PatchGAN discriminator for image-to-image tasks (e.g., pix2pix, CycleGAN).
-    Produces an NxN map of 'real/fake' predictions for each patch of the input.
+    Discriminatore PatchGAN per task image-to-image.
+
+    Produce una mappa NxN di predizioni real/fake, una per ogni patch.
     """
     def __init__(self, in_channels=6, ndf=64, use_sigmoid=False):
         """
         Args:
-            in_channels (int): Number of channels in the input. In pix2pix, 
-                               if we concatenate input + output images, 
-                               this might be 6 (e.g. 3+3).
-            ndf (int): Base number of discriminator filters. 
-                       The number of filters doubles with each layer.
-            use_sigmoid (bool): Whether to apply a sigmoid at the end 
-                                (common in older versions of pix2pix). 
-                                In newer WGAN-GP, we typically don't.
+            in_channels (int): Numero di canali in ingresso. In pix2pix,
+                               concatenando input e output RGB si arriva a 6.
+            ndf (int): Numero base di filtri del discriminatore.
+            use_sigmoid (bool): Se applicare una sigmoid finale.
         """
         super(PatchGANDiscriminator, self).__init__()
 
-        # The PatchGAN discriminator is basically several downsampling layers
-        # leading to a final 1×1 convolution. Each location in the final
-        # feature map corresponds to a "patch" in the input image.
+        # PatchGAN non produce un singolo scalare finale, ma bensì
+        # una feature map, una per ogni patch osservata dall'uscita.
+        # è una scelta molto pratica: costringe il modello a curare le
+        # texture locali, non soltanto l'aspetto globale dell'immagine.
 
-        # Convolution blocks
-        # 1) No normalization in the first layer
+        # Blocchi della convoluzione:
+        # 1) Primo blocco senza normalizzazione
         layers = [
             nn.Conv2d(in_channels, ndf, kernel_size=4, stride=2, padding=1),
             nn.LeakyReLU(0.2, inplace=True),
         ]
 
-        # 2) Downsampling layers
+        # 2) Blocchi di downsampling
         curr_dim = ndf
         next_dim = curr_dim * 2
         layers += [
@@ -276,23 +428,25 @@ class PatchGANDiscriminator(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
         ]
 
-        # 3) Stride = 1 for the last convolution(s) so that 
-        #    the receptive field is about 70×70 (PatchGAN).
+        # 3) Stride = 1 per l’ultima/e convoluzione/i, in modo che il campo ricettivo sia circa 70×70 (PatchGAN).
         curr_dim = next_dim
         next_dim = curr_dim * 2
-        # This layer keeps stride=1 to reduce the patch size growth
+        # Questo layer mantie stride=1 per evitare che la dimensione delle patch cresca troppo
         layers += [
             nn.Conv2d(curr_dim, next_dim, kernel_size=4, stride=1, padding=1),
             nn.InstanceNorm2d(next_dim),
             nn.LeakyReLU(0.2, inplace=True),
         ]
 
-        # 4) Output layer: 1 filter, stride=1
+        # 4) Layer di output
+        # Il canale finale è uno, ma distribuito su una griglia spaziale.
+        # Per questo l'output non è uno scalare singolo.
         layers += [
             nn.Conv2d(next_dim, 1, kernel_size=4, stride=1, padding=1)
         ]
         
-        # Optionally apply a sigmoid (e.g., for vanilla GAN or BCE loss)
+        # Quando si usa BCEWithLogitsLoss la sigmoid finale non serve,
+        # perchè è già incorporata nella loss.
         if use_sigmoid:
             layers += [nn.Sigmoid()]
 
@@ -300,17 +454,21 @@ class PatchGANDiscriminator(nn.Module):
 
     def forward(self, x, y):
         """
-        Inputs:
-            x (Tensor): shape (batch_size, in_channels, H, W)
+        Args:
+            x (Tensor): Immagine di input.
+            y (Tensor): Target reale o output generato.
+
         Returns:
-            Tensor of shape (batch_size, 1, H/2^n, W/2^n) 
-            (or similarly downsampled dimensions), where each location 
-            is a prediction of real/fake for that patch.
+            Tensor: Mappa di predizioni real/fake per patch.
         """
+        # Qui la concatenazione lungo i canali è il passaggio chiave:
+        # il discriminatore giudica la coerenza della coppia, non solo
+        # la qualità estetica del target/output preso da solo.
         return self.model(torch.cat([x, y], dim=1)) # Concatena input e output
 
 # --------------------- Determinismo ---------------------
 def set_seed(seed):
+    # Fissare il seed riduce molto la variabilità e aiuta quando si confrontano esperimenti.
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
@@ -322,6 +480,8 @@ def set_seed(seed):
 
 # --------------------- Logging ---------------------
 def log_message(message, log_file, show_time=True, use_stdout=True):
+    # Loggiamo su file, oltre che a schermo, perchè così
+    # dopo ore o giorni si puo' capire cosa è successo.
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if show_time:
         message = f"[{now_str}] {message}"
@@ -344,6 +504,8 @@ class ProgressTracker:
     def calculate_progress(self, epoch, batch):
         self.times.append(time.time())
         if len(self.times) > self.max_history:
+            # Manteniamo una finestra temporale limitata, così la stima dell'ETA
+            # resta reattiva anche se la velocità del training cambia nel tempo.
             self.times.pop(0)
         total_elapsed_time = self.times[-1] - self.start_time
         elapsed_time = self.times[-1] - self.times[0]
@@ -368,6 +530,7 @@ def save_checkpoint(checkpoint_path, epoch, G, D, opt_G, opt_D, scaler_G, scaler
         scaler_G (torch.cuda.amp.GradScaler): GradScaler per il generatore.
         scaler_D (torch.cuda.amp.GradScaler): GradScaler per il discriminatore.
     """
+
     checkpoint = {
         'epoch': epoch,
         'generator_state_dict': G.state_dict(),
@@ -393,6 +556,9 @@ def load_checkpoint(checkpoint_path, G, D, opt_G, opt_D, scaler_G, scaler_D, dev
         scaler_D (torch.cuda.amp.GradScaler): GradScaler per il discriminatore.
         device (torch.device): Dispositivo su cui caricare i modelli.
     """
+    # Qui non carichiamo solo i pesi dei modelli, ma anche optimizer e scaler.
+    # Questo rende il resume davvero coerente con il punto in cui il training
+    # era stato interrotto.
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     G.load_state_dict(checkpoint['generator_state_dict'])
     D.load_state_dict(checkpoint['discriminator_state_dict'])
@@ -400,7 +566,8 @@ def load_checkpoint(checkpoint_path, G, D, opt_G, opt_D, scaler_G, scaler_D, dev
     opt_D.load_state_dict(checkpoint['optimizerD_state_dict'])
     scaler_G.load_state_dict(checkpoint['scalerG_state_dict'])
     scaler_D.load_state_dict(checkpoint['scalerD_state_dict'])
-    start_epoch = checkpoint['epoch'] + 1  # Riprendi dalla successiva
+    # Riprendiamo dall'epoca successiva per non ripetere quella già completata.
+    start_epoch = checkpoint['epoch'] + 1
     return start_epoch
 
 # --------------------- Funzioni utili ---------------------
@@ -416,375 +583,421 @@ def save_images(path, input, output, target, epoch, batch_index):
         epoch (int): Numero dell'epoca corrente.
         batch_index (int): Indice del batch corrente.
     """
-    # Salva le immagini di input, output e target
-    # Rimettiamo le immagini da [-1,1] a [0,1]
+    # Le immagini sono normalizzate in [-1, 1]; prima di salvarle per uso umano
+    # dobbiamo riportarle nell'intervallo [0, 1].
     save_image((input * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_input.tif"))
     save_image((output * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_output.tif"))
     save_image((target * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_target.tif"))
 
 # --------------------- Training e Validazione ---------------------
-def validate(G, D, validation_loader, device, bce_loss, l1_loss, epoch, log_file):
+# Training e validation hanno due ruoli diversi:
+# - nel training aggiorniamo i pesi del modello;
+# - nella validation misuriamo come si comporta su dati non usati
+#   per gli aggiornamenti, quindi senza backpropagation.
+def validate(G, D, validation_loader, device, bce_loss, l1_loss, epoch, log_file, output_val_dir):
     """
-    Funzione di validazione del modello.
-    Questa funzione calcola la loss media del generatore e del discriminatore.
-
-    Args:
-        G (nn.Module): Modello del generatore.
-        D (nn.Module): Modello del discriminatore.
-        validation_loader (DataLoader): DataLoader per il set di validazione.
-        device (torch.device): Dispositivo su cui eseguire i calcoli (CPU o GPU).
-        bce_loss (nn.Module): Funzione di perdita BCE (Binary Cross Entropy).
-        l1_loss (nn.Module): Funzione di perdita L1 (Mean Absolute Error).
-        epoch (int): Numero dell'epoca corrente.
-        log_file (str): Percorso del file di log.
-
-    Returns:
-        tuple: Media delle perdite del generatore e del discriminatore.
+    Esegue un pass di validazione e calcola le loss medie
+    di generatore e discriminatore.
     """
-    # Metti in eval mode
     G.eval()
     D.eval()
 
-    # Crea/assicurati che esista la cartella per gli output di validazione
     os.makedirs(output_val_dir, exist_ok=True)
 
     total_loss_G = 0.0
     total_loss_D = 0.0
     count = 0
+    amp_enabled = is_amp_enabled(device)
 
-    # Niente gradienti
-    with torch.no_grad(), autocast("cuda"):
+    # In validazione disattiviamo i gradienti: risparmiamo memoria e tempo,
+    # e soprattutto evitiamo qualunque aggiornamento accidentale dei pesi.
+    with torch.no_grad():
         for i, (x, y) in enumerate(validation_loader):
             x, y = x.to(device), y.to(device)
 
-            # Genera immagini di output
-            fake = G(x)
+            # `autocast` abilita la mixed precision quando il device lo supporta.
+            # In pratica alcune operazioni vengono svolte in precisione ridotta
+            # per guadagnare velocità e memoria.
+            with autocast(device_type=device.type, enabled=amp_enabled):
+                fake = G(x)
 
-            # Predizioni del discriminatore su reale e falso
-            D_real = D(x, y)
-            D_fake = D(x, fake)
+                D_real = D(x, y)
+                D_fake = D(x, fake)
 
-            # BCE labels
-            real_label = torch.ones_like(D_real, device=device)
-            fake_label = torch.zeros_like(D_fake, device=device)
+                real_label = torch.ones_like(D_real, device=device)
+                fake_label = torch.zeros_like(D_fake, device=device)
 
-            # Calcolo delle due loss (D e G)
-            loss_D = bce_loss(D_real, real_label) + bce_loss(D_fake, fake_label)
-            loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * 25
+                # BCE misura la parte adversarial: quanto bene il discriminatore
+                # distingue coppie reali e coppie false.
+                loss_D = bce_loss(D_real, real_label) + bce_loss(D_fake, fake_label)
+
+                # La loss del generatore combina due obiettivi:
+                # 1) ingannare il discriminatore;
+                # 2) restare vicino al target corretto.
+                
+                # La componente L1 è utile per evitare output plausibili ma
+                # scollegati dal target specifico del campione attuale.
+                loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * 25
 
             total_loss_D += loss_D.item()
             total_loss_G += loss_G.item()
             count += 1
 
-            # --- Salvataggio immagini di esempio ---
-            # Ad esempio, salvi i primi 5 batch
+            # Salviamo qualche preview.
             if i < 5:
-                # Salva la prima immagine del batch (indice 0)
-                save_images(output_val_dir, x[0], fake.detach()[0], y[0], epoch, i)
+                save_images(output_val_dir, x[0], fake[0], y[0], epoch, i)
 
-    # Ritorni la media delle loss
-    avg_loss_D = total_loss_D / count
-    avg_loss_G = total_loss_G / count
+    avg_loss_D = total_loss_D / count if count > 0 else 0.0
+    avg_loss_G = total_loss_G / count if count > 0 else 0.0
 
-    # Log
-    log_message(f"[Epoca {epoch}] Validation: loss_G={avg_loss_G:.4f} loss_D={avg_loss_D:.4f}", log_file)
+    log_message(
+        f"[Epoch {epoch}] Validation: loss_G={avg_loss_G:.4f} loss_D={avg_loss_D:.4f}",
+        log_file
+    )
 
     return avg_loss_G, avg_loss_D
 
-def test_inference(checkpoint_path, test_folder, output_folder=output_test_dir, image_size=(512, 512), device="cuda"):
+def test_inference(checkpoint_path, test_folder, output_folder, image_size=(256, 256), device=None):
     """
-    Funzione di test per il modello.
-    Questa funzione esegue l'inferenza su un set di immagini e salva i risultati.
-
-    Args:
-        checkpoint_path (str): Percorso del checkpoint da caricare.
-        test_folder (str): Percorso della cartella contenente le immagini di test.
-        output_folder (str): Percorso della cartella in cui salvare le immagini di output.
-        device (torch.device): Dispositivo su cui eseguire i calcoli (CPU o GPU).
+    Esegue inferenza sul test set e salva le immagini generate.
     """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Crea cartella per gli output se non esiste già
     os.makedirs(output_folder, exist_ok=True)
 
-    # Carica il checkpoint
+    # In inferenza ci serve soltanto il generatore.
+    # Il discriminatore serve solo in training.
     G = UNetGenerator().to(device)
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    G.load_state_dict(checkpoint['generator_state_dict'])
+    G.load_state_dict(checkpoint["generator_state_dict"])
     G.eval()
-    # log_message(f"Checkpoint caricato.")
 
-    # Trasformazioni da applicare alle immagini di test
+    # Il preprocessing deve restare coerente con quello del training,
+    # altrimenti il modello riceverebbe input distribuiti in modo diverso.
     transform = transforms.Compose([
         transforms.Resize(image_size),
         transforms.ToTensor(),
-        transforms.Normalize([0.5]*3, [0.5]*3),
+        transforms.Normalize([0.5] * 3, [0.5] * 3),
     ])
 
-    # Iterazione sui file nella cartella di test
-    test_files = sorted([
+    test_files = sorted(
         f for f in os.listdir(test_folder)
-        if f.lower().endswith('_label_free.tif')
-    ])
+        if f.lower().endswith("_label_free.tif")
+    )
+
     if not test_files:
-        print(f"Nessun file trovato nella cartella di test: {test_folder}")
+        print(f"No test files found in: {test_folder}")
         return
 
-    with torch.no_grad(), autocast(device_type="cuda"):
-        for i, filename in enumerate(test_files):
+    amp_enabled = is_amp_enabled(device)
 
-            # Carico l'immagine di test label-free
+    with torch.no_grad():
+        for filename in test_files:
             img_path = os.path.join(test_folder, filename)
-            img = Image.open(img_path).convert('RGB')
+            img = Image.open(img_path).convert("RGB")
+            img_tensor = transform(img).unsqueeze(0).to(device)
 
-            # Applico la trasfromazione
-            img_tensor = transform(img).unsqueeze(0).to(device)  # shape: (1, 3, H, W)
+            with autocast(device_type=device.type, enabled=amp_enabled):
+                fake_stained = G(img_tensor)
 
-            # Passa dal generatore
-            fake_stained = G(img_tensor)  # shape: (1, 3, H, W)
-
-            # Riporta in [0,1] per salvataggio
+            # Riportiamo l'output nell'intervallo adatto al salvataggio.
             fake_stained = (fake_stained * 0.5) + 0.5
-            fake_stained = fake_stained.clamp(0,1)
+            fake_stained = fake_stained.clamp(0, 1)
 
-            # Salva l'immagine generata
-            out_filename = f"{os.path.splitext(filename)[0]}_generated.tif"
+            out_filename = f"{Path(filename).stem}_generated.tif"
             out_path = os.path.join(output_folder, out_filename)
-
-            # Converte da tensor a PIL e salva
             save_image(fake_stained, out_path)
 
-            # print(f"{out_filename} salvata in {output_folder}")
-    print(f"Test completato. Immagini salvate in {output_folder}")
+    print(f"Test completed. Images saved in {output_folder}")
 
-def train_one_epoch(G, D, training_loader, device, opt_G, opt_D, scaler_G, scaler_D, bce_loss, l1_loss, epoch, log_file, progress_tracker):
+def train_one_epoch(
+    G,
+    D,
+    training_loader,
+    device,
+    opt_G,
+    opt_D,
+    scaler_G,
+    scaler_D,
+    bce_loss,
+    l1_loss,
+    epoch,
+    log_file,
+    progress_tracker,
+    log_rate
+):
     """
-    Funzione di training per un'epoca.
-    Questa funzione esegue il training del generatore e del discriminatore per un'epoca.
-    Calcola le perdite e aggiorna i pesi dei modelli.
-
-    Args:
-        G (nn.Module): Modello del generatore.
-        D (nn.Module): Modello del discriminatore.
-        training_loader (DataLoader): DataLoader per il set di addestramento.
-        device (torch.device): Dispositivo su cui eseguire i calcoli (CPU o GPU).
-        opt_G (torch.optim.Optimizer): Ottimizzatore per il generatore.
-        opt_D (torch.optim.Optimizer): Ottimizzatore per il discriminatore.
-        scaler_G (torch.cuda.amp.GradScaler): GradScaler per il generatore.
-        scaler_D (torch.cuda.amp.GradScaler): GradScaler per il discriminatore.
-        bce_loss (nn.Module): Funzione di perdita BCE (Binary Cross Entropy).
-        l1_loss (nn.Module): Funzione di perdita L1 (Mean Absolute Error).
-        epoch (int): Numero dell'epoca corrente.
-        log_file (str): Percorso del file di log.
-        progress_tracker (ProgressTracker): Oggetto per monitorare il progresso.
+    Addestra generatore e discriminatore per una singola epoca.
     """
-    # Metti in training mode
     G.train()
     D.train()
-    
+    amp_enabled = is_amp_enabled(device)
+
     for i, (x, y) in enumerate(training_loader):
-        # (x, y) sono le immagini di input e target
-        # x sono batch_size immagini di input (label-free)
-        # y sono batch_size immagini di target (stained)
-
-        # Trasferimento su GPU
         x, y = x.to(device), y.to(device)
-        
-        # ---------- DISCRIMINATORE ----------
-        with autocast("cuda"):
-            # Genera immagini false
-            fake = G(x).detach()
-            # .detach() fa sì che quando si utilizza fake, non si calcolino i gradienti per il generatore
-            # Di fatto evita che qualsiasi funzione che interagisce con fake possa modificare i gradienti del generatore
 
-            # Calcola le predizioni del discriminatore
-            # D_real è la predizione per le immagini reali
-            # D_fake è la predizione per le immagini false
+        # ---------- DISCRIMINATOR ----------
+        # Prima aggiorniamo il discriminatore. In questo step il suo compito
+        # è distinguere le coppie reali `(x, y)` da quelle sintetiche `(x, fake)`.
+        with autocast(device_type=device.type, enabled=amp_enabled):
+            # `.detach()` è fondamentale: vogliamo usare l'output del generatore
+            # come esempio falso per D, ma senza far tornare il gradiente dentro G.
+            fake = G(x).detach()
+
             D_real = D(x, y)
             D_fake = D(x, fake)
 
-            # Calcola la perdita del discriminatore
-            # real_label e fake_label sono le etichette per BCEWithLogitsLoss
-            # real_label = 1 (reale), fake_label = 0 (falso)
             real_label = torch.ones_like(D_real, device=device)
             fake_label = torch.zeros_like(D_fake, device=device)
 
-            # Calcola la perdita combinando le predizioni reali e false
             loss_D = bce_loss(D_real, real_label) + bce_loss(D_fake, fake_label)
 
-        # Ottimizzazione del discriminatore
-        opt_D.zero_grad() # zero_grad() azzera i gradienti accumulati
-        scaler_D.scale(loss_D).backward() # scaler.scale() calcola i gradienti in modo scalato
-        scaler_D.step(opt_D) # scaler.step() applica i gradienti all'ottimizzatore
-        scaler_D.update() # Aggiorna lo scaler
+        opt_D.zero_grad()
+        # Con mixed precision il GradScaler aiuta a evitare problemi numerici
+        # durante il backward in precisione ridotta.
+        scaler_D.scale(loss_D).backward()
+        scaler_D.step(opt_D)
+        scaler_D.update()
 
-        # ---------- GENERATORE ----------
-        with autocast("cuda"):
-            # Genera immagini false
+        # ---------- GENERATOR ----------
+        # Ora aggiorniamo il generatore. Qui NON facciamo detach, perchè
+        # adesso vogliamo che il gradiente attraversi davvero G e lo corregga.
+        with autocast(device_type=device.type, enabled=amp_enabled):
             fake = G(x)
-
-            # Calcola le predizioni del discriminatore per le immagini false
             D_fake = D(x, fake)
 
-            # Calcola la perdita del generatore
-            # La perdita del generatore è la somma della BCE con le predizioni del discriminatore
-            # e della L1 loss tra le immagini false e quelle reali
-            # La L1 loss penalizza le differenze tra le immagini generate e quelle reali
-            # La BCE penalizza le predizioni del discriminatore
-            loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * 25 # bisogna provare altri valori (prima era 100)
+            # La loss del generatore combina due spinte complementari:
+            # - BCE adversarial: far sembrare l'output abbastanza realistico
+            #   da "convincere" il discriminatore;
+            # - L1: mantenere fedeltà verso il target reale.
+            loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * 25
 
-        # Ottimizzazione del generatore
-        opt_G.zero_grad() # zero_grad() azzera i gradienti accumulati
-        scaler_G.scale(loss_G).backward() # scaler.scale() calcola i gradienti in modo scalato
-        scaler_G.step(opt_G) # scaler.step() applica i gradienti all'ottimizzatore
+        opt_G.zero_grad()
+        scaler_G.scale(loss_G).backward()
+        scaler_G.step(opt_G)
         scaler_G.update()
 
         progress, total_elapsed_time, expected_time, eta, end_time = progress_tracker.calculate_progress(epoch, i)
-        # progress_str = f"{progress:.2%} | {total_elapsed_time/3600:.1f}h/{expected_time/3600:.1f}h | ETA: {eta/3600:.2f}h -> {datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
-        progress_str = f"{progress:.2%} | {total_elapsed_time/3600:.1f}h/{expected_time/3600:.1f}h | {datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
-        # progress_str = f"{progress:.2%} | Fine stimata: {datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
+        progress_str = (
+            f"{progress:.2%} | "
+            f"{total_elapsed_time / 3600:.1f}h/{expected_time / 3600:.1f}h | "
+            f"{datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
+        )
 
-
-        # Stampa e log su file
         if i % log_rate == 0:
-            log_message(f"[ep {epoch} | b {i}] loss_G: {loss_G.item():.4f} loss_D: {loss_D.item():.4f} - {progress_str}", log_file)
-            # Non serve salvare le immagini di training dato che le salviamo in validate
-            # save_images("local_storage/output_train", x[0], fake.detach()[0], y[0], epoch, i)
+            log_message(
+                f"[ep {epoch} | b {i}] loss_G: {loss_G.item():.4f} "
+                f"loss_D: {loss_D.item():.4f} - {progress_str}",
+                log_file
+            )
 
 # --------------------- Main ---------------------
-def main(dataset_root):
+def main(
+    dataset_root,
+    logs_dir,
+    checkpoints_dir,
+    output_val_dir,
+    output_train_dir,
+    seed=42,
+    n_epochs=150,
+    batch_size=8,
+    n_workers=12,
+    image_size=(256, 256),
+    log_rate=15,
+    checkpoint_rate=10,
+    validate_rate=1,
+    resume_checkpoint=None
+):
     start_time = time.time()
 
-    # Crea la cartella per i log (se non esiste già)
     os.makedirs(logs_dir, exist_ok=True)
+    os.makedirs(checkpoints_dir, exist_ok=True)
+    os.makedirs(output_train_dir, exist_ok=True)
+    os.makedirs(output_val_dir, exist_ok=True)
 
-    # Genero un nome file log con data/ora attuale (unico per ogni esecuzione).
     timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     log_file = os.path.join(logs_dir, f"Log-{timestamp_str}.txt")
-    # Se esiste già un file con lo stesso nome, lo cancello (per evitare conflitti)
+
     if os.path.exists(log_file):
         os.remove(log_file)
 
-    # Imposta il seed per la riproducibilità
     set_seed(seed)
-    log_message(f"Seed impostato a {seed}", log_file)
+    log_message(f"Seed set to {seed}", log_file)
 
-    # Imposta il dispositivo (GPU o CPU)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    log_message(f"Dispositivo: {device}", log_file)
+    log_message(f"Device: {device}", log_file)
 
-    # Trasformazioni per il dataset
-    # Normalizzazione delle immagini tra -1 e 1 (per il generatore)
+    # La normalizzazione con media e std pari a 0.5 porta i valori
+    # da [0, 1] a [-1, 1].
     transform = transforms.Compose([
-        transforms.Resize(image_size), # Risoluzione delle immagini, potrebbe essere 256 o 512
+        transforms.Resize(image_size),
         transforms.ToTensor(),
-        transforms.Normalize([0.5]*3, [0.5]*3)
+        transforms.Normalize([0.5] * 3, [0.5] * 3)
     ])
-    
-    train_dir = os.path.join(dataset_root, "train")
-    val_dir = os.path.join(dataset_root, "val")
-    test_dir = os.path.join(dataset_root, "test")
+
+    train_dir = os.path.join(dataset_root, "dataset_train")
+    val_dir = os.path.join(dataset_root, "dataset_val")
 
     training_dataset = PairedHistologyDataset(train_dir, transform)
-    training_loader = DataLoader(training_dataset, batch_size=batch_size, shuffle=training_shuffle, num_workers=n_workers, pin_memory=True) # prima num_workers era a 0 e pin_memory non c'era e batch_size a 4, Shuffle era a Flase
-    # andrebbero presi i tempi precisi per ogni configurazione (profiling(?)), ma in linea di massima:
-    # con num_workers=12 impiega circa 1.27 minuti, 1.28 e 1.22
-    # con num_workers=8 impiega circa 1.26 minuti, 1.26 e 1.34
-    # con num_workers=4 impega circa 1.41 minuti, 1.41 e 1.38
-    # con num_workers=0 impiega circa 1.27 minuti, 1.23 e 1.29
-
     validation_dataset = PairedHistologyDataset(val_dir, transform)
-    validation_loader = DataLoader(validation_dataset, batch_size=batch_size, shuffle=validation_shuffle, num_workers=n_workers, pin_memory=True)
 
-    # Inizializzazione del modello
+    # In training facciamo shuffle; in validation no, perchè lì non stiamo
+    # imparando ma solo misurando il comportamento del modello.
+    training_loader = DataLoader(
+        training_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=n_workers,
+        pin_memory=(device.type == "cuda")
+    )
+
+    validation_loader = DataLoader(
+        validation_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=n_workers,
+        pin_memory=(device.type == "cuda")
+    )
+
     generator = UNetGenerator().to(device)
     discriminator = PatchGANDiscriminator().to(device)
-    
-    # Inizializzazione degli ottimizzatori
+
     opt_G = optim.Adam(generator.parameters(), lr=2e-4, betas=(0.5, 0.999))
     opt_D = optim.Adam(discriminator.parameters(), lr=2e-4, betas=(0.5, 0.999))
 
-    # Inizializzazione del GradScaler per la precisione mista
-    scaler_G = GradScaler(device='cuda')
-    scaler_D = GradScaler(device='cuda')
+    amp_enabled = is_amp_enabled(device)
+    scaler_G = GradScaler(enabled=amp_enabled)
+    scaler_D = GradScaler(enabled=amp_enabled)
 
-    # Inizializzazione delle funzioni di perdita
+    # BCEWithLogitsLoss lavora direttamente sui logits del discriminatore,
+    # mentre L1Loss misura la distanza diretta tra output generato e target.
     bce_loss = nn.BCEWithLogitsLoss()
     l1_loss = nn.L1Loss()
 
-    # Creazione cartella per le immagini di preview e cancellazione dei file esistenti
-    os.makedirs(output_train_dir, exist_ok=True)
+    # Puliamo la cartella di output del training per non mischiare materiale di run diverse.
     for file in os.listdir(output_train_dir):
-        os.remove(os.path.join(output_train_dir, file))
+        file_path = os.path.join(output_train_dir, file)
+        if os.path.isfile(file_path):
+            os.remove(file_path)
 
-    # Checkpoint
     start_epoch = 0
-    if use_checkpoint:
-        os.makedirs(checkpoints_dir, exist_ok=True)
-        # Se vuoi usare i checkpoint, carica il checkpoint esistente
-        if os.path.exists(restore_checkpoint_path):
-            start_epoch = load_checkpoint(restore_checkpoint_path, generator, discriminator, 
-                                        opt_G, opt_D, scaler_G, scaler_D, device)
-            log_message(f"Checkpoint caricato da {restore_checkpoint_path}, epoca {start_epoch}", log_file)
+    if resume_checkpoint is not None:
+        if os.path.exists(resume_checkpoint):
+            start_epoch = load_checkpoint(
+                resume_checkpoint,
+                generator,
+                discriminator,
+                opt_G,
+                opt_D,
+                scaler_G,
+                scaler_D,
+                device
+            )
+            log_message(f"Checkpoint loaded from {resume_checkpoint}, epoch {start_epoch}", log_file)
         else:
-            log_message("ATTENZIONE - Checkpoint non trovato", log_file)
+            log_message(f"WARNING - Checkpoint not found: {resume_checkpoint}", log_file)
     else:
-        log_message("Nessun checkpoint caricato", log_file)
+        log_message("Training started from scratch", log_file)
 
-    # Crea il progress tracker
     progress_tracker = ProgressTracker(n_epochs, len(training_loader))
     progress_tracker.start()
 
-    # Inizio allenamento
-    log_message("Inizio allenamento", log_file)
+    log_message("Training started", log_file)
+
     for epoch in range(start_epoch, n_epochs):
-        log_message(f"Inizio epoca {epoch}", log_file)
+        log_message(f"Starting epoch {epoch}", log_file)
 
-        # ---------- ALLENAMENTO (una epoca) ----------
-        train_one_epoch(generator, discriminator, training_loader, device, opt_G, opt_D, scaler_G, scaler_D,
-                        bce_loss, l1_loss, epoch, log_file, progress_tracker)
+        train_one_epoch(
+            generator,
+            discriminator,
+            training_loader,
+            device,
+            opt_G,
+            opt_D,
+            scaler_G,
+            scaler_D,
+            bce_loss,
+            l1_loss,
+            epoch,
+            log_file,
+            progress_tracker,
+            log_rate
+        )
 
-        # Log fine epoca
-        log_message(f"Fine epoca {epoch}", log_file)
+        log_message(f"Finished epoch {epoch}", log_file)
 
-        # ------ SALVATAGGIO CHECKPOINT ------
-        # Salva ogni epoca (o magari ogni 5 epoche, se preferisci)
-        if use_checkpoint:
-            if (epoch + 1) % checkpoint_rate == 0:
-                checkpoint_path = os.path.join(
-                    checkpoints_dir,
-                    f"checkpoint_Pix2Pix_epoca{epoch}_{timestamp_str}.pth"
-                )
-                save_checkpoint(checkpoint_path, epoch, generator, discriminator, opt_G, opt_D, scaler_G, scaler_D)
-                log_message(f"Checkpoint salvato in {checkpoint_path} all'epoca {epoch}", log_file)
+        # Salviamo checkpoint periodici: se il training si interrompe, non si riparte da zero.
+        if (epoch + 1) % checkpoint_rate == 0:
+            checkpoint_path = os.path.join(
+                checkpoints_dir,
+                f"checkpoint_Pix2Pix_epoch{epoch}_{timestamp_str}.pth"
+            )
+            save_checkpoint(
+                checkpoint_path,
+                epoch,
+                generator,
+                discriminator,
+                opt_G,
+                opt_D,
+                scaler_G,
+                scaler_D
+            )
+            log_message(f"Checkpoint saved to {checkpoint_path} at epoch {epoch}", log_file)
 
-        # ---------- VALIDATION (in corrispondenza con checkpoint_rate) ----------
-        if(epoch + 1) % validate_rate == 0:
-            validate(generator, discriminator, validation_loader, device, bce_loss, l1_loss, epoch, log_file)
+        # La validation periodica misura se il modello sta migliorando
+        # anche fuori dal training set.
+        if (epoch + 1) % validate_rate == 0:
+            validate(
+                generator,
+                discriminator,
+                validation_loader,
+                device,
+                bce_loss,
+                l1_loss,
+                epoch,
+                log_file,
+                output_val_dir
+            )
 
-    # Fine allenamento
-    end_time = time.time()
-    total_seconds = end_time - start_time
-    log_message(f"Fine esecuzione. Tempo impiegato = {total_seconds:.2f} secondi", log_file)
+    total_seconds = time.time() - start_time
+    log_message(f"Execution completed. Total time = {total_seconds:.2f} seconds", log_file)
               
 
 if __name__ == "__main__":
-    if len(sys.argv) >= 3 and sys.argv[1] == "test":
-        dataset_root = sys.argv[2]
-        test_dir = os.path.join(dataset_root, "test")
-        # Esegui il test con un checkpoint esistente
-        print(f"Inizio test con il checkpoint in: {restore_checkpoint_path}")
-        test_inference(
-            restore_checkpoint_path,
-            test_folder=test_dir,
-            output_folder=output_test_dir,
-            image_size=image_size,
-            device="cuda"
+    parser = build_parser()
+    args = parser.parse_args()
+
+    paths = build_workspace_paths(args.dataset_root)
+
+    if args.mode == "train":
+        print("Starting training.")
+        main(
+            dataset_root=args.dataset_root,
+            logs_dir=paths["logs_dir"],
+            checkpoints_dir=paths["checkpoints_dir"],
+            output_val_dir=paths["output_val_dir"],
+            output_train_dir=paths["output_train_dir"],
+            seed=args.seed,
+            n_epochs=args.epochs,
+            batch_size=args.batch_size,
+            n_workers=args.num_workers,
+            image_size=tuple(args.image_size),
+            log_rate=args.log_rate,
+            checkpoint_rate=args.checkpoint_rate,
+            validate_rate=args.validate_rate,
+            resume_checkpoint=args.resume
         )
-    elif len(sys.argv) >= 3 and sys.argv[1] == "train":
-        dataset_root = sys.argv[2]
-        print(f"Inizio allenamento.")
-        main(dataset_root)
-    else:
-        print("Uso: python pix2pix.py [train/test] <dataset_root>")
-        print("Esempio train: python src/pix2pix.py train local_workspace/your_sample")
-        print("Esempio test: python src/pix2pix.py test local_workspace/your_sample")
+
+    elif args.mode == "test":
+        test_dir = Path(args.dataset_root) / "dataset_test"
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        print(f"Starting test with checkpoint: {args.checkpoint}")
+        test_inference(
+            checkpoint_path=args.checkpoint,
+            test_folder=str(test_dir),
+            output_folder=str(paths["output_test_dir"]),
+            image_size=tuple(args.image_size),
+            device=device
+        )

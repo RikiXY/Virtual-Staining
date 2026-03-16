@@ -9,7 +9,7 @@
         "en": "random seed for reproducibility (optional)"
     },
     "save_masks": {
-        "en": "if set, also saves the binary masks"
+        "en": "if set, also saves the subimage masks"
     },
     "lang": {
         "en": "language of messages: en (default) or it"

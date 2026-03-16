@@ -623,7 +623,7 @@ def main(path: str, seed: Optional[int] = None, save_masks: bool = False) -> Non
     # [ITA] Salvataggio delle immagini suddivise
     # [EN] Saving the split images
     for i, subset in enumerate(split):
-        subset_name = ["train", "val", "test"][i]
+        subset_name = ["dataset_train", "dataset_val", "dataset_test"][i]
         os.makedirs(os.path.join(path, subset_name), exist_ok=True)
         for lf_img, st_img in subset:
             cv2.imwrite(os.path.join(path, subset_name, f"{lf_img[1]}.tif"), lf_img[0])
