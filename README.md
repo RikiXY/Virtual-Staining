@@ -8,7 +8,7 @@ This repository implements an end-to-end workflow for **virtual staining in comp
 
 - generates tissue masks;
 - aligns the stained image to the label-free reference;
-- extracts paired patches and creates `train`, `val`, and `test` splits;
+- extracts paired patches and creates `dataset_train`, `dataset_val`, and `dataset_test` splits;
 - trains a Pix2Pix-style conditional GAN on the resulting paired dataset.
 
 The project therefore combines **classical image processing** and **paired deep learning**, with alignment and dataset preparation as core technical steps.
@@ -28,31 +28,66 @@ local_workspace/
 
 ### 2. Run preprocessing and dataset creation
 
+`prepare_dataset.py` provides a CLI interface for preprocessing and dataset preparation:
+
 ```bash
-python src/ollie_wan_kenobi.py local_workspace/your_sample --lang en --seed 42
+python src/prepare_dataset.py <sample_path> [--seed SEED] [--save_masks] [--lang {en,it}]
+```
+
+**Example:**
+
+```bash
+python src/prepare_dataset.py local_workspace/your_sample --lang en --seed 42
+```
+
+To see all preprocessing options:
+
+```bash
+python src/prepare_dataset.py --help
 ```
 
 ### 3. Train the model
 
-Before training or testing, verify the checkpoint path and output settings inside src/pix2pix.py. The dataset path is passed as a command-line argument.
+`pix2pix.py` supports separate CLI entry points for training and test inference:
+
+```bash
+python src/pix2pix.py train <dataset_root>
+python src/pix2pix.py test <dataset_root> --checkpoint <checkpoint_path>
+```
+
+**Training example:**
 
 ```bash
 python src/pix2pix.py train local_workspace/your_sample
 ```
 
-### 4. Run test inference
-
-After setting the desired checkpoint path in the script:
+To see all training options:
 
 ```bash
-python src/pix2pix.py test local_workspace/your_sample
+python src/pix2pix.py train --help
 ```
 
-Note: preprocessing is exposed through a CLI-oriented workflow, while training and testing may still require manual path editing inside `src/pix2pix.py`.
+### 4. Run test inference
+
+Provide the checkpoint explicitly from the command line:
+
+```bash
+python src/pix2pix.py test local_workspace/your_sample --checkpoint local_workspace/your_sample/checkpoints/your_checkpoint.pth
+```
+
+To see all test options:
+
+```bash
+python src/pix2pix.py test --help
+```
+
+**Note**: the training and test workflow is now CLI-driven. Outputs such as logs, checkpoints, validation previews, and test predictions are created automatically inside the selected dataset root.
 
 ## Qualitative Results
 
-The repository includes qualitative comparison panels built from test outputs. Each panel compares:
+The figures below are static qualitative examples included for documentation and visual inspection.
+
+Each panel compares:
 
 - input label-free patch;
 - generated stained prediction;
@@ -65,7 +100,7 @@ The repository includes qualitative comparison panels built from test outputs. E
 
 The current executable workflow is concentrated in two scripts inside [`src/`](./src):
 
-1. [`src/ollie_wan_kenobi.py`](./src/ollie_wan_kenobi.py)  
+1. [`src/prepare_dataset.py`](./src/prepare_dataset.py)  
    Preprocessing pipeline for mask generation, alignment, patch extraction, and dataset split creation.
 2. [`src/pix2pix.py`](./src/pix2pix.py)  
    Training and inference script for a Pix2Pix-style paired image-to-image translation model.
@@ -76,7 +111,7 @@ Workflow summary:
 2. Generate masks and isolate useful tissue regions.
 3. Align the stained image to the label-free image.
 4. Extract aligned patches.
-5. Split patches into `train`, `val`, and `test`.
+5. Split patches into `dataset_train`, `dataset_val`, and `dataset_test`.
 6. Train the model and save checkpoints and validation outputs.
 7. Run test-time inference on held-out data.
 
@@ -92,7 +127,7 @@ Virtual-Staining/
 ├── local_workspace/
 ├── src/
 │   ├── json/
-│   ├── ollie_wan_kenobi.py
+│   ├── prepare_dataset.py
 │   └── pix2pix.py
 ├── requirements.txt
 └── README.md
@@ -101,7 +136,7 @@ Virtual-Staining/
 Main paths:
 
 - `src/` contains the main executable code.
-- `src/ollie_wan_kenobi.py` handles preprocessing and dataset creation.
+- `src/prepare_dataset.py` handles preprocessing and dataset creation.
 - `src/pix2pix.py` handles training, validation, checkpoints, and test inference.
 - `src/json/` contains support configuration and message files.
 - `local_workspace/` is the working area used during execution, where input samples and execution-generated folders such as datasets, checkpoints, logs, and output images are stored.
@@ -111,7 +146,7 @@ Main paths:
 
 ## Main Scripts
 
-### `src/ollie_wan_kenobi.py`
+### `src/prepare_dataset.py`
 
 Integrated preprocessing entry point.
 
@@ -121,12 +156,18 @@ Integrated preprocessing entry point.
 - computes foreground masks for both images;
 - aligns the stained image to the label-free reference;
 - extracts patch pairs from aligned tissue regions;
-- saves the resulting dataset into `train`, `val`, and `test`.
+- saves the resulting dataset into `dataset_train/`, `dataset_val/`, and `dataset_test/`.
 
 **CLI usage**
 
 ```bash
-python src/ollie_wan_kenobi.py path [--seed SEED] [--save_masks] [--lang {en,it}]
+python src/prepare_dataset.py <path> [--seed SEED] [--save_masks] [--lang {en,it}]
+```
+
+To see all available options:
+
+```bash
+python src/prepare_dataset.py --help
 ```
 
 **Typical outputs**
@@ -136,9 +177,11 @@ python src/ollie_wan_kenobi.py path [--seed SEED] [--save_masks] [--lang {en,it}
 - `aligned_stained.tif`
 - `aligned_mask_st.tif`
 - `subimages/`
-- `train/`
-- `val/`
-- `test/`
+- `dataset_train/`
+- `dataset_val/`
+- `dataset_test/`
+
+When `--save_masks` is enabled, patch-level mask files are also saved inside `subimages/`.
 
 ### `src/pix2pix.py`
 
@@ -148,19 +191,26 @@ Learning and inference stage of the pipeline.
 
 - loads paired patch datasets using the naming convention `*_label_free.tif` and `*_stained.tif`;
 - trains a Pix2Pix-style conditional GAN;
-- validates during training;
+- validates the model during training;
 - saves checkpoints;
 - runs test-time inference from a selected checkpoint.
 
 **CLI usage**
 
 ```bash
-python src/pix2pix.py train local_workspace/your_sample
-python src/pix2pix.py test local_workspace/your_sample
+python src/pix2pix.py train <dataset_root>
+python src/pix2pix.py test <dataset_root> --checkpoint <checkpoint_path>
 ```
 
-**Practical note**:
-dataset folders, output folders, and checkpoint paths are still configured directly in the script, so they may need manual editing before training or inference on a new setup.
+To see all available options:
+
+```bash
+python src/pix2pix.py --help
+python src/pix2pix.py train --help
+python src/pix2pix.py test --help
+```
+
+**Practical note**: logs, checkpoints, validation outputs, and test outputs are automatically created inside the selected dataset root.
 
 ## Input and Outputs
 
@@ -181,10 +231,10 @@ Only valid prefix-matched pairs are used by the dataset loader.
 - masks for both input images;
 - aligned stained image artifacts;
 - extracted paired patches in `subimages/`;
-- dataset splits in `train/`, `val/`, and `test/`.
+- dataset splits in `dataset_train/`, `dataset_val/`, and `dataset_test/`.
 - validation predictions;
 - saved checkpoints;
-- test predictions and qualitative comparison figures.
+- test predictions.
 
 ## Method
 
@@ -227,7 +277,7 @@ The repository includes a minimal [`requirements.txt`](./requirements.txt), but 
 **Preprocessing:**
 
 ```bash
-python src/ollie_wan_kenobi.py local_workspace/liver --lang en --seed 42 --save_masks
+python src/prepare_dataset.py local_workspace/liver --lang en --seed 42 --save_masks
 ```
 
 **Training:**
@@ -239,17 +289,16 @@ python src/pix2pix.py train local_workspace/liver
 **Testing/Inference:**
 
 ```bash
-python src/pix2pix.py test local_workspace/liver
+python src/pix2pix.py test local_workspace/liver --checkpoint local_workspace/liver/checkpoints/your_checkpoint.pth
 ```
 
-Before training or testing, verify dataset paths and checkpoint settings inside `src/pix2pix.py`.
+For test inference, provide the checkpoint path explicitly with `--checkpoint`.
 
 ## Limitations/Current State
 
 The project is structured and usable, but still experimental in several practical respects.
 
-- Some dataset paths and checkpoint names still need manual editing in `src/pix2pix.py`.
-- Configuration is only partially centralized.
+- The workflow is now CLI-driven, but configuration is still only partially centralized.
 - The repository includes historical material alongside the current main workflow.
 - Dependency management is minimal and not yet tightly pinned.
 
@@ -258,7 +307,7 @@ The project is structured and usable, but still experimental in several practica
 Planned or plausible directions for improvement include:
 
 - centralized configuration for paths and hyperparameters;
-- cleaner CLI unification across preprocessing and training;
+- more consistent CLI design and centralized configuration;
 - stronger reproducibility and dataset bookkeeping;
 - more modular separation of preprocessing, training, and evaluation code;
 - expanded evaluation and visualization utilities.

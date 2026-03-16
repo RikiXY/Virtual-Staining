@@ -40,14 +40,14 @@ def build_workspace_paths(dataset_root: str) -> dict:
 # Lo script supporta due modalità distinte: addestramento e test.
 def build_parser():
     parser = argparse.ArgumentParser(
-    prog="python pix2pix.py",
+    prog="python src/pix2pix.py",
     description="Train or test the Pix2Pix model on a paired histology dataset.",
     epilog=(
         "Examples:\n"
-        "  python pix2pix.py train local_workspace/sample --epochs 150\n"
-        "  python pix2pix.py test local_workspace/sample --checkpoint local_workspace/sample/checkpoints/model.pth\n"
+        "  python src/pix2pix.py train local_workspace/sample --epochs 150\n"
+        "  python src/pix2pix.py test local_workspace/sample --checkpoint local_workspace/sample/checkpoints/model.pth\n"
         "\n"
-        "Use 'python pix2pix.py <command> --help' to see the options for a specific command."
+        "Use 'python src/pix2pix.py <command> --help' to see the options for a specific command."
     ),
     formatter_class=argparse.RawTextHelpFormatter
 )
@@ -64,7 +64,7 @@ def build_parser():
     train_parser.add_argument(
         "dataset_root",
         type=str,
-        help="Path to the dataset root containing train/, val/, and test/"
+        help="Path to the dataset root containing dataset_train/ and dataset_val/"
     )
     train_parser.add_argument(
         "--seed",
@@ -131,7 +131,7 @@ def build_parser():
     test_parser.add_argument(
         "dataset_root",
         type=str,
-        help="Path to the dataset root containing train/, val/, and test/"
+        help="Path to the dataset root containing dataset_test/"
     )
     test_parser.add_argument(
         "--checkpoint",
@@ -573,7 +573,7 @@ def load_checkpoint(checkpoint_path, G, D, opt_G, opt_D, scaler_G, scaler_D, dev
 # --------------------- Funzioni utili ---------------------
 def save_images(path, input, output, target, epoch, batch_index):
     """
-    Salva le immagini di input, output e target in formato PNG.
+    Salva le immagini di input, output e target in formato TIF.
     
     Args:
         path (str): Percorso della cartella di salvataggio.

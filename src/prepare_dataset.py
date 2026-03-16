@@ -3,7 +3,7 @@ Integrated preprocessing pipeline for paired histopathology samples.
 
 This script loads `label_free.tif` and `stained.tif`, computes tissue masks,
 aligns the stained image to the label-free reference, extracts paired patches,
-and creates the dataset splits used for training, validation, and testing.
+and creates the `dataset_train`, `dataset_val`, and `dataset_test` splits.
 """
 
 # The original filename was `ollie_wan_kenobi`, born from an internal joke:
@@ -658,7 +658,7 @@ if __name__ == "__main__":
     # [ITA] Parser principale per gli argomenti
     # [EN] Main parser for the arguments
     parser = argparse.ArgumentParser(
-        usage="python ollie_wan_kenobi.py path [--seed SEED] [--save_masks] [--lang {en, it}]",
+        usage="python src/prepare_dataset.py <path> [--seed SEED] [--save_masks] [--lang {en,it}]",
         description=HELP["description"][lang_args.lang],
         formatter_class=argparse.RawTextHelpFormatter,
         parents=[lang_parser]
