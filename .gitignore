@@ -1,5 +1,3 @@
 /local_workspace/*
 !/local_workspace/.gitkeep
-/tools/*
-!/tools/.gitkeep
 /src/__pycache__/*
