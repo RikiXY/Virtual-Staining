@@ -3,7 +3,7 @@
         "en": "Prepares masks, aligns images, extracts subimages, and splits the dataset"
     },
     "path": {
-        "en": "path to folder with label_free.tif and stained.tif"
+        "en": "path to the folder containing <source_name>.tif and <target_name>.tif"
     },
     "seed": {
         "en": "random seed for reproducibility (optional)"

@@ -1,3 +1,4 @@
 /local_workspace/*
-!/local_workspace/.gitkeep
+!/local_workspace/datasets/.gitkeep
+!/local_workspace/results/.gitkeep
 /src/__pycache__/*

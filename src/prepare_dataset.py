@@ -12,6 +12,8 @@ extracts paired patches, and creates the `dataset_train`, `dataset_val`, and
 # and from there "Kenobi" felt like the only possible ending.
 # Ironically, none of the collaborators had even seen Star Wars.
 
+from os import path
+
 import cv2, os, random
 import argparse
 import json
@@ -499,7 +501,7 @@ def split_items(items: list, ratios: list[int]) -> list[list]:
     items : list
         List to split.
     ratios : list[int]
-        Rapporti di suddivisione (es. [0.7, 0.15, 0.15])
+        Split ratios (e.g. [0.7, 0.15, 0.15]).
     
     Returns
     -------
@@ -525,22 +527,40 @@ def split_items(items: list, ratios: list[int]) -> list[list]:
         start = end
     return output
 
+ALLOWED_EXTENSIONS = {".tif", ".tiff", ".png"}
+
+def validate_image_filename(filename: str, role: str) -> Path:
+    file_path = Path(filename)
+    suffix = file_path.suffix.lower()
+
+    if not file_path.name:
+        raise ValueError(f"{role} filename is empty.")
+    if suffix not in ALLOWED_EXTENSIONS:
+        raise ValueError(
+            f"{role} must use one of these extensions: {', '.join(sorted(ALLOWED_EXTENSIONS))}. "
+            f"Received: {filename}"
+        )
+    return file_path
+
 def main(
     path: str,
     source_name: str,
     target_name: str,
     seed: Optional[int] = None,
     save_masks: bool = False,
+    image_size: tuple[int, int] = (256, 256),
+    grid_movement: tuple[int, int] = (256, 256),
+    margin: int = 200,
 ) -> None:
 
     # ====================[SET SEED]====================
     # [ITA] Imposta il seed per ottenere sempre la stessa suddivisione, se necessario
     # [EN] Set seed for reproducibility
-    if seed is not None:
-        random.seed(seed)
-        print(MESSAGES["seed_set"][lang].format(seed=seed))
-    else:
-        print(MESSAGES["no_seed"][lang])
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
+    random.seed(seed)
+    print(MESSAGES["seed_set"][lang].format(seed=seed))
     # ==================================================
 
 
@@ -550,13 +570,19 @@ def main(
     print(MESSAGES["loading_images"][lang].format(path=path))
     if not os.path.exists(path):
         raise FileNotFoundError(MESSAGES["check_path"][lang].format(path=path)) 
-    source_path = os.path.join(path, f"{source_name}.tif")
-    target_path = os.path.join(path, f"{target_name}.tif")
-    source_image = cv2.imread(source_path)
-    target_image = cv2.imread(target_path)
+    source_file = validate_image_filename(source_name, "Source")
+    target_file = validate_image_filename(target_name, "Target")
+    
+    source_stem = source_file.stem
+    target_stem = target_file.stem
+    source_suffix = source_file.suffix.lower()
+    target_suffix = target_file.suffix.lower()
+
+    source_image = cv2.imread(os.path.join(path, source_file.name))
+    target_image = cv2.imread(os.path.join(path, target_file.name))
     if source_image is None or target_image is None:
         raise FileNotFoundError(
-            f"Missing paired files. Expected '{source_name}.tif' and '{target_name}.tif' inside: {path}"
+            f"Missing paired files. Expected '{source_name}' and '{target_name}' inside: {path}"
         )
     print(
         MESSAGES["images_loaded"][lang].format(
@@ -576,8 +602,8 @@ def main(
     print(MESSAGES["masks_calculated"][lang])
     # [ITA] Salvataggio delle maschere
     # [EN] Saving masks
-    cv2.imwrite(os.path.join(path, f"mask_{source_name}.tif"), source_mask)
-    cv2.imwrite(os.path.join(path, f"mask_{target_name}.tif"), target_mask)
+    cv2.imwrite(os.path.join(path, f"mask_{source_stem}{source_suffix}"), source_mask)
+    cv2.imwrite(os.path.join(path, f"mask_{target_stem}{target_suffix}"), target_mask)
     print(MESSAGES["mask_saved"][lang])
     # =========================================================
 
@@ -596,8 +622,8 @@ def main(
     print(MESSAGES["images_aligned"][lang])
     # [ITA] Salvataggio delle immagini allineate
     # [EN] Saving aligned images
-    cv2.imwrite(os.path.join(path, f"aligned_{target_name}.tif"), aligned_target)
-    cv2.imwrite(os.path.join(path, f"aligned_mask_{target_name}.tif"), aligned_target_mask)
+    cv2.imwrite(os.path.join(path, f"aligned_{target_stem}{target_suffix}"), aligned_target)
+    cv2.imwrite(os.path.join(path, f"aligned_mask_{target_stem}{target_suffix}"), aligned_target_mask)
     print(MESSAGES["images_aligned_saved"][lang])
     # =========================================================
 
@@ -610,9 +636,7 @@ def main(
     # Vogliamo mettere il margine come parametro? Sì
     # Vogliamo mettere le dimensioni delle sottoimmagini come parametro? Sì
     # Vogliamo mettere lo spostamento della griglia come parametro? Sì
-    margin = 200
-    image_size = (256, 256)
-    grid_movement = (256, 256)
+    
     source_images, source_masks, positions = divide_image_with_grid(
         source_image[margin:-margin, margin:-margin],
         image_size,
@@ -643,10 +667,10 @@ def main(
         target_images,
         target_masks,
     ):
-        named_source_images.append((source_img, f"{x:05}_{y:05}_{source_name}"))
-        named_target_images.append((target_img, f"{x:05}_{y:05}_{target_name}"))
-        named_source_masks.append((source_patch_mask, f"{x:05}_{y:05}_mask_{source_name}"))
-        named_target_masks.append((target_patch_mask, f"{x:05}_{y:05}_mask_{target_name}"))
+        named_source_images.append((source_img, f"{x:05}_{y:05}_source{source_suffix}"))
+        named_target_images.append((target_img, f"{x:05}_{y:05}_target{target_suffix}"))
+        named_source_masks.append((source_patch_mask, f"{x:05}_{y:05}_mask_source{source_suffix}"))
+        named_target_masks.append((target_patch_mask, f"{x:05}_{y:05}_mask_target{target_suffix}"))
     print(MESSAGES["pair_renamed"][lang])
     # [ITA] Salvataggio delle sottoimmagini
     # [EN] Saving sub-images
@@ -658,11 +682,11 @@ def main(
         named_target_images,
         named_target_masks,
     ):
-        cv2.imwrite(os.path.join(path, "subimages", f"{source_img[1]}.tif"), source_img[0])
-        cv2.imwrite(os.path.join(path, "subimages", f"{target_img[1]}.tif"), target_img[0])
+        cv2.imwrite(os.path.join(path, "subimages", source_img[1]), source_img[0])
+        cv2.imwrite(os.path.join(path, "subimages", target_img[1]), target_img[0])
         if save_masks:
-            cv2.imwrite(os.path.join(path, "subimages", f"{source_patch_mask[1]}.tif"), source_patch_mask[0])
-            cv2.imwrite(os.path.join(path, "subimages", f"{target_patch_mask[1]}.tif"), target_patch_mask[0])
+            cv2.imwrite(os.path.join(path, "subimages", source_patch_mask[1]), source_patch_mask[0])
+            cv2.imwrite(os.path.join(path, "subimages", target_patch_mask[1]), target_patch_mask[0])
     print(MESSAGES["pair_saved"][lang])
     # [ITA] Suddivisione del dataset in training, validation e testing
     # [EN] Splitting the dataset into training, validation, and testing
@@ -676,8 +700,8 @@ def main(
         subset_name = ["dataset_train", "dataset_val", "dataset_test"][i]
         os.makedirs(os.path.join(path, subset_name), exist_ok=True)
         for source_img, target_img in subset:
-            cv2.imwrite(os.path.join(path, subset_name, f"{source_img[1]}.tif"), source_img[0])
-            cv2.imwrite(os.path.join(path, subset_name, f"{target_img[1]}.tif"), target_img[0])
+            cv2.imwrite(os.path.join(path, subset_name, source_img[1]), source_img[0])
+            cv2.imwrite(os.path.join(path, subset_name, target_img[1]), target_img[0])
     print(MESSAGES["dataset_saved"][lang])
     # ==========================================================
 
@@ -704,7 +728,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         usage=(
             "python src/prepare_dataset.py <path> [--seed SEED] [--save_masks] "
-            "[--source-name SOURCE_NAME] [--target-name TARGET_NAME] [--lang {en,it}]"
+            "[--source-name SOURCE_NAME] [--target-name TARGET_NAME] "
+            "[--image-size WIDTH HEIGHT] [--grid-movement STEP_X STEP_Y] "
+            "[--margin MARGIN] [--lang {en,it}]"
         ),
         description=HELP["description"][lang_args.lang],
         formatter_class=argparse.RawTextHelpFormatter,
@@ -728,14 +754,36 @@ if __name__ == "__main__":
     parser.add_argument(
         "--source-name",
         type=str,
-        default="label_free",
-        help="Base name of the source image file without extension (default: label_free)"
+        required=True,
+        help="Source image filename with extension (.tif, .tiff, .png)"
     )
     parser.add_argument(
         "--target-name",
         type=str,
-        default="stained",
-        help="Base name of the target image file without extension (default: stained)"
+        required=True,
+        help="Target image filename with extension (.tif, .tiff, .png)"
+    )
+    parser.add_argument(
+        "--image-size",
+        type=int,
+        nargs=2,
+        metavar=("WIDTH", "HEIGHT"),
+        default=(512, 512),
+        help="Patch size used for extraction (default: 512 512)"
+    )
+    parser.add_argument(
+        "--grid-movement",
+        type=int,
+        nargs=2,
+        metavar=("STEP_X", "STEP_Y"),
+        default=(512, 512),
+        help="Grid step used for patch extraction (default: 512 512)"
+    )
+    parser.add_argument(
+        "--margin",
+        type=int,
+        default=200,
+        help="Margin cropped from each border before patch extraction (default: 200)"
     )
     args = parser.parse_args()
     lang = args.lang
@@ -750,5 +798,8 @@ if __name__ == "__main__":
         target_name=args.target_name,
         seed=args.seed,
         save_masks=args.save_masks,
+        image_size=tuple(args.image_size),
+        grid_movement=tuple(args.grid_movement),
+        margin=args.margin,
     )
 

@@ -22,11 +22,11 @@ from torchvision.utils import save_image
 # Questa funzione costruisce tutti i percorsi principali del progetto
 # partendo da una sola root. Evita di spargere stringhe hardcoded nel
 #  resto del file.
-def build_workspace_paths(dataset_root: str) -> dict:
-    root = Path(dataset_root)
+def build_workspace_paths(run_root: str | Path) -> dict:
+    root = Path(run_root)
 
     return {
-        "workspace_root": root,
+        "run_root": root,
         "logs_dir": root / "logs",
         "checkpoints_dir": root / "checkpoints",
         "output_val_dir": root / "output_val",
@@ -44,8 +44,10 @@ def build_parser():
     description="Train or test the Pix2Pix model on a paired histology dataset.",
     epilog=(
         "Examples:\n"
-        "  python src/pix2pix.py train local_workspace/sample --epochs 150\n"
-        "  python src/pix2pix.py test local_workspace/sample --checkpoint local_workspace/sample/checkpoints/model.pth\n"
+        "  python src/pix2pix.py train local_workspace/datasets/inverted_512 --run-name L1-25\n"
+        "  python src/pix2pix.py test local_workspace/datasets/inverted_512 "
+        "--run-path local_workspace/results/L1-25 "
+        "--checkpoint local_workspace/results/L1-25/checkpoints/model.pth\n"
         "\n"
         "Use 'python src/pix2pix.py <command> --help' to see the options for a specific command."
     ),
@@ -67,22 +69,22 @@ def build_parser():
         help="Path to the dataset root containing dataset_train/ and dataset_val/"
     )
     train_parser.add_argument(
-        "--source-name",
+        "--run-name",
         type=str,
-        default="label_free",
-        help="Base name of the source images (default: label_free)"
+        required=True,
+        help="Name of the output run directory to create"
     )
     train_parser.add_argument(
-        "--target-name",
+        "--results-path",
         type=str,
-        default="stained",
-        help="Base name of the target images (default: stained)"
+        default="local_workspace/results",
+        help="Base directory where the new run folder will be created (default: local_workspace/results)"
     )
     train_parser.add_argument(
         "--seed",
         type=int,
-        default=42,
-        help="Random seed for reproducibility (default: 42)"
+        default=None,
+        help="Random seed for reproducibility. If omitted, a random seed is generated."
     )
     train_parser.add_argument(
         "--epochs",
@@ -107,8 +109,8 @@ def build_parser():
         type=int,
         nargs=2,
         metavar=("WIDTH", "HEIGHT"),
-        default=(256, 256),
-        help="Resize images before training, e.g. --image_size 256 256"
+        default=(512, 512),
+        help="Resize images before training, e.g. --image_size 512 512"
     )
     train_parser.add_argument(
         "--log_rate",
@@ -146,30 +148,24 @@ def build_parser():
         help="Path to the dataset root containing dataset_test/"
     )
     test_parser.add_argument(
-        "--source-name",
-        type=str,
-        default="label_free",
-        help="Base name of the source images (default: label_free)"
-    )
-    test_parser.add_argument(
-        "--target-name",
-        type=str,
-        default="stained",
-        help="Base name of the target images (default: stained)"
-    )
-    test_parser.add_argument(
         "--checkpoint",
         type=str,
         required=True,
         help="Path to the checkpoint to use for inference"
     )
     test_parser.add_argument(
+        "--run-path",
+        type=str,
+        required=True,
+        help="Path to an existing training run containing checkpoints/ and output folders"
+    )
+    test_parser.add_argument(
         "--image_size",
         type=int,
         nargs=2,
         metavar=("WIDTH", "HEIGHT"),
-        default=(256, 256),
-        help="Resize images before inference, e.g. --image_size 256 256"
+        default=(512, 512),
+        help="Resize images before inference, e.g. --image_size 512 512"
     )
 
     return parser
@@ -182,29 +178,62 @@ def build_parser():
 # da PyTorch per una classe `Dataset`: il DataLoader usa questi metodi per
 # sapere quanti campioni esistono e come recuperarli quando costruisce i batch.
 class PairedHistologyDataset(Dataset):
-    def __init__(self, folder_path, source_name, target_name, transform=None):
+    VALID_IMAGE_EXTENSIONS = {".tif", ".tiff", ".png"}
+        
+    def __init__(self, folder_path, transform=None):
         self.folder_path = folder_path
-        self.source_name = source_name
-        self.target_name = target_name
-        self.source_suffix = f"_{self.source_name}.tif"
-        self.target_suffix = f"_{self.target_name}.tif"
         self.transform = transform
         # Le coppie vengono costruite una volta sola all'inizio, così
         # durante training e validation non dobbiamo esplorare la cartella
         # ogni volta.
-        self.pairs = self._get_pairs()
+        self.pairs = self._discover_pairs()
 
-    def _get_pairs(self):
-        files = os.listdir(self.folder_path)
-        # Qui cerchiamo tutti i file source che hanno il corrispondente file target.
-        # Se una coppia è incompleta, viene esclusa dal dataset.
-        prefixes = [
-            f.removesuffix(self.source_suffix)
-            for f in files
-            if f.endswith(self.source_suffix)
-            and f.removesuffix(self.source_suffix) + self.target_suffix in files
-        ]
-        return sorted(prefixes)
+    def _discover_pairs(self):
+        grouped = {}
+
+        for filename in sorted(os.listdir(self.folder_path)):
+            file_path = os.path.join(self.folder_path, filename)
+
+            if not os.path.isfile(file_path):
+                continue
+
+            suffix = Path(filename).suffix.lower()
+            if suffix not in self.VALID_IMAGE_EXTENSIONS:
+                continue
+
+            stem = Path(filename).stem
+
+            if stem.startswith("mask_") or "_mask_" in stem:
+                continue
+
+            parts = stem.split("_")
+            if len(parts) < 3:
+                continue
+
+            key = (parts[0], parts[1])
+            grouped.setdefault(key, []).append(file_path)
+
+        samples = []
+        for key in sorted(grouped):
+            files = grouped[key]
+
+            source_path = None
+            target_path = None
+
+            for file_path in files:
+                stem = Path(file_path).stem.lower()
+
+                if stem.endswith("_source"):
+                    source_path = file_path
+                elif stem.endswith("_target"):
+                    target_path = file_path
+
+            if source_path is None or target_path is None:
+                continue
+
+            samples.append((source_path, target_path))
+
+        return samples
 
     def __len__(self):
         # Restituiamo quante coppie valide sono state trovate.
@@ -212,13 +241,10 @@ class PairedHistologyDataset(Dataset):
 
     def __getitem__(self, idx):
         # Dato un indice, recuperiamo il prefisso comune e apriamo entrambe le immagini della coppia.
-        prefix = self.pairs[idx]
-        source_image = Image.open(
-            os.path.join(self.folder_path, prefix + self.source_suffix)
-        ).convert('RGB')
-        target_image = Image.open(
-            os.path.join(self.folder_path, prefix + self.target_suffix)
-        ).convert('RGB')
+        source_path, target_path = self.pairs[idx]
+
+        source_image = Image.open(source_path).convert("RGB")
+        target_image = Image.open(target_path).convert("RGB")
 
         if self.transform:
             # La stessa trasformazione viene applicata a source e target.
@@ -697,9 +723,7 @@ def test_inference(
     checkpoint_path,
     test_folder,
     output_folder,
-    source_name,
-    target_name,
-    image_size=(256, 256),
+    image_size=(512, 512),
     device=None
 ):
     """
@@ -709,7 +733,8 @@ def test_inference(
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     os.makedirs(output_folder, exist_ok=True)
-    source_suffix = f"_{source_name}.tif"
+
+    valid_exts = {".tif", ".tiff", ".png"}
 
     # In inferenza ci serve soltanto il generatore.
     # Il discriminatore serve solo in training.
@@ -728,11 +753,14 @@ def test_inference(
 
     test_files = sorted(
         f for f in os.listdir(test_folder)
-        if f.lower().endswith(source_suffix.lower())
+        if (
+            Path(f).suffix.lower() in valid_exts
+            and Path(f).stem.lower().endswith("_source")
+        )
     )
 
     if not test_files:
-        print(f"No test files found in: {test_folder}")
+        print(f"No test source files found in: {test_folder}")
         return
 
     amp_enabled = is_amp_enabled(device)
@@ -750,12 +778,16 @@ def test_inference(
             fake_target = (fake_target * 0.5) + 0.5
             fake_target = fake_target.clamp(0, 1)
 
-            out_filename = f"{Path(filename).stem}_to_{target_name}_generated.tif"
+            source_stem = Path(filename).stem
+            source_ext = Path(filename).suffix.lower()
+            prefix = source_stem[:-len("_source")]
+            out_filename = f"{prefix}_target_generated{source_ext}"
+
             out_path = os.path.join(output_folder, out_filename)
             save_image(fake_target, out_path)
 
     print(f"Test completed. Images saved in {output_folder}")
-
+    
 def train_one_epoch(
     G,
     D,
@@ -844,13 +876,11 @@ def main(
     checkpoints_dir,
     output_val_dir,
     output_train_dir,
-    source_name,
-    target_name,
-    seed=42,
+    seed=None,
     n_epochs=150,
     batch_size=8,
     n_workers=12,
-    image_size=(256, 256),
+    image_size=(512, 512),
     log_rate=15,
     checkpoint_rate=10,
     validate_rate=1,
@@ -869,12 +899,14 @@ def main(
     if os.path.exists(log_file):
         os.remove(log_file)
 
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
     set_seed(seed)
     log_message(f"Seed set to {seed}", log_file)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log_message(f"Device: {device}", log_file)
-    log_message(f"Direction: {source_name} -> {target_name}", log_file)
 
     # La normalizzazione con media e std pari a 0.5 porta i valori
     # da [0, 1] a [-1, 1].
@@ -889,15 +921,11 @@ def main(
 
     training_dataset = PairedHistologyDataset(
         train_dir,
-        source_name=source_name,
-        target_name=target_name,
         transform=transform
     )
 
     validation_dataset = PairedHistologyDataset(
         val_dir,
-        source_name=source_name,
-        target_name=target_name,
         transform=transform
     )
 
@@ -1027,18 +1055,18 @@ if __name__ == "__main__":
     parser = build_parser()
     args = parser.parse_args()
 
-    paths = build_workspace_paths(args.dataset_root)
-
     if args.mode == "train":
-        print("Starting training.")
+        run_root = Path(args.results_path) / args.run_name
+        paths = build_workspace_paths(run_root)
+        
+        print(f"Starting training run '{args.run_name}' in: {run_root}")
+        
         main(
             dataset_root=args.dataset_root,
             logs_dir=paths["logs_dir"],
             checkpoints_dir=paths["checkpoints_dir"],
             output_val_dir=paths["output_val_dir"],
             output_train_dir=paths["output_train_dir"],
-            source_name=args.source_name,
-            target_name=args.target_name,
             seed=args.seed,
             n_epochs=args.epochs,
             batch_size=args.batch_size,
@@ -1054,13 +1082,15 @@ if __name__ == "__main__":
         test_dir = Path(args.dataset_root) / "dataset_test"
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        print(f"Starting test with checkpoint: {args.checkpoint}")
+        run_root = Path(args.run_path)
+        paths = build_workspace_paths(run_root)
+
+        print(f"Starting test for run: {run_root}")
+        print(f"Using checkpoint: {args.checkpoint}")
         test_inference(
             checkpoint_path=args.checkpoint,
             test_folder=str(test_dir),
             output_folder=str(paths["output_test_dir"]),
-            source_name=args.source_name,
-            target_name=args.target_name,
             image_size=tuple(args.image_size),
             device=device
         )
