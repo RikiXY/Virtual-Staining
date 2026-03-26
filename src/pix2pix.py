@@ -67,6 +67,18 @@ def build_parser():
         help="Path to the dataset root containing dataset_train/ and dataset_val/"
     )
     train_parser.add_argument(
+        "--source-name",
+        type=str,
+        default="label_free",
+        help="Base name of the source images (default: label_free)"
+    )
+    train_parser.add_argument(
+        "--target-name",
+        type=str,
+        default="stained",
+        help="Base name of the target images (default: stained)"
+    )
+    train_parser.add_argument(
         "--seed",
         type=int,
         default=42,
@@ -134,6 +146,18 @@ def build_parser():
         help="Path to the dataset root containing dataset_test/"
     )
     test_parser.add_argument(
+        "--source-name",
+        type=str,
+        default="label_free",
+        help="Base name of the source images (default: label_free)"
+    )
+    test_parser.add_argument(
+        "--target-name",
+        type=str,
+        default="stained",
+        help="Base name of the target images (default: stained)"
+    )
+    test_parser.add_argument(
         "--checkpoint",
         type=str,
         required=True,
@@ -151,15 +175,19 @@ def build_parser():
     return parser
 
 # ====================[DATASET]====================
-# Questo dataset contiene coppie label-free e stained.
-# A ogni immagine label-free deve corrispondere la sua versione stained.
+# Questo dataset contiene coppie di immagini source e target.
+# A ogni immagine source deve corrispondere la rispettiva immagine target.
 #
 # Implementare `__len__` e `__getitem__` è il requisito minimo richiesto
 # da PyTorch per una classe `Dataset`: il DataLoader usa questi metodi per
 # sapere quanti campioni esistono e come recuperarli quando costruisce i batch.
 class PairedHistologyDataset(Dataset):
-    def __init__(self, folder_path, transform=None):
+    def __init__(self, folder_path, source_name, target_name, transform=None):
         self.folder_path = folder_path
+        self.source_name = source_name
+        self.target_name = target_name
+        self.source_suffix = f"_{self.source_name}.tif"
+        self.target_suffix = f"_{self.target_name}.tif"
         self.transform = transform
         # Le coppie vengono costruite una volta sola all'inizio, così
         # durante training e validation non dobbiamo esplorare la cartella
@@ -168,11 +196,14 @@ class PairedHistologyDataset(Dataset):
 
     def _get_pairs(self):
         files = os.listdir(self.folder_path)
-        # Qui cerchiamo tutti i file `_label_free.tif` che hanno il corrispondente `_stained.tif`.
+        # Qui cerchiamo tutti i file source che hanno il corrispondente file target.
         # Se una coppia è incompleta, viene esclusa dal dataset.
-        prefixes = [f.replace('_label_free.tif', '')
-                    for f in files if f.endswith('_label_free.tif')
-                    and f.replace('_label_free.tif', '') + '_stained.tif' in files]
+        prefixes = [
+            f.removesuffix(self.source_suffix)
+            for f in files
+            if f.endswith(self.source_suffix)
+            and f.removesuffix(self.source_suffix) + self.target_suffix in files
+        ]
         return sorted(prefixes)
 
     def __len__(self):
@@ -182,13 +213,19 @@ class PairedHistologyDataset(Dataset):
     def __getitem__(self, idx):
         # Dato un indice, recuperiamo il prefisso comune e apriamo entrambe le immagini della coppia.
         prefix = self.pairs[idx]
-        lf = Image.open(os.path.join(self.folder_path, prefix + '_label_free.tif')).convert('RGB')
-        st = Image.open(os.path.join(self.folder_path, prefix + '_stained.tif')).convert('RGB')
+        source_image = Image.open(
+            os.path.join(self.folder_path, prefix + self.source_suffix)
+        ).convert('RGB')
+        target_image = Image.open(
+            os.path.join(self.folder_path, prefix + self.target_suffix)
+        ).convert('RGB')
+
         if self.transform:
-            # La stessa trasformazione viene applicata a input e target.
-            lf = self.transform(lf)
-            st = self.transform(st)
-        return lf, st
+            # La stessa trasformazione viene applicata a source e target.
+            source_image = self.transform(source_image)
+            target_image = self.transform(target_image)
+
+        return source_image, target_image
 # =================================================
 
 def is_amp_enabled(device):
@@ -380,9 +417,8 @@ class UNetGenerator(nn.Module):
         return logits
 
 # --------------------- Discriminatore (PatchGAN) ---------------------
-# Il discriminatore riceve input e target/output concatenati sui canali.
-# Questo gli permette di giudicare non solo se l'immagine sembra realistica,
-# ma se è plausibile proprio in relazione all'input label-free da cui deriva.
+# Il discriminatore valuta la coerenza della coppia condizionale:
+# immagine di partenza + target reale o generato.
 class PatchGANDiscriminator(nn.Module):
     """
     Discriminatore PatchGAN per task image-to-image.
@@ -462,9 +498,9 @@ class PatchGANDiscriminator(nn.Module):
             Tensor: Mappa di predizioni real/fake per patch.
         """
         # Qui la concatenazione lungo i canali è il passaggio chiave:
-        # il discriminatore giudica la coerenza della coppia, non solo
-        # la qualità estetica del target/output preso da solo.
-        return self.model(torch.cat([x, y], dim=1)) # Concatena input e output
+        # il discriminatore giudica la coerenza della coppia condizionale,
+        # non solo la qualità del target reale o generato preso da solo.
+        return self.model(torch.cat([x, y], dim=1)) # Concatena source e target/output
 
 # --------------------- Determinismo ---------------------
 def set_seed(seed):
@@ -574,12 +610,12 @@ def load_checkpoint(checkpoint_path, G, D, opt_G, opt_D, scaler_G, scaler_D, dev
 def save_images(path, input, output, target, epoch, batch_index):
     """
     Salva le immagini di input, output e target in formato TIF.
-    
+
     Args:
         path (str): Percorso della cartella di salvataggio.
         input (Tensor): Immagine di input.
         output (Tensor): Immagine generata dal modello.
-        target (Tensor): Immagine target (stained).
+        target (Tensor): Immagine target corrispondente all'input corrente.
         epoch (int): Numero dell'epoca corrente.
         batch_index (int): Indice del batch corrente.
     """
@@ -657,7 +693,15 @@ def validate(G, D, validation_loader, device, bce_loss, l1_loss, epoch, log_file
 
     return avg_loss_G, avg_loss_D
 
-def test_inference(checkpoint_path, test_folder, output_folder, image_size=(256, 256), device=None):
+def test_inference(
+    checkpoint_path,
+    test_folder,
+    output_folder,
+    source_name,
+    target_name,
+    image_size=(256, 256),
+    device=None
+):
     """
     Esegue inferenza sul test set e salva le immagini generate.
     """
@@ -665,6 +709,7 @@ def test_inference(checkpoint_path, test_folder, output_folder, image_size=(256,
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     os.makedirs(output_folder, exist_ok=True)
+    source_suffix = f"_{source_name}.tif"
 
     # In inferenza ci serve soltanto il generatore.
     # Il discriminatore serve solo in training.
@@ -683,7 +728,7 @@ def test_inference(checkpoint_path, test_folder, output_folder, image_size=(256,
 
     test_files = sorted(
         f for f in os.listdir(test_folder)
-        if f.lower().endswith("_label_free.tif")
+        if f.lower().endswith(source_suffix.lower())
     )
 
     if not test_files:
@@ -699,15 +744,15 @@ def test_inference(checkpoint_path, test_folder, output_folder, image_size=(256,
             img_tensor = transform(img).unsqueeze(0).to(device)
 
             with autocast(device_type=device.type, enabled=amp_enabled):
-                fake_stained = G(img_tensor)
+                fake_target = G(img_tensor)
 
             # Riportiamo l'output nell'intervallo adatto al salvataggio.
-            fake_stained = (fake_stained * 0.5) + 0.5
-            fake_stained = fake_stained.clamp(0, 1)
+            fake_target = (fake_target * 0.5) + 0.5
+            fake_target = fake_target.clamp(0, 1)
 
-            out_filename = f"{Path(filename).stem}_generated.tif"
+            out_filename = f"{Path(filename).stem}_to_{target_name}_generated.tif"
             out_path = os.path.join(output_folder, out_filename)
-            save_image(fake_stained, out_path)
+            save_image(fake_target, out_path)
 
     print(f"Test completed. Images saved in {output_folder}")
 
@@ -799,6 +844,8 @@ def main(
     checkpoints_dir,
     output_val_dir,
     output_train_dir,
+    source_name,
+    target_name,
     seed=42,
     n_epochs=150,
     batch_size=8,
@@ -827,6 +874,7 @@ def main(
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log_message(f"Device: {device}", log_file)
+    log_message(f"Direction: {source_name} -> {target_name}", log_file)
 
     # La normalizzazione con media e std pari a 0.5 porta i valori
     # da [0, 1] a [-1, 1].
@@ -839,8 +887,19 @@ def main(
     train_dir = os.path.join(dataset_root, "dataset_train")
     val_dir = os.path.join(dataset_root, "dataset_val")
 
-    training_dataset = PairedHistologyDataset(train_dir, transform)
-    validation_dataset = PairedHistologyDataset(val_dir, transform)
+    training_dataset = PairedHistologyDataset(
+        train_dir,
+        source_name=source_name,
+        target_name=target_name,
+        transform=transform
+    )
+
+    validation_dataset = PairedHistologyDataset(
+        val_dir,
+        source_name=source_name,
+        target_name=target_name,
+        transform=transform
+    )
 
     # In training facciamo shuffle; in validation no, perchè lì non stiamo
     # imparando ma solo misurando il comportamento del modello.
@@ -978,6 +1037,8 @@ if __name__ == "__main__":
             checkpoints_dir=paths["checkpoints_dir"],
             output_val_dir=paths["output_val_dir"],
             output_train_dir=paths["output_train_dir"],
+            source_name=args.source_name,
+            target_name=args.target_name,
             seed=args.seed,
             n_epochs=args.epochs,
             batch_size=args.batch_size,
@@ -998,6 +1059,8 @@ if __name__ == "__main__":
             checkpoint_path=args.checkpoint,
             test_folder=str(test_dir),
             output_folder=str(paths["output_test_dir"]),
+            source_name=args.source_name,
+            target_name=args.target_name,
             image_size=tuple(args.image_size),
             device=device
         )

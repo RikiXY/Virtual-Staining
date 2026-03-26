@@ -1,9 +1,10 @@
 """
 Integrated preprocessing pipeline for paired histopathology samples.
 
-This script loads `label_free.tif` and `stained.tif`, computes tissue masks,
-aligns the stained image to the label-free reference, extracts paired patches,
-and creates the `dataset_train`, `dataset_val`, and `dataset_test` splits.
+This script loads two paired full-size images (a source image and a target
+image), computes tissue masks, aligns the target image to the source reference,
+extracts paired patches, and creates the `dataset_train`, `dataset_val`, and
+`dataset_test` splits.
 """
 
 # The original filename was `ollie_wan_kenobi`, born from an internal joke:
@@ -170,7 +171,7 @@ def calculate_mask_with_grid(img: np.ndarray, sub_shape: tuple[int, int], grid: 
             mask = cv2.bitwise_and(mask, roi_mask)
     return mask
 
-def calculate_mask_with_mutliple_parameters(img: np.ndarray, parameters: list[tuple[int, int]]) -> np.ndarray:
+def calculate_mask_with_multiple_parameters(img: np.ndarray, parameters: list[tuple[int, int]]) -> np.ndarray:
     """
     Calculates the mask for the input image using multiple parameter pairs.
 
@@ -211,14 +212,14 @@ def calculate_mask_with_mutliple_parameters(img: np.ndarray, parameters: list[tu
 
 def align_images(img1: np.ndarray, img2: np.ndarray, mask1: Optional[np.ndarray] = None, mask2: Optional[np.ndarray] = None, nfeatures: int = 10000, ed_distance: int = 200) -> tuple[np.ndarray, Optional[np.ndarray], np.ndarray]:
     """
-    Align two images.
+    Aligns a moving image to a reference image.
 
     Parameters
     ----------
     img1 : np.ndarray
-        The first image.
+        Reference image.
     img2 : np.ndarray
-        The second image.
+        Image to align to the reference.
     mask1 : np.ndarray, optional
         The mask for the first image. Default is None.
     mask2 : np.ndarray, optional
@@ -303,7 +304,7 @@ def align_images(img1: np.ndarray, img2: np.ndarray, mask1: Optional[np.ndarray]
 
     return img2_aligned, mask2_aligned, warp_matrix
 
-def align_from_scaled(img1: np.ndarray, img2: np.ndarray, scale: int = 0.5, mask1: Optional[np.ndarray] = None, mask2: Optional[np.ndarray] = None, nfeatures: int = 10000, ed_distance: int = 200) -> tuple[np.ndarray, Optional[np.ndarray], np.ndarray]:
+def align_from_scaled(img1: np.ndarray, img2: np.ndarray, scale: float = 0.5, mask1: Optional[np.ndarray] = None, mask2: Optional[np.ndarray] = None, nfeatures: int = 10000, ed_distance: int = 200) -> tuple[np.ndarray, Optional[np.ndarray], np.ndarray]:
     # ----- DA FAR VEDERE AD ANDREA -----
     # vogliamo mettere il fattore di scala come parametro? Sì
     # vogliamo mettere la soglia di distanza euclidea come parametro? Sì
@@ -314,10 +315,10 @@ def align_from_scaled(img1: np.ndarray, img2: np.ndarray, scale: int = 0.5, mask
     Parameters
     ----------
     img1 : np.ndarray
-        First input image (reference image).
+        Source image used as reference.
     img2 : np.ndarray
-        Second input image to be aligned to the first.
-    scale : int, optional
+        Target image to be aligned to the source image.
+    scale : float, optional
         Scaling factor to resize images before alignment (default is 0.5).
     mask1 : Optional[np.ndarray], optional
         Optional mask for the first image.
@@ -393,11 +394,9 @@ def extract_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray
     
     return img[y:y+h, x:x+w]
 
-def divide_image_with_grid(img: np.ndarray, img_size: tuple[int, int], grid_movement: tuple[int, int], mask: Optional[np.ndarray] = None, max_mask_percentage = 0.4) -> list[np.ndarray]:
-    # ----- DA FAR VEDERE AD ANDREA -----
-    # Vogliamo mettere la max_mask_percentage come parametro? Sì
+def divide_image_with_grid(img: np.ndarray, img_size: tuple[int, int], grid_movement: tuple[int, int], mask: Optional[np.ndarray] = None, max_mask_percentage = 0.4) -> tuple[list[np.ndarray], Optional[list[np.ndarray]], list[tuple[int, int]]]:
     """
-    Divide the input image into a grid of sub-images of size `img_size`.
+    Divides the input image into a grid of sub-images of size `img_size`.
 
     Parameters
     ----------
@@ -491,21 +490,21 @@ def divide_image_with_positions(img: np.ndarray, img_size: tuple[int, int], posi
     
     return images
 
-def split_input(input: list, ratios: list[int]) -> list[list]:
+def split_items(items: list, ratios: list[int]) -> list[list]:
     """
-    Suddivide l'input in N liste in base ai rapporti specificati
+    Splits the input list into N sublists according to the specified ratios.
     
     Parameters
     ----------
-    input : list
-        Lista di input da suddividere
+    items : list
+        List to split.
     ratios : list[int]
         Rapporti di suddivisione (es. [0.7, 0.15, 0.15])
     
     Returns
     -------
-    split_input : list[list]
-        Lista delle liste suddivise
+    output : list[list]
+        List of generated sublists.
     """
     if len(ratios) < 2:
         raise ValueError("Devi specificare almeno 2 rapporti")
@@ -514,8 +513,8 @@ def split_input(input: list, ratios: list[int]) -> list[list]:
     if any(ratio < 0 for ratio in ratios):
         raise ValueError("I rapporti devono essere >= 0")
     
-    # Mescolamento casuale dell'input
-    shuffled = input.copy()
+    # Mescolamento casuale della lista
+    shuffled = items.copy()
     random.shuffle(shuffled)
 
     output = []
@@ -526,7 +525,13 @@ def split_input(input: list, ratios: list[int]) -> list[list]:
         start = end
     return output
 
-def main(path: str, seed: Optional[int] = None, save_masks: bool = False) -> None:
+def main(
+    path: str,
+    source_name: str,
+    target_name: str,
+    seed: Optional[int] = None,
+    save_masks: bool = False,
+) -> None:
 
     # ====================[SET SEED]====================
     # [ITA] Imposta il seed per ottenere sempre la stessa suddivisione, se necessario
@@ -545,39 +550,54 @@ def main(path: str, seed: Optional[int] = None, save_masks: bool = False) -> Non
     print(MESSAGES["loading_images"][lang].format(path=path))
     if not os.path.exists(path):
         raise FileNotFoundError(MESSAGES["check_path"][lang].format(path=path)) 
-    label_free = cv2.imread(os.path.join(path, "label_free.tif"))
-    stained = cv2.imread(os.path.join(path, "stained.tif"))
-    if label_free is None or stained is None:
-        raise FileNotFoundError(MESSAGES["check_images"][lang])
-    print(MESSAGES["images_loaded"][lang].format(lf_shape=label_free.shape, st_shape=stained.shape))
+    source_path = os.path.join(path, f"{source_name}.tif")
+    target_path = os.path.join(path, f"{target_name}.tif")
+    source_image = cv2.imread(source_path)
+    target_image = cv2.imread(target_path)
+    if source_image is None or target_image is None:
+        raise FileNotFoundError(
+            f"Missing paired files. Expected '{source_name}.tif' and '{target_name}.tif' inside: {path}"
+        )
+    print(
+        MESSAGES["images_loaded"][lang].format(
+            source_image_shape=source_image.shape,
+            target_image_shape=target_image.shape,
+        )
+    )
     # =====================================================
 
 
     # ====================[MASK PROCESSING]====================
-    # [ITA] Calcolo delle maschere per le immagini label-free e stained
-    # [EN] Calculate masks for label-free and stained images
+    # [ITA] Calcolo delle maschere per le immagini source e target
+    # [EN] Calculate masks for source and target images
     print(MESSAGES["calculate_masks"][lang])
-    mask_lf = calculate_mask_with_mutliple_parameters(label_free, [(2, 3), (4, 6), (6, 9), (8, 15)])
-    mask_st = calculate_mask_with_mutliple_parameters(stained, [(2, 3), (4, 6), (6, 9), (8, 15)])
+    source_mask = calculate_mask_with_multiple_parameters(source_image, [(2, 3), (4, 6), (6, 9), (8, 15)])
+    target_mask = calculate_mask_with_multiple_parameters(target_image, [(2, 3), (4, 6), (6, 9), (8, 15)])
     print(MESSAGES["masks_calculated"][lang])
     # [ITA] Salvataggio delle maschere
     # [EN] Saving masks
-    cv2.imwrite(os.path.join(path, "mask_lf.tif"), mask_lf)
-    cv2.imwrite(os.path.join(path, "mask_st.tif"), mask_st)
+    cv2.imwrite(os.path.join(path, f"mask_{source_name}.tif"), source_mask)
+    cv2.imwrite(os.path.join(path, f"mask_{target_name}.tif"), target_mask)
     print(MESSAGES["mask_saved"][lang])
     # =========================================================
 
 
     # ====================[IMAGE ALIGNMENT]==================== 
-    # [ITA] Allineamento delle immagini
-    # [EN] Aligning images
+    # [ITA] Allineamento dell'immagine target sull'immagine source
+    # [EN] Aligning the target image to the source image
     print(MESSAGES["aligning_images"][lang])
-    aligned_stained, aligned_mask_st, warp_matrix = align_from_scaled(label_free, stained, mask1=mask_lf, mask2=mask_st, scale=0.5)
+    aligned_target, aligned_target_mask, warp_matrix = align_from_scaled(
+        source_image,
+        target_image,
+        mask1=source_mask,
+        mask2=target_mask,
+        scale=0.5,
+    )
     print(MESSAGES["images_aligned"][lang])
     # [ITA] Salvataggio delle immagini allineate
     # [EN] Saving aligned images
-    cv2.imwrite(os.path.join(path, "aligned_stained.tif"), aligned_stained)
-    cv2.imwrite(os.path.join(path, "aligned_mask_st.tif"), aligned_mask_st)
+    cv2.imwrite(os.path.join(path, f"aligned_{target_name}.tif"), aligned_target)
+    cv2.imwrite(os.path.join(path, f"aligned_mask_{target_name}.tif"), aligned_target_mask)
     print(MESSAGES["images_aligned_saved"][lang])
     # =========================================================
 
@@ -593,47 +613,71 @@ def main(path: str, seed: Optional[int] = None, save_masks: bool = False) -> Non
     margin = 200
     image_size = (256, 256)
     grid_movement = (256, 256)
-    lf_images, lf_masks, positions = divide_image_with_grid(label_free[margin:-margin, margin:-margin], image_size, grid_movement, mask_lf[margin:-margin, margin:-margin])
-    st_images = divide_image_with_positions(aligned_stained[margin:-margin, margin:-margin], image_size, positions)
-    st_masks = divide_image_with_positions(aligned_mask_st[margin:-margin, margin:-margin], image_size, positions)
-    print(MESSAGES["total_subimages"][lang].format(count=len(lf_images)))
+    source_images, source_masks, positions = divide_image_with_grid(
+        source_image[margin:-margin, margin:-margin],
+        image_size,
+        grid_movement,
+        source_mask[margin:-margin, margin:-margin],
+    )
+    target_images = divide_image_with_positions(
+        aligned_target[margin:-margin, margin:-margin],
+        image_size,
+        positions,
+    )
+    target_masks = divide_image_with_positions(
+        aligned_target_mask[margin:-margin, margin:-margin],
+        image_size,
+        positions,
+    )
+    print(MESSAGES["total_subimages"][lang].format(count=len(source_images)))
     # [ITA] Combinazione delle immagini con le maschere
     # [EN] Combining images with masks
-    named_lf_images = []
-    named_st_images = []
-    named_lf_masks = []
-    named_st_masks = []
-    for (x, y), lf_img, lf_mask, st_img, st_mask in zip(positions, lf_images, lf_masks, st_images, st_masks):
-        named_lf_images.append((lf_img, f"{x:>05}_{y:>05}_label_free"))
-        named_st_images.append((st_img, f"{x:>05}_{y:>05}_stained"))
-        named_lf_masks.append((lf_mask, f"{x:>05}_{y:>05}_mask_lf"))
-        named_st_masks.append((st_mask, f"{x:>05}_{y:>05}_mask_st"))
+    named_source_images = []
+    named_target_images = []
+    named_source_masks = []
+    named_target_masks = []
+    for (x, y), source_img, source_patch_mask, target_img, target_patch_mask in zip(
+        positions,
+        source_images,
+        source_masks,
+        target_images,
+        target_masks,
+    ):
+        named_source_images.append((source_img, f"{x:05}_{y:05}_{source_name}"))
+        named_target_images.append((target_img, f"{x:05}_{y:05}_{target_name}"))
+        named_source_masks.append((source_patch_mask, f"{x:05}_{y:05}_mask_{source_name}"))
+        named_target_masks.append((target_patch_mask, f"{x:05}_{y:05}_mask_{target_name}"))
     print(MESSAGES["pair_renamed"][lang])
     # [ITA] Salvataggio delle sottoimmagini
     # [EN] Saving sub-images
     print(MESSAGES["pair_saving"][lang])
     os.makedirs(os.path.join(path, "subimages"), exist_ok=True)
-    for lf_img, lf_mask, st_img, st_mask in zip(named_lf_images, named_lf_masks, named_st_images, named_st_masks):
-        cv2.imwrite(os.path.join(path, "subimages", f"{lf_img[1]}.tif"), lf_img[0])
-        cv2.imwrite(os.path.join(path, "subimages", f"{st_img[1]}.tif"), st_img[0])
+    for source_img, source_patch_mask, target_img, target_patch_mask in zip(
+        named_source_images,
+        named_source_masks,
+        named_target_images,
+        named_target_masks,
+    ):
+        cv2.imwrite(os.path.join(path, "subimages", f"{source_img[1]}.tif"), source_img[0])
+        cv2.imwrite(os.path.join(path, "subimages", f"{target_img[1]}.tif"), target_img[0])
         if save_masks:
-            cv2.imwrite(os.path.join(path, "subimages", f"{lf_mask[1]}.tif"), lf_mask[0])
-            cv2.imwrite(os.path.join(path, "subimages", f"{st_mask[1]}.tif"), st_mask[0])
+            cv2.imwrite(os.path.join(path, "subimages", f"{source_patch_mask[1]}.tif"), source_patch_mask[0])
+            cv2.imwrite(os.path.join(path, "subimages", f"{target_patch_mask[1]}.tif"), target_patch_mask[0])
     print(MESSAGES["pair_saved"][lang])
     # [ITA] Suddivisione del dataset in training, validation e testing
     # [EN] Splitting the dataset into training, validation, and testing
     print(MESSAGES["dataset_subdivision"][lang])
-    images = list(zip(named_lf_images, named_st_images))
-    split = split_input(images, [0.8, 0.05, 0.15])
+    images = list(zip(named_source_images, named_target_images))
+    split = split_items(images, [0.8, 0.05, 0.15])
     print(MESSAGES["pair_number_division"][lang].format(train=len(split[0]), val=len(split[1]), test=len(split[2])))
     # [ITA] Salvataggio delle immagini suddivise
     # [EN] Saving the split images
     for i, subset in enumerate(split):
         subset_name = ["dataset_train", "dataset_val", "dataset_test"][i]
         os.makedirs(os.path.join(path, subset_name), exist_ok=True)
-        for lf_img, st_img in subset:
-            cv2.imwrite(os.path.join(path, subset_name, f"{lf_img[1]}.tif"), lf_img[0])
-            cv2.imwrite(os.path.join(path, subset_name, f"{st_img[1]}.tif"), st_img[0])
+        for source_img, target_img in subset:
+            cv2.imwrite(os.path.join(path, subset_name, f"{source_img[1]}.tif"), source_img[0])
+            cv2.imwrite(os.path.join(path, subset_name, f"{target_img[1]}.tif"), target_img[0])
     print(MESSAGES["dataset_saved"][lang])
     # ==========================================================
 
@@ -658,7 +702,10 @@ if __name__ == "__main__":
     # [ITA] Parser principale per gli argomenti
     # [EN] Main parser for the arguments
     parser = argparse.ArgumentParser(
-        usage="python src/prepare_dataset.py <path> [--seed SEED] [--save_masks] [--lang {en,it}]",
+        usage=(
+            "python src/prepare_dataset.py <path> [--seed SEED] [--save_masks] "
+            "[--source-name SOURCE_NAME] [--target-name TARGET_NAME] [--lang {en,it}]"
+        ),
         description=HELP["description"][lang_args.lang],
         formatter_class=argparse.RawTextHelpFormatter,
         parents=[lang_parser]
@@ -678,6 +725,18 @@ if __name__ == "__main__":
         action="store_true",
         help=HELP["save_masks"][lang_args.lang]
     )
+    parser.add_argument(
+        "--source-name",
+        type=str,
+        default="label_free",
+        help="Base name of the source image file without extension (default: label_free)"
+    )
+    parser.add_argument(
+        "--target-name",
+        type=str,
+        default="stained",
+        help="Base name of the target image file without extension (default: stained)"
+    )
     args = parser.parse_args()
     lang = args.lang
     # ==========================================================
@@ -685,5 +744,11 @@ if __name__ == "__main__":
 
     # [ITA] Esecuzione della funzione principale con gli argomenti specificati
     # [EN] Running the main function with the specified arguments
-    main(path=args.path, seed=args.seed, save_masks=args.save_masks)
+    main(
+        path=args.path,
+        source_name=args.source_name,
+        target_name=args.target_name,
+        seed=args.seed,
+        save_masks=args.save_masks,
+    )
 

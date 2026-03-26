@@ -16,12 +16,12 @@
         "en": "The path {path} does not exist."
     },
     "check_images": {
-        "it": "Impossibile caricare le immagini. Devono essere chiamate label_free.tif e stained.tif",
-        "en": "Cannot load images. They must be named label_free.tif and stained.tif"
-    },
+        "it": "Impossibile caricare i file accoppiati richiesti.",
+        "en": "Cannot load the requested paired files."
+        },
     "images_loaded": {
-        "it": "Immagini caricate. Dimensioni: label_free={lf_shape}, stained={st_shape}",
-        "en": "Images loaded. Sizes: label_free={lf_shape}, stained={st_shape}"
+        "it": "Immagini caricate. Dimensioni: source={source_image_shape}, target={target_image_shape}",
+        "en": "Images loaded. Sizes: source={source_image_shape}, target={target_image_shape}"
     },
     "calculate_masks": {
         "it": "Calcolo delle maschere. Ci vorrà un po' di tempo...",
@@ -32,8 +32,8 @@
         "en": "Masks calculated"
     },
     "mask_saved": {
-        "it": "Maschera salvata",
-        "en": "Mask saved in"
+        "it": "Maschere salvate",
+        "en": "Masks saved"
     },
     "images_size_mismatch": {
         "it": "Le immagini non hanno le stesse dimensioni, impossibile allinearle",
@@ -72,16 +72,16 @@
         "en": "Total pairs extracted: {count}"
     },
     "pair_renamed": {
-        "it": "Coppie rinominata",
-        "en": "Pair renamed"
+        "it": "Coppie rinominate",
+        "en": "Pairs renamed"
     },
     "pair_saving": {
         "it": "Salvataggio delle coppie",
-        "en": "Saving pair"
+        "en": "Saving pairs"
     },
     "pair_saved": {
-        "it": "Coppie salvata",
-        "en": "Pair saved"
+        "it": "Coppie salvate",
+        "en": "Pairs saved"
     },
     "dataset_subdivision": {
         "it": "Suddivisione del dataset in training, validation e test",
