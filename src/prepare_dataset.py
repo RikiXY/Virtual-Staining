@@ -729,7 +729,7 @@ if __name__ == "__main__":
     usage=(
         "python src/prepare_dataset.py <path> "
         "--source-name SOURCE_NAME --target-name TARGET_NAME\n"
-        "       [--seed SEED] [--save_masks] [--image-size WIDTH HEIGHT]\n"
+        "       [--seed SEED] [--save-masks] [--image-size WIDTH HEIGHT]\n"
         "       [--grid-movement STEP_X STEP_Y] [--margin MARGIN] [--lang {en,it}]"
     ),
         description=HELP["description"][lang_args.lang],
@@ -742,13 +742,13 @@ if __name__ == "__main__":
         help=HELP["path"][lang_args.lang]
     )
     parser.add_argument(
-        "--source_name",
+        "--source-name",
         type=str,
         required=True,
         help="Source image filename with extension (.tif, .tiff, .png)"
     )
     parser.add_argument(
-        "--target_name",
+        "--target-name",
         type=str,
         required=True,
         help="Target image filename with extension (.tif, .tiff, .png)"
@@ -759,12 +759,12 @@ if __name__ == "__main__":
         help=HELP["seed"][lang_args.lang]
     )
     parser.add_argument(
-        "--save_masks",
+        "--save-masks",
         action="store_true",
         help=HELP["save_masks"][lang_args.lang]
     )
     parser.add_argument(
-        "--image_size",
+        "--image-size",
         type=int,
         nargs=2,
         metavar=("WIDTH", "HEIGHT"),
@@ -772,7 +772,7 @@ if __name__ == "__main__":
         help="Patch size used for extraction (default: 512 512)"
     )
     parser.add_argument(
-        "--grid_movement",
+        "--grid-movement",
         type=int,
         nargs=2,
         metavar=("STEP_X", "STEP_Y"),
