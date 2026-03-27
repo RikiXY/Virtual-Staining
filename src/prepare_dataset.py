@@ -726,12 +726,12 @@ if __name__ == "__main__":
     # [ITA] Parser principale per gli argomenti
     # [EN] Main parser for the arguments
     parser = argparse.ArgumentParser(
-        usage=(
-            "python src/prepare_dataset.py <path> [--seed SEED] [--save_masks] "
-            "[--source-name SOURCE_NAME] [--target-name TARGET_NAME] "
-            "[--image-size WIDTH HEIGHT] [--grid-movement STEP_X STEP_Y] "
-            "[--margin MARGIN] [--lang {en,it}]"
-        ),
+    usage=(
+        "python src/prepare_dataset.py <path> "
+        "--source-name SOURCE_NAME --target-name TARGET_NAME\n"
+        "       [--seed SEED] [--save_masks] [--image-size WIDTH HEIGHT]\n"
+        "       [--grid-movement STEP_X STEP_Y] [--margin MARGIN] [--lang {en,it}]"
+    ),
         description=HELP["description"][lang_args.lang],
         formatter_class=argparse.RawTextHelpFormatter,
         parents=[lang_parser]
@@ -740,16 +740,6 @@ if __name__ == "__main__":
         "path",
         type=str,
         help=HELP["path"][lang_args.lang]
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        help=HELP["seed"][lang_args.lang]
-    )
-    parser.add_argument(
-        "--save_masks",
-        action="store_true",
-        help=HELP["save_masks"][lang_args.lang]
     )
     parser.add_argument(
         "--source-name",
@@ -762,6 +752,16 @@ if __name__ == "__main__":
         type=str,
         required=True,
         help="Target image filename with extension (.tif, .tiff, .png)"
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        help=HELP["seed"][lang_args.lang]
+    )
+    parser.add_argument(
+        "--save_masks",
+        action="store_true",
+        help=HELP["save_masks"][lang_args.lang]
     )
     parser.add_argument(
         "--image-size",

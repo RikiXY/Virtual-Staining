@@ -4,61 +4,50 @@ Paired virtual staining pipeline for histopathology images
 
 ## Overview
 
-This repository implements an end-to-end workflow for **virtual staining in computational histopathology**. Starting from paired full-size tissue images, typically `label_free.tif` and `stained.tif`, the pipeline:
+This repository implements a paired virtual staining pipeline for computational histopathology.
 
+Starting from full-size `label_free.tif` and `stained.tif` images, the workflow:
 - generates tissue masks;
 - aligns the stained image to the label-free reference;
-- extracts paired patches and creates `dataset_train`, `dataset_val`, and `dataset_test` splits;
+- extracts paired patches and builds `dataset_train`, `dataset_val`, and `dataset_test`;
 - trains a Pix2Pix-style conditional GAN on the resulting paired dataset.
 
-The project therefore combines **classical image processing** and **paired deep learning**, with alignment and dataset preparation as core technical steps.
+The project combines classical image processing with paired deep learning for image-to-image translation.
 
 ## Quick Start
 
-### 1. Prepare input data
+### 1. Prepare the input folder
 
 Create a sample folder inside `local_workspace/` containing a paired full-size sample:
 
 ```text
 local_workspace/
-└── your_sample/
-    ├── label_free.tif
-    └── stained.tif
+└── datasets/
+   └── your_sample/
+      ├── source.tif
+      └── target.tif
+   └── results/
 ```
 
-### 2. Run preprocessing and dataset creation
-
-`prepare_dataset.py` provides a CLI interface for preprocessing and dataset preparation:
+### 2. Build the paired dataset
 
 ```bash
-python src/prepare_dataset.py <sample_path> [--seed SEED] [--save_masks] [--lang {en,it}]
+python src/prepare_dataset.py local_workspace/datasets/your_sample --source-name source.tif --target-name target.tif
 ```
 
-**Example:**
-
-```bash
-python src/prepare_dataset.py local_workspace/your_sample --lang en --seed 42
-```
-
-To see all preprocessing options:
-
-```bash
-python src/prepare_dataset.py --help
-```
+Use `python src/prepare_dataset.py --help` to inspect the available preprocessing options.
 
 ### 3. Train the model
 
-`pix2pix.py` supports separate CLI entry points for training and test inference:
-
 ```bash
-python src/pix2pix.py train <dataset_root>
-python src/pix2pix.py test <dataset_root> --checkpoint <checkpoint_path>
+python src/pix2pix.py train DATASET_PATH --run-name YOUR_RUN_NAME
+python src/pix2pix.py test DATASET_PATH --checkpoint CHECKPOINT_PATH
 ```
 
 **Training example:**
 
 ```bash
-python src/pix2pix.py train local_workspace/your_sample
+python src/pix2pix.py train local_workspace/datasets/your_sample --run-name your_run_name
 ```
 
 To see all training options:
@@ -72,7 +61,7 @@ python src/pix2pix.py train --help
 Provide the checkpoint explicitly from the command line:
 
 ```bash
-python src/pix2pix.py test local_workspace/your_sample --checkpoint local_workspace/your_sample/checkpoints/your_checkpoint.pth
+python src/pix2pix.py test local_workspace/datasets/your_sample --checkpoint local_workspace/datasets/your_sample/checkpoints/your_checkpoint.pth
 ```
 
 To see all test options:
