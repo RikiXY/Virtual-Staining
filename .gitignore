@@ -1,12 +1,27 @@
+# Ignore local workspace files
 /local_workspace/*
 !/local_workspace/.gitkeep
 
+# But do track datasets and results subdirectories (except their contents, which can be large and are expected to change frequently)
 !/local_workspace/datasets/
 /local_workspace/datasets/*
 !/local_workspace/datasets/.gitkeep
-
 !/local_workspace/results/
 /local_workspace/results/*
 !/local_workspace/results/.gitkeep
 
-/src/__pycache__/
+# Jupyter
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Obsidian
+.obsidian/
+**/.obsidian/
+
+# VSCode
+.vscode/
+**/.vscode/
