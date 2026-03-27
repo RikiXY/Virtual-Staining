@@ -69,13 +69,13 @@ def build_parser():
         help="Path to the dataset root containing dataset_train/ and dataset_val/"
     )
     train_parser.add_argument(
-        "--run-name",
+        "--run_name",
         type=str,
         required=True,
         help="Name of the output run directory to create"
     )
     train_parser.add_argument(
-        "--results-path",
+        "--results_path",
         type=str,
         default="local_workspace/results",
         help="Base directory where the new run folder will be created (default: local_workspace/results)"
@@ -138,21 +138,21 @@ def build_parser():
         help="Optional checkpoint path to resume training from"
     )
     train_parser.add_argument(
-        "--l1-lambda",
+        "--l1_lambda",
         type=float,
         default=25.0,
         help="Weight of the L1 reconstruction loss (default: 25.0)"
     )
 
     train_parser.add_argument(
-        "--lr-g",
+        "--lr_g",
         type=float,
         default=2e-4,
         help="Learning rate for the generator (default: 2e-4)"
     )
 
     train_parser.add_argument(
-        "--lr-d",
+        "--lr_d",
         type=float,
         default=2e-4,
         help="Learning rate for the discriminator (default: 2e-4)"
@@ -189,7 +189,7 @@ def build_parser():
         help="Path to the checkpoint to use for inference"
     )
     test_parser.add_argument(
-        "--run-path",
+        "--run_path",
         type=str,
         required=True,
         help="Path to an existing training run containing checkpoints/ and output folders"

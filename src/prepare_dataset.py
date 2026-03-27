@@ -742,13 +742,13 @@ if __name__ == "__main__":
         help=HELP["path"][lang_args.lang]
     )
     parser.add_argument(
-        "--source-name",
+        "--source_name",
         type=str,
         required=True,
         help="Source image filename with extension (.tif, .tiff, .png)"
     )
     parser.add_argument(
-        "--target-name",
+        "--target_name",
         type=str,
         required=True,
         help="Target image filename with extension (.tif, .tiff, .png)"
@@ -764,7 +764,7 @@ if __name__ == "__main__":
         help=HELP["save_masks"][lang_args.lang]
     )
     parser.add_argument(
-        "--image-size",
+        "--image_size",
         type=int,
         nargs=2,
         metavar=("WIDTH", "HEIGHT"),
@@ -772,7 +772,7 @@ if __name__ == "__main__":
         help="Patch size used for extraction (default: 512 512)"
     )
     parser.add_argument(
-        "--grid-movement",
+        "--grid_movement",
         type=int,
         nargs=2,
         metavar=("STEP_X", "STEP_Y"),
