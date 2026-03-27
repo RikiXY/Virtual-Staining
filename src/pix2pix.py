@@ -136,6 +136,40 @@ def build_parser():
         default=None,
         help="Optional checkpoint path to resume training from"
     )
+    train_parser.add_argument(
+        "--l1-lambda",
+        type=float,
+        default=25.0,
+        help="Weight of the L1 reconstruction loss (default: 25.0)"
+    )
+
+    train_parser.add_argument(
+        "--lr-g",
+        type=float,
+        default=2e-4,
+        help="Learning rate for the generator (default: 2e-4)"
+    )
+
+    train_parser.add_argument(
+        "--lr-d",
+        type=float,
+        default=2e-4,
+        help="Learning rate for the discriminator (default: 2e-4)"
+    )
+
+    train_parser.add_argument(
+        "--beta1",
+        type=float,
+        default=0.5,
+        help="Adam beta1 (default: 0.5)"
+    )
+
+    train_parser.add_argument(
+        "--beta2",
+        type=float,
+        default=0.999,
+        help="Adam beta2 (default: 0.999)"
+    )
 
     test_parser = subparsers.add_parser(
         "test",
@@ -578,7 +612,21 @@ class ProgressTracker:
         return progress, total_elapsed_time, expected_time, eta, end_time
 
 # --------------------- Checkpoints ---------------------
-def save_checkpoint(checkpoint_path, epoch, G, D, opt_G, opt_D, scaler_G, scaler_D):
+def save_checkpoint(
+    checkpoint_path, 
+    epoch, 
+    G, 
+    D, 
+    opt_G, 
+    opt_D, 
+    scaler_G, 
+    scaler_D,
+    l1_lambda,
+    lr_g,
+    lr_d,
+    beta1,
+    beta2
+):
     """
     Salva un checkpoint del modello.
 
@@ -594,13 +642,18 @@ def save_checkpoint(checkpoint_path, epoch, G, D, opt_G, opt_D, scaler_G, scaler
     """
 
     checkpoint = {
-        'epoch': epoch,
-        'generator_state_dict': G.state_dict(),
-        'discriminator_state_dict': D.state_dict(),
-        'optimizerG_state_dict': opt_G.state_dict(),
-        'optimizerD_state_dict': opt_D.state_dict(),
-        'scalerG_state_dict': scaler_G.state_dict(),
-        'scalerD_state_dict': scaler_D.state_dict()
+        "epoch": epoch,
+        "generator_state_dict": G.state_dict(),
+        "discriminator_state_dict": D.state_dict(),
+        "optimizerG_state_dict": opt_G.state_dict(),
+        "optimizerD_state_dict": opt_D.state_dict(),
+        "scalerG_state_dict": scaler_G.state_dict(),
+        "scalerD_state_dict": scaler_D.state_dict(),
+        "l1_lambda": l1_lambda,
+        "lr_g": lr_g,
+        "lr_d": lr_d,
+        "beta1": beta1,
+        "beta2": beta2,
     }
     torch.save(checkpoint, checkpoint_path)
 
@@ -656,7 +709,17 @@ def save_images(path, input, output, target, epoch, batch_index):
 # - nel training aggiorniamo i pesi del modello;
 # - nella validation misuriamo come si comporta su dati non usati
 #   per gli aggiornamenti, quindi senza backpropagation.
-def validate(G, D, validation_loader, device, bce_loss, l1_loss, epoch, log_file, output_val_dir):
+def validate(
+    G, 
+    D, 
+    validation_loader, 
+    device, 
+    bce_loss, 
+    l1_loss, epoch, 
+    log_file, 
+    output_val_dir, 
+    l1_lambda
+):
     """
     Esegue un pass di validazione e calcola le loss medie
     di generatore e discriminatore.
@@ -699,7 +762,7 @@ def validate(G, D, validation_loader, device, bce_loss, l1_loss, epoch, log_file
                 
                 # La componente L1 è utile per evitare output plausibili ma
                 # scollegati dal target specifico del campione attuale.
-                loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * 25
+                loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * l1_lambda
 
             total_loss_D += loss_D.item()
             total_loss_G += loss_G.item()
@@ -802,7 +865,8 @@ def train_one_epoch(
     epoch,
     log_file,
     progress_tracker,
-    log_rate
+    log_rate,
+    l1_lambda
 ):
     """
     Addestra generatore e discriminatore per una singola epoca.
@@ -848,7 +912,7 @@ def train_one_epoch(
             # - BCE adversarial: far sembrare l'output abbastanza realistico
             #   da "convincere" il discriminatore;
             # - L1: mantenere fedeltà verso il target reale.
-            loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * 25
+            loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * l1_lambda
 
         opt_G.zero_grad()
         scaler_G.scale(loss_G).backward()
@@ -884,7 +948,12 @@ def main(
     log_rate=15,
     checkpoint_rate=10,
     validate_rate=1,
-    resume_checkpoint=None
+    resume_checkpoint=None,
+    l1_lambda=25.0,
+    lr_g=2e-4,
+    lr_d=2e-4,
+    beta1=0.5,
+    beta2=0.999
 ):
     start_time = time.time()
 
@@ -950,8 +1019,8 @@ def main(
     generator = UNetGenerator().to(device)
     discriminator = PatchGANDiscriminator().to(device)
 
-    opt_G = optim.Adam(generator.parameters(), lr=2e-4, betas=(0.5, 0.999))
-    opt_D = optim.Adam(discriminator.parameters(), lr=2e-4, betas=(0.5, 0.999))
+    opt_G = optim.Adam(generator.parameters(), lr=lr_g, betas=(beta1, beta2))
+    opt_D = optim.Adam(discriminator.parameters(), lr=lr_d, betas=(beta1, beta2))
 
     amp_enabled = is_amp_enabled(device)
     scaler_G = GradScaler(enabled=amp_enabled)
@@ -991,6 +1060,11 @@ def main(
     progress_tracker.start()
 
     log_message("Training started", log_file)
+    log_message(
+        f"Hyperparameters | l1_lambda={l1_lambda} | lr_g={lr_g} | lr_d={lr_d} | "
+        f"beta1={beta1} | beta2={beta2}",
+        log_file
+    )
 
     for epoch in range(start_epoch, n_epochs):
         log_message(f"Starting epoch {epoch}", log_file)
@@ -1009,7 +1083,8 @@ def main(
             epoch,
             log_file,
             progress_tracker,
-            log_rate
+            log_rate,
+            l1_lambda
         )
 
         log_message(f"Finished epoch {epoch}", log_file)
@@ -1018,7 +1093,7 @@ def main(
         if (epoch + 1) % checkpoint_rate == 0:
             checkpoint_path = os.path.join(
                 checkpoints_dir,
-                f"checkpoint_Pix2Pix_epoch{epoch}_{timestamp_str}.pth"
+                f"ep{epoch:03d}.pth"
             )
             save_checkpoint(
                 checkpoint_path,
@@ -1028,7 +1103,12 @@ def main(
                 opt_G,
                 opt_D,
                 scaler_G,
-                scaler_D
+                scaler_D,
+                l1_lambda,
+                lr_g,
+                lr_d,
+                beta1,
+                beta2
             )
             log_message(f"Checkpoint saved to {checkpoint_path} at epoch {epoch}", log_file)
 
@@ -1044,7 +1124,8 @@ def main(
                 l1_loss,
                 epoch,
                 log_file,
-                output_val_dir
+                output_val_dir,
+                l1_lambda
             )
 
     total_seconds = time.time() - start_time
@@ -1075,7 +1156,12 @@ if __name__ == "__main__":
             log_rate=args.log_rate,
             checkpoint_rate=args.checkpoint_rate,
             validate_rate=args.validate_rate,
-            resume_checkpoint=args.resume
+            resume_checkpoint=args.resume,
+            l1_lambda=args.l1_lambda,
+            lr_g=args.lr_g,
+            lr_d=args.lr_d,
+            beta1=args.beta1,
+            beta2=args.beta2
         )
 
     elif args.mode == "test":
