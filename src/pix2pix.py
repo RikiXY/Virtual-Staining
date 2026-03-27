@@ -90,6 +90,7 @@ def build_parser():
         "--epochs",
         type=int,
         default=150,
+        required=True,
         help="Number of training epochs (default: 150)"
     )
     train_parser.add_argument(
@@ -586,6 +587,50 @@ def log_message(message, log_file, show_time=True, use_stdout=True):
     if use_stdout:
         print(message)
 
+def get_first_pair_size(dataset):
+    """
+    Restituisce la dimensione reale su disco della prima coppia del dataset.
+    Serve per distinguere tra patch native e resize applicato dal training.
+    """
+    if len(dataset) == 0:
+        return None
+
+    source_path, target_path = dataset.pairs[0]
+
+    with Image.open(source_path) as src_img:
+        source_size = src_img.size  # (width, height)
+
+    with Image.open(target_path) as tgt_img:
+        target_size = tgt_img.size  # (width, height)
+
+    return {
+        "source": source_size,
+        "target": target_size,
+        "source_path": source_path,
+        "target_path": target_path,
+    }
+
+
+def save_run_config(run_config, run_root):
+    config_path = os.path.join(run_root, "run_config.json")
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(run_config, f, indent=4)
+    return config_path
+
+
+def log_run_header(log_file, run_config):
+    """
+    Scrive nel log un riepilogo iniziale ordinato della run.
+    """
+    log_message("=" * 80, log_file, show_time=False)
+    log_message("RUN CONFIGURATION", log_file, show_time=False)
+    log_message("=" * 80, log_file, show_time=False)
+
+    for key, value in run_config.items():
+        log_message(f"{key}: {value}", log_file, show_time=False)
+
+    log_message("=" * 80, log_file, show_time=False)
+
 class ProgressTracker:
     def __init__(self, total_epochs, total_batches, max_history=500):
         self.total_epochs = total_epochs
@@ -625,7 +670,11 @@ def save_checkpoint(
     lr_g,
     lr_d,
     beta1,
-    beta2
+    beta2,
+    image_size=None,
+    batch_size=None,
+    num_workers=None,
+    dataset_root=None
 ):
     """
     Salva un checkpoint del modello.
@@ -654,6 +703,10 @@ def save_checkpoint(
         "lr_d": lr_d,
         "beta1": beta1,
         "beta2": beta2,
+        "image_size": image_size,
+        "batch_size": batch_size,
+        "num_workers": num_workers,
+        "dataset_root": str(dataset_root) if dataset_root is not None else None,
     }
     torch.save(checkpoint, checkpoint_path)
 
@@ -936,6 +989,7 @@ def train_one_epoch(
 # --------------------- Main ---------------------
 def main(
     dataset_root,
+    run_root,
     logs_dir,
     checkpoints_dir,
     output_val_dir,
@@ -997,6 +1051,40 @@ def main(
         val_dir,
         transform=transform
     )
+    
+    first_train_pair_info = get_first_pair_size(training_dataset)
+    first_val_pair_info = get_first_pair_size(validation_dataset)
+
+    run_config = {
+        "timestamp": timestamp_str,
+        "dataset_root": str(dataset_root),
+        "run_root": str(run_root),
+        "logs_dir": str(logs_dir),
+        "checkpoints_dir": str(checkpoints_dir),
+        "output_train_dir": str(output_train_dir),
+        "output_val_dir": str(output_val_dir),
+        "train_dir": str(train_dir),
+        "val_dir": str(val_dir),
+        "seed": seed,
+        "device": str(device),
+        "epochs": n_epochs,
+        "batch_size": batch_size,
+        "num_workers": n_workers,
+        "image_size_resize": list(image_size),
+        "log_rate": log_rate,
+        "checkpoint_rate": checkpoint_rate,
+        "validate_rate": validate_rate,
+        "resume_checkpoint": str(resume_checkpoint) if resume_checkpoint else None,
+        "l1_lambda": l1_lambda,
+        "lr_g": lr_g,
+        "lr_d": lr_d,
+        "beta1": beta1,
+        "beta2": beta2,
+        "train_samples": len(training_dataset),
+        "val_samples": len(validation_dataset),
+        "first_train_pair_info": first_train_pair_info,
+        "first_val_pair_info": first_val_pair_info,
+    }
 
     # In training facciamo shuffle; in validation no, perchè lì non stiamo
     # imparando ma solo misurando il comportamento del modello.
@@ -1015,6 +1103,13 @@ def main(
         num_workers=n_workers,
         pin_memory=(device.type == "cuda")
     )
+    
+    run_config["train_batches"] = len(training_loader)
+    run_config["val_batches"] = len(validation_loader)
+
+    config_path = save_run_config(run_config, run_root)
+    log_run_header(log_file, run_config)
+    log_message(f"Run config saved to {config_path}", log_file)
 
     generator = UNetGenerator().to(device)
     discriminator = PatchGANDiscriminator().to(device)
@@ -1108,7 +1203,11 @@ def main(
                 lr_g,
                 lr_d,
                 beta1,
-                beta2
+                beta2,
+                image_size=image_size,
+                batch_size=batch_size,
+                num_workers=n_workers,
+                dataset_root=dataset_root
             )
             log_message(f"Checkpoint saved to {checkpoint_path} at epoch {epoch}", log_file)
 
@@ -1144,6 +1243,7 @@ if __name__ == "__main__":
         
         main(
             dataset_root=args.dataset_root,
+            run_root=run_root,
             logs_dir=paths["logs_dir"],
             checkpoints_dir=paths["checkpoints_dir"],
             output_val_dir=paths["output_val_dir"],
