@@ -6,6 +6,7 @@ import statistics
 from pathlib import Path
 from typing import Any
 
+import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 
@@ -16,6 +17,9 @@ except ImportError as exc:
         "Missing dependency: scikit-image. Install it with:\n"
         "pip install scikit-image"
     ) from exc
+
+
+METRIC_NAMES = ["mae", "rmse", "psnr", "ssim"]
 
 
 def add_single_subparser(subparsers: Any) -> None:
@@ -34,7 +38,24 @@ def add_single_subparser(subparsers: Any) -> None:
         type=str,
         help="Path to the generated image.",
     )
+    single_parser.add_argument(
+        "--output-dir",
+        dest="output_dir",
+        type=str,
+        default=None,
+        help=(
+            "Directory where evaluation outputs will be saved. If omitted, the script "
+            "tries to infer .../results/NAME_RUN/evaluation from the generated path."
+        ),
+    )
+    single_parser.add_argument(
+        "--save-graphs",
+        dest="save_graphs",
+        action="store_true",
+        help="Save diagnostic plots for the evaluated pair.",
+    )
     single_parser.set_defaults(func=run_single)
+
 
 
 def add_dataset_subparser(subparsers: Any) -> None:
@@ -54,11 +75,23 @@ def add_dataset_subparser(subparsers: Any) -> None:
         help="Directory containing generated images.",
     )
     dataset_parser.add_argument(
-        "output_dir",
+        "--output-dir",
+        dest="output_dir",
         type=str,
-        help="Directory where CSV results will be saved.",
+        default=None,
+        help=(
+            "Directory where evaluation outputs will be saved. If omitted, the script "
+            "tries to infer .../results/NAME_RUN/evaluation from the generated directory."
+        ),
+    )
+    dataset_parser.add_argument(
+        "--save-graphs",
+        dest="save_graphs",
+        action="store_true",
+        help="Save aggregate plots for the evaluated dataset.",
     )
     dataset_parser.set_defaults(func=run_dataset)
+
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -75,6 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+
 def load_rgb_image(path: str | Path) -> np.ndarray:
     image_path = Path(path)
 
@@ -89,6 +123,7 @@ def load_rgb_image(path: str | Path) -> np.ndarray:
     return np.array(image)
 
 
+
 def validate_same_shape(target: np.ndarray, generated: np.ndarray) -> None:
     if target.shape != generated.shape:
         raise ValueError(
@@ -97,16 +132,20 @@ def validate_same_shape(target: np.ndarray, generated: np.ndarray) -> None:
         )
 
 
+
 def to_float01(image: np.ndarray) -> np.ndarray:
     return image.astype(np.float32) / 255.0
+
 
 
 def compute_mae(target: np.ndarray, generated: np.ndarray) -> float:
     return float(np.mean(np.abs(target - generated)))
 
 
+
 def compute_rmse(target: np.ndarray, generated: np.ndarray) -> float:
     return float(np.sqrt(np.mean((target - generated) ** 2)))
+
 
 
 def compute_psnr(target: np.ndarray, generated: np.ndarray) -> float:
@@ -116,6 +155,7 @@ def compute_psnr(target: np.ndarray, generated: np.ndarray) -> float:
         return float("inf")
 
     return float(20.0 * np.log10(1.0 / np.sqrt(mse)))
+
 
 
 def compute_ssim(target: np.ndarray, generated: np.ndarray) -> float:
@@ -139,27 +179,29 @@ def compute_ssim(target: np.ndarray, generated: np.ndarray) -> float:
         )
 
 
+
 def evaluate_pair(
     target_path: str | Path,
     generated_path: str | Path,
-) -> tuple[dict[str, float], tuple[int, int, int]]:
+) -> tuple[dict[str, float], tuple[int, int, int], np.ndarray, np.ndarray]:
     target = load_rgb_image(target_path)
     generated = load_rgb_image(generated_path)
 
     validate_same_shape(target, generated)
     shape = target.shape
 
-    target = to_float01(target)
-    generated = to_float01(generated)
+    target_float = to_float01(target)
+    generated_float = to_float01(generated)
 
     metrics = {
-        "mae": compute_mae(target, generated),
-        "rmse": compute_rmse(target, generated),
-        "psnr": compute_psnr(target, generated),
-        "ssim": compute_ssim(target, generated),
+        "mae": compute_mae(target_float, generated_float),
+        "rmse": compute_rmse(target_float, generated_float),
+        "psnr": compute_psnr(target_float, generated_float),
+        "ssim": compute_ssim(target_float, generated_float),
     }
 
-    return metrics, shape
+    return metrics, shape, target_float, generated_float
+
 
 
 def print_single_result(
@@ -180,6 +222,7 @@ def print_single_result(
     print(f"SSIM:  {metrics['ssim']:.4f}")
 
 
+
 def extract_target_sample_id(path: str | Path) -> str:
     name = Path(path).stem
     suffix = "_target"
@@ -190,6 +233,7 @@ def extract_target_sample_id(path: str | Path) -> str:
     return name[: -len(suffix)]
 
 
+
 def extract_generated_sample_id(path: str | Path) -> str:
     name = Path(path).stem
     suffix = "_target_generated"
@@ -198,6 +242,21 @@ def extract_generated_sample_id(path: str | Path) -> str:
         raise ValueError(f"Generated file does not end with '{suffix}': {path}")
 
     return name[: -len(suffix)]
+
+
+
+def extract_single_sample_id(target_path: str | Path, generated_path: str | Path) -> str:
+    target_id = extract_target_sample_id(target_path)
+    generated_id = extract_generated_sample_id(generated_path)
+
+    if target_id != generated_id:
+        raise ValueError(
+            "Target and generated files refer to different sample ids. "
+            f"Got '{target_id}' and '{generated_id}'."
+        )
+
+    return target_id
+
 
 
 def collect_target_files(target_dir: str | Path) -> dict[str, Path]:
@@ -214,6 +273,7 @@ def collect_target_files(target_dir: str | Path) -> dict[str, Path]:
     return target_files
 
 
+
 def collect_generated_files(generated_dir: str | Path) -> dict[str, Path]:
     directory = Path(generated_dir)
 
@@ -226,6 +286,50 @@ def collect_generated_files(generated_dir: str | Path) -> dict[str, Path]:
         generated_files[sample_id] = path
 
     return generated_files
+
+
+
+def infer_default_output_dir(generated_path: str | Path) -> Path:
+    path = Path(generated_path).resolve()
+    base = path.parent if path.is_file() else path
+
+    parts = base.parts
+    if "results" not in parts:
+        raise ValueError(
+            "Could not infer output directory from generated path. Expected the generated "
+            "data to be inside a path like .../results/NAME_RUN/... Please provide "
+            "--output-dir explicitly."
+        )
+
+    results_index = parts.index("results")
+    if results_index + 1 >= len(parts):
+        raise ValueError(
+            "Could not infer NAME_RUN from generated path. Expected a path like "
+            ".../results/NAME_RUN/... Please provide --output-dir explicitly."
+        )
+
+    run_dir = Path(*parts[: results_index + 2])
+    if run_dir.name == "results":
+        raise ValueError(
+            "Could not infer NAME_RUN from generated path. Expected a path like "
+            ".../results/NAME_RUN/... Please provide --output-dir explicitly."
+        )
+
+    if run_dir.parent.name != "results":
+        raise ValueError(
+            "Could not infer a valid run directory inside results/. Please provide "
+            "--output-dir explicitly."
+        )
+
+    return run_dir / "evaluation"
+
+
+
+def resolve_output_dir(output_dir: str | None, generated_path: str | Path) -> Path:
+    if output_dir is not None:
+        return Path(output_dir)
+    return infer_default_output_dir(generated_path)
+
 
 
 def write_per_image_metrics_csv(rows: list[dict[str, object]], output_path: str | Path) -> None:
@@ -248,6 +352,7 @@ def write_per_image_metrics_csv(rows: list[dict[str, object]], output_path: str 
         writer.writerows(rows)
 
 
+
 def write_skipped_csv(rows: list[dict[str, str]], output_path: str | Path) -> None:
     fieldnames = ["sample_id", "reason", "target_path", "generated_path"]
 
@@ -257,11 +362,32 @@ def write_skipped_csv(rows: list[dict[str, str]], output_path: str | Path) -> No
         writer.writerows(rows)
 
 
+
+def write_single_case_csv(row: dict[str, object], output_path: str | Path) -> None:
+    fieldnames = [
+        "sample_id",
+        "target_path",
+        "generated_path",
+        "width",
+        "height",
+        "channels",
+        "mae",
+        "rmse",
+        "psnr",
+        "ssim",
+    ]
+
+    with Path(output_path).open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerow(row)
+
+
+
 def build_summary_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
-    metrics = ["mae", "rmse", "psnr", "ssim"]
     summary_rows: list[dict[str, object]] = []
 
-    for metric in metrics:
+    for metric in METRIC_NAMES:
         values = [float(row[metric]) for row in rows]
 
         summary_rows.append(
@@ -277,6 +403,7 @@ def build_summary_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]
         )
 
     return summary_rows
+
 
 
 def write_summary_csv(
@@ -302,16 +429,117 @@ def write_summary_csv(
         dict_writer.writerows(summary_rows)
 
 
+
+def save_single_plots(
+    target: np.ndarray,
+    generated: np.ndarray,
+    sample_id: str,
+    output_dir: str | Path,
+) -> list[Path]:
+    output_directory = Path(output_dir)
+    output_directory.mkdir(parents=True, exist_ok=True)
+
+    absolute_error = np.mean(np.abs(target - generated), axis=2)
+
+    error_map_path = output_directory / f"{sample_id}_absolute_error_map.png"
+    plt.figure(figsize=(6, 5))
+    plt.imshow(absolute_error)
+    plt.title("Absolute Error Map")
+    plt.axis("off")
+    plt.colorbar(fraction=0.046, pad=0.04)
+    plt.tight_layout()
+    plt.savefig(error_map_path, dpi=200, bbox_inches="tight")
+    plt.close()
+
+    histogram_path = output_directory / f"{sample_id}_error_histogram.png"
+    plt.figure(figsize=(6, 4))
+    plt.hist(absolute_error.ravel(), bins=50)
+    plt.title("Absolute Error Histogram")
+    plt.xlabel("Absolute error")
+    plt.ylabel("Pixel count")
+    plt.tight_layout()
+    plt.savefig(histogram_path, dpi=200, bbox_inches="tight")
+    plt.close()
+
+    return [error_map_path, histogram_path]
+
+
+
+def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) -> list[Path]:
+    output_directory = Path(output_dir)
+    output_directory.mkdir(parents=True, exist_ok=True)
+    saved_paths: list[Path] = []
+
+    for metric in METRIC_NAMES:
+        values = [float(row[metric]) for row in rows]
+        histogram_path = output_directory / f"{metric}_histogram.png"
+
+        plt.figure(figsize=(6, 4))
+        plt.hist(values, bins=20)
+        plt.title(f"{metric.upper()} Histogram")
+        plt.xlabel(metric.upper())
+        plt.ylabel("Count")
+        plt.tight_layout()
+        plt.savefig(histogram_path, dpi=200, bbox_inches="tight")
+        plt.close()
+
+        saved_paths.append(histogram_path)
+
+    boxplot_path = output_directory / "metrics_boxplot.png"
+    plt.figure(figsize=(8, 5))
+    data = [[float(row[metric]) for row in rows] for metric in METRIC_NAMES]
+    plt.boxplot(data, tick_labels=[metric.upper() for metric in METRIC_NAMES])
+    plt.title("Metrics Boxplot")
+    plt.ylabel("Value")
+    plt.tight_layout()
+    plt.savefig(boxplot_path, dpi=200, bbox_inches="tight")
+    plt.close()
+
+    saved_paths.append(boxplot_path)
+    return saved_paths
+
+
+
 def run_single(args: argparse.Namespace) -> None:
-    metrics, shape = evaluate_pair(args.target, args.generated)
+    sample_id = extract_single_sample_id(args.target, args.generated)
+    metrics, shape, target, generated = evaluate_pair(args.target, args.generated)
     print_single_result(args.target, args.generated, metrics, shape)
+
+    output_dir = resolve_output_dir(args.output_dir, args.generated)
+    individual_cases_dir = output_dir / "individual_cases"
+    individual_cases_dir.mkdir(parents=True, exist_ok=True)
+
+    height, width, channels = shape
+    row = {
+        "sample_id": sample_id,
+        "target_path": str(args.target),
+        "generated_path": str(args.generated),
+        "width": width,
+        "height": height,
+        "channels": channels,
+        "mae": metrics["mae"],
+        "rmse": metrics["rmse"],
+        "psnr": metrics["psnr"],
+        "ssim": metrics["ssim"],
+    }
+
+    single_case_csv = individual_cases_dir / f"{sample_id}_evaluation.csv"
+    write_single_case_csv(row, single_case_csv)
+    print()
+    print(f"Saved single-case metrics to: {single_case_csv}")
+
+    if args.save_graphs:
+        plot_paths = save_single_plots(target, generated, sample_id, individual_cases_dir)
+        for plot_path in plot_paths:
+            print(f"Saved graph to:               {plot_path}")
+
 
 
 def run_dataset(args: argparse.Namespace) -> None:
     target_files = collect_target_files(args.target_dir)
     generated_files = collect_generated_files(args.generated_dir)
 
-    output_dir = Path(args.output_dir)
+    output_dir = resolve_output_dir(args.output_dir, args.generated_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     all_sample_ids = sorted(set(target_files) | set(generated_files))
@@ -346,7 +574,7 @@ def run_dataset(args: argparse.Namespace) -> None:
             continue
 
         try:
-            metrics, shape = evaluate_pair(target_path, generated_path)
+            metrics, shape, _, _ = evaluate_pair(target_path, generated_path)
         except Exception as exc:
             skipped_rows.append(
                 {
@@ -405,11 +633,18 @@ def run_dataset(args: argparse.Namespace) -> None:
     print(f"Saved per-image metrics to: {per_image_csv}")
     print(f"Saved summary to:           {summary_csv}")
     print(f"Saved skipped samples to:   {skipped_csv}")
+
+    if args.save_graphs and per_image_rows:
+        plot_paths = save_dataset_plots(per_image_rows, output_dir)
+        for plot_path in plot_paths:
+            print(f"Saved graph to:             {plot_path}")
+
     print()
     print(f"Targets found:   {len(target_files)}")
     print(f"Generated found: {len(generated_files)}")
     print(f"Pairs evaluated: {len(per_image_rows)}")
     print(f"Skipped:         {len(skipped_rows)}")
+
 
 
 def main() -> None:
