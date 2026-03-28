@@ -727,8 +727,8 @@ if __name__ == "__main__":
     # [EN] Main parser for the arguments
     parser = argparse.ArgumentParser(
     usage=(
-        "python src/prepare_dataset.py <path> "
-        "--source-name SOURCE_NAME --target-name TARGET_NAME\n"
+        "python src/prepare_dataset.py --path PATH\n"
+        "       --source-name SOURCE_NAME --target-name TARGET_NAME\n"
         "       [--seed SEED] [--save-masks] [--image-size WIDTH HEIGHT]\n"
         "       [--grid-movement STEP_X STEP_Y] [--margin MARGIN] [--lang {en,it}]"
     ),
@@ -737,8 +737,9 @@ if __name__ == "__main__":
         parents=[lang_parser]
     )
     parser.add_argument(
-        "path",
+        "--path",
         type=str,
+        required=True,
         help=HELP["path"][lang_args.lang]
     )
     parser.add_argument(

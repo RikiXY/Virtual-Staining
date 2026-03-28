@@ -44,12 +44,18 @@ def build_parser():
     description="Train or test the Pix2Pix model on a paired histology dataset.",
     epilog=(
         "Examples:\n"
-        "  python src/pix2pix.py train local_workspace/datasets/inverted_512 --run-name L1-25\n"
-        "  python src/pix2pix.py test local_workspace/datasets/inverted_512 "
+        "  python src/pix2pix.py train "
+        "--dataset-root local_workspace/datasets/inverted_512 "
+        "--run-name L1-25 "
+        "--epochs 100\n"
+        "\n"
+        "  python src/pix2pix.py test "
+        "--dataset-root local_workspace/datasets/inverted_512 "
         "--run-path local_workspace/results/L1-25 "
         "--checkpoint local_workspace/results/L1-25/checkpoints/model.pth\n"
         "\n"
-        "Use 'python src/pix2pix.py <command> --help' to see the options for a specific command."
+        "Use 'python src/pix2pix.py <command> --help' "
+        "to see the options for a specific command."
     ),
     formatter_class=argparse.RawTextHelpFormatter
 )
@@ -64,8 +70,9 @@ def build_parser():
         formatter_class=argparse.RawTextHelpFormatter
     )
     train_parser.add_argument(
-        "dataset-root",
+        "--dataset-root",
         type=str,
+        required=True,
         help="Path to the dataset root containing dataset_train/ and dataset_val/"
     )
     train_parser.add_argument(
@@ -89,9 +96,8 @@ def build_parser():
     train_parser.add_argument(
         "--epochs",
         type=int,
-        default=150,
         required=True,
-        help="Number of training epochs (default: 150)"
+        help="Number of training epochs"
     )
     train_parser.add_argument(
         "--batch-size",
@@ -111,7 +117,7 @@ def build_parser():
         nargs=2,
         metavar=("WIDTH", "HEIGHT"),
         default=(512, 512),
-        help="Resize images before training, e.g. --image_size 512 512"
+        help="Resize images before training, e.g. --image-size 512 512"
     )
     train_parser.add_argument(
         "--log-rate",
@@ -143,28 +149,24 @@ def build_parser():
         default=25.0,
         help="Weight of the L1 reconstruction loss (default: 25.0)"
     )
-
     train_parser.add_argument(
         "--lr-g",
         type=float,
         default=2e-4,
         help="Learning rate for the generator (default: 2e-4)"
     )
-
     train_parser.add_argument(
         "--lr-d",
         type=float,
         default=2e-4,
         help="Learning rate for the discriminator (default: 2e-4)"
     )
-
     train_parser.add_argument(
         "--beta1",
         type=float,
         default=0.5,
         help="Adam beta1 (default: 0.5)"
     )
-
     train_parser.add_argument(
         "--beta2",
         type=float,
@@ -178,8 +180,9 @@ def build_parser():
         formatter_class=argparse.RawTextHelpFormatter
     )
     test_parser.add_argument(
-        "dataset-root",
+        "--dataset-root",
         type=str,
+        required=True,
         help="Path to the dataset root containing dataset_test/"
     )
     test_parser.add_argument(
@@ -200,7 +203,7 @@ def build_parser():
         nargs=2,
         metavar=("WIDTH", "HEIGHT"),
         default=(512, 512),
-        help="Resize images before inference, e.g. --image_size 512 512"
+        help="Resize images before inference, e.g. --image-size 512 512"
     )
 
     return parser
@@ -994,8 +997,8 @@ def main(
     checkpoints_dir,
     output_val_dir,
     output_train_dir,
+    n_epochs,
     seed=None,
-    n_epochs=150,
     batch_size=8,
     n_workers=12,
     image_size=(512, 512),
@@ -1248,8 +1251,8 @@ if __name__ == "__main__":
             checkpoints_dir=paths["checkpoints_dir"],
             output_val_dir=paths["output_val_dir"],
             output_train_dir=paths["output_train_dir"],
-            seed=args.seed,
             n_epochs=args.epochs,
+            seed=args.seed,
             batch_size=args.batch_size,
             n_workers=args.num_workers,
             image_size=tuple(args.image_size),
