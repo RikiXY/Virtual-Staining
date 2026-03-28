@@ -2,6 +2,7 @@ UV      ?= uv
 PYTHON  ?= $(UV) run python
 RUFF    ?= ruff
 PYRIGHT ?= pyright
+
 ENV_FILE ?= .env.make
 
 ifneq ("$(wildcard $(ENV_FILE))","")
@@ -9,9 +10,9 @@ include $(ENV_FILE)
 endif
 
 # Optional args
-EPOCHS    ?= 100
-SEED      ?= 42
-L1        ?= 25
+EPOCHS ?= 100
+SEED ?= 42
+L1 ?= 25
 CHECKPOINT ?=
 SOURCE_NAME ?= source.tif
 TARGET_NAME ?= target.tif
