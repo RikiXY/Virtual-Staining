@@ -1244,7 +1244,8 @@ def main(
     log_message(f"Seed set to {seed}", log_file, use_stdout=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    log_message(f"Device: {device}", log_file, use_stdout=False)
+    device_name = torch.cuda.get_device_name(device) if device.type == "cuda" else "CPU"
+    log_message(f"Device: {device} ({device_name})", log_file)
 
     # La normalizzazione con media e std pari a 0.5 porta i valori
     # da [0, 1] a [-1, 1].
