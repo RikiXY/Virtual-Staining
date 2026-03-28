@@ -6,6 +6,7 @@ PYRIGHT ?= pyright
 # Optional args
 EPOCHS    ?= 100
 SEED      ?= 42
+L1        ?= 25
 CHECKPOINT ?=
 SOURCE_NAME ?= source.tif
 TARGET_NAME ?= target.tif
@@ -57,6 +58,7 @@ help:
 	@printf "  MARGIN=<n>                            Crop margin for prepare-dataset (default: $(MARGIN))\n"
 	@printf "  EPOCHS=<n>                            Training epochs (default: $(EPOCHS))\n"
 	@printf "  SEED=<n>                              Training seed (default: $(SEED))\n"
+	@printf "  L1=<n>                                L1 loss weight for training (default: $(L1))\n"
 	@printf "  CHECKPOINT=<path>                     Optional explicit checkpoint for test\n"
 	@printf "\nExamples:\n"
 	@printf "  export DATASET=inv_512\n"
@@ -66,7 +68,7 @@ help:
 	@printf "  make test\n"
 	@printf "  make evaluate\n"
 	@printf "  make train DATASET=inv_1024 RUN_NAME=inv_P-1024_L1-50\n"
-	@printf "  make train DATASET=inv_512 RUN_NAME=inv_debug EPOCHS=10 SEED=123\n"
+	@printf "  make train DATASET=inv_512 RUN_NAME=inv_debug EPOCHS=10 SEED=123 L1=37\n"
 	@printf "  make test DATASET=inv_512 RUN_NAME=inv_P-512_L1-37 CHECKPOINT=local_workspace/results/inv_P-512_L1-37/checkpoints/ep042.pth\n"
 	@printf "\n"
 
@@ -87,7 +89,7 @@ prepare-dataset: require-dataset
 	$(PYTHON) src/prepare_dataset.py --path $(DATASET_ROOT) --source-name $(SOURCE_NAME) --target-name $(TARGET_NAME) --seed $(SEED) --lang $(PREPARE_LANG) --image-size $(IMAGE_SIZE) --grid-movement $(GRID_MOVEMENT) --margin $(MARGIN) $(SAVE_MASKS_FLAG)
 
 train: require-config
-	$(PYTHON) src/pix2pix.py train --dataset-root $(DATASET_ROOT)/ --run-name $(RUN_NAME) --results-path $(RESULTS_PATH) --epochs $(EPOCHS) --seed $(SEED)
+	$(PYTHON) src/pix2pix.py train --dataset-root $(DATASET_ROOT)/ --run-name $(RUN_NAME) --results-path $(RESULTS_PATH) --epochs $(EPOCHS) --seed $(SEED) --l1-lambda $(L1)
 
 test: require-config
 	@test -n "$(CHECKPOINT_RESOLVED)" || (echo "No checkpoint found in $(CHECKPOINT_DIR). Set CHECKPOINT=/path/to/file.pth if needed."; exit 1)
