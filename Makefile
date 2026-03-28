@@ -1,7 +1,7 @@
 UV      ?= uv
 PYTHON  ?= $(UV) run python
-RUFF    ?= $(UV) run ruff
-PYRIGHT ?= $(UV) run pyright
+RUFF    ?= ruff
+PYRIGHT ?= pyright
 
 # Optional args
 EPOCHS    ?= 100

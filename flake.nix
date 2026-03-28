@@ -23,13 +23,14 @@
           ruff
           pyright
         ];
+        
+        UV_PYTHON = "${python}/bin/python";
+        UV_PYTHON_DOWNLOADS = "never";
+        LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+          pkgs.stdenv.cc.cc.lib
+        ];
 
         shellHook = ''
-          export UV_PYTHON=${python}/bin/python3.11
-          export UV_PYTHON_DOWNLOADS=never
-
-          export LD_LIBRARY_PATH=${pkgs.lib.makeLibraryPath runtimeLibs}:''${LD_LIBRARY_PATH:-}
-
           if [ -d /usr/lib/wsl/lib ]; then
             export LD_LIBRARY_PATH=/usr/lib/wsl/lib:$LD_LIBRARY_PATH
           fi
