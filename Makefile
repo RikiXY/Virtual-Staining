@@ -38,7 +38,6 @@ help:
 	@printf "  make evaluate                         Evaluate generated outputs\n"
 	@printf "  make sync                             Sync project dependencies\n"
 	@printf "  make lock                             Refresh uv.lock\n"
-	@printf "  make nix-develop                      Enter Nix dev shell\n"
 	@printf "  make lint                             Run Ruff lints\n"
 	@printf "  make format                           Format code with Ruff\n"
 	@printf "  make format-check                     Check formatting without changing files\n"
@@ -110,9 +109,6 @@ check-types:
 	$(PYRIGHT) .
 
 check: lint format-check check-types
-
-nix-develop:
-	nix develop
 
 clean:
 	rm -rf .ruff_cache .mypy_cache .pyright __pycache__
