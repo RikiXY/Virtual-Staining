@@ -18,6 +18,9 @@
 __pycache__/
 *.py[cod]
 
+# Local Makefile env
+.env.make
+
 # Obsidian
 .obsidian/
 **/.obsidian/

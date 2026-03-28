@@ -2,6 +2,11 @@ UV      ?= uv
 PYTHON  ?= $(UV) run python
 RUFF    ?= ruff
 PYRIGHT ?= pyright
+ENV_FILE ?= .env.make
+
+ifneq ("$(wildcard $(ENV_FILE))","")
+include $(ENV_FILE)
+endif
 
 # Optional args
 EPOCHS    ?= 100
@@ -37,6 +42,7 @@ help:
 	@printf "  make train                            Train Pix2Pix\n"
 	@printf "  make test                             Run test inference\n"
 	@printf "  make evaluate                         Evaluate generated outputs\n"
+	@printf "  make run-all                          Run train, test, and evaluate sequentially\n"
 	@printf "  make sync                             Sync project dependencies\n"
 	@printf "  make lock                             Refresh uv.lock\n"
 	@printf "  make lint                             Run Ruff lints\n"
@@ -46,8 +52,9 @@ help:
 	@printf "  make check                            Run lint + format-check + check-types\n"
 	@printf "  make clean                            Remove common caches\n"
 	@printf "\nConfig:\n"
-	@printf "  export DATASET=inv_512\n"
-	@printf "  export RUN_NAME=inv_P-512_L1-37\n"
+	@printf "  ENV_FILE=.env.make                    Optional Makefile env file (default: $(ENV_FILE))\n"
+	@printf "  DATASET=inv_512                       Dataset name (can come from $(ENV_FILE))\n"
+	@printf "  RUN_NAME=inv_P-512_L1-37              Run name (can come from $(ENV_FILE))\n"
 	@printf "\nOptional:\n"
 	@printf "  SOURCE_NAME=<file>                    Source image filename (default: $(SOURCE_NAME))\n"
 	@printf "  TARGET_NAME=<file>                    Target image filename (default: $(TARGET_NAME))\n"
@@ -61,12 +68,12 @@ help:
 	@printf "  L1=<n>                                L1 loss weight for training (default: $(L1))\n"
 	@printf "  CHECKPOINT=<path>                     Optional explicit checkpoint for test\n"
 	@printf "\nExamples:\n"
-	@printf "  export DATASET=inv_512\n"
-	@printf "  export RUN_NAME=inv_P-512_L1-37\n"
+	@printf "  cp .env.make.example .env.make\n"
 	@printf "  make prepare-dataset SOURCE_NAME=source.tif TARGET_NAME=target.tif\n"
 	@printf "  make train\n"
 	@printf "  make test\n"
 	@printf "  make evaluate\n"
+	@printf "  make run-all\n"
 	@printf "  make train DATASET=inv_1024 RUN_NAME=inv_P-1024_L1-50\n"
 	@printf "  make train DATASET=inv_512 RUN_NAME=inv_debug EPOCHS=10 SEED=123 L1=37\n"
 	@printf "  make test DATASET=inv_512 RUN_NAME=inv_P-512_L1-37 CHECKPOINT=local_workspace/results/inv_P-512_L1-37/checkpoints/ep042.pth\n"
@@ -97,6 +104,11 @@ test: require-config
 
 evaluate: require-config
 	$(PYTHON) tools/evaluate_generation.py dataset $(DATASET_TEST_PATH) $(OUTPUT_TEST_PATH) --save-graphs
+
+run-all:
+	$(MAKE) train
+	$(MAKE) test
+	$(MAKE) evaluate
 
 lint:
 	$(RUFF) check .

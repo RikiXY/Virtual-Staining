@@ -100,10 +100,22 @@ nix develop
 make sync
 ```
 
-### 3. Build the paired dataset
+### 3. Create the Makefile env file
 
 ```bash
-export DATASET=your_sample
+cp .env.make.example .env.make
+```
+
+Then edit `.env.make` and set:
+
+```make
+DATASET=your_sample
+RUN_NAME=your_run_name
+```
+
+### 4. Build the paired dataset
+
+```bash
 make prepare-dataset SOURCE_NAME=source.tif TARGET_NAME=target.tif
 ```
 
@@ -114,15 +126,18 @@ make help
 uv run python src/prepare_dataset.py --help
 ```
 
-### 4. Train, test, and evaluate
+### 5. Train, test, and evaluate
 
 ```bash
-export DATASET=your_sample
-export RUN_NAME=your_run_name
-
 make train
 make test
 make evaluate
+```
+
+Or run the full sequence with one command:
+
+```bash
+make run-all
 ```
 
 Useful overrides:
@@ -130,6 +145,7 @@ Useful overrides:
 ```bash
 make train EPOCHS=10 SEED=123
 make test CHECKPOINT=local_workspace/results/your_run_name/checkpoints/ep010.pth
+make run-all RUN_NAME=debug_run L1=37
 ```
 
 If `CHECKPOINT` is not provided, `make test` automatically selects the highest `ep*.pth` file found under:
