@@ -20,6 +20,7 @@ except ImportError as exc:
 
 
 METRIC_NAMES = ["mae", "rmse", "psnr", "ssim"]
+VALID_IMAGE_EXTENSIONS = {".tif", ".tiff", ".png"}
 
 
 def add_single_subparser(subparsers: Any) -> None:
@@ -29,13 +30,17 @@ def add_single_subparser(subparsers: Any) -> None:
         description="Compute MAE, RMSE, PSNR and SSIM for one target/generated pair.",
     )
     single_parser.add_argument(
-        "target",
+        "--target-image",
+        dest="target",
         type=str,
+        required=True,
         help="Path to the target image.",
     )
     single_parser.add_argument(
-        "generated",
+        "--generated-image",
+        dest="generated",
         type=str,
+        required=True,
         help="Path to the generated image.",
     )
     single_parser.add_argument(
@@ -48,12 +53,6 @@ def add_single_subparser(subparsers: Any) -> None:
             "tries to infer .../results/NAME_RUN/evaluation from the generated path."
         ),
     )
-    single_parser.add_argument(
-        "--save-graphs",
-        dest="save_graphs",
-        action="store_true",
-        help="Save diagnostic plots for the evaluated pair.",
-    )
     single_parser.set_defaults(func=run_single)
 
 
@@ -65,13 +64,17 @@ def add_dataset_subparser(subparsers: Any) -> None:
         description="Compute MAE, RMSE, PSNR and SSIM for all matching pairs in a dataset.",
     )
     dataset_parser.add_argument(
-        "target_dir",
+        "--target-dir",
+        dest="target_dir",
         type=str,
+        required=True,
         help="Directory containing target images.",
     )
     dataset_parser.add_argument(
-        "generated_dir",
+        "--generated-dir",
+        dest="generated_dir",
         type=str,
+        required=True,
         help="Directory containing generated images.",
     )
     dataset_parser.add_argument(
@@ -98,6 +101,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python tools/evaluate_generation.py",
         description="Evaluate generated images against target images.",
+        epilog=(
+            "Examples:\n"
+            "  python tools/evaluate_generation.py single "
+            "--target-image local_workspace/datasets/your_run/dataset_test/00512_09216_target.tif "
+            "--generated-image local_workspace/results/your_run/output_test/00512_09216_target_generated.tif\n"
+            "  python tools/evaluate_generation.py dataset "
+            "--target-dir local_workspace/datasets/your_run/dataset_test "
+            "--generated-dir local_workspace/results/your_run/output_test "
+            "--save-graphs\n\n"
+            "Use 'python tools/evaluate_generation.py <command> --help' to see the options "
+            "for a specific command."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
         add_help=True,
     )
 
@@ -266,7 +282,11 @@ def collect_target_files(target_dir: str | Path) -> dict[str, Path]:
         raise NotADirectoryError(f"Target directory not found: {directory}")
 
     target_files: dict[str, Path] = {}
-    for path in sorted(directory.glob("*_target.tif")):
+    for path in sorted(directory.iterdir()):
+        if not path.is_file() or path.suffix.lower() not in VALID_IMAGE_EXTENSIONS:
+            continue
+        if not path.stem.endswith("_target"):
+            continue
         sample_id = extract_target_sample_id(path)
         target_files[sample_id] = path
 
@@ -281,7 +301,11 @@ def collect_generated_files(generated_dir: str | Path) -> dict[str, Path]:
         raise NotADirectoryError(f"Generated directory not found: {directory}")
 
     generated_files: dict[str, Path] = {}
-    for path in sorted(directory.glob("*_target_generated.tif")):
+    for path in sorted(directory.iterdir()):
+        if not path.is_file() or path.suffix.lower() not in VALID_IMAGE_EXTENSIONS:
+            continue
+        if not path.stem.endswith("_target_generated"):
+            continue
         sample_id = extract_generated_sample_id(path)
         generated_files[sample_id] = path
 
@@ -430,41 +454,6 @@ def write_summary_csv(
 
 
 
-def save_single_plots(
-    target: np.ndarray,
-    generated: np.ndarray,
-    sample_id: str,
-    output_dir: str | Path,
-) -> list[Path]:
-    output_directory = Path(output_dir)
-    output_directory.mkdir(parents=True, exist_ok=True)
-
-    absolute_error = np.mean(np.abs(target - generated), axis=2)
-
-    error_map_path = output_directory / f"{sample_id}_absolute_error_map.png"
-    plt.figure(figsize=(6, 5))
-    plt.imshow(absolute_error)
-    plt.title("Absolute Error Map")
-    plt.axis("off")
-    plt.colorbar(fraction=0.046, pad=0.04)
-    plt.tight_layout()
-    plt.savefig(error_map_path, dpi=200, bbox_inches="tight")
-    plt.close()
-
-    histogram_path = output_directory / f"{sample_id}_error_histogram.png"
-    plt.figure(figsize=(6, 4))
-    plt.hist(absolute_error.ravel(), bins=50)
-    plt.title("Absolute Error Histogram")
-    plt.xlabel("Absolute error")
-    plt.ylabel("Pixel count")
-    plt.tight_layout()
-    plt.savefig(histogram_path, dpi=200, bbox_inches="tight")
-    plt.close()
-
-    return [error_map_path, histogram_path]
-
-
-
 def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) -> list[Path]:
     output_directory = Path(output_dir)
     output_directory.mkdir(parents=True, exist_ok=True)
@@ -502,7 +491,7 @@ def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) ->
 
 def run_single(args: argparse.Namespace) -> None:
     sample_id = extract_single_sample_id(args.target, args.generated)
-    metrics, shape, target, generated = evaluate_pair(args.target, args.generated)
+    metrics, shape, _, _ = evaluate_pair(args.target, args.generated)
     print_single_result(args.target, args.generated, metrics, shape)
 
     output_dir = resolve_output_dir(args.output_dir, args.generated)
@@ -527,11 +516,6 @@ def run_single(args: argparse.Namespace) -> None:
     write_single_case_csv(row, single_case_csv)
     print()
     print(f"Saved single-case metrics to: {single_case_csv}")
-
-    if args.save_graphs:
-        plot_paths = save_single_plots(target, generated, sample_id, individual_cases_dir)
-        for plot_path in plot_paths:
-            print(f"Saved graph to:               {plot_path}")
 
 
 
