@@ -23,8 +23,8 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    parser.add_argument("--input-image", type=Path, help="Path to the input/source image.")
-    parser.add_argument("--output-image", type=Path, help="Path to the generated/output image.")
+    parser.add_argument("--source-image", type=Path, help="Path to the real source image.")
+    parser.add_argument("--generated-image", type=Path, help="Path to the generated/generated image.")
     parser.add_argument("--target-image", type=Path, help="Path to the real target image.")
     parser.add_argument(
         "--save-path",
@@ -32,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Path where the comparison panel will be saved. If omitted, the script "
-            "tries to infer .../results/NAME_RUN/comparisons from --output-image."
+            "tries to infer .../results/NAME_RUN/comparisons from --generated-image."
         ),
     )
     parser.add_argument(
@@ -83,10 +83,10 @@ def to_float01(image: Image.Image) -> np.ndarray:
     return np.asarray(image, dtype=np.float32) / 255.0
 
 
-def compute_absolute_difference_map(output_img: Image.Image, target_img: Image.Image) -> np.ndarray:
-    output_float = to_float01(output_img)
+def compute_absolute_difference_map(generated_img: Image.Image, target_img: Image.Image) -> np.ndarray:
+    generated_float = to_float01(generated_img)
     target_float = to_float01(target_img)
-    return np.mean(np.abs(target_float - output_float), axis=2)
+    return np.mean(np.abs(target_float - generated_float), axis=2)
 
 
 def extract_generated_sample_id(path: str | Path) -> str:
@@ -97,20 +97,20 @@ def extract_generated_sample_id(path: str | Path) -> str:
     return stem[: -len(suffix)]
 
 
-def infer_run_dir_from_output_path(output_path: str | Path) -> Path:
-    path = Path(output_path).resolve()
+def infer_run_dir_from_generated_path(generated_path: str | Path) -> Path:
+    path = Path(generated_path).resolve()
     base = path.parent if path.is_file() else path
     parts = base.parts
     if "results" not in parts:
         raise ValueError(
-            "Could not infer run directory from output path. Expected a path like "
-            ".../results/NAME_RUN/output_test/..."
+            "Could not infer run directory from generated path. Expected a path like "
+            ".../results/NAME_RUN/generated_test/..."
         )
     results_index = parts.index("results")
     if results_index + 1 >= len(parts):
         raise ValueError(
-            "Could not infer NAME_RUN from output path. Expected a path like "
-            ".../results/NAME_RUN/output_test/..."
+            "Could not infer NAME_RUN from generated path. Expected a path like "
+            ".../results/NAME_RUN/generated_test/..."
         )
     run_dir = Path(*parts[: results_index + 2])
     if run_dir.parent.name != "results":
@@ -121,10 +121,10 @@ def infer_run_dir_from_output_path(output_path: str | Path) -> Path:
     return run_dir
 
 
-def infer_default_save_path(output_image: str | Path) -> Path:
-    output_path = Path(output_image)
-    sample_id = extract_generated_sample_id(output_path)
-    run_dir = infer_run_dir_from_output_path(output_path)
+def infer_default_save_path(generated_image: str | Path) -> Path:
+    generated_path = Path(generated_image)
+    sample_id = extract_generated_sample_id(generated_path)
+    run_dir = infer_run_dir_from_generated_path(generated_path)
     return run_dir / "comparisons" / f"{sample_id}_comparison.png"
 
 
@@ -132,26 +132,30 @@ def infer_diagnostics_dir(save_path: str | Path) -> Path:
     save_path = Path(save_path)
     return save_path.parent / "diagnostics"
 
+def infer_case_diagnostics_dir(save_path: str | Path, generated_image: str | Path) -> Path:
+    diagnostics_dir = infer_diagnostics_dir(save_path)
+    sample_id = extract_generated_sample_id(generated_image)
+    return diagnostics_dir / sample_id
 
 def save_comparison_panel(
-    input_path: str | Path,
-    output_path: str | Path,
+    source_path: str | Path,
+    generated_path: str | Path,
     target_path: str | Path,
     save_path: str | Path,
     suptitle: str | None = None,
 ) -> Path:
-    input_img = open_rgb(input_path)
-    output_img = open_rgb(output_path)
+    source_img = open_rgb(source_path)
+    generated_img = open_rgb(generated_path)
     target_img = open_rgb(target_path)
 
-    validate_same_size(input_img, output_img, target_img)
+    validate_same_size(source_img, generated_img, target_img)
 
-    images: list[Any] = [input_img, output_img, target_img]
-    titles = ["INPUT", "OUTPUT", "TARGET"]
+    images: list[Any] = [source_img, generated_img, target_img]
+    titles = ["source", "generated", "target"]
 
-    diff_map = compute_absolute_difference_map(output_img, target_img)
+    diff_map = compute_absolute_difference_map(generated_img, target_img)
     images.append(diff_map)
-    titles.append("PER-PIXEL MAE MAP")
+    titles.append("MAE map")
 
     fig_width = 4 * len(images)
     fig, axes = plt.subplots(1, len(images), figsize=(fig_width, 4))
@@ -179,21 +183,21 @@ def save_comparison_panel(
 
 
 def save_diagnostic_plots(
-    input_path: str | Path,
-    output_path: str | Path,
+    source_path: str | Path,
+    generated_path: str | Path,
     target_path: str | Path,
     save_dir: str | Path,
 ) -> list[Path]:
-    _ = open_rgb(input_path)
-    output_img = open_rgb(output_path)
+    _ = open_rgb(source_path)
+    generated_img = open_rgb(generated_path)
     target_img = open_rgb(target_path)
-    validate_same_size(output_img, target_img)
+    validate_same_size(generated_img, target_img)
 
     target = to_float01(target_img)
-    generated = to_float01(output_img)
+    generated = to_float01(generated_img)
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
-    sample_id = extract_generated_sample_id(output_path)
+    sample_id = extract_generated_sample_id(generated_path)
     saved_paths: list[Path] = []
 
     absolute_error = np.mean(np.abs(target - generated), axis=2)
@@ -298,10 +302,10 @@ def find_existing_image(base_dir: str | Path, sample_id: str, suffix: str) -> Pa
     )
 
 
-def infer_input_path_from_row(row: dict[str, str]) -> Path:
+def infer_source_path_from_row(row: dict[str, str]) -> Path:
     sample_id = row["sample_id"]
-    if row.get("input_path"):
-        candidate = Path(row["input_path"])
+    if row.get("source_path"):
+        candidate = Path(row["source_path"])
         if candidate.is_file():
             return candidate
     if row.get("target_path"):
@@ -317,7 +321,7 @@ def infer_input_path_from_row(row: dict[str, str]) -> Path:
             return find_existing_image(dataset_test_dir, sample_id, "_source")
         except FileNotFoundError:
             pass
-    raise FileNotFoundError(f"Could not infer input/source path for sample '{sample_id}'.")
+    raise FileNotFoundError(f"Could not infer source/source path for sample '{sample_id}'.")
 
 
 def select_representative_rows(
@@ -344,7 +348,7 @@ def write_metric_selection_summary(rows: list[dict[str, object]], save_path: str
         "metric_value",
         "target_value",
         "abs_distance_from_target",
-        "input_path",
+        "source_path",
         "target_path",
         "generated_path",
         "comparison_path",
@@ -356,25 +360,131 @@ def write_metric_selection_summary(rows: list[dict[str, object]], save_path: str
         writer.writeheader()
         writer.writerows(rows)
 
+def save_stacked_image_panel(
+    image_paths: list[str | Path],
+    save_path: str | Path,
+    row_titles: list[str] | None = None,
+    suptitle: str | None = None,
+) -> Path:
+    if not image_paths:
+        raise ValueError("No image paths provided for stacked panel.")
+
+    resolved_paths = [Path(path) for path in image_paths]
+    for path in resolved_paths:
+        if not path.is_file():
+            raise FileNotFoundError(f"Diagnostic image not found: {path}")
+
+    images = [np.asarray(Image.open(path).convert("RGB")) for path in resolved_paths]
+
+    max_width = max(image.shape[1] for image in images)
+    total_height = sum(image.shape[0] for image in images)
+
+    dpi = 200
+    fig_width = max_width / dpi
+    extra_title_space = 0.8 if suptitle else 0.2
+    fig_height = total_height / dpi + extra_title_space + 0.4 * len(images)
+
+    fig, axes = plt.subplots(len(images), 1, figsize=(fig_width, fig_height))
+    if len(images) == 1:
+        axes = [axes]
+
+    for index, (ax, image, path) in enumerate(zip(axes, images, resolved_paths)):
+        ax.imshow(image)
+        if row_titles is not None:
+            ax.set_title(row_titles[index])
+        else:
+            ax.set_title(path.stem)
+        ax.axis("off")
+
+    if suptitle:
+        fig.suptitle(suptitle)
+
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    return save_path
+
+
+def build_metric_kind_row_title(metric_name: str, kind: str, sample_id: str, metric_value: float) -> str:
+    return f"{metric_name.upper()} | {kind.upper()} | sample={sample_id} | value={metric_value:.6f}"
+
+
+def save_metric_diagnostics_summary(
+    metric_name: str,
+    metric_dir: str | Path,
+    diagnostic_entries: list[dict[str, object]],
+) -> list[Path]:
+    metric_dir = Path(metric_dir)
+
+    output_specs = [
+        (
+            "comparison_path",
+            f"{metric_name}_comparisons_max_mean_min.png",
+            f"{metric_name.upper()} - Comparison Panels (MAX / MEAN / MIN)",
+        ),
+        (
+            "error_histogram_path",
+            f"{metric_name}_error_histograms_max_mean_min.png",
+            f"{metric_name.upper()} - Absolute Error Histograms (MAX / MEAN / MIN)",
+        ),
+        (
+            "intensity_overlay_histogram_path",
+            f"{metric_name}_intensity_overlay_histograms_max_mean_min.png",
+            f"{metric_name.upper()} - Target vs Generated Intensity Histograms (MAX / MEAN / MIN)",
+        ),
+        (
+            "target_vs_generated_scatter_by_channel_path",
+            f"{metric_name}_target_vs_generated_scatters_by_channel_max_mean_min.png",
+            f"{metric_name.upper()} - Target vs Generated Scatter by Channel (MAX / MEAN / MIN)",
+        ),
+    ]
+
+    saved_paths: list[Path] = []
+
+    for path_key, filename, suptitle in output_specs:
+        image_paths = [entry[path_key] for entry in diagnostic_entries]
+        row_titles = [
+            build_metric_kind_row_title(
+                metric_name=metric_name,
+                kind=entry["kind"],
+                sample_id=entry["sample_id"],
+                metric_value=entry["metric_value"],
+            )
+            for entry in diagnostic_entries
+        ]
+        saved_path = save_stacked_image_panel(
+            image_paths=image_paths,
+            save_path=metric_dir / filename,
+            row_titles=row_titles,
+            suptitle=suptitle,
+        )
+        saved_paths.append(saved_path)
+
+    return saved_paths
 
 def run_single_mode(args: argparse.Namespace) -> None:
-    if args.input_image is None or args.output_image is None or args.target_image is None:
-        raise SystemExit("Single mode requires --input-image, --output-image and --target-image.")
+    if args.source_image is None or args.generated_image is None or args.target_image is None:
+        raise SystemExit("Single mode requires --source-image, --generated-image and --target-image.")
 
-    save_path = args.save_path if args.save_path is not None else infer_default_save_path(args.output_image)
+    save_path = args.save_path if args.save_path is not None else infer_default_save_path(args.generated_image)
     saved_path = save_comparison_panel(
-        input_path=args.input_image,
-        output_path=args.output_image,
+        source_path=args.source_image,
+        generated_path=args.generated_image,
         target_path=args.target_image,
         save_path=save_path,
     )
     print(f"Saved comparison image to: {saved_path}")
 
     if args.with_diagnostics:
-        diagnostics_dir = infer_diagnostics_dir(saved_path)
+        diagnostics_dir = infer_case_diagnostics_dir(
+            save_path=saved_path,
+            generated_image=args.generated_image,
+        )
         diagnostic_paths = save_diagnostic_plots(
-            input_path=args.input_image,
-            output_path=args.output_image,
+            source_path=args.source_image,
+            generated_path=args.generated_image,
             target_path=args.target_image,
             save_dir=diagnostics_dir,
         )
@@ -405,23 +515,45 @@ def run_from_metrics_mode(args: argparse.Namespace) -> None:
         metric_dir.mkdir(parents=True, exist_ok=True)
         representative_rows = select_representative_rows(metric_name, metric_summary, per_image_rows)
         metric_selection_rows: list[dict[str, object]] = []
+        metric_diagnostic_entries: list[dict[str, object]] = []
         for kind, row in representative_rows.items():
             sample_id = row["sample_id"]
             metric_value = float(row[metric_name])
             target_value = float(metric_summary[kind if kind in {"min", "max"} else "mean"])
-            input_path = infer_input_path_from_row(row)
-            output_path = Path(row["generated_path"])
+            source_path = infer_source_path_from_row(row)
+            generated_path = Path(row["generated_path"])
             target_path = Path(row["target_path"])
             comparison_path = metric_dir / f"{kind}_{sample_id}_comparison.png"
             saved_path = save_comparison_panel(
-                input_path=input_path,
-                output_path=output_path,
+                source_path=source_path,
+                generated_path=generated_path,
                 target_path=target_path,
                 save_path=comparison_path,
                 suptitle=(
                     f"{metric_name.upper()} | {kind.upper()} | "
                     f"sample={sample_id} | value={metric_value:.6f}"
                 ),
+            )
+            diagnostics_case_dir = metric_dir / "diagnostics" / f"{kind}_{sample_id}"
+            diagnostic_paths = save_diagnostic_plots(
+                source_path=source_path,
+                generated_path=generated_path,
+                target_path=target_path,
+                save_dir=diagnostics_case_dir,
+            )
+            diagnostic_paths_by_name = {path.name: path for path in diagnostic_paths}
+            metric_diagnostic_entries.append(
+                {
+                    "kind": kind,
+                    "sample_id": sample_id,
+                    "metric_value": metric_value,
+                    "comparison_path": saved_path,
+                    "error_histogram_path": diagnostic_paths_by_name[f"{sample_id}_error_histogram.png"],
+                    "intensity_overlay_histogram_path": diagnostic_paths_by_name[f"{sample_id}_intensity_overlay_histogram.png"],
+                    "target_vs_generated_scatter_by_channel_path": diagnostic_paths_by_name[
+                        f"{sample_id}_target_vs_generated_scatter_by_channel.png"
+                    ],
+                }
             )
             selection_row = {
                 "metric": metric_name,
@@ -430,14 +562,24 @@ def run_from_metrics_mode(args: argparse.Namespace) -> None:
                 "metric_value": metric_value,
                 "target_value": target_value,
                 "abs_distance_from_target": abs(metric_value - target_value),
-                "input_path": str(input_path),
+                "source_path": str(source_path),
                 "target_path": str(target_path),
-                "generated_path": str(output_path),
+                "generated_path": str(generated_path),
                 "comparison_path": str(saved_path),
             }
             selection_summary_rows.append(selection_row)
             metric_selection_rows.append(selection_row)
         write_metric_selection_summary(metric_selection_rows, metric_dir / "selection_summary.csv")
+        kind_order = {"max": 0, "mean": 1, "min": 2}
+        metric_diagnostic_entries.sort(key=lambda entry: kind_order[entry["kind"]])
+
+        aggregated_paths = save_metric_diagnostics_summary(
+            metric_name=metric_name,
+            metric_dir=metric_dir,
+            diagnostic_entries=metric_diagnostic_entries,
+        )
+        for aggregated_path in aggregated_paths:
+            print(f"Saved aggregated diagnostic panel to: {aggregated_path}")
     write_metric_selection_summary(selection_summary_rows, metrics_dir / "metrics_selection_summary.csv")
     print(f"Saved metric-based comparisons to: {metrics_dir}")
 
