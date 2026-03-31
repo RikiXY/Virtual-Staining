@@ -1,112 +1,79 @@
 # Virtual-Staining
 
-Paired virtual staining pipeline for histopathology images
+Paired virtual staining pipeline for histopathology images.
+
+This repository implements a paired virtual staining workflow that combines classical image processing and deep learning. Starting from paired full-size histology images, the pipeline builds an aligned patch dataset, trains a Pix2Pix-style conditional GAN, runs test inference, and provides integrated evaluation and comparison tools.
+
+The learning stage currently uses a **U-Net generator** and a **PatchGAN discriminator**, trained with **adversarial loss + L1 reconstruction loss**.
 
 ## Overview
 
-This repository implements a paired virtual staining pipeline for computational histopathology.
+The project follows this workflow:
 
-Starting from full-size `label_free.tif` and `stained.tif` images, the workflow:
-- generates tissue masks;
-- aligns the stained image to the label-free reference;
-- extracts paired patches and builds `dataset_train`, `dataset_val`, and `dataset_test`;
-- trains a Pix2Pix-style conditional GAN on the resulting paired dataset.
+1. load a paired full-size sample (`source` / `target`);
+2. generate tissue masks;
+3. align the target image to the source reference;
+4. extract aligned paired patches;
+5. build `dataset_train`, `dataset_val`, and `dataset_test`;
+6. train the model;
+7. run test inference on held-out patches;
+8. evaluate generated results with integrated metrics and comparison panels.
 
-The project combines classical image processing with paired deep learning for image-to-image translation.
-
-## Quick Start
-
-### 1. Prepare the input folder
-
-Create a sample folder inside `local_workspace/` containing a paired full-size sample:
-
-```text
-local_workspace/
-└── datasets/
-   └── your_sample/
-      ├── source.tif
-      └── target.tif
-   └── results/
-```
-
-### 2. Build the paired dataset
-
-```bash
-python src/prepare_dataset.py local_workspace/datasets/your_sample --source-name source.tif --target-name target.tif
-```
-
-Use `python src/prepare_dataset.py --help` to inspect the available preprocessing options.
-
-### 3. Train the model
-
-```bash
-python src/pix2pix.py train DATASET_PATH --run-name YOUR_RUN_NAME
-python src/pix2pix.py test DATASET_PATH --checkpoint CHECKPOINT_PATH
-```
-
-**Training example:**
-
-```bash
-python src/pix2pix.py train local_workspace/datasets/your_sample --run-name your_run_name
-```
-
-To see all training options:
-
-```bash
-python src/pix2pix.py train --help
-```
-
-### 4. Run test inference
-
-Provide the checkpoint explicitly from the command line:
-
-```bash
-python src/pix2pix.py test local_workspace/datasets/your_sample --checkpoint local_workspace/datasets/your_sample/checkpoints/your_checkpoint.pth
-```
-
-To see all test options:
-
-```bash
-python src/pix2pix.py test --help
-```
-
-**Note**: the training and test workflow is now CLI-driven. Outputs such as logs, checkpoints, validation previews, and test predictions are created automatically inside the selected dataset root.
+In addition to preprocessing and training, the repository also includes:
+- a metric evaluation tool for **MAE, RMSE, PSNR and SSIM**
+- a comparison tool to generate **visual panels and diagnostic plots**
 
 ## Qualitative Results
 
-The figures below are static qualitative examples included for documentation and visual inspection.
+The figures below show example qualitative outputs included for documentation.
 
 Each panel compares:
+- source patch
+- generated target
+- real target
 
-- input label-free patch;
-- generated stained prediction;
-- real stained target.
+From Label free to H&E staining.
+![Qualitative results](docs/assets/LabelFree-to-Stained_qualitative_result_2.png)
 
-![Qualitative results](docs/assets/qualitative_result_1.png)
-![Qualitative results](docs/assets/qualitative_result_2.png)
+From H&E staining to Label free.
+![Qualitative results](docs/assets/Stained-to-LabelFree_qualitative_result_2.png)
 
-## Current Workflow
+## Main Pipeline
 
-The current executable workflow is concentrated in two scripts inside [`src/`](./src):
+### 1. Dataset preparation
 
-1. [`src/prepare_dataset.py`](./src/prepare_dataset.py)  
-   Preprocessing pipeline for mask generation, alignment, patch extraction, and dataset split creation.
-2. [`src/pix2pix.py`](./src/pix2pix.py)  
-   Training and inference script for a Pix2Pix-style paired image-to-image translation model.
+`src/prepare_dataset.py` builds the paired dataset from full-size images.
 
-Workflow summary:
+It:
+- computes tissue masks;
+- aligns the target image to the source image;
+- extracts paired patches;
+- creates `dataset_train/`, `dataset_val/`, and `dataset_test/`
 
-1. Provide paired full-size histology images.
-2. Generate masks and isolate useful tissue regions.
-3. Align the stained image to the label-free image.
-4. Extract aligned patches.
-5. Split patches into `dataset_train`, `dataset_val`, and `dataset_test`.
-6. Train the model and save checkpoints and validation outputs.
-7. Run test-time inference on held-out data.
+### 2. Training and test inference
+
+`src/pix2pix.py` provides two CLI modes:
+- `train`
+- `test`
+
+Training creates a run directory with logs, checkpoints, validation outputs and metadata.  
+Test inference loads a checkpoint and generates predictions for the test split.
+
+### 3. Evaluation and visual comparison
+
+`tools/evaluate_generation.py` evaluates generated images against target images and can save:
+- per-image metrics
+- summary CSV files
+- skipped samples
+- optional plots
+
+`tools/make_comparison.py` creates:
+- source / generated / target comparison panels
+- MAE difference maps
+- optional diagnostic plots
+- representative comparisons selected from evaluation results
 
 ## Repository Structure
-
-The repository includes both the current workflow and older experimental material accumulated during development. For day-to-day use, the main entry point is `src/`.
 
 ```text
 Virtual-Staining/
@@ -118,189 +85,95 @@ Virtual-Staining/
 │   ├── json/
 │   ├── prepare_dataset.py
 │   └── pix2pix.py
+├── tools/
+│   ├── evaluate_generation.py
+│   └── make_comparison.py
 ├── requirements.txt
-└── README.md
+├── README.md
+└── TASKS.md
 ```
 
-Main paths:
+## Example Workflow
 
-- `src/` contains the main executable code.
-- `src/prepare_dataset.py` handles preprocessing and dataset creation.
-- `src/pix2pix.py` handles training, validation, checkpoints, and test inference.
-- `src/json/` contains support configuration and message files.
-- `local_workspace/` is the working area used during execution, where input samples and execution-generated folders such as datasets, checkpoints, logs, and output images are stored.
-- `docs/` contains project documentation and static assets used in the README or related explanatory material.
-- `examples/` contains example images or sample materials useful to illustrate the pipeline and its outputs.
-- `archive/` contains historical notes, experiments, and legacy working material collected during development.
+The commands below show a typical end-to-end usage example.
 
-## Main Scripts
-
-### `src/prepare_dataset.py`
-
-Integrated preprocessing entry point.
-
-**What it does**
-
-- loads `label_free.tif` and `stained.tif` from a given folder;
-- computes foreground masks for both images;
-- aligns the stained image to the label-free reference;
-- extracts patch pairs from aligned tissue regions;
-- saves the resulting dataset into `dataset_train/`, `dataset_val/`, and `dataset_test/`.
-
-**CLI usage**
+### Prepare the dataset
 
 ```bash
-python src/prepare_dataset.py <path> [--seed SEED] [--save_masks] [--lang {en,it}]
+python src/prepare_dataset.py \
+  --path local_workspace/datasets/your_sample \
+  --source-name source.tif \
+  --target-name target.tif \
+  --image-size 512 512 \
+  --grid-movement 512 512 \
+  --margin 200 \
+  --seed 42 \
+  --lang en
 ```
 
-To see all available options:
+### Train the model
+
+```bash
+python src/pix2pix.py train \
+  --dataset-root local_workspace/datasets/your_sample \
+  --run-name your_run \
+  --results-path local_workspace/results \
+  --epochs 100 \
+  --batch-size 8 \
+  --l1-lambda 25 \
+  --seed 42
+```
+
+### Run test inference
+
+```bash
+python src/pix2pix.py test \
+  --dataset-root local_workspace/datasets/your_sample \
+  --run-path local_workspace/results/your_run \
+  --checkpoint local_workspace/results/your_run/checkpoints/ep099.pth
+```
+
+### Evaluate generated results
+
+```bash
+python tools/evaluate_generation.py dataset \
+  --target-dir local_workspace/datasets/your_sample/dataset_test \
+  --generated-dir local_workspace/results/your_run/output_test \
+  --save-graphs
+```
+
+### Create representative comparison panels
+
+```bash
+python tools/make_comparison.py \
+  --from-metrics \
+  --run-path local_workspace/results/your_run
+```
+
+### Create a single comparison panel
+
+```bash
+python tools/make_comparison.py \
+  --source-image local_workspace/datasets/your_sample/dataset_test/source.tif \
+  --generated-image local_workspace/results/your_run/output_test/generated.tif \
+  --target-image local_workspace/datasets/your_sample/dataset_test/target.tif \
+  --with-diagnostics
+```
+
+## Notes
+
+- `prepare_dataset.py` is the preprocessing entry point
+- `pix2pix.py` handles training, validation, checkpoints and test inference
+- `evaluate_generation.py` handles metric evaluation
+- `make_comparison.py` handles visual comparison and diagnostics
+
+For detailed options, use:
 
 ```bash
 python src/prepare_dataset.py --help
-```
-
-**Typical outputs**
-
-- `mask_lf.tif`
-- `mask_st.tif`
-- `aligned_stained.tif`
-- `aligned_mask_st.tif`
-- `subimages/`
-- `dataset_train/`
-- `dataset_val/`
-- `dataset_test/`
-
-When `--save_masks` is enabled, patch-level mask files are also saved inside `subimages/`.
-
-### `src/pix2pix.py`
-
-Learning and inference stage of the pipeline.
-
-**What it does**
-
-- loads paired patch datasets using the naming convention `*_label_free.tif` and `*_stained.tif`;
-- trains a Pix2Pix-style conditional GAN;
-- validates the model during training;
-- saves checkpoints;
-- runs test-time inference from a selected checkpoint.
-
-**CLI usage**
-
-```bash
-python src/pix2pix.py train <dataset_root>
-python src/pix2pix.py test <dataset_root> --checkpoint <checkpoint_path>
-```
-
-To see all available options:
-
-```bash
 python src/pix2pix.py --help
 python src/pix2pix.py train --help
 python src/pix2pix.py test --help
+python tools/evaluate_generation.py --help
+python tools/make_comparison.py --help
 ```
-
-**Practical note**: logs, checkpoints, validation outputs, and test outputs are automatically created inside the selected dataset root.
-
-## Input and Outputs
-
-**Expected preprocessing input**:
-
-- `label_free.tif`
-- `stained.tif`
-
-**Expected training/testing pairs**:
-
-- `00000_00000_label_free.tif`
-- `00000_00000_stained.tif`
-
-Only valid prefix-matched pairs are used by the dataset loader.
-
-**Typical generated artifacts**:
-
-- masks for both input images;
-- aligned stained image artifacts;
-- extracted paired patches in `subimages/`;
-- dataset splits in `dataset_train/`, `dataset_val/`, and `dataset_test/`.
-- validation predictions;
-- saved checkpoints;
-- test predictions.
-
-## Method
-
-The pipeline combines deterministic image processing with paired supervised deep learning.
-
-**Preprocessing**
-
-- mask generation isolates tissue regions and reduces background-dominated areas;
-- alignment registers the stained image to the label-free reference using feature-based matching and affine transformation;
-- patch extraction divides aligned images into fixed-size patches while filtering mostly background regions.
-
-**Learning model:**
-
-- Pix2Pix-style conditional GAN trained on paired histology patches;
-- U-Net-like generator with skip connections;
-- PatchGAN discriminator on conditional image pairs;
-- adversarial supervision combined with reconstruction loss.
-
-This setup is suitable for paired image-to-image translation, where the generated stained image should remain structurally consistent with the input label-free image.
-
-## Requirements
-
-The project currently targets:
-
-- **Python 3.11**
-
-Main libraries used in the codebase include:
-
-- OpenCV
-- NumPy
-- Pillow
-- PyTorch
-- torchvision
-- Matplotlib
-
-The repository includes a minimal [`requirements.txt`](./requirements.txt), but dependency management is still lightweight and may require manual package installation depending on the environment.
-
-## Detailed Usage
-
-**Preprocessing:**
-
-```bash
-python src/prepare_dataset.py local_workspace/liver --lang en --seed 42 --save_masks
-```
-
-**Training:**
-
-```bash
-python src/pix2pix.py train local_workspace/liver
-```
-
-**Testing/Inference:**
-
-```bash
-python src/pix2pix.py test local_workspace/liver --checkpoint local_workspace/liver/checkpoints/your_checkpoint.pth
-```
-
-For test inference, provide the checkpoint path explicitly with `--checkpoint`.
-
-## Limitations/Current State
-
-The project is structured and usable, but still experimental in several practical respects.
-
-- The workflow is now CLI-driven, but configuration is still only partially centralized.
-- The repository includes historical material alongside the current main workflow.
-- Dependency management is minimal and not yet tightly pinned.
-
-## Future Improvements
-
-Planned or plausible directions for improvement include:
-
-- centralized configuration for paths and hyperparameters;
-- more consistent CLI design and centralized configuration;
-- stronger reproducibility and dataset bookkeeping;
-- more modular separation of preprocessing, training, and evaluation code;
-- expanded evaluation and visualization utilities.
-
-## Academic Context
-
-This project was developed in a university and research-oriented setting focused on **virtual staining**, **computational histopathology**, and **paired image-to-image translation**. It reflects both the methodological importance of aligned supervision and the practical engineering work required to transform full-size microscopy images into training-ready paired data.

@@ -1,7 +1,7 @@
 # TASKS
 
 ## Now
-- [ ] Update README to the latest project version
+- [X] Update README to the latest project version
 - [ ] Re-check the full pipeline after recent refactoring
 - [ ] Re-check path handling across preprocessing, training, test and evaluation
 - [ ] Re-check logs, checkpoints and run metadata
