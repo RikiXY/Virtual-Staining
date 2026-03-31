@@ -20,6 +20,7 @@ The project follows this workflow:
 8. evaluate generated results with integrated metrics and comparison panels.
 
 In addition to preprocessing and training, the repository also includes:
+
 - a metric evaluation tool for **MAE, RMSE, PSNR and SSIM**
 - a comparison tool to generate **visual panels and diagnostic plots**
 
@@ -28,6 +29,7 @@ In addition to preprocessing and training, the repository also includes:
 The figures below show example qualitative outputs included for documentation.
 
 Each panel compares:
+
 - source patch
 - generated target
 - real target
@@ -45,6 +47,7 @@ From H&E staining to Label free.
 `src/prepare_dataset.py` builds the paired dataset from full-size images.
 
 It:
+
 - computes tissue masks;
 - aligns the target image to the source image;
 - extracts paired patches;
@@ -53,6 +56,7 @@ It:
 ### 2. Training and test inference
 
 `src/pix2pix.py` provides two CLI modes:
+
 - `train`
 - `test`
 
@@ -62,12 +66,14 @@ Test inference loads a checkpoint and generates predictions for the test split.
 ### 3. Evaluation and visual comparison
 
 `tools/evaluate_generation.py` evaluates generated images against target images and can save:
+
 - per-image metrics
 - summary CSV files
 - skipped samples
 - optional plots
 
 `tools/make_comparison.py` creates:
+
 - source / generated / target comparison panels
 - MAE difference maps
 - optional diagnostic plots
