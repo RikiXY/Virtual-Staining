@@ -21,6 +21,7 @@ __pycache__/
 # Obsidian
 .obsidian/
 **/.obsidian/
+notes/*
 
 # VSCode
 .vscode/
