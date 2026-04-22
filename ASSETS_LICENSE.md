@@ -1,6 +1,6 @@
 Non-code assets notice
 
-Copyright (c) 2025 Riccardo Giuseppe Amato (RikiXY), Andrea Mura
+Copyright (c) 2025 Riccardo Giuseppe Amato (RikiXY), Andrea Mura (andreamura)
 
 All images, sample histology patches, generated examples, comparison panels, and any
 other non-code visual assets contained in this repository are provided exclusively for
