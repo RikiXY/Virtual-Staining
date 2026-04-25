@@ -14,9 +14,11 @@ extracts paired patches, and creates the `dataset_train`, `dataset_val`, and
 
 from os import path
 
-import cv2, os, random
+
+import cv2, os, random, shutil
 import argparse
 import json
+import csv
 from pathlib import Path
 from typing import Optional
 
@@ -542,6 +544,145 @@ def validate_image_filename(filename: str, role: str) -> Path:
         )
     return file_path
 
+
+def compute_white_ratio(img: np.ndarray, white_threshold: int = 240) -> float:
+    """
+    Computes the ratio of near-white pixels in the input image.
+
+    Parameters
+    ----------
+    img : np.ndarray
+        Input image.
+    white_threshold : int, optional
+        Pixels with grayscale intensity greater than or equal to this threshold
+        are considered white background. Default is 240.
+
+    Returns
+    -------
+    white_ratio : float
+        Ratio of near-white pixels in the image.
+    """
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    return float(np.mean(gray >= white_threshold))
+
+
+def compute_largest_white_component_ratio(
+    img: np.ndarray,
+    white_threshold: int = 245,
+) -> float:
+    """
+    Computes the area ratio of the largest connected near-white component.
+
+    Parameters
+    ----------
+    img : np.ndarray
+        Input image.
+    white_threshold : int, optional
+        Pixels with grayscale intensity greater than or equal to this threshold
+        are considered white. Default is 245.
+
+    Returns
+    -------
+    largest_component_ratio : float
+        Ratio between the largest white connected component area and the total
+        patch area.
+    """
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    white_mask = (gray >= white_threshold).astype(np.uint8) * 255
+
+    num_labels, _, stats, _ = cv2.connectedComponentsWithStats(
+        white_mask,
+        connectivity=8,
+    )
+
+    if num_labels <= 1:
+        return 0.0
+
+    largest_area = int(np.max(stats[1:, cv2.CC_STAT_AREA]))
+    return float(largest_area / white_mask.size)
+
+
+def ensure_clean_directory(directory: str | Path) -> None:
+    """
+    Removes an output directory if it already exists and recreates it empty.
+
+    Parameters
+    ----------
+    directory : str | Path
+        Directory to clean and recreate.
+    """
+
+    directory = Path(directory)
+    if directory.exists():
+        shutil.rmtree(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+
+
+def is_valid_patch_pair(
+    source_img: np.ndarray,
+    target_img: np.ndarray,
+    source_mask: np.ndarray,
+    target_mask: np.ndarray,
+    min_foreground_ratio: float,
+    max_white_ratio: float,
+    white_threshold: int,
+    max_largest_white_component_ratio: float,
+) -> tuple[bool, dict[str, float | list[str]]]:
+    """
+    Validates a source/target patch pair using both mask coverage and white ratio.
+
+    Returns
+    -------
+    is_valid : bool
+        True if the patch pair is valid, False otherwise.
+    debug_info : dict[str, float | list[str]]
+        Dictionary containing computed ratios and discard reasons.
+    """
+
+    source_foreground_ratio = cv2.countNonZero(source_mask) / source_mask.size
+    target_foreground_ratio = cv2.countNonZero(target_mask) / target_mask.size
+
+    source_white_ratio = compute_white_ratio(source_img, white_threshold)
+    target_white_ratio = compute_white_ratio(target_img, white_threshold)
+
+    source_largest_white_component_ratio = compute_largest_white_component_ratio(
+        source_img,
+        white_threshold,
+    )
+    target_largest_white_component_ratio = compute_largest_white_component_ratio(
+        target_img,
+        white_threshold,
+    )
+
+    reasons: list[str] = []
+
+    if source_foreground_ratio < min_foreground_ratio:
+        reasons.append("low_source_foreground")
+    if target_foreground_ratio < min_foreground_ratio:
+        reasons.append("low_target_foreground")
+    if source_white_ratio > max_white_ratio:
+        reasons.append("high_source_white_ratio")
+    if target_white_ratio > max_white_ratio:
+        reasons.append("high_target_white_ratio")
+    if source_largest_white_component_ratio > max_largest_white_component_ratio:
+        reasons.append("high_source_largest_white_component_ratio")
+    if target_largest_white_component_ratio > max_largest_white_component_ratio:
+        reasons.append("high_target_largest_white_component_ratio")
+
+    debug_info = {
+        "source_foreground_ratio": source_foreground_ratio,
+        "target_foreground_ratio": target_foreground_ratio,
+        "source_white_ratio": source_white_ratio,
+        "target_white_ratio": target_white_ratio,
+        "source_largest_white_component_ratio": source_largest_white_component_ratio,
+        "target_largest_white_component_ratio": target_largest_white_component_ratio,
+        "reasons": reasons,
+    }
+
+    return len(reasons) == 0, debug_info
+
 def main(
     path: str,
     source_name: str,
@@ -654,12 +795,24 @@ def main(
         positions,
     )
     print(MESSAGES["total_subimages"][lang].format(count=len(source_images)))
-    # [ITA] Combinazione delle immagini con le maschere
-    # [EN] Combining images with masks
+
+    # [ITA] Filtro finale robusto sulle coppie: controlliamo sia le maschere
+    # [EN] Final robust pair filter: check both masks
+    # [ITA] che la percentuale di bianco nelle patch source e target.
+    # [EN] and the white-background ratio in source and target patches.
+    min_foreground_ratio = 0.25
+    max_white_ratio = 0.7
+    white_threshold = 250
+    max_largest_white_component_ratio = 0.20
+
+    # [ITA] Manteniamo separate le coppie valide da quelle scartate per poterle ispezionare.
+    # [EN] Keep valid and discarded pairs separate so they can be inspected later.
     named_source_images = []
     named_target_images = []
-    named_source_masks = []
-    named_target_masks = []
+    discarded_source_images = []
+    discarded_target_images = []
+    discarded_log_rows = []
+
     for (x, y), source_img, source_patch_mask, target_img, target_patch_mask in zip(
         positions,
         source_images,
@@ -667,41 +820,99 @@ def main(
         target_images,
         target_masks,
     ):
-        named_source_images.append((source_img, f"{x:05}_{y:05}_source{source_suffix}"))
-        named_target_images.append((target_img, f"{x:05}_{y:05}_target{target_suffix}"))
-        named_source_masks.append((source_patch_mask, f"{x:05}_{y:05}_mask_source{source_suffix}"))
-        named_target_masks.append((target_patch_mask, f"{x:05}_{y:05}_mask_target{target_suffix}"))
+        source_name = f"{x:05}_{y:05}_source{source_suffix}"
+        target_name = f"{x:05}_{y:05}_target{target_suffix}"
+
+        is_valid, debug_info = is_valid_patch_pair(
+            source_img=source_img,
+            target_img=target_img,
+            source_mask=source_patch_mask,
+            target_mask=target_patch_mask,
+            min_foreground_ratio=min_foreground_ratio,
+            max_white_ratio=max_white_ratio,
+            white_threshold=white_threshold,
+            max_largest_white_component_ratio=max_largest_white_component_ratio,
+        )
+
+        if is_valid:
+            named_source_images.append((source_img, source_name))
+            named_target_images.append((target_img, target_name))
+        else:
+            discarded_source_images.append((source_img, source_name))
+            discarded_target_images.append((target_img, target_name))
+
+            discarded_log_rows.append(
+                {
+                    "sample_id": f"{x:05}_{y:05}",
+                    "source_name": source_name,
+                    "target_name": target_name,
+                    "source_foreground_ratio": debug_info["source_foreground_ratio"],
+                    "target_foreground_ratio": debug_info["target_foreground_ratio"],
+                    "source_white_ratio": debug_info["source_white_ratio"],
+                    "target_white_ratio": debug_info["target_white_ratio"],
+                    "source_largest_white_component_ratio": debug_info["source_largest_white_component_ratio"],
+                    "target_largest_white_component_ratio": debug_info["target_largest_white_component_ratio"],
+                    "reasons": ";".join(debug_info["reasons"]),
+                }
+            )
+
     print(MESSAGES["pair_renamed"][lang])
-    # [ITA] Salvataggio delle sottoimmagini
-    # [EN] Saving sub-images
-    print(MESSAGES["pair_saving"][lang])
-    os.makedirs(os.path.join(path, "subimages"), exist_ok=True)
-    for source_img, source_patch_mask, target_img, target_patch_mask in zip(
-        named_source_images,
-        named_source_masks,
-        named_target_images,
-        named_target_masks,
-    ):
-        cv2.imwrite(os.path.join(path, "subimages", source_img[1]), source_img[0])
-        cv2.imwrite(os.path.join(path, "subimages", target_img[1]), target_img[0])
-        if save_masks:
-            cv2.imwrite(os.path.join(path, "subimages", source_patch_mask[1]), source_patch_mask[0])
-            cv2.imwrite(os.path.join(path, "subimages", target_patch_mask[1]), target_patch_mask[0])
-    print(MESSAGES["pair_saved"][lang])
+
+    # [ITA] Prepariamo anche una cartella con le patch scartate per debug e verifica visiva.
+    # [EN] Also prepare a discarded-patches folder for debugging and visual inspection.
+    discarded_root = os.path.join(path, "discarded_patches")
+    discarded_source_dir = os.path.join(discarded_root, "source")
+    discarded_target_dir = os.path.join(discarded_root, "target")
+
+    # [ITA] Puliamo le cartelle di output per evitare residui di esecuzioni precedenti.
+    # [EN] Clean output folders to avoid leftovers from previous runs.
+    ensure_clean_directory(os.path.join(path, "dataset_train"))
+    ensure_clean_directory(os.path.join(path, "dataset_val"))
+    ensure_clean_directory(os.path.join(path, "dataset_test"))
+    ensure_clean_directory(discarded_source_dir)
+    ensure_clean_directory(discarded_target_dir)
+
+    for source_img, source_name in discarded_source_images:
+        cv2.imwrite(os.path.join(discarded_source_dir, source_name), source_img)
+    for target_img, target_name in discarded_target_images:
+        cv2.imwrite(os.path.join(discarded_target_dir, target_name), target_img)
+    
+    discarded_log_path = os.path.join(discarded_root, "discarded_log.csv")
+    with open(discarded_log_path, "w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(
+            file,
+            fieldnames=[
+                "sample_id",
+                "source_name",
+                "target_name",
+                "source_foreground_ratio",
+                "target_foreground_ratio",
+                "source_white_ratio",
+                "target_white_ratio",
+                "reasons",
+                "source_largest_white_component_ratio",
+                "target_largest_white_component_ratio"
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(discarded_log_rows)
+
     # [ITA] Suddivisione del dataset in training, validation e testing
     # [EN] Splitting the dataset into training, validation, and testing
     print(MESSAGES["dataset_subdivision"][lang])
     images = list(zip(named_source_images, named_target_images))
     split = split_items(images, [0.8, 0.05, 0.15])
     print(MESSAGES["pair_number_division"][lang].format(train=len(split[0]), val=len(split[1]), test=len(split[2])))
+
     # [ITA] Salvataggio delle immagini suddivise
     # [EN] Saving the split images
     for i, subset in enumerate(split):
         subset_name = ["dataset_train", "dataset_val", "dataset_test"][i]
-        os.makedirs(os.path.join(path, subset_name), exist_ok=True)
+        subset_dir = os.path.join(path, subset_name)
         for source_img, target_img in subset:
-            cv2.imwrite(os.path.join(path, subset_name, source_img[1]), source_img[0])
-            cv2.imwrite(os.path.join(path, subset_name, target_img[1]), target_img[0])
+            cv2.imwrite(os.path.join(subset_dir, source_img[1]), source_img[0])
+            cv2.imwrite(os.path.join(subset_dir, target_img[1]), target_img[0])
+
     print(MESSAGES["dataset_saved"][lang])
     # ==========================================================
 
