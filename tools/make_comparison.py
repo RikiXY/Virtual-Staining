@@ -742,7 +742,7 @@ def print_metric_run_header(run_path: Path, available_metrics: list[str]) -> Non
 def print_metric_saved_files(metrics_dir: Path) -> None:
     """Stampa il riepilogo finale dei file salvati in modalita from-metrics."""
     print_section("Saved files")
-    print_info("Metric-based comparisons", style(str(metrics_dir), "green"))
+    print_info("Metric-based comparisons", metrics_dir)
 
 
 # =====================================
@@ -903,7 +903,7 @@ def run_from_metrics(args: argparse.Namespace) -> None:
         )
 
         for aggregated_path in aggregated_paths:
-            print_info("Saved aggregated panel", style(str(aggregated_path), "magenta"))
+            print_info("Saved aggregated panel", aggregated_path)
 
     write_metric_selection_summary(
         selection_summary_rows,
