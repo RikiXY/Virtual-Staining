@@ -1398,7 +1398,7 @@ def main(
     )
 
     training_status = {
-        "last_checkpoint": Path(resume_checkpoint).name if resume_checkpoint else "none"
+        "last_checkpoint": Path(resume_checkpoint).name if resume_checkpoint else "none "
     }
 
     for epoch in range(start_epoch, n_epochs):
