@@ -1170,7 +1170,13 @@ def train_one_epoch(
             f"ETA {eta_str}"
         )
 
-        update_console_progress(console_message)
+        should_update_progress = (
+            i % log_rate == 0
+            or i == len(training_loader) - 1
+        )
+
+        if should_update_progress:
+            update_console_progress(console_message)
 
         if i % log_rate == 0:
             if end_time is None:
