@@ -742,7 +742,7 @@ def print_metric_run_header(run_path: Path, available_metrics: list[str]) -> Non
 def print_metric_saved_files(metrics_dir: Path) -> None:
     """Stampa il riepilogo finale dei file salvati in modalita from-metrics."""
     print_section("Saved files")
-    print_info("Metric-based comparisons", metrics_dir)
+    print_info(style(f"Metric-based comparisons, {metrics_dir}", "bold", "magenta"))  
 
 
 # =====================================
