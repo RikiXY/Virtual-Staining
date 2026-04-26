@@ -790,33 +790,20 @@ def render_progress_bar(progress: float, width: int = 40) -> str:
     return f"[{style(bar, 'green')}]"
 
 
-def update_console_progress(message: str, checkpoint_message: str | None = None) -> None:
-    """Aggiorna la console con una barra di progresso e una riga informativa sotto."""
+def update_console_progress(message: str) -> None:
+    """Aggiorna una singola riga di progresso in console."""
     try:
         terminal_width = os.get_terminal_size().columns
     except OSError:
-        terminal_width = 120
+        terminal_width = 140
 
-    if checkpoint_message is None:
-        checkpoint_message = "Last saved checkpoint: none yet"
-
-    msg1 = message[: terminal_width - 1].ljust(terminal_width - 1)
-    msg2 = checkpoint_message[: terminal_width - 1].ljust(terminal_width - 1)
-
-    # \033[K cancella la riga corrente.
-    # \033[F torna alla riga precedente.
-    block = (
-        "\r\033[K" + msg1 +
-        "\n\033[K" + msg2 +
-        "\033[F"
-    )
-
-    print(block, end="", flush=True)
+    clean_message = message[: terminal_width - 1]
+    print("\r" + clean_message.ljust(terminal_width - 1), end="", flush=True)
 
 
 def finish_console_progress() -> None:
-    """Chiude il blocco di progresso corrente."""
-    print("\033[1B")
+    """Chiude la riga di progresso corrente."""
+    print()
 
 
 # --------------------- Checkpoints ---------------------
@@ -1181,7 +1168,8 @@ def train_one_epoch(
             f"loss_G {loss_G.item():.4f} | "
             f"loss_D {loss_D.item():.4f} | "
             f"elapsed {elapsed_str} | "
-            f"ETA {eta_str}"
+            f"ETA {eta_str} | "
+            f"ckpt {training_status['last_checkpoint']}"
         )
 
         should_update_progress = (
@@ -1190,8 +1178,7 @@ def train_one_epoch(
         )
 
         if should_update_progress:
-            checkpoint_message = f"Last saved checkpoint: {training_status['last_checkpoint']}"
-            update_console_progress(console_message, checkpoint_message)
+            update_console_progress(console_message)
         
         if i % log_rate == 0:
             if end_time is None:
