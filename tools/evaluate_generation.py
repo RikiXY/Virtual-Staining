@@ -652,7 +652,7 @@ def print_dataset_summary(
             print_info(f"{metric.upper()} median", color_metric(metric, float(np.median(values))))
 
     print_section("Saved files")
-    print_info("Evaluation dir", str(output_dir))
+    print_info("Evaluation dir", style(str(output_dir), "bold", "magenta"))
 
 
 
@@ -676,7 +676,7 @@ def run_single(args: argparse.Namespace) -> None:
     write_single_case_csv(row, single_case_csv)
 
     print_section("Saved files")
-    print_info("Single-case CSV", str(single_case_csv))
+    print_info("Single evaluation CSV", style(str(single_case_csv), "bold", "magenta"))
 
 
 def run_dataset(args: argparse.Namespace) -> None:
