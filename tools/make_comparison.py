@@ -410,7 +410,7 @@ def select_representative_rows(
     metric_summary: dict[str, float],
     per_image_rows: list[dict[str, str]],
 ) -> dict[str, dict[str, str]]:
-    """Seleziona i sample min, max e piu vicino alla media per una metrica."""
+    """Seleziona i sample min, max e più vicino alla mediana per una metrica."""
     if not per_image_rows:
         raise ValueError("No per-image rows available for representative selection.")
 
@@ -418,12 +418,12 @@ def select_representative_rows(
         return float(row[metric_name])
 
     return {
-        "min": min(per_image_rows, key=metric_value),
         "max": max(per_image_rows, key=metric_value),
-        "mean": min(
+        "median": min(
             per_image_rows,
-            key=lambda row: abs(metric_value(row) - metric_summary["mean"]),
+            key=lambda row: abs(metric_value(row) - metric_summary["median"]),
         ),
+        "min": min(per_image_rows, key=metric_value),
     }
 
 
@@ -657,28 +657,28 @@ def save_metric_diagnostics_summary(
     metric_dir: str | Path,
     diagnostic_entries: list[dict[str, object]],
 ) -> list[Path]:
-    """Salva i pannelli aggregati per una metrica sui casi min, mean e max."""
+    """Salva i pannelli aggregati per una metrica sui casi min, median e max."""
     metric_dir = Path(metric_dir)
     output_specs = [
         (
             "comparison_path",
-            f"{metric_name}_comparisons_max_mean_min.png",
-            f"{metric_name.upper()} - Comparison Panels (MAX / MEAN / MIN)",
+            f"{metric_name}_comparisons_max_median_min.png",
+            f"{metric_name.upper()} - Comparison Panels (MAX / MEDIAN / MIN)",
         ),
         (
             "error_histogram_path",
-            f"{metric_name}_error_histograms_max_mean_min.png",
-            f"{metric_name.upper()} - Absolute Error Histograms (MAX / MEAN / MIN)",
+            f"{metric_name}_error_histograms_max_median_min.png",
+            f"{metric_name.upper()} - Absolute Error Histograms (MAX / MEDIAN / MIN)",
         ),
         (
             "intensity_overlay_histogram_path",
-            f"{metric_name}_intensity_overlay_histograms_max_mean_min.png",
-            f"{metric_name.upper()} - Target vs Generated Intensity Histograms (MAX / MEAN / MIN)",
+            f"{metric_name}_intensity_overlay_histograms_max_median_min.png",
+            f"{metric_name.upper()} - Target vs Generated Intensity Histograms (MAX / MEDIAN / MIN)",
         ),
         (
             "target_vs_generated_scatter_by_channel_path",
-            f"{metric_name}_target_vs_generated_scatters_by_channel_max_mean_min.png",
-            f"{metric_name.upper()} - Target vs Generated Scatter by Channel (MAX / MEAN / MIN)",
+            f"{metric_name}_target_vs_generated_scatters_by_channel_max_median_min.png",
+            f"{metric_name.upper()} - Target vs Generated Scatter by Channel (MAX / MEDIAN / MIN)",
         ),
     ]
     saved_paths: list[Path] = []
@@ -697,7 +697,7 @@ def save_metric_diagnostics_summary(
         saved_path = save_stacked_image_panel(
             image_paths=image_paths,
             save_path=metric_dir / filename,
-            row_titles=row_titles,
+            row_titles=None,
             suptitle=suptitle,
         )
         saved_paths.append(saved_path)
@@ -791,10 +791,10 @@ def build_metric_case_artifacts(
     sample_id = row["sample_id"]
     metric_value = float(row[metric_name])
 
-    if kind in {"min", "max"}:
+    if kind in {"min", "max", "median"}:
         target_value = float(metric_summary[kind])
     else:
-        target_value = float(metric_summary["mean"])
+        raise ValueError(f"Unsupported representative kind: {kind}")
 
     source_path = infer_source_path_from_row(row)
     generated_path = Path(row["generated_path"])
@@ -894,7 +894,7 @@ def run_from_metrics(args: argparse.Namespace) -> None:
             metric_diagnostic_entries.append(diagnostic_entry)
 
         write_metric_selection_summary(metric_selection_rows, metric_dir / "selection_summary.csv")
-        kind_order = {"max": 0, "mean": 1, "min": 2}
+        kind_order = {"max": 0, "median": 1, "min": 2}
         metric_diagnostic_entries.sort(key=lambda entry: kind_order[entry["kind"]])
         aggregated_paths = save_metric_diagnostics_summary(
             metric_name=metric_name,
