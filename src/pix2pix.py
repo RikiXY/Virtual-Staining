@@ -773,9 +773,17 @@ def color_progress(progress: float) -> str:
     return style(text, "green")
 
 
-def render_progress_bar(progress: float, width: int = 30) -> str:
+def render_progress_bar(progress: float, width: int = 40) -> str:
     progress = min(max(progress, 0.0), 1.0)
+
     filled = int(width * progress)
+
+    if progress > 0 and filled == 0:
+        filled = 1
+
+    if progress >= 1:
+        filled = width
+
     empty = width - filled
 
     bar = "█" * filled + "-" * empty
@@ -852,7 +860,7 @@ def save_checkpoint(
     }
     torch.save(checkpoint, checkpoint_path)
 
-def load_checkpoint(checkpoint_path, G, D, opt_G, opt_D, scaler_G, scaler_D, image_size=(256, 256), device=None):
+def load_checkpoint(checkpoint_path, G, D, opt_G, opt_D, scaler_G, scaler_D, device=None, image_size=(256, 256)):
     """
     Carica un checkpoint del modello.
 
@@ -1148,10 +1156,13 @@ def train_one_epoch(
         eta_str = format_duration(eta)
         progress_bar = render_progress_bar(progress)
 
+        epoch_progress = (i + 1) / progress_tracker.total_batches
+
         console_message = (
             f"{progress_bar} "
-            f"{color_progress(progress)} | "
-            f"ep {epoch + 1}/{progress_tracker.total_epochs} | "
+            f"global {color_progress(progress)} | "
+            f"ep {epoch + 1}/{progress_tracker.total_epochs} "
+            f"({epoch_progress:.0%}) | "
             f"b {i + 1}/{progress_tracker.total_batches} | "
             f"loss_G {loss_G.item():.4f} | "
             f"loss_D {loss_D.item():.4f} | "
@@ -1394,8 +1405,6 @@ def main(
             l1_weight
         )
 
-        finish_console_progress()
-
         log_message(f"Finished epoch {epoch}", log_file, use_stdout=False)
 
         # Salviamo checkpoint periodici: se il training si interrompe, non si riparte da zero.
@@ -1428,7 +1437,7 @@ def main(
         # La validation periodica misura se il modello sta migliorando
         # anche fuori dal training set.
         if (epoch + 1) % validate_rate == 0:
-            val_loss_G, val_loss_D = validate(
+            validate(
                 generator,
                 discriminator,
                 validation_loader,
@@ -1440,13 +1449,8 @@ def main(
                 output_val_dir,
                 l1_weight
             )
-
-            print(
-                f"{style('Validation', 'bold', 'cyan')} "
-                f"epoch {epoch + 1}/{n_epochs} | "
-                f"loss_G {val_loss_G:.4f} | loss_D {val_loss_D:.4f}"
-            )
-
+    
+    finish_console_progress()
     total_seconds = time.time() - start_time
     log_message(f"Execution completed. Total time = {total_seconds:.2f} seconds", log_file, use_stdout=False)
     
