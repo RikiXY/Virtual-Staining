@@ -980,16 +980,16 @@ if __name__ == "__main__":
         type=int,
         nargs=2,
         metavar=("WIDTH", "HEIGHT"),
-        default=(512, 512),
-        help="Patch size used for extraction (default: 512 512)"
+        default=(256, 256),
+        help="Patch size used for extraction (default: 256 256)"
     )
     parser.add_argument(
         "--grid-movement",
         type=int,
         nargs=2,
         metavar=("STEP_X", "STEP_Y"),
-        default=(512, 512),
-        help="Grid step used for patch extraction (default: 512 512)"
+        default=(256, 256),
+        help="Grid step used for patch extraction (default: 256 256)"
     )
     parser.add_argument(
         "--margin",
