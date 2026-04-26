@@ -1107,6 +1107,9 @@ def train_one_epoch(
     D.train()
     amp_enabled = is_amp_enabled(device)
 
+    last_loss_G = None
+    last_loss_D = None
+
     for i, (x, y) in enumerate(training_loader):
         x, y = x.to(device), y.to(device)
 
@@ -1151,6 +1154,9 @@ def train_one_epoch(
         scaler_G.step(opt_G)
         scaler_G.update()
 
+        last_loss_G = loss_G.item()
+        last_loss_D = loss_D.item()
+
         progress, total_elapsed_time, eta, end_time = progress_tracker.calculate_progress(epoch, i)
 
         elapsed_str = format_duration(total_elapsed_time)
@@ -1193,8 +1199,7 @@ def train_one_epoch(
                 log_file,
                 use_stdout=False,
             )
-
-    
+    return last_loss_G, last_loss_D
 
 # --------------------- Main ---------------------
 def main(
@@ -1399,7 +1404,7 @@ def main(
     for epoch in range(start_epoch, n_epochs):
         log_message(f"Starting epoch {epoch}", log_file, use_stdout=False)
 
-        train_one_epoch(
+        last_loss_G, last_loss_D = train_one_epoch(
             generator,
             discriminator,
             training_loader,
@@ -1447,6 +1452,18 @@ def main(
             )
             training_status["last_checkpoint"] = Path(checkpoint_path).name
             log_message(f"Checkpoint saved to {checkpoint_path} at epoch {epoch}", log_file, use_stdout=False)
+            if epoch == n_epochs - 1:
+                update_console_progress(
+                    f"{render_progress_bar(1.0)} "
+                    f"global {color_progress(1.0)} | "
+                    f"ep {epoch + 1}/{n_epochs} (100%) | "
+                    f"b {len(training_loader)}/{len(training_loader)} | "
+                    f"loss_G {last_loss_G:.4f} | "
+                    f"loss_D {last_loss_D:.4f} | "
+                    f"elapsed {format_duration(time.time() - start_time)} | "
+                    f"ETA 0s | "
+                    f"ckpt {training_status['last_checkpoint']}"
+                )
 
         # La validation periodica misura se il modello sta migliorando
         # anche fuori dal training set.
