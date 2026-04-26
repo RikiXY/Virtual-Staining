@@ -289,6 +289,7 @@ def add_paired_subparser(subparsers: Any) -> None:
         ),
     )
     add_common_comparison_arguments(parser)
+
     parser.add_argument(
         "--sample-id-column",
         default="sample_id",
@@ -300,6 +301,26 @@ def add_paired_subparser(subparsers: Any) -> None:
         default=0.0,
         help="Tolerance below which two values are considered equal.",
     )
+
+    parser.add_argument(
+        "--min-value",
+        type=float,
+        default=None,
+        help="Minimum metric value used for shared histogram bins. If omitted, inferred from paired values.",
+    )
+    parser.add_argument(
+        "--max-value",
+        type=float,
+        default=None,
+        help="Maximum metric value used for shared histogram bins. If omitted, inferred from paired values.",
+    )
+    parser.add_argument(
+        "--bins",
+        type=int,
+        default=30,
+        help="Number of bins for the comparison histogram.",
+    )
+
     parser.set_defaults(func=run_paired)
 
 
@@ -462,9 +483,6 @@ def compute_unpaired_comparison(
     b: np.ndarray,
     group_a: UnpairedGroupStats,
     group_b: UnpairedGroupStats,
-    bins: int,
-    min_value: float,
-    max_value: float,
     higher_is_better: bool,
 ) -> UnpairedComparison:
     """Calcola i confronti principali tra due distribuzioni non appaiate."""
@@ -538,11 +556,7 @@ def compute_paired_summary(
 ) -> PairedSummary:
     """Calcola il riepilogo principale per il confronto paired."""
     raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(dtype=float)
-
-    if lower_is_better := (not higher_is_better):
-        signed_delta = -raw_delta
-    else:
-        signed_delta = raw_delta
+    signed_delta = raw_delta if higher_is_better else -raw_delta
 
     share_b_better = float(np.mean(signed_delta > tolerance))
     share_a_better = float(np.mean(signed_delta < -tolerance))
@@ -668,7 +682,7 @@ def ecdf(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return x, y
 
 
-def plot_unpaired_histogram(
+def plot_distribution_histogram(
     a: np.ndarray,
     b: np.ndarray,
     edges: np.ndarray,
@@ -677,7 +691,7 @@ def plot_unpaired_histogram(
     column: str,
     output_dir: Path,
 ) -> None:
-    """Salva l'istogramma di confronto tra i due gruppi."""
+    """Salva l'istogramma di confronto tra due distribuzioni."""
     plt.figure(figsize=(9, 5))
     plt.hist(a, bins=edges, density=True, alpha=0.45, label=label_a)
     plt.hist(b, bins=edges, density=True, alpha=0.45, label=label_b)
@@ -690,7 +704,7 @@ def plot_unpaired_histogram(
     plt.close()
 
 
-def plot_unpaired_ecdf(
+def plot_distribution_ecdf(
     a: np.ndarray,
     b: np.ndarray,
     label_a: str,
@@ -850,9 +864,6 @@ def run_unpaired(args: argparse.Namespace) -> None:
         b=values_b,
         group_a=group_a,
         group_b=group_b,
-        bins=args.bins,
-        min_value=args.min_value,
-        max_value=args.max_value,
         higher_is_better=args.higher_is_better,
     )
 
@@ -861,8 +872,8 @@ def run_unpaired(args: argparse.Namespace) -> None:
     save_unpaired_report_txt(group_a, group_b, comparison, args, output_dir)
 
     edges = np.linspace(args.min_value, args.max_value, args.bins + 1)
-    plot_unpaired_histogram(values_a, values_b, edges, args.label_a, args.label_b, args.column, output_dir)
-    plot_unpaired_ecdf(values_a, values_b, args.label_a, args.label_b, args.column, output_dir)
+    plot_distribution_histogram(values_a, values_b, edges, args.label_a, args.label_b, args.column, output_dir)
+    plot_distribution_ecdf(values_a, values_b, args.label_a, args.label_b, args.column, output_dir)
     print_unpaired_cli_summary(group_a, group_b, comparison, args, output_dir)
 
 
@@ -890,6 +901,44 @@ def run_paired(args: argparse.Namespace) -> None:
 
     raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(dtype=float)
     signed_delta = raw_delta if args.higher_is_better else -raw_delta
+    values_a = merged["value_a"].to_numpy(dtype=float)
+    values_b = merged["value_b"].to_numpy(dtype=float)
+
+    if args.min_value is None:
+        min_value = min(float(values_a.min()), float(values_b.min()))
+    else:
+        min_value = args.min_value
+
+    if args.max_value is None:
+        max_value = max(float(values_a.max()), float(values_b.max()))
+    else:
+        max_value = args.max_value
+
+    if min_value == max_value:
+        padding = 0.5 if min_value == 0 else abs(min_value) * 0.05
+        min_value -= padding
+        max_value += padding
+
+    edges = np.linspace(min_value, max_value, args.bins + 1)
+
+    plot_distribution_histogram(
+        values_a,
+        values_b,
+        edges,
+        args.label_a,
+        args.label_b,
+        args.column,
+        output_dir,
+    )
+
+    plot_distribution_ecdf(
+        values_a,
+        values_b,
+        args.label_a,
+        args.label_b,
+        args.column,
+        output_dir,
+    )
     plot_paired_delta_histogram(signed_delta, args.column, output_dir)
     plot_paired_scatter(merged, args.label_a, args.label_b, args.column, output_dir)
     print_paired_cli_summary(summary, args, output_dir)
