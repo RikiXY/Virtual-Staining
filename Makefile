@@ -97,14 +97,14 @@ prepare-dataset: require-dataset
 	$(PYTHON) src/prepare_dataset.py --path $(DATASET_ROOT) --source-name $(SOURCE_NAME) --target-name $(TARGET_NAME) --seed $(SEED) --lang $(PREPARE_LANG) --image-size $(IMAGE_SIZE) --grid-movement $(GRID_MOVEMENT) --margin $(MARGIN) $(SAVE_MASKS_FLAG)
 
 train: require-config
-	$(PYTHON) src/pix2pix.py train --dataset-root $(DATASET_ROOT)/ --run-name $(RUN_NAME) --results-path $(RESULTS_PATH) --epochs $(EPOCHS) --seed $(SEED) --l1-lambda $(L1)
+	$(PYTHON) src/pix2pix.py train --dataset-root $(DATASET_ROOT)/ --run-name $(RUN_NAME) --results-path $(RESULTS_PATH) --epochs $(EPOCHS) --seed $(SEED) --l1-weight $(L1)
 
 test: require-config
 	@test -n "$(CHECKPOINT_RESOLVED)" || (echo "No checkpoint found in $(CHECKPOINT_DIR). Set CHECKPOINT=/path/to/file.pth if needed."; exit 1)
 	$(PYTHON) src/pix2pix.py test --dataset-root $(DATASET_ROOT)/ --run-path $(RUN_PATH) --checkpoint $(CHECKPOINT_RESOLVED)
 
 evaluate: require-config
-	$(PYTHON) tools/evaluate_generation.py dataset $(DATASET_TEST_PATH) $(OUTPUT_TEST_PATH) --save-graphs
+	$(PYTHON) tools/evaluate_generation.py dataset --target-dir $(DATASET_TEST_PATH) --generated-dir $(OUTPUT_TEST_PATH) --save-graphs
 
 run-all:
 	$(MAKE) train

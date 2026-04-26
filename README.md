@@ -80,9 +80,11 @@ make clean
 
 ## Quick Start
 
+The `Makefile` is the recommended entry point for the standard workflow.
+
 ### 1. Prepare the input folder
 
-Create a sample folder inside `local_workspace/datasets/` containing one paired full-size sample:
+Create a dataset folder inside `local_workspace/datasets/` containing one paired full-size sample:
 
 ```text
 local_workspace/
@@ -93,40 +95,52 @@ local_workspace/
 └── results/
 ```
 
-### 2. Enter the development environment and install dependencies
+`DATASET` must match the folder name under `local_workspace/datasets/`.
+
+### 2. Enter the development environment
 
 ```bash
 nix develop
 make sync
 ```
 
-### 3. Create the Makefile env file
+The README examples below assume you are already inside the Nix shell so that `uv` is available.
+
+### 3. Create the Makefile config file
 
 ```bash
 cp .env.make.example .env.make
 ```
 
-Then edit `.env.make` and set:
+Edit `.env.make` and set the dataset you want to use and the run directory you want to create:
 
 ```make
 DATASET=your_sample
 RUN_NAME=your_run_name
 ```
 
-### 4. Build the paired dataset
+Example:
 
-```bash
-make prepare-dataset SOURCE_NAME=source.tif TARGET_NAME=target.tif
+```make
+DATASET=inv_512
+RUN_NAME=inv_P-512_L1-50
 ```
 
-To inspect all available options:
+### 4. Run the pipeline
+
+Build the paired patch dataset:
 
 ```bash
-make help
-uv run python src/prepare_dataset.py --help
+make prepare-dataset
 ```
 
-### 5. Train, test, and evaluate
+If your full-size files use different names, override them explicitly:
+
+```bash
+make prepare-dataset SOURCE_NAME=label_free.tif TARGET_NAME=he_stain.tif
+```
+
+Train the model, run test inference, and evaluate the outputs:
 
 ```bash
 make train
@@ -134,13 +148,13 @@ make test
 make evaluate
 ```
 
-Or run the full sequence with one command:
+Or run the full sequence in one command:
 
 ```bash
 make run-all
 ```
 
-Useful overrides:
+Useful one-off overrides:
 
 ```bash
 make train EPOCHS=10 SEED=123
@@ -148,16 +162,105 @@ make test CHECKPOINT=local_workspace/results/your_run_name/checkpoints/ep010.pth
 make run-all RUN_NAME=debug_run L1=37
 ```
 
-If `CHECKPOINT` is not provided, `make test` automatically selects the highest `ep*.pth` file found under:
+If `CHECKPOINT` is omitted, `make test` looks for the highest `ep*.pth` file under:
 
 ```text
 local_workspace/results/<RUN_NAME>/checkpoints/
 ```
 
-Outputs are written under:
+The main outputs for a run are written under:
 
 ```text
 local_workspace/results/<RUN_NAME>/
+```
+
+To inspect the available commands and flags:
+
+```bash
+make help
+uv run python src/prepare_dataset.py --help
+uv run python src/pix2pix.py --help
+uv run python tools/evaluate_generation.py --help
+uv run python tools/make_comparison.py --help
+```
+
+## Common Commands
+
+Use `make` for the standard workflow. Use the raw Python CLIs when you need advanced options not exposed by the `Makefile`.
+
+### `make prepare-dataset`
+
+Builds `dataset_train/`, `dataset_val/`, and `dataset_test/` from one full-size paired sample.
+
+Inputs:
+
+- `DATASET` from `.env.make` or the command line
+- full-size input files inside `local_workspace/datasets/<DATASET>/`
+- optional overrides such as `SOURCE_NAME`, `TARGET_NAME`, `IMAGE_SIZE`, `GRID_MOVEMENT`, `MARGIN`, and `SAVE_MASKS`
+
+Example:
+
+```bash
+make prepare-dataset \
+  DATASET=your_sample \
+  SOURCE_NAME=source.tif \
+  TARGET_NAME=target.tif \
+  SAVE_MASKS=1 \
+  IMAGE_SIZE="512 512" \
+  GRID_MOVEMENT="512 512"
+```
+
+### `make train`
+
+Starts a training run and writes logs, checkpoints, validation outputs, and metadata into `local_workspace/results/<RUN_NAME>/`.
+
+Inputs:
+
+- `DATASET`
+- `RUN_NAME`
+- optional overrides such as `EPOCHS`, `SEED`, and `L1`
+
+Example:
+
+```bash
+make train DATASET=your_sample RUN_NAME=your_run_name EPOCHS=100 L1=50
+```
+
+### `make test`
+
+Runs inference on `dataset_test/` using a trained checkpoint and writes generated outputs to `output_test/`.
+
+Inputs:
+
+- `DATASET`
+- `RUN_NAME`
+- optional `CHECKPOINT`
+
+Examples:
+
+```bash
+make test
+make test CHECKPOINT=local_workspace/results/your_run_name/checkpoints/ep050.pth
+```
+
+### `make evaluate`
+
+Computes MAE, RMSE, PSNR, and SSIM by comparing `dataset_test/` against `output_test/`. The evaluation tool can also save summary CSV files and aggregate plots.
+
+Example:
+
+```bash
+make evaluate
+```
+
+### `make run-all`
+
+Runs `train`, `test`, and `evaluate` sequentially using the current `DATASET` and `RUN_NAME`.
+
+Example:
+
+```bash
+make run-all DATASET=your_sample RUN_NAME=debug_run EPOCHS=10
 ```
 
 ## Qualitative Results
@@ -236,7 +339,9 @@ Virtual-Staining/
 └── TASKS.md
 ```
 
-## Example Workflow
+## Advanced CLI Examples
+
+Use these when you want more control than the `Makefile` exposes.
 
 ### Prepare the dataset
 
@@ -262,6 +367,8 @@ uv run python src/pix2pix.py train \
   --results-path local_workspace/results \
   --epochs 100 \
   --batch-size 8 \
+  --image-size 512 512 \
+  --l1-weight 50 \
   --seed 42
 ```
 
@@ -286,15 +393,14 @@ uv run python tools/evaluate_generation.py dataset \
 ### Create representative comparison panels
 
 ```bash
-uv run python tools/make_comparison.py \
-  --from-metrics \
+uv run python tools/make_comparison.py from-metrics \
   --run-path local_workspace/results/your_run
 ```
 
 ### Create a single comparison panel
 
 ```bash
-uv run python tools/make_comparison.py \
+uv run python tools/make_comparison.py single \
   --source-image local_workspace/datasets/your_sample/dataset_test/00512_09216_source.tif \
   --generated-image local_workspace/results/your_run/output_test/00512_09216_target_generated.tif \
   --target-image local_workspace/datasets/your_sample/dataset_test/00512_09216_target.tif \
@@ -303,21 +409,10 @@ uv run python tools/make_comparison.py \
 
 ## Notes
 
-- `prepare_dataset.py` is the preprocessing entry point
-- `pix2pix.py` handles training, validation, checkpoints, and test inference
-- `evaluate_generation.py` handles metric evaluation
-- `make_comparison.py` handles visual comparison and diagnostics
-
-For detailed options, use:
-
-```bash
-uv run python src/prepare_dataset.py --help
-uv run python src/pix2pix.py --help
-uv run python src/pix2pix.py train --help
-uv run python src/pix2pix.py test --help
-uv run python tools/evaluate_generation.py --help
-uv run python tools/make_comparison.py --help
-```
+- `src/prepare_dataset.py` is the preprocessing entry point
+- `src/pix2pix.py` handles training, validation, checkpoints, and test inference
+- `tools/evaluate_generation.py` handles metric evaluation
+- `tools/make_comparison.py` handles visual comparison and diagnostics
 
 ## Input and Output Conventions
 
@@ -346,47 +441,6 @@ Only prefix-matched pairs are used by the dataset loader.
 - validation predictions
 - saved checkpoints
 - test predictions
-
-## Makefile Workflow
-
-Common targets:
-
-```bash
-make prepare-dataset
-make train
-make test
-make evaluate
-```
-
-Example workflow:
-
-```bash
-export DATASET=inv_512
-export RUN_NAME=inv_P-512_L1-37
-
-make prepare-dataset
-make train
-make test
-make evaluate
-```
-
-Example with overrides:
-
-```bash
-make train DATASET=inv_512 RUN_NAME=inv_debug EPOCHS=10 SEED=123
-make test DATASET=inv_512 RUN_NAME=inv_P-512_L1-37 \
-  CHECKPOINT=local_workspace/results/inv_P-512_L1-37/checkpoints/ep042.pth
-```
-
-Additional dataset preparation options:
-
-```bash
-make prepare-dataset \
-  SOURCE_NAME=source.tif \
-  TARGET_NAME=target.tif \
-  SAVE_MASKS=1 \
-  PREPARE_LANG=en
-```
 
 ## Method
 
