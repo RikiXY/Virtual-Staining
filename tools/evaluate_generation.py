@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import statistics
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -18,16 +20,141 @@ except ImportError as exc:
         "pip install scikit-image"
     ) from exc
 
+YLIM = 0.5 # normalmente dovrebbe essere 1 ma lo metto a 0.5 per rendere 
+# più visibili le differenze tra i modelli nei grafici, visto che i valori
+# di molte metriche tendono ad essere bassi.
 
 METRIC_NAMES = ["mae", "rmse", "psnr", "ssim"]
 VALID_IMAGE_EXTENSIONS = {".tif", ".tiff", ".png"}
 
+METRIC_FIELDNAMES = [
+    "sample_id",
+    "target_path",
+    "generated_path",
+    "width",
+    "height",
+    "channels",
+    "mae",
+    "rmse",
+    "psnr",
+    "ssim",
+]
+
+PLOT_FIXED_RANGES = {
+    "mae": (0.0, 1.0),
+    "rmse": (0.0, 1.0),
+    "ssim": (0.0, 1.0),
+    # Il PSNR non ha un massimo teorico finito. Per confronto visivo usiamo
+    # una finestra fissa pratica, cosi gli istogrammi restano sovrapponibili.
+    "psnr": (0.0, 60.0),
+}
+
+PLOT_FIXED_BINS = 30
+
+
+# =====================================
+# Sezione dedicata alla colorazione CLI
+# =====================================
+ANSI = {
+    "reset": "\033[0m",
+    "bold": "\033[1m",
+    "red": "\033[31m",
+    "green": "\033[32m",
+    "yellow": "\033[33m",
+    "blue": "\033[34m",
+    "magenta": "\033[35m",
+    "cyan": "\033[36m",
+    "orange": "\033[38;5;208m",
+}
+
+
+def use_color() -> bool:
+    """Restituisce True se ha senso usare colori ANSI in console."""
+    return os.environ.get("NO_COLOR") is None and sys.stdout.isatty()
+
+
+def style(text: str, *names: str) -> str:
+    """Applica uno stile ANSI al testo, se la colorazione e abilitata."""
+    if not use_color():
+        return text
+    prefix = "".join(ANSI[name] for name in names if name in ANSI)
+    return prefix + text + ANSI["reset"]
+
+
+def print_section(title: str) -> None:
+    """Stampa un'intestazione di sezione leggibile in CLI."""
+    print()
+    print(style(f"=== {title} ===", "bold", "cyan"))
+
+
+def print_info(label: str, value: str) -> None:
+    """Stampa una singola riga etichetta."""
+    print(f"{style(label + ':', 'bold', 'blue')} {value}")
+
+
+def color_metric(name: str, value: float) -> str:
+    """Colora una metrica con soglie pensate per la sola lettura CLI."""
+    if name == "ssim":
+        if value >= 0.85:
+            color = "green"
+        elif value >= 0.75:
+            color = "yellow"
+        elif value >= 0.65:
+            color = "orange"
+        else:
+            color = "red"
+        return style(f"{value:.6f}", color)
+
+    if name == "psnr":
+        if value >= 25:
+            color = "green"
+        elif value >= 20:
+            color = "yellow"
+        elif value >= 15:
+            color = "orange"
+        else:
+            color = "red"
+        return style(f"{value:.4f}", color)
+
+    if name == "mae":
+        if value <= 0.06:
+            color = "green"
+        elif value <= 0.10:
+            color = "yellow"
+        elif value <= 0.16:
+            color = "orange"
+        else:
+            color = "red"
+        return style(f"{value:.6f}", color)
+
+    if name == "rmse":
+        if value <= 0.08:
+            color = "green"
+        elif value <= 0.12:
+            color = "yellow"
+        elif value <= 0.20:
+            color = "orange"
+        else:
+            color = "red"
+        return style(f"{value:.6f}", color)
+
+    return f"{value:.6f}"
+
+
+
+# ==========================
+# Sezione dedicata al parser
+# ==========================
 
 def add_single_subparser(subparsers: Any) -> None:
+    """Aggiunge il sottocomando per la valutazione di una singola coppia."""
     single_parser = subparsers.add_parser(
         "single",
         help="Evaluate one target/generated image pair.",
-        description="Compute MAE, RMSE, PSNR and SSIM for one target/generated pair.",
+        description=(
+            "Compute MAE, RMSE, PSNR and SSIM for one target/generated pair. "
+            "Supported image extensions: .tif, .tiff, .png."
+        ),
     )
     single_parser.add_argument(
         "--target-image",
@@ -56,26 +183,33 @@ def add_single_subparser(subparsers: Any) -> None:
     single_parser.set_defaults(func=run_single)
 
 
-
 def add_dataset_subparser(subparsers: Any) -> None:
+    """Aggiunge il sottocomando per la valutazione di un intero dataset."""
     dataset_parser = subparsers.add_parser(
         "dataset",
         help="Evaluate all matching target/generated pairs in two folders.",
-        description="Compute MAE, RMSE, PSNR and SSIM for all matching pairs in a dataset.",
+        description=(
+            "Compute MAE, RMSE, PSNR and SSIM for all matching pairs in a dataset. "
+            "Supported image extensions: .tif, .tiff, .png."
+        ),
     )
     dataset_parser.add_argument(
         "--target-dir",
         dest="target_dir",
         type=str,
         required=True,
-        help="Directory containing target images.",
+        help=("Directory containing target images with filename stem ending in '_target'. "
+            "Supported extensions: .tif, .tiff, .png."
+        ),
     )
     dataset_parser.add_argument(
         "--generated-dir",
         dest="generated_dir",
         type=str,
         required=True,
-        help="Directory containing generated images.",
+        help=("Directory containing generated images with filename stem ending in '_target_generated'. "
+            "Supported extensions: .tif, .tiff, .png."
+        ),
     )
     dataset_parser.add_argument(
         "--output-dir",
@@ -96,36 +230,42 @@ def add_dataset_subparser(subparsers: Any) -> None:
     dataset_parser.set_defaults(func=run_dataset)
 
 
-
 def build_parser() -> argparse.ArgumentParser:
+    """Costruisce il parser principale e registra i sottocomandi disponibili."""
     parser = argparse.ArgumentParser(
         prog="python tools/evaluate_generation.py",
-        description="Evaluate generated images against target images.",
+        description=(
+            "Evaluate generated images against target images. "
+            "Supported image extensions: .tif, .tiff, .png."
+        ),
         epilog=(
             "Examples:\n"
-            "  python tools/evaluate_generation.py single "
-            "--target-image local_workspace/datasets/your_run/dataset_test/00512_09216_target.tif "
-            "--generated-image local_workspace/results/your_run/output_test/00512_09216_target_generated.tif\n"
-            "  python tools/evaluate_generation.py dataset "
-            "--target-dir local_workspace/datasets/your_run/dataset_test "
-            "--generated-dir local_workspace/results/your_run/output_test "
-            "--save-graphs\n\n"
+            "  python tools/evaluate_generation.py single\n"
+            "      --target-image local_workspace/datasets/your_run/dataset_test/00512_09216_target.tif\n"
+            "      --generated-image local_workspace/results/your_run/output_test/00512_09216_target_generated.tif\n"
+            "\n"
+            "  python tools/evaluate_generation.py dataset\n"
+            "      --target-dir local_workspace/datasets/your_run/dataset_test\n"
+            "      --generated-dir local_workspace/results/your_run/output_test\n"
+            "      --save-graphs\n\n"
             "Use 'python tools/evaluate_generation.py <command> --help' to see the options "
             "for a specific command."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
         add_help=True,
     )
-
     subparsers = parser.add_subparsers(dest="mode")
     add_single_subparser(subparsers)
     add_dataset_subparser(subparsers)
-
     return parser
 
 
+# ========================================
+# Sezione dedicata alle funzioni utilities
+# ========================================
 
 def load_rgb_image(path: str | Path) -> np.ndarray:
+    """Carica un'immagine da disco e la restituisce come array RGB uint8."""
     image_path = Path(path)
 
     if not image_path.is_file():
@@ -139,8 +279,8 @@ def load_rgb_image(path: str | Path) -> np.ndarray:
     return np.array(image)
 
 
-
 def validate_same_shape(target: np.ndarray, generated: np.ndarray) -> None:
+    """Verifica che target e generated abbiano esattamente la stessa shape."""
     if target.shape != generated.shape:
         raise ValueError(
             "Target and generated images must have the same shape. "
@@ -148,23 +288,119 @@ def validate_same_shape(target: np.ndarray, generated: np.ndarray) -> None:
         )
 
 
-
 def to_float01(image: np.ndarray) -> np.ndarray:
+    """Converte l'immagine da uint8 [0,255] a float32 [0,1]."""
     return image.astype(np.float32) / 255.0
 
 
+def extract_sample_id(path: str | Path, suffix: str, label: str = "File") -> str:
+    """Estrae il sample id togliendo il suffisso atteso dal nome file."""
+    name = Path(path).stem
+
+    if not name.endswith(suffix):
+        raise ValueError(f"{label} file does not end with '{suffix}': {path}")
+
+    return name[: -len(suffix)]
+
+
+def extract_single_sample_id(target_path: str | Path, generated_path: str | Path) -> str:
+    """Controlla che target e generated appartengano allo stesso sample."""
+    target_id = extract_sample_id(target_path, "_target", "Target")
+    generated_id = extract_sample_id(generated_path, "_target_generated", "Generated")
+
+    if target_id != generated_id:
+        raise ValueError(
+            "Target and generated files refer to different sample ids. "
+            f"Got '{target_id}' and '{generated_id}'."
+        )
+
+    return target_id
+
+
+def collect_image_files(directory_path: str | Path, suffix: str, label: str) -> dict[str, Path]:
+    """Raccoglie i file validi di una cartella indicizzandoli per sample id."""
+    directory = Path(directory_path)
+
+    if not directory.is_dir():
+        raise NotADirectoryError(f"{label} directory not found: {directory}")
+
+    files: dict[str, Path] = {}
+
+    for path in sorted(directory.iterdir()):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in VALID_IMAGE_EXTENSIONS:
+            continue
+        if not path.stem.endswith(suffix):
+            continue
+
+        sample_id = extract_sample_id(path, suffix, label)
+        files[sample_id] = path
+
+    return files
+
+
+def infer_default_output_dir(generated_path: str | Path) -> Path:
+    """Prova a ricavare results/NAME_RUN/evaluation da un path interno al run."""
+    path = Path(generated_path).resolve()
+    base = path.parent if path.is_file() else path
+    parts = base.parts
+
+    if "results" not in parts:
+        raise ValueError(
+            "Could not infer output directory from generated path. Expected the generated "
+            "data to be inside a path like .../results/NAME_RUN/... Please provide "
+            "--output-dir explicitly."
+        )
+
+    results_index = parts.index("results")
+
+    if results_index + 1 >= len(parts):
+        raise ValueError(
+            "Could not infer NAME_RUN from generated path. Expected a path like "
+            ".../results/NAME_RUN/... Please provide --output-dir explicitly."
+        )
+
+    run_dir = Path(*parts[: results_index + 2])
+
+    if run_dir.name == "results":
+        raise ValueError(
+            "Could not infer NAME_RUN from generated path. Expected a path like "
+            ".../results/NAME_RUN/... Please provide --output-dir explicitly."
+        )
+
+    if run_dir.parent.name != "results":
+        raise ValueError(
+            "Could not infer a valid run directory inside results/. Please provide "
+            "--output-dir explicitly."
+        )
+
+    return run_dir / "evaluation"
+
+
+def resolve_output_dir(output_dir: str | None, generated_path: str | Path) -> Path:
+    """Usa l'output esplicito se presente, altrimenti prova a inferirlo."""
+    if output_dir is not None:
+        return Path(output_dir)
+    return infer_default_output_dir(generated_path)
+
+
+# ==========================================
+# Sezione dedicata al calcolo delle metriche
+# ==========================================
 
 def compute_mae(target: np.ndarray, generated: np.ndarray) -> float:
+    """Calcola il Mean Absolute Error su immagini normalizzate."""
     return float(np.mean(np.abs(target - generated)))
 
 
-
 def compute_rmse(target: np.ndarray, generated: np.ndarray) -> float:
+    """Calcola il Root Mean Squared Error su immagini normalizzate."""
     return float(np.sqrt(np.mean((target - generated) ** 2)))
 
 
-
 def compute_psnr(target: np.ndarray, generated: np.ndarray) -> float:
+    """Calcola il PSNR assumendo immagini normalizzate nell'intervallo [0,1]."""
     mse = float(np.mean((target - generated) ** 2))
 
     if mse == 0.0:
@@ -173,8 +409,8 @@ def compute_psnr(target: np.ndarray, generated: np.ndarray) -> float:
     return float(20.0 * np.log10(1.0 / np.sqrt(mse)))
 
 
-
 def compute_ssim(target: np.ndarray, generated: np.ndarray) -> float:
+    """Calcola l'SSIM su immagini RGB normalizzate."""
     try:
         return float(
             structural_similarity(
@@ -195,11 +431,11 @@ def compute_ssim(target: np.ndarray, generated: np.ndarray) -> float:
         )
 
 
-
 def evaluate_pair(
     target_path: str | Path,
     generated_path: str | Path,
-) -> tuple[dict[str, float], tuple[int, int, int], np.ndarray, np.ndarray]:
+) -> tuple[dict[str, float], tuple[int, int, int]]:
+    """Calcola le quattro metriche per una coppia target/generated."""
     target = load_rgb_image(target_path)
     generated = load_rgb_image(generated_path)
 
@@ -216,204 +452,15 @@ def evaluate_pair(
         "ssim": compute_ssim(target_float, generated_float),
     }
 
-    return metrics, shape, target_float, generated_float
-
-
-
-def print_single_result(
-    target_path: str | Path,
-    generated_path: str | Path,
-    metrics: dict[str, float],
-    shape: tuple[int, int, int],
-) -> None:
-    height, width, channels = shape
-
-    print(f"Target:     {target_path}")
-    print(f"Generated:  {generated_path}")
-    print(f"Shape:      {width}x{height}x{channels}")
-    print()
-    print(f"MAE:   {metrics['mae']:.6f}")
-    print(f"RMSE:  {metrics['rmse']:.6f}")
-    print(f"PSNR:  {metrics['psnr']:.4f}")
-    print(f"SSIM:  {metrics['ssim']:.4f}")
-
-
-
-def extract_target_sample_id(path: str | Path) -> str:
-    name = Path(path).stem
-    suffix = "_target"
-
-    if not name.endswith(suffix):
-        raise ValueError(f"Target file does not end with '{suffix}': {path}")
-
-    return name[: -len(suffix)]
-
-
-
-def extract_generated_sample_id(path: str | Path) -> str:
-    name = Path(path).stem
-    suffix = "_target_generated"
-
-    if not name.endswith(suffix):
-        raise ValueError(f"Generated file does not end with '{suffix}': {path}")
-
-    return name[: -len(suffix)]
-
-
-
-def extract_single_sample_id(target_path: str | Path, generated_path: str | Path) -> str:
-    target_id = extract_target_sample_id(target_path)
-    generated_id = extract_generated_sample_id(generated_path)
-
-    if target_id != generated_id:
-        raise ValueError(
-            "Target and generated files refer to different sample ids. "
-            f"Got '{target_id}' and '{generated_id}'."
-        )
-
-    return target_id
-
-
-
-def collect_target_files(target_dir: str | Path) -> dict[str, Path]:
-    directory = Path(target_dir)
-
-    if not directory.is_dir():
-        raise NotADirectoryError(f"Target directory not found: {directory}")
-
-    target_files: dict[str, Path] = {}
-    for path in sorted(directory.iterdir()):
-        if not path.is_file() or path.suffix.lower() not in VALID_IMAGE_EXTENSIONS:
-            continue
-        if not path.stem.endswith("_target"):
-            continue
-        sample_id = extract_target_sample_id(path)
-        target_files[sample_id] = path
-
-    return target_files
-
-
-
-def collect_generated_files(generated_dir: str | Path) -> dict[str, Path]:
-    directory = Path(generated_dir)
-
-    if not directory.is_dir():
-        raise NotADirectoryError(f"Generated directory not found: {directory}")
-
-    generated_files: dict[str, Path] = {}
-    for path in sorted(directory.iterdir()):
-        if not path.is_file() or path.suffix.lower() not in VALID_IMAGE_EXTENSIONS:
-            continue
-        if not path.stem.endswith("_target_generated"):
-            continue
-        sample_id = extract_generated_sample_id(path)
-        generated_files[sample_id] = path
-
-    return generated_files
-
-
-
-def infer_default_output_dir(generated_path: str | Path) -> Path:
-    path = Path(generated_path).resolve()
-    base = path.parent if path.is_file() else path
-
-    parts = base.parts
-    if "results" not in parts:
-        raise ValueError(
-            "Could not infer output directory from generated path. Expected the generated "
-            "data to be inside a path like .../results/NAME_RUN/... Please provide "
-            "--output-dir explicitly."
-        )
-
-    results_index = parts.index("results")
-    if results_index + 1 >= len(parts):
-        raise ValueError(
-            "Could not infer NAME_RUN from generated path. Expected a path like "
-            ".../results/NAME_RUN/... Please provide --output-dir explicitly."
-        )
-
-    run_dir = Path(*parts[: results_index + 2])
-    if run_dir.name == "results":
-        raise ValueError(
-            "Could not infer NAME_RUN from generated path. Expected a path like "
-            ".../results/NAME_RUN/... Please provide --output-dir explicitly."
-        )
-
-    if run_dir.parent.name != "results":
-        raise ValueError(
-            "Could not infer a valid run directory inside results/. Please provide "
-            "--output-dir explicitly."
-        )
-
-    return run_dir / "evaluation"
-
-
-
-def resolve_output_dir(output_dir: str | None, generated_path: str | Path) -> Path:
-    if output_dir is not None:
-        return Path(output_dir)
-    return infer_default_output_dir(generated_path)
-
-
-
-def write_per_image_metrics_csv(rows: list[dict[str, object]], output_path: str | Path) -> None:
-    fieldnames = [
-        "sample_id",
-        "target_path",
-        "generated_path",
-        "width",
-        "height",
-        "channels",
-        "mae",
-        "rmse",
-        "psnr",
-        "ssim",
-    ]
-
-    with Path(output_path).open("w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-
-def write_skipped_csv(rows: list[dict[str, str]], output_path: str | Path) -> None:
-    fieldnames = ["sample_id", "reason", "target_path", "generated_path"]
-
-    with Path(output_path).open("w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-
-def write_single_case_csv(row: dict[str, object], output_path: str | Path) -> None:
-    fieldnames = [
-        "sample_id",
-        "target_path",
-        "generated_path",
-        "width",
-        "height",
-        "channels",
-        "mae",
-        "rmse",
-        "psnr",
-        "ssim",
-    ]
-
-    with Path(output_path).open("w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerow(row)
-
+    return metrics, shape
 
 
 def build_summary_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Costruisce le righe aggregate del summary.csv."""
     summary_rows: list[dict[str, object]] = []
 
     for metric in METRIC_NAMES:
         values = [float(row[metric]) for row in rows]
-
         summary_rows.append(
             {
                 "metric": metric,
@@ -429,6 +476,57 @@ def build_summary_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]
     return summary_rows
 
 
+# =======================================
+# Sezione dedicata alla scrittura dei CSV
+# =======================================
+
+def build_metric_row(
+    sample_id: str,
+    target_path: str | Path,
+    generated_path: str | Path,
+    shape: tuple[int, int, int],
+    metrics: dict[str, float],
+) -> dict[str, object]:
+    """Costruisce una riga standard per per_image_metrics.csv."""
+    height, width, channels = shape
+    return {
+        "sample_id": sample_id,
+        "target_path": str(target_path),
+        "generated_path": str(generated_path),
+        "width": width,
+        "height": height,
+        "channels": channels,
+        "mae": metrics["mae"],
+        "rmse": metrics["rmse"],
+        "psnr": metrics["psnr"],
+        "ssim": metrics["ssim"],
+    }
+
+def write_per_image_metrics_csv(rows: list[dict[str, object]], output_path: str | Path) -> None:
+    """Scrive il CSV con una riga per ogni coppia valutata."""
+    with Path(output_path).open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=METRIC_FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def write_skipped_csv(rows: list[dict[str, str]], output_path: str | Path) -> None:
+    """Scrive il CSV dei sample saltati con la relativa motivazione."""
+    fieldnames = ["sample_id", "reason", "target_path", "generated_path"]
+
+    with Path(output_path).open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def write_single_case_csv(row: dict[str, object], output_path: str | Path) -> None:
+    """Scrive il CSV prodotto dalla modalita single."""
+    with Path(output_path).open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=METRIC_FIELDNAMES)
+        writer.writeheader()
+        writer.writerow(row)
+
 
 def write_summary_csv(
     summary_rows: list[dict[str, object]],
@@ -438,6 +536,7 @@ def write_summary_csv(
     num_pairs_evaluated: int,
     num_skipped: int,
 ) -> None:
+    """Scrive il CSV riassuntivo con conteggi globali e statistiche per metrica."""
     fieldnames = ["metric", "count", "mean", "median", "std", "min", "max"]
 
     with Path(output_path).open("w", newline="", encoding="utf-8") as file:
@@ -453,8 +552,19 @@ def write_summary_csv(
         dict_writer.writerows(summary_rows)
 
 
+# ===========================
+# Sezione dedicata ai grafici
+# ===========================
+
+
+def get_metric_plot_range(metric: str) -> tuple[float, float]:
+    """Restituisce il range fisso usato nei grafici per una metrica."""
+    if metric not in PLOT_FIXED_RANGES:
+        raise ValueError(f"Unsupported metric for plotting: {metric}")
+    return PLOT_FIXED_RANGES[metric]
 
 def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) -> list[Path]:
+    """Salva istogrammi con assi fissi e un boxplot finale riassuntivo."""
     output_directory = Path(output_dir)
     output_directory.mkdir(parents=True, exist_ok=True)
     saved_paths: list[Path] = []
@@ -462,12 +572,17 @@ def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) ->
     for metric in METRIC_NAMES:
         values = [float(row[metric]) for row in rows]
         histogram_path = output_directory / f"{metric}_histogram.png"
+        min_value, max_value = get_metric_plot_range(metric)
+        bin_edges = np.linspace(min_value, max_value, PLOT_FIXED_BINS + 1)
 
         plt.figure(figsize=(6, 4))
-        plt.hist(values, bins=20)
+        weights = np.ones(len(values), dtype=float) / len(values)
+        plt.hist(values, bins=bin_edges, weights=weights)
         plt.title(f"{metric.upper()} Histogram")
         plt.xlabel(metric.upper())
-        plt.ylabel("Count")
+        plt.ylabel("Share of samples")
+        plt.xlim(min_value, max_value)
+        plt.ylim(0.0, YLIM)
         plt.tight_layout()
         plt.savefig(histogram_path, dpi=200, bbox_inches="tight")
         plt.close()
@@ -488,46 +603,91 @@ def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) ->
     return saved_paths
 
 
+# ====================================
+# Sezione dedicata al report testuale
+# ====================================
+
+def print_single_result(
+    target_path: str | Path,
+    generated_path: str | Path,
+    metrics: dict[str, float],
+    shape: tuple[int, int, int],
+) -> None:
+    """Stampa a terminale il riepilogo di una singola valutazione."""
+    height, width, channels = shape
+
+    print_section("Single-pair evaluation")
+    print_info("Target", str(target_path))
+    print_info("Generated", str(generated_path))
+    print_info("Shape", f"{width}x{height}x{channels}")
+    print()
+    print_info("MAE", color_metric("mae", metrics["mae"]))
+    print_info("RMSE", color_metric("rmse", metrics["rmse"]))
+    print_info("PSNR", color_metric("psnr", metrics["psnr"]))
+    print_info("SSIM", color_metric("ssim", metrics["ssim"]))
+
+
+def print_dataset_summary(
+    target_files: dict[str, Path],
+    generated_files: dict[str, Path],
+    per_image_rows: list[dict[str, object]],
+    skipped_rows: list[dict[str, str]],
+    output_dir: Path,
+) -> None:
+    """Stampa un riepilogo finale della modalita dataset."""
+    print_section("Dataset evaluation")
+    print_info("Targets found", str(len(target_files)))
+    print_info("Generated found", str(len(generated_files)))
+
+    pairs_color = "green" if per_image_rows else "red"
+    skipped_color = "green" if not skipped_rows else "yellow"
+    print_info("Pairs evaluated", style(str(len(per_image_rows)), pairs_color))
+    print_info("Skipped", style(str(len(skipped_rows)), skipped_color))
+
+    if per_image_rows:
+        print_section("Metric summary")
+        for metric in METRIC_NAMES:
+            values = [float(row[metric]) for row in per_image_rows]
+            print_info(f"{metric.upper()} mean", color_metric(metric, float(np.mean(values))))
+            print_info(f"{metric.upper()} median", color_metric(metric, float(np.median(values))))
+
+    print_section("Saved files")
+    print_info("Evaluation dir", style(str(output_dir), "bold", "magenta"))
+
+
+
+
+# =====================================
+# Sezione dedicata al flusso principale
+# =====================================
 
 def run_single(args: argparse.Namespace) -> None:
+    """Esegue il flusso completo per la modalita single."""
     sample_id = extract_single_sample_id(args.target, args.generated)
-    metrics, shape, _, _ = evaluate_pair(args.target, args.generated)
+    metrics, shape = evaluate_pair(args.target, args.generated)
     print_single_result(args.target, args.generated, metrics, shape)
 
     output_dir = resolve_output_dir(args.output_dir, args.generated)
     individual_cases_dir = output_dir / "individual_cases"
     individual_cases_dir.mkdir(parents=True, exist_ok=True)
 
-    height, width, channels = shape
-    row = {
-        "sample_id": sample_id,
-        "target_path": str(args.target),
-        "generated_path": str(args.generated),
-        "width": width,
-        "height": height,
-        "channels": channels,
-        "mae": metrics["mae"],
-        "rmse": metrics["rmse"],
-        "psnr": metrics["psnr"],
-        "ssim": metrics["ssim"],
-    }
-
+    row = build_metric_row(sample_id, args.target, args.generated, shape, metrics)
     single_case_csv = individual_cases_dir / f"{sample_id}_evaluation.csv"
     write_single_case_csv(row, single_case_csv)
-    print()
-    print(f"Saved single-case metrics to: {single_case_csv}")
 
+    print_section("Saved files")
+    print_info("Single evaluation CSV", style(str(single_case_csv), "bold", "magenta"))
 
 
 def run_dataset(args: argparse.Namespace) -> None:
-    target_files = collect_target_files(args.target_dir)
-    generated_files = collect_generated_files(args.generated_dir)
+    """Esegue il flusso completo per la modalita dataset."""
+    target_files = collect_image_files(args.target_dir, "_target", "Target")
+    generated_files = collect_image_files(args.generated_dir, "_target_generated", "Generated")
 
     output_dir = resolve_output_dir(args.output_dir, args.generated_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     all_sample_ids = sorted(set(target_files) | set(generated_files))
-
     per_image_rows: list[dict[str, object]] = []
     skipped_rows: list[dict[str, str]] = []
 
@@ -558,7 +718,7 @@ def run_dataset(args: argparse.Namespace) -> None:
             continue
 
         try:
-            metrics, shape, _, _ = evaluate_pair(target_path, generated_path)
+            metrics, shape = evaluate_pair(target_path, generated_path)
         except Exception as exc:
             skipped_rows.append(
                 {
@@ -570,21 +730,8 @@ def run_dataset(args: argparse.Namespace) -> None:
             )
             continue
 
-        height, width, channels = shape
-
         per_image_rows.append(
-            {
-                "sample_id": sample_id,
-                "target_path": str(target_path),
-                "generated_path": str(generated_path),
-                "width": width,
-                "height": height,
-                "channels": channels,
-                "mae": metrics["mae"],
-                "rmse": metrics["rmse"],
-                "psnr": metrics["psnr"],
-                "ssim": metrics["ssim"],
-            }
+            build_metric_row(sample_id, target_path, generated_path, shape, metrics)
         )
 
     per_image_csv = output_dir / "per_image_metrics.csv"
@@ -594,41 +741,30 @@ def run_dataset(args: argparse.Namespace) -> None:
     write_per_image_metrics_csv(per_image_rows, per_image_csv)
     write_skipped_csv(skipped_rows, skipped_csv)
 
+    summary_rows: list[dict[str, object]] = []
     if per_image_rows:
         summary_rows = build_summary_rows(per_image_rows)
-        write_summary_csv(
-            summary_rows=summary_rows,
-            output_path=summary_csv,
-            num_targets_found=len(target_files),
-            num_generated_found=len(generated_files),
-            num_pairs_evaluated=len(per_image_rows),
-            num_skipped=len(skipped_rows),
-        )
-    else:
-        write_summary_csv(
-            summary_rows=[],
-            output_path=summary_csv,
-            num_targets_found=len(target_files),
-            num_generated_found=len(generated_files),
-            num_pairs_evaluated=0,
-            num_skipped=len(skipped_rows),
-        )
 
-    print(f"Saved per-image metrics to: {per_image_csv}")
-    print(f"Saved summary to:           {summary_csv}")
-    print(f"Saved skipped samples to:   {skipped_csv}")
+    write_summary_csv(
+        summary_rows=summary_rows,
+        output_path=summary_csv,
+        num_targets_found=len(target_files),
+        num_generated_found=len(generated_files),
+        num_pairs_evaluated=len(per_image_rows),
+        num_skipped=len(skipped_rows),
+    )
+
+    print_section("Saved files")
+    print_info("Per-image metrics", str(per_image_csv))
+    print_info("Summary", str(summary_csv))
+    print_info("Skipped samples", str(skipped_csv))
 
     if args.save_graphs and per_image_rows:
         plot_paths = save_dataset_plots(per_image_rows, output_dir)
         for plot_path in plot_paths:
-            print(f"Saved graph to:             {plot_path}")
+            print_info("Graph", str(plot_path))
 
-    print()
-    print(f"Targets found:   {len(target_files)}")
-    print(f"Generated found: {len(generated_files)}")
-    print(f"Pairs evaluated: {len(per_image_rows)}")
-    print(f"Skipped:         {len(skipped_rows)}")
-
+    print_dataset_summary(target_files, generated_files, per_image_rows, skipped_rows, output_dir)
 
 
 def main() -> None:

@@ -1,4 +1,5 @@
 import os
+import sys
 import random
 import time
 import datetime
@@ -45,14 +46,15 @@ def build_parser():
     epilog=(
         "Examples:\n"
         "  python src/pix2pix.py train "
-        "--dataset-root local_workspace/datasets/inverted_512 "
-        "--run-name L1-25 "
-        "--epochs 100\n"
+        "--dataset-root local_workspace/datasets/inverted_256 "
+        "--run-name inv_P-256_L1-25 "
+        "--epochs 100 "
+        "--image-size 256 256\n"
         "\n"
         "  python src/pix2pix.py test "
-        "--dataset-root local_workspace/datasets/inverted_512 "
-        "--run-path local_workspace/results/L1-25 "
-        "--checkpoint local_workspace/results/L1-25/checkpoints/model.pth\n"
+        "--dataset-root local_workspace/datasets/inverted_256 "
+        "--run-path local_workspace/results/inv_P-256_L1-25 "
+        "--checkpoint local_workspace/results/inv_P-256_L1-25/checkpoints/ep099.pth\n"
         "\n"
         "Use 'python src/pix2pix.py <command> --help' "
         "to see the options for a specific command."
@@ -115,9 +117,12 @@ def build_parser():
         "--image-size",
         type=int,
         nargs=2,
-        metavar=("WIDTH", "HEIGHT"),
-        default=(512, 512),
-        help="Resize images before training, e.g. --image-size 512 512"
+        metavar=("HEIGHT", "WIDTH"),
+        default=(256, 256),
+        help=(
+            "Resize images before training as HEIGHT WIDTH "
+            "(default: 256 256). Use 512 512 for 512x512 patch experiments."
+        )
     )
     train_parser.add_argument(
         "--log-rate",
@@ -144,7 +149,7 @@ def build_parser():
         help="Optional checkpoint path to resume training from"
     )
     train_parser.add_argument(
-        "--l1-lambda",
+        "--l1-weight",
         type=float,
         default=25.0,
         help="Weight of the L1 reconstruction loss (default: 25.0)"
@@ -201,9 +206,12 @@ def build_parser():
         "--image-size",
         type=int,
         nargs=2,
-        metavar=("WIDTH", "HEIGHT"),
-        default=(512, 512),
-        help="Resize images before inference, e.g. --image-size 512 512"
+        metavar=("HEIGHT", "WIDTH"),
+        default=(256, 256),
+        help=(
+            "Resize images before inference as HEIGHT WIDTH "
+            "(default: 256 256). Must match the image size used during training."
+        )
     )
 
     return parser
@@ -462,22 +470,22 @@ class UNetGenerator(nn.Module):
         # Per immagini grayscale, N vale 1
 
         # Encoder
-        x1 = self.inc(x)       # Shape: [N, 64, 512, 512]
-        x2 = self.down1(x1)    # Shape: [N, 128, 256, 256]
-        x3 = self.down2(x2)    # Shape: [N, 256, 128, 128]
-        x4 = self.down3(x3)    # Shape: [N, 512, 64, 64]
-        x5 = self.down4(x4)    # Shape: [N, 1024, 32, 32]
+        x1 = self.inc(x)       # [N, 64, H, W]
+        x2 = self.down1(x1)    # [N, 128, H/2, W/2]
+        x3 = self.down2(x2)    # [N, 256, H/4, W/4]
+        x4 = self.down3(x3)    # [N, 512, H/8, W/8]
+        x5 = self.down4(x4)    # [N, 1024, H/16, W/16]
 
         # `x5` è il bottleneck: la rappresentazione più compressa e più astratta.
         # Qui la rete conserva il contesto globale dell'immagine.
         # Decoder
-        x = self.up1(x5, x4)   # Shape: [N, 512, 64, 64]
-        x = self.up2(x, x3)    # Shape: [N, 256, 128, 128]
-        x = self.up3(x, x2)    # Shape: [N, 128, 256, 256]
-        x = self.up4(x, x1)    # Shape: [N, 64, 512, 512]
-        
+        x = self.up1(x5, x4)   # Shape: [N, 512, H/8, W/8]
+        x = self.up2(x, x3)    # Shape: [N, 256, H/4, W/4]
+        x = self.up3(x, x2)    # Shape: [N, 128, H/2, W/2]
+        x = self.up4(x, x1)    # Shape: [N, 64, H, W]
+
         # Il layer finale trasforma le feature ricostruite nell'output vero e proprio.
-        logits = self.outc(x)  # Shape: [N, n_classes, 512, 512]
+        logits = self.outc(x)  # Shape: [N, n_classes, H, W]
         return logits
 
 # --------------------- Discriminatore (PatchGAN) ---------------------
@@ -625,39 +633,178 @@ def log_run_header(log_file, run_config):
     """
     Scrive nel log un riepilogo iniziale ordinato della run.
     """
-    log_message("=" * 80, log_file, show_time=False)
-    log_message("RUN CONFIGURATION", log_file, show_time=False)
-    log_message("=" * 80, log_file, show_time=False)
+    log_message("=" * 80, log_file, show_time=False, use_stdout=False)
+    log_message("RUN CONFIGURATION", log_file, show_time=False, use_stdout=False)
+    log_message("=" * 80, log_file, show_time=False, use_stdout=False)
 
     for key, value in run_config.items():
-        log_message(f"{key}: {value}", log_file, show_time=False)
+        log_message(f"{key}: {value}", log_file, show_time=False, use_stdout=False)
 
-    log_message("=" * 80, log_file, show_time=False)
+    log_message("=" * 80, log_file, show_time=False, use_stdout=False)
 
 class ProgressTracker:
-    def __init__(self, total_epochs, total_batches, max_history=500):
+    def __init__(
+        self,
+        total_epochs,
+        total_batches,
+        start_epoch=0,
+        max_history=300,
+        warmup_batches=10,
+        min_eta_batches=5,
+    ):
         self.total_epochs = total_epochs
         self.total_batches = total_batches
+        self.start_epoch = start_epoch
         self.max_history = max_history
-        self.start_time = time.time()
-        self.times = []
-    
+        self.warmup_batches = warmup_batches
+        self.min_eta_batches = min_eta_batches
+
+        self.total_steps = total_epochs * total_batches
+        self.start_step = start_epoch * total_batches
+
+        self.start_time = None
+        self.last_step_time = None
+        self.step_durations = []
+
     def start(self):
-        self.times = [time.time()]
+        now = time.time()
+        self.start_time = now
+        self.last_step_time = now
+        self.step_durations = []
 
     def calculate_progress(self, epoch, batch):
-        self.times.append(time.time())
-        if len(self.times) > self.max_history:
-            # Manteniamo una finestra temporale limitata, così la stima dell'ETA
-            # resta reattiva anche se la velocità del training cambia nel tempo.
-            self.times.pop(0)
-        total_elapsed_time = self.times[-1] - self.start_time
-        elapsed_time = self.times[-1] - self.times[0]
-        eta = (elapsed_time / len(self.times)) * (self.total_epochs * self.total_batches - (epoch * self.total_batches + batch))
-        expected_time = total_elapsed_time + eta
-        progress = (epoch * self.total_batches + batch) / (self.total_epochs * self.total_batches)
-        end_time = self.times[-1] + eta
-        return progress, total_elapsed_time, expected_time, eta, end_time
+        now = time.time()
+
+        current_step = epoch * self.total_batches + batch + 1
+        completed_since_start = current_step - self.start_step
+        remaining_steps = max(self.total_steps - current_step, 0)
+
+        step_duration = now - self.last_step_time
+        self.last_step_time = now
+
+        if completed_since_start > self.warmup_batches:
+            self.step_durations.append(step_duration)
+
+            if len(self.step_durations) > self.max_history:
+                self.step_durations.pop(0)
+
+        total_elapsed_time = now - self.start_time
+        progress = current_step / self.total_steps if self.total_steps > 0 else 1.0
+
+        if len(self.step_durations) < self.min_eta_batches:
+            eta = None
+            end_time = None
+        else:
+            avg_step_time = sum(self.step_durations) / len(self.step_durations)
+            eta = avg_step_time * remaining_steps
+            end_time = now + eta
+
+        return progress, total_elapsed_time, eta, end_time
+
+
+# --------------------- Colors ---------------------
+ANSI = {
+    "reset": "\033[0m",
+    "bold": "\033[1m",
+    "red": "\033[31m",
+    "green": "\033[32m",
+    "yellow": "\033[33m",
+    "blue": "\033[34m",
+    "cyan": "\033[36m",
+    "orange": "\033[38;5;208m",
+}
+
+
+def use_color() -> bool:
+    """Restituisce True se ha senso usare colori ANSI in console."""
+    return os.environ.get("NO_COLOR") is None and sys.stdout.isatty()
+
+
+def style(text: str, *names: str) -> str:
+    """Applica uno stile ANSI al testo, se la colorazione è abilitata."""
+    if not use_color():
+        return text
+
+    prefix = "".join(ANSI[name] for name in names if name in ANSI)
+    return prefix + text + ANSI["reset"]
+
+
+def print_section(title: str) -> None:
+    print()
+    print(style(f"=== {title} ===", "bold", "cyan"))
+
+
+def print_info(label: str, value: str) -> None:
+    print(f"{style(label + ':', 'bold', 'blue')} {value}")
+
+
+def format_duration(seconds):
+    """Formatta una durata in modo leggibile."""
+    if seconds is None:
+        return "--"
+
+    seconds = int(max(seconds, 0))
+
+    if seconds < 60:
+        return f"{seconds}s"
+
+    minutes, sec = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {sec:02d}s"
+
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h {minutes:02d}m"
+
+    days, hours = divmod(hours, 24)
+    return f"{days}d {hours:02d}h"
+
+
+def color_progress(progress: float) -> str:
+    text = f"{progress:.2%}"
+
+    if progress < 0.33:
+        return style(text, "yellow")
+    if progress < 0.66:
+        return style(text, "cyan")
+    if progress < 0.90:
+        return style(text, "blue")
+
+    return style(text, "green")
+
+
+def render_progress_bar(progress: float, width: int = 40) -> str:
+    progress = min(max(progress, 0.0), 1.0)
+
+    filled = int(width * progress)
+
+    if progress > 0 and filled == 0:
+        filled = 1
+
+    if progress >= 1:
+        filled = width
+
+    empty = width - filled
+
+    bar = "█" * filled + "-" * empty
+    return f"[{style(bar, 'green')}]"
+
+
+def update_console_progress(message: str) -> None:
+    """Aggiorna una singola riga di progresso in console."""
+    try:
+        terminal_width = os.get_terminal_size().columns
+    except OSError:
+        terminal_width = 140
+
+    clean_message = message[: terminal_width - 1]
+    print("\r" + clean_message.ljust(terminal_width - 1), end="", flush=True)
+
+
+def finish_console_progress() -> None:
+    """Chiude la riga di progresso corrente."""
+    print()
+
 
 # --------------------- Checkpoints ---------------------
 def save_checkpoint(
@@ -669,7 +816,7 @@ def save_checkpoint(
     opt_D, 
     scaler_G, 
     scaler_D,
-    l1_lambda,
+    l1_weight,
     lr_g,
     lr_d,
     beta1,
@@ -701,7 +848,7 @@ def save_checkpoint(
         "optimizerD_state_dict": opt_D.state_dict(),
         "scalerG_state_dict": scaler_G.state_dict(),
         "scalerD_state_dict": scaler_D.state_dict(),
-        "l1_lambda": l1_lambda,
+        "l1_weight": l1_weight,
         "lr_g": lr_g,
         "lr_d": lr_d,
         "beta1": beta1,
@@ -713,7 +860,7 @@ def save_checkpoint(
     }
     torch.save(checkpoint, checkpoint_path)
 
-def load_checkpoint(checkpoint_path, G, D, opt_G, opt_D, scaler_G, scaler_D, device):
+def load_checkpoint(checkpoint_path, G, D, opt_G, opt_D, scaler_G, scaler_D, device=None, image_size=(256, 256)):
     """
     Carica un checkpoint del modello.
 
@@ -725,12 +872,26 @@ def load_checkpoint(checkpoint_path, G, D, opt_G, opt_D, scaler_G, scaler_D, dev
         opt_D (torch.optim.Optimizer): Ottimizzatore del discriminatore.
         scaler_G (torch.cuda.amp.GradScaler): GradScaler per il generatore.
         scaler_D (torch.cuda.amp.GradScaler): GradScaler per il discriminatore.
+        image_size (tuple): Dimensioni dell'immagine utilizzate durante il training.
         device (torch.device): Dispositivo su cui caricare i modelli.
     """
     # Qui non carichiamo solo i pesi dei modelli, ma anche optimizer e scaler.
     # Questo rende il resume davvero coerente con il punto in cui il training
     # era stato interrotto.
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+
+    checkpoint_image_size = checkpoint.get("image_size")
+    if image_size is not None and checkpoint_image_size is not None:
+        checkpoint_image_size = tuple(checkpoint_image_size)
+        requested_image_size = tuple(image_size)
+
+        if checkpoint_image_size != requested_image_size:
+            raise ValueError(
+                "Image size mismatch between checkpoint and resumed training. "
+                f"Checkpoint image_size={checkpoint_image_size}, "
+                f"current image_size={requested_image_size}."
+            )
+
     G.load_state_dict(checkpoint['generator_state_dict'])
     D.load_state_dict(checkpoint['discriminator_state_dict'])
     opt_G.load_state_dict(checkpoint['optimizerG_state_dict'])
@@ -774,7 +935,7 @@ def validate(
     l1_loss, epoch, 
     log_file, 
     output_val_dir, 
-    l1_lambda
+    l1_weight
 ):
     """
     Esegue un pass di validazione e calcola le loss medie
@@ -818,7 +979,7 @@ def validate(
                 
                 # La componente L1 è utile per evitare output plausibili ma
                 # scollegati dal target specifico del campione attuale.
-                loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * l1_lambda
+                loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * l1_weight
 
             total_loss_D += loss_D.item()
             total_loss_G += loss_G.item()
@@ -833,7 +994,8 @@ def validate(
 
     log_message(
         f"[Epoch {epoch}] Validation: loss_G={avg_loss_G:.4f} loss_D={avg_loss_D:.4f}",
-        log_file
+        log_file, 
+        use_stdout=False
     )
 
     return avg_loss_G, avg_loss_D
@@ -842,7 +1004,7 @@ def test_inference(
     checkpoint_path,
     test_folder,
     output_folder,
-    image_size=(512, 512),
+    image_size=(256, 256),
     device=None
 ):
     """
@@ -859,6 +1021,19 @@ def test_inference(
     # Il discriminatore serve solo in training.
     G = UNetGenerator().to(device)
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+
+    checkpoint_image_size = checkpoint.get("image_size")
+    if checkpoint_image_size is not None:
+        checkpoint_image_size = tuple(checkpoint_image_size)
+        requested_image_size = tuple(image_size)
+
+        if checkpoint_image_size != requested_image_size:
+            raise ValueError(
+                "Image size mismatch between checkpoint and inference. "
+                f"Checkpoint was trained with image_size={checkpoint_image_size}, "
+                f"but inference is using image_size={requested_image_size}. "
+                "Pass the correct --image-size or use a matching checkpoint."
+            )
     G.load_state_dict(checkpoint["generator_state_dict"])
     G.eval()
 
@@ -922,7 +1097,8 @@ def train_one_epoch(
     log_file,
     progress_tracker,
     log_rate,
-    l1_lambda
+    l1_weight,
+    training_status
 ):
     """
     Addestra generatore e discriminatore per una singola epoca.
@@ -930,6 +1106,9 @@ def train_one_epoch(
     G.train()
     D.train()
     amp_enabled = is_amp_enabled(device)
+
+    last_loss_G = None
+    last_loss_D = None
 
     for i, (x, y) in enumerate(training_loader):
         x, y = x.to(device), y.to(device)
@@ -968,26 +1147,59 @@ def train_one_epoch(
             # - BCE adversarial: far sembrare l'output abbastanza realistico
             #   da "convincere" il discriminatore;
             # - L1: mantenere fedeltà verso il target reale.
-            loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * l1_lambda
+            loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * l1_weight
 
         opt_G.zero_grad()
         scaler_G.scale(loss_G).backward()
         scaler_G.step(opt_G)
         scaler_G.update()
 
-        progress, total_elapsed_time, expected_time, eta, end_time = progress_tracker.calculate_progress(epoch, i)
-        progress_str = (
-            f"{progress:.2%} | "
-            f"{total_elapsed_time / 3600:.1f}h/{expected_time / 3600:.1f}h | "
-            f"{datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}"
+        last_loss_G = loss_G.item()
+        last_loss_D = loss_D.item()
+
+        progress, total_elapsed_time, eta, end_time = progress_tracker.calculate_progress(epoch, i)
+
+        elapsed_str = format_duration(total_elapsed_time)
+        eta_str = format_duration(eta)
+        progress_bar = render_progress_bar(progress)
+
+        epoch_progress = (i + 1) / progress_tracker.total_batches
+
+        console_message = (
+            f"{progress_bar} "
+            f"global {color_progress(progress)} | "
+            f"ep {epoch + 1}/{progress_tracker.total_epochs} "
+            f"({epoch_progress:.0%}) | "
+            f"b {i + 1}/{progress_tracker.total_batches} | "
+            f"loss_G {loss_G.item():.4f} | "
+            f"loss_D {loss_D.item():.4f} | "
+            f"elapsed {elapsed_str} | "
+            f"ETA {eta_str} | "
+            f"ckpt {training_status['last_checkpoint']}"
         )
 
+        should_update_progress = (
+            i % log_rate == 0
+            or i == len(training_loader) - 1
+        )
+
+        if should_update_progress:
+            update_console_progress(console_message)
+        
         if i % log_rate == 0:
+            if end_time is None:
+                end_time_str = "warming up"
+            else:
+                end_time_str = datetime.datetime.fromtimestamp(end_time).strftime("%Y-%m-%d %H:%M:%S")
+
             log_message(
                 f"[ep {epoch} | b {i}] loss_G: {loss_G.item():.4f} "
-                f"loss_D: {loss_D.item():.4f} - {progress_str}",
-                log_file
+                f"loss_D: {loss_D.item():.4f} - "
+                f"{progress:.2%} | elapsed {elapsed_str} | ETA {eta_str} | end {end_time_str}",
+                log_file,
+                use_stdout=False,
             )
+    return last_loss_G, last_loss_D
 
 # --------------------- Main ---------------------
 def main(
@@ -1001,12 +1213,12 @@ def main(
     seed=None,
     batch_size=8,
     n_workers=12,
-    image_size=(512, 512),
+    image_size=(256, 256),
     log_rate=15,
     checkpoint_rate=10,
     validate_rate=1,
     resume_checkpoint=None,
-    l1_lambda=25.0,
+    l1_weight=25.0,
     lr_g=2e-4,
     lr_d=2e-4,
     beta1=0.5,
@@ -1029,10 +1241,10 @@ def main(
         seed = random.randint(0, 2**32 - 1)
 
     set_seed(seed)
-    log_message(f"Seed set to {seed}", log_file)
+    log_message(f"Seed set to {seed}", log_file, use_stdout=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    log_message(f"Device: {device}", log_file)
+    log_message(f"Device: {device}", log_file, use_stdout=False)
 
     # La normalizzazione con media e std pari a 0.5 porta i valori
     # da [0, 1] a [-1, 1].
@@ -1078,7 +1290,7 @@ def main(
         "checkpoint_rate": checkpoint_rate,
         "validate_rate": validate_rate,
         "resume_checkpoint": str(resume_checkpoint) if resume_checkpoint else None,
-        "l1_lambda": l1_lambda,
+        "l1_weight": l1_weight,
         "lr_g": lr_g,
         "lr_d": lr_d,
         "beta1": beta1,
@@ -1112,7 +1324,7 @@ def main(
 
     config_path = save_run_config(run_config, run_root)
     log_run_header(log_file, run_config)
-    log_message(f"Run config saved to {config_path}", log_file)
+    log_message(f"Run config saved to {config_path}", log_file, use_stdout=False)
 
     generator = UNetGenerator().to(device)
     discriminator = PatchGANDiscriminator().to(device)
@@ -1146,28 +1358,53 @@ def main(
                 opt_D,
                 scaler_G,
                 scaler_D,
-                device
+                device,
+                image_size=image_size
             )
-            log_message(f"Checkpoint loaded from {resume_checkpoint}, epoch {start_epoch}", log_file)
+            log_message(f"Checkpoint loaded from {resume_checkpoint}, epoch {start_epoch}", log_file, use_stdout=False)
         else:
-            log_message(f"WARNING - Checkpoint not found: {resume_checkpoint}", log_file)
+            log_message(f"WARNING - Checkpoint not found: {resume_checkpoint}", log_file, use_stdout=False)
     else:
-        log_message("Training started from scratch", log_file)
+        log_message("Training started from scratch", log_file, use_stdout=False)
 
-    progress_tracker = ProgressTracker(n_epochs, len(training_loader))
+    print_section("Pix2Pix training")
+    print_info("Run root", str(run_root))
+    print_info("Dataset root", str(dataset_root))
+    print_info("Device", str(device))
+    print_info("Epochs", str(n_epochs))
+    print_info("Start epoch", str(start_epoch))
+    print_info("Train samples", str(len(training_dataset)))
+    print_info("Validation samples", str(len(validation_dataset)))
+    print_info("Train batches/epoch", str(len(training_loader)))
+    print_info("Validation batches", str(len(validation_loader)))
+    print_info("Detailed log", str(log_file))
+    print()
+    print(style("Training progress:", "bold", "cyan"))
+
+    progress_tracker = ProgressTracker(
+        total_epochs=n_epochs,
+        total_batches=len(training_loader),
+        start_epoch=start_epoch,
+        warmup_batches=max(10, log_rate),
+    )
     progress_tracker.start()
 
-    log_message("Training started", log_file)
+    log_message("Training started", log_file, use_stdout=False)
     log_message(
-        f"Hyperparameters | l1_lambda={l1_lambda} | lr_g={lr_g} | lr_d={lr_d} | "
+        f"Hyperparameters | l1_weight={l1_weight} | lr_g={lr_g} | lr_d={lr_d} | "
         f"beta1={beta1} | beta2={beta2}",
-        log_file
+        log_file,
+        use_stdout=False
     )
 
-    for epoch in range(start_epoch, n_epochs):
-        log_message(f"Starting epoch {epoch}", log_file)
+    training_status = {
+        "last_checkpoint": Path(resume_checkpoint).name if resume_checkpoint else "none "
+    }
 
-        train_one_epoch(
+    for epoch in range(start_epoch, n_epochs):
+        log_message(f"Starting epoch {epoch}", log_file, use_stdout=False)
+
+        last_loss_G, last_loss_D = train_one_epoch(
             generator,
             discriminator,
             training_loader,
@@ -1182,10 +1419,11 @@ def main(
             log_file,
             progress_tracker,
             log_rate,
-            l1_lambda
+            l1_weight,
+            training_status
         )
 
-        log_message(f"Finished epoch {epoch}", log_file)
+        log_message(f"Finished epoch {epoch}", log_file, use_stdout=False)
 
         # Salviamo checkpoint periodici: se il training si interrompe, non si riparte da zero.
         if (epoch + 1) % checkpoint_rate == 0:
@@ -1202,7 +1440,7 @@ def main(
                 opt_D,
                 scaler_G,
                 scaler_D,
-                l1_lambda,
+                l1_weight,
                 lr_g,
                 lr_d,
                 beta1,
@@ -1212,7 +1450,20 @@ def main(
                 num_workers=n_workers,
                 dataset_root=dataset_root
             )
-            log_message(f"Checkpoint saved to {checkpoint_path} at epoch {epoch}", log_file)
+            training_status["last_checkpoint"] = Path(checkpoint_path).name
+            log_message(f"Checkpoint saved to {checkpoint_path} at epoch {epoch}", log_file, use_stdout=False)
+            if epoch == n_epochs - 1:
+                update_console_progress(
+                    f"{render_progress_bar(1.0)} "
+                    f"global {color_progress(1.0)} | "
+                    f"ep {epoch + 1}/{n_epochs} (100%) | "
+                    f"b {len(training_loader)}/{len(training_loader)} | "
+                    f"loss_G {last_loss_G:.4f} | "
+                    f"loss_D {last_loss_D:.4f} | "
+                    f"elapsed {format_duration(time.time() - start_time)} | "
+                    f"ETA 0s | "
+                    f"ckpt {training_status['last_checkpoint']}"
+                )
 
         # La validation periodica misura se il modello sta migliorando
         # anche fuori dal training set.
@@ -1227,11 +1478,13 @@ def main(
                 epoch,
                 log_file,
                 output_val_dir,
-                l1_lambda
+                l1_weight
             )
-
+    
+    finish_console_progress()
     total_seconds = time.time() - start_time
-    log_message(f"Execution completed. Total time = {total_seconds:.2f} seconds", log_file)
+    log_message(f"Execution completed. Total time = {total_seconds:.2f} seconds", log_file, use_stdout=False)
+    
               
 
 if __name__ == "__main__":
@@ -1242,7 +1495,6 @@ if __name__ == "__main__":
         run_root = Path(args.results_path) / args.run_name
         paths = build_workspace_paths(run_root)
         
-        print(f"Starting training run '{args.run_name}' in: {run_root}")
         
         main(
             dataset_root=args.dataset_root,
@@ -1260,7 +1512,7 @@ if __name__ == "__main__":
             checkpoint_rate=args.checkpoint_rate,
             validate_rate=args.validate_rate,
             resume_checkpoint=args.resume,
-            l1_lambda=args.l1_lambda,
+            l1_weight=args.l1_weight,
             lr_g=args.lr_g,
             lr_d=args.lr_d,
             beta1=args.beta1,
