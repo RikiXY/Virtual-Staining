@@ -272,7 +272,7 @@ def add_unpaired_subparser(subparsers: Any) -> None:
         "--thresholds",
         nargs="*",
         type=float,
-        default=[0.8, 0.9, 0.95],
+        default=[0.65, 0.75, 0.85],
         help="Thresholds used for share-above or share-below statistics.",
     )
     parser.set_defaults(func=run_unpaired)
