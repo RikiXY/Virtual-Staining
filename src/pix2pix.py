@@ -139,8 +139,8 @@ def build_parser():
     train_parser.add_argument(
         "--validate-rate",
         type=int,
-        default=1,
-        help="Run validation every N epochs (default: 1)"
+        default=10,
+        help="Run validation every N epochs (default: 10)"
     )
     train_parser.add_argument(
         "--resume",
