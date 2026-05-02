@@ -903,13 +903,13 @@ def load_checkpoint(checkpoint_path, G, D, opt_G, opt_D, scaler_G, scaler_D, dev
     return start_epoch
 
 # --------------------- Funzioni utili ---------------------
-def save_images(path, input, output, target, epoch, batch_index):
+def save_images(path, source_tensor, output, target, epoch, batch_index):
     """
     Salva le immagini di input, output e target in formato TIF.
 
     Args:
         path (str): Percorso della cartella di salvataggio.
-        input (Tensor): Immagine di input.
+        source_tensor (Tensor): Immagine di input.
         output (Tensor): Immagine generata dal modello.
         target (Tensor): Immagine target corrispondente all'input corrente.
         epoch (int): Numero dell'epoca corrente.
@@ -917,7 +917,7 @@ def save_images(path, input, output, target, epoch, batch_index):
     """
     # Le immagini sono normalizzate in [-1, 1]; prima di salvarle per uso umano
     # dobbiamo riportarle nell'intervallo [0, 1].
-    save_image((input * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_input.tif"))
+    save_image((source_tensor * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_input.tif"))
     save_image((output * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_output.tif"))
     save_image((target * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_target.tif"))
 
