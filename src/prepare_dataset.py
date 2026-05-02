@@ -464,11 +464,11 @@ def split_items(items: list, ratios: list[int]) -> list[list]:
         List of generated sublists.
     """
     if len(ratios) < 2:
-        raise ValueError("Devi specificare almeno 2 rapporti")
+        raise ValueError("At least 2 ratios must be specified")
     if sum(ratios) > 1:
-        raise ValueError("La somma dei rapporti deve essere <= 1")
+        raise ValueError("The sum of ratios must be <= 1")
     if any(ratio < 0 for ratio in ratios):
-        raise ValueError("I rapporti devono essere >= 0")
+        raise ValueError("All ratios must be >= 0")
     
     # Random shuffle of the list
     shuffled = items.copy()
