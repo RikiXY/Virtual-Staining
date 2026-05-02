@@ -238,9 +238,9 @@ class PairedHistologyDataset(Dataset):
         grouped = {}
 
         for filename in sorted(os.listdir(self.folder_path)):
-            file_path = os.path.join(self.folder_path, filename)
+            file_path = Path(self.folder_path) / filename
 
-            if not os.path.isfile(file_path):
+            if not file_path.is_file():
                 continue
 
             suffix = Path(filename).suffix.lower()
@@ -337,8 +337,8 @@ class DoubleConv(nn.Module):
         out_channels (int): Numero di canali in uscita.
     """
     def __init__(self, in_channels, out_channels):
-        conv_params = SETTINGS["double_conv"]
         super(DoubleConv, self).__init__()
+        conv_params = SETTINGS["double_conv"]
         # Due convoluzioni di fila sono un blocco molto usato nelle U-Net:
         # la prima inizia a trasformare le feature, la seconda le rifinisce.
         self.double_conv = nn.Sequential(
@@ -623,7 +623,7 @@ def get_first_pair_size(dataset):
 
 
 def save_run_config(run_config, run_root):
-    config_path = os.path.join(run_root, "run_config.json")
+    config_path = Path(run_root) / "run_config.json"
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(run_config, f, indent=4)
     return config_path
@@ -903,13 +903,13 @@ def load_checkpoint(checkpoint_path, G, D, opt_G, opt_D, scaler_G, scaler_D, dev
     return start_epoch
 
 # --------------------- Funzioni utili ---------------------
-def save_images(path, input, output, target, epoch, batch_index):
+def save_images(path, source_tensor, output, target, epoch, batch_index):
     """
     Salva le immagini di input, output e target in formato TIF.
 
     Args:
         path (str): Percorso della cartella di salvataggio.
-        input (Tensor): Immagine di input.
+        source_tensor (Tensor): Immagine di input.
         output (Tensor): Immagine generata dal modello.
         target (Tensor): Immagine target corrispondente all'input corrente.
         epoch (int): Numero dell'epoca corrente.
@@ -917,9 +917,9 @@ def save_images(path, input, output, target, epoch, batch_index):
     """
     # Le immagini sono normalizzate in [-1, 1]; prima di salvarle per uso umano
     # dobbiamo riportarle nell'intervallo [0, 1].
-    save_image((input * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_input.tif"))
-    save_image((output * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_output.tif"))
-    save_image((target * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_target.tif"))
+    save_image((source_tensor * 0.5 + 0.5), Path(path) / f"epoch{epoch}_batch{batch_index}_input.tif")
+    save_image((output * 0.5 + 0.5), Path(path) / f"epoch{epoch}_batch{batch_index}_output.tif")
+    save_image((target * 0.5 + 0.5), Path(path) / f"epoch{epoch}_batch{batch_index}_target.tif")
 
 # --------------------- Training e Validazione ---------------------
 # Training e validation hanno due ruoli diversi:
@@ -944,7 +944,7 @@ def validate(
     G.eval()
     D.eval()
 
-    os.makedirs(output_val_dir, exist_ok=True)
+    Path(output_val_dir).mkdir(parents=True, exist_ok=True)
 
     total_loss_G = 0.0
     total_loss_D = 0.0
@@ -1013,9 +1013,7 @@ def test_inference(
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    os.makedirs(output_folder, exist_ok=True)
-
-    valid_exts = {".tif", ".tiff", ".png"}
+    Path(output_folder).mkdir(parents=True, exist_ok=True)
 
     # In inferenza ci serve soltanto il generatore.
     # Il discriminatore serve solo in training.
@@ -1045,25 +1043,21 @@ def test_inference(
         transforms.Normalize([0.5] * 3, [0.5] * 3),
     ])
 
-    test_files = sorted(
-        f for f in os.listdir(test_folder)
-        if (
-            Path(f).suffix.lower() in valid_exts
-            and Path(f).stem.lower().endswith("_source")
-        )
-    )
+    dataset = PairedHistologyDataset(test_folder, transform=transform)
 
-    if not test_files:
+    if not dataset.pairs:
         print(f"No test source files found in: {test_folder}")
         return
 
     amp_enabled = is_amp_enabled(device)
 
     with torch.no_grad():
-        for filename in test_files:
-            img_path = os.path.join(test_folder, filename)
-            img = Image.open(img_path).convert("RGB")
-            img_tensor = transform(img).unsqueeze(0).to(device)
+        for idx, (source_tensor, _) in enumerate(dataset):
+            source_path = dataset.pairs[idx][0]
+            prefix = source_path.stem[:-len("_source")]
+            out_filename = f"{prefix}_target_generated{source_path.suffix.lower()}"
+
+            img_tensor = source_tensor.unsqueeze(0).to(device)
 
             with autocast(device_type=device.type, enabled=amp_enabled):
                 fake_target = G(img_tensor)
@@ -1072,12 +1066,7 @@ def test_inference(
             fake_target = (fake_target * 0.5) + 0.5
             fake_target = fake_target.clamp(0, 1)
 
-            source_stem = Path(filename).stem
-            source_ext = Path(filename).suffix.lower()
-            prefix = source_stem[:-len("_source")]
-            out_filename = f"{prefix}_target_generated{source_ext}"
-
-            out_path = os.path.join(output_folder, out_filename)
+            out_path = Path(output_folder) / out_filename
             save_image(fake_target, out_path)
 
     print(f"Test completed. Images saved in {output_folder}")
@@ -1226,15 +1215,15 @@ def main(
 ):
     start_time = time.time()
 
-    os.makedirs(logs_dir, exist_ok=True)
-    os.makedirs(checkpoints_dir, exist_ok=True)
-    os.makedirs(output_train_dir, exist_ok=True)
-    os.makedirs(output_val_dir, exist_ok=True)
+    Path(logs_dir).mkdir(parents=True, exist_ok=True)
+    Path(checkpoints_dir).mkdir(parents=True, exist_ok=True)
+    Path(output_train_dir).mkdir(parents=True, exist_ok=True)
+    Path(output_val_dir).mkdir(parents=True, exist_ok=True)
 
     timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_file = os.path.join(logs_dir, f"Log-{timestamp_str}.txt")
+    log_file = Path(logs_dir) / f"Log-{timestamp_str}.txt"
 
-    if os.path.exists(log_file):
+    if log_file.exists():
         os.remove(log_file)
 
     if seed is None:
@@ -1255,8 +1244,8 @@ def main(
         transforms.Normalize([0.5] * 3, [0.5] * 3)
     ])
 
-    train_dir = os.path.join(dataset_root, "dataset_train")
-    val_dir = os.path.join(dataset_root, "dataset_val")
+    train_dir = Path(dataset_root) / "dataset_train"
+    val_dir = Path(dataset_root) / "dataset_val"
 
     training_dataset = PairedHistologyDataset(
         train_dir,
@@ -1344,13 +1333,13 @@ def main(
 
     # Puliamo la cartella di output del training per non mischiare materiale di run diverse.
     for file in os.listdir(output_train_dir):
-        file_path = os.path.join(output_train_dir, file)
-        if os.path.isfile(file_path):
+        file_path = Path(output_train_dir) / file
+        if file_path.is_file():
             os.remove(file_path)
 
     start_epoch = 0
     if resume_checkpoint is not None:
-        if os.path.exists(resume_checkpoint):
+        if Path(resume_checkpoint).exists():
             start_epoch = load_checkpoint(
                 resume_checkpoint,
                 generator,
@@ -1428,10 +1417,7 @@ def main(
 
         # Salviamo checkpoint periodici: se il training si interrompe, non si riparte da zero.
         if (epoch + 1) % checkpoint_rate == 0:
-            checkpoint_path = os.path.join(
-                checkpoints_dir,
-                f"ep{epoch:03d}.pth"
-            )
+            checkpoint_path = Path(checkpoints_dir) / f"ep{epoch:03d}.pth"
             save_checkpoint(
                 checkpoint_path,
                 epoch,

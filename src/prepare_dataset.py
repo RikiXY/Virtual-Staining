@@ -12,10 +12,7 @@ extracts paired patches, and creates the `dataset_train`, `dataset_val`, and
 # and from there "Kenobi" felt like the only possible ending.
 # Ironically, none of the collaborators had even seen Star Wars.
 
-from os import path
-
-
-import cv2, os, random, shutil
+import cv2, random, shutil
 import argparse
 import json
 import csv
@@ -709,7 +706,7 @@ def main(
     # [ITA]  Caricamento delle immagini
     # [EN] Loading images
     print(MESSAGES["loading_images"][lang].format(path=path))
-    if not os.path.exists(path):
+    if not Path(path).exists():
         raise FileNotFoundError(MESSAGES["check_path"][lang].format(path=path)) 
     source_file = validate_image_filename(source_name, "Source")
     target_file = validate_image_filename(target_name, "Target")
@@ -719,8 +716,8 @@ def main(
     source_suffix = source_file.suffix.lower()
     target_suffix = target_file.suffix.lower()
 
-    source_image = cv2.imread(os.path.join(path, source_file.name))
-    target_image = cv2.imread(os.path.join(path, target_file.name))
+    source_image = cv2.imread(Path(path) / source_file.name)
+    target_image = cv2.imread(Path(path) / target_file.name)
     if source_image is None or target_image is None:
         raise FileNotFoundError(
             f"Missing paired files. Expected '{source_name}' and '{target_name}' inside: {path}"
@@ -743,8 +740,9 @@ def main(
     print(MESSAGES["masks_calculated"][lang])
     # [ITA] Salvataggio delle maschere
     # [EN] Saving masks
-    cv2.imwrite(os.path.join(path, f"mask_{source_stem}{source_suffix}"), source_mask)
-    cv2.imwrite(os.path.join(path, f"mask_{target_stem}{target_suffix}"), target_mask)
+    if save_masks:
+        cv2.imwrite(Path(path) / f"mask_{source_stem}{source_suffix}", source_mask)
+        cv2.imwrite(Path(path) / f"mask_{target_stem}{target_suffix}", target_mask)
     print(MESSAGES["mask_saved"][lang])
     # =========================================================
 
@@ -763,8 +761,8 @@ def main(
     print(MESSAGES["images_aligned"][lang])
     # [ITA] Salvataggio delle immagini allineate
     # [EN] Saving aligned images
-    cv2.imwrite(os.path.join(path, f"aligned_{target_stem}{target_suffix}"), aligned_target)
-    cv2.imwrite(os.path.join(path, f"aligned_mask_{target_stem}{target_suffix}"), aligned_target_mask)
+    cv2.imwrite(Path(path) / f"aligned_{target_stem}{target_suffix}", aligned_target)
+    cv2.imwrite(Path(path) / f"aligned_mask_{target_stem}{target_suffix}", aligned_target_mask)
     print(MESSAGES["images_aligned_saved"][lang])
     # =========================================================
 
@@ -820,8 +818,8 @@ def main(
         target_images,
         target_masks,
     ):
-        source_name = f"{x:05}_{y:05}_source{source_suffix}"
-        target_name = f"{x:05}_{y:05}_target{target_suffix}"
+        patch_source_name = f"{x:05}_{y:05}_source{source_suffix}"
+        patch_target_name = f"{x:05}_{y:05}_target{target_suffix}"
 
         is_valid, debug_info = is_valid_patch_pair(
             source_img=source_img,
@@ -835,17 +833,17 @@ def main(
         )
 
         if is_valid:
-            named_source_images.append((source_img, source_name))
-            named_target_images.append((target_img, target_name))
+            named_source_images.append((source_img, patch_source_name))
+            named_target_images.append((target_img, patch_target_name))
         else:
-            discarded_source_images.append((source_img, source_name))
-            discarded_target_images.append((target_img, target_name))
+            discarded_source_images.append((source_img, patch_source_name))
+            discarded_target_images.append((target_img, patch_target_name))
 
             discarded_log_rows.append(
                 {
                     "sample_id": f"{x:05}_{y:05}",
-                    "source_name": source_name,
-                    "target_name": target_name,
+                    "source_name": patch_source_name,
+                    "target_name": patch_target_name,
                     "source_foreground_ratio": debug_info["source_foreground_ratio"],
                     "target_foreground_ratio": debug_info["target_foreground_ratio"],
                     "source_white_ratio": debug_info["source_white_ratio"],
@@ -860,24 +858,24 @@ def main(
 
     # [ITA] Prepariamo anche una cartella con le patch scartate per debug e verifica visiva.
     # [EN] Also prepare a discarded-patches folder for debugging and visual inspection.
-    discarded_root = os.path.join(path, "discarded_patches")
-    discarded_source_dir = os.path.join(discarded_root, "source")
-    discarded_target_dir = os.path.join(discarded_root, "target")
+    discarded_root = Path(path) / "discarded_patches"
+    discarded_source_dir = discarded_root / "source"
+    discarded_target_dir = discarded_root / "target"
 
     # [ITA] Puliamo le cartelle di output per evitare residui di esecuzioni precedenti.
     # [EN] Clean output folders to avoid leftovers from previous runs.
-    ensure_clean_directory(os.path.join(path, "dataset_train"))
-    ensure_clean_directory(os.path.join(path, "dataset_val"))
-    ensure_clean_directory(os.path.join(path, "dataset_test"))
+    ensure_clean_directory(Path(path) / "dataset_train")
+    ensure_clean_directory(Path(path) / "dataset_val")
+    ensure_clean_directory(Path(path) / "dataset_test")
     ensure_clean_directory(discarded_source_dir)
     ensure_clean_directory(discarded_target_dir)
 
-    for source_img, source_name in discarded_source_images:
-        cv2.imwrite(os.path.join(discarded_source_dir, source_name), source_img)
-    for target_img, target_name in discarded_target_images:
-        cv2.imwrite(os.path.join(discarded_target_dir, target_name), target_img)
+    for source_img, patch_source_name in discarded_source_images:
+        cv2.imwrite(discarded_source_dir / patch_source_name, source_img)
+    for target_img, patch_target_name in discarded_target_images:
+        cv2.imwrite(discarded_target_dir / patch_target_name, target_img)
     
-    discarded_log_path = os.path.join(discarded_root, "discarded_log.csv")
+    discarded_log_path = discarded_root / "discarded_log.csv"
     with open(discarded_log_path, "w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(
             file,
@@ -908,10 +906,10 @@ def main(
     # [EN] Saving the split images
     for i, subset in enumerate(split):
         subset_name = ["dataset_train", "dataset_val", "dataset_test"][i]
-        subset_dir = os.path.join(path, subset_name)
+        subset_dir = Path(path) / subset_name
         for source_img, target_img in subset:
-            cv2.imwrite(os.path.join(subset_dir, source_img[1]), source_img[0])
-            cv2.imwrite(os.path.join(subset_dir, target_img[1]), target_img[0])
+            cv2.imwrite(subset_dir / source_img[1], source_img[0])
+            cv2.imwrite(subset_dir / target_img[1], target_img[0])
 
     print(MESSAGES["dataset_saved"][lang])
     # ==========================================================
