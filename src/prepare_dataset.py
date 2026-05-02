@@ -820,8 +820,8 @@ def main(
         target_images,
         target_masks,
     ):
-        source_name = f"{x:05}_{y:05}_source{source_suffix}"
-        target_name = f"{x:05}_{y:05}_target{target_suffix}"
+        patch_source_name = f"{x:05}_{y:05}_source{source_suffix}"
+        patch_target_name = f"{x:05}_{y:05}_target{target_suffix}"
 
         is_valid, debug_info = is_valid_patch_pair(
             source_img=source_img,
@@ -835,17 +835,17 @@ def main(
         )
 
         if is_valid:
-            named_source_images.append((source_img, source_name))
-            named_target_images.append((target_img, target_name))
+            named_source_images.append((source_img, patch_source_name))
+            named_target_images.append((target_img, patch_target_name))
         else:
-            discarded_source_images.append((source_img, source_name))
-            discarded_target_images.append((target_img, target_name))
+            discarded_source_images.append((source_img, patch_source_name))
+            discarded_target_images.append((target_img, patch_target_name))
 
             discarded_log_rows.append(
                 {
                     "sample_id": f"{x:05}_{y:05}",
-                    "source_name": source_name,
-                    "target_name": target_name,
+                    "source_name": patch_source_name,
+                    "target_name": patch_target_name,
                     "source_foreground_ratio": debug_info["source_foreground_ratio"],
                     "target_foreground_ratio": debug_info["target_foreground_ratio"],
                     "source_white_ratio": debug_info["source_white_ratio"],
@@ -872,10 +872,10 @@ def main(
     ensure_clean_directory(discarded_source_dir)
     ensure_clean_directory(discarded_target_dir)
 
-    for source_img, source_name in discarded_source_images:
-        cv2.imwrite(os.path.join(discarded_source_dir, source_name), source_img)
-    for target_img, target_name in discarded_target_images:
-        cv2.imwrite(os.path.join(discarded_target_dir, target_name), target_img)
+    for source_img, patch_source_name in discarded_source_images:
+        cv2.imwrite(os.path.join(discarded_source_dir, patch_source_name), source_img)
+    for target_img, patch_target_name in discarded_target_images:
+        cv2.imwrite(os.path.join(discarded_target_dir, patch_target_name), target_img)
     
     discarded_log_path = os.path.join(discarded_root, "discarded_log.csv")
     with open(discarded_log_path, "w", newline="", encoding="utf-8") as file:
