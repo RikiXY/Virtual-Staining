@@ -1015,8 +1015,6 @@ def test_inference(
 
     Path(output_folder).mkdir(parents=True, exist_ok=True)
 
-    valid_exts = {".tif", ".tiff", ".png"}
-
     # In inferenza ci serve soltanto il generatore.
     # Il discriminatore serve solo in training.
     G = UNetGenerator().to(device)
@@ -1045,25 +1043,21 @@ def test_inference(
         transforms.Normalize([0.5] * 3, [0.5] * 3),
     ])
 
-    test_files = sorted(
-        f for f in os.listdir(test_folder)
-        if (
-            Path(f).suffix.lower() in valid_exts
-            and Path(f).stem.lower().endswith("_source")
-        )
-    )
+    dataset = PairedHistologyDataset(test_folder, transform=transform)
 
-    if not test_files:
+    if not dataset.pairs:
         print(f"No test source files found in: {test_folder}")
         return
 
     amp_enabled = is_amp_enabled(device)
 
     with torch.no_grad():
-        for filename in test_files:
-            img_path = Path(test_folder) / filename
-            img = Image.open(img_path).convert("RGB")
-            img_tensor = transform(img).unsqueeze(0).to(device)
+        for idx, (source_tensor, _) in enumerate(dataset):
+            source_path = dataset.pairs[idx][0]
+            prefix = source_path.stem[:-len("_source")]
+            out_filename = f"{prefix}_target_generated{source_path.suffix.lower()}"
+
+            img_tensor = source_tensor.unsqueeze(0).to(device)
 
             with autocast(device_type=device.type, enabled=amp_enabled):
                 fake_target = G(img_tensor)
@@ -1071,11 +1065,6 @@ def test_inference(
             # Riportiamo l'output nell'intervallo adatto al salvataggio.
             fake_target = (fake_target * 0.5) + 0.5
             fake_target = fake_target.clamp(0, 1)
-
-            source_stem = Path(filename).stem
-            source_ext = Path(filename).suffix.lower()
-            prefix = source_stem[:-len("_source")]
-            out_filename = f"{prefix}_target_generated{source_ext}"
 
             out_path = Path(output_folder) / out_filename
             save_image(fake_target, out_path)
