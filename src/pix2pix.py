@@ -238,9 +238,9 @@ class PairedHistologyDataset(Dataset):
         grouped = {}
 
         for filename in sorted(os.listdir(self.folder_path)):
-            file_path = os.path.join(self.folder_path, filename)
+            file_path = Path(self.folder_path) / filename
 
-            if not os.path.isfile(file_path):
+            if not file_path.is_file():
                 continue
 
             suffix = Path(filename).suffix.lower()
@@ -623,7 +623,7 @@ def get_first_pair_size(dataset):
 
 
 def save_run_config(run_config, run_root):
-    config_path = os.path.join(run_root, "run_config.json")
+    config_path = Path(run_root) / "run_config.json"
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(run_config, f, indent=4)
     return config_path
@@ -917,9 +917,9 @@ def save_images(path, source_tensor, output, target, epoch, batch_index):
     """
     # Le immagini sono normalizzate in [-1, 1]; prima di salvarle per uso umano
     # dobbiamo riportarle nell'intervallo [0, 1].
-    save_image((source_tensor * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_input.tif"))
-    save_image((output * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_output.tif"))
-    save_image((target * 0.5 + 0.5), os.path.join(path, f"epoch{epoch}_batch{batch_index}_target.tif"))
+    save_image((source_tensor * 0.5 + 0.5), Path(path) / f"epoch{epoch}_batch{batch_index}_input.tif")
+    save_image((output * 0.5 + 0.5), Path(path) / f"epoch{epoch}_batch{batch_index}_output.tif")
+    save_image((target * 0.5 + 0.5), Path(path) / f"epoch{epoch}_batch{batch_index}_target.tif")
 
 # --------------------- Training e Validazione ---------------------
 # Training e validation hanno due ruoli diversi:
@@ -944,7 +944,7 @@ def validate(
     G.eval()
     D.eval()
 
-    os.makedirs(output_val_dir, exist_ok=True)
+    Path(output_val_dir).mkdir(parents=True, exist_ok=True)
 
     total_loss_G = 0.0
     total_loss_D = 0.0
@@ -1013,7 +1013,7 @@ def test_inference(
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    os.makedirs(output_folder, exist_ok=True)
+    Path(output_folder).mkdir(parents=True, exist_ok=True)
 
     valid_exts = {".tif", ".tiff", ".png"}
 
@@ -1061,7 +1061,7 @@ def test_inference(
 
     with torch.no_grad():
         for filename in test_files:
-            img_path = os.path.join(test_folder, filename)
+            img_path = Path(test_folder) / filename
             img = Image.open(img_path).convert("RGB")
             img_tensor = transform(img).unsqueeze(0).to(device)
 
@@ -1077,7 +1077,7 @@ def test_inference(
             prefix = source_stem[:-len("_source")]
             out_filename = f"{prefix}_target_generated{source_ext}"
 
-            out_path = os.path.join(output_folder, out_filename)
+            out_path = Path(output_folder) / out_filename
             save_image(fake_target, out_path)
 
     print(f"Test completed. Images saved in {output_folder}")
@@ -1226,15 +1226,15 @@ def main(
 ):
     start_time = time.time()
 
-    os.makedirs(logs_dir, exist_ok=True)
-    os.makedirs(checkpoints_dir, exist_ok=True)
-    os.makedirs(output_train_dir, exist_ok=True)
-    os.makedirs(output_val_dir, exist_ok=True)
+    Path(logs_dir).mkdir(parents=True, exist_ok=True)
+    Path(checkpoints_dir).mkdir(parents=True, exist_ok=True)
+    Path(output_train_dir).mkdir(parents=True, exist_ok=True)
+    Path(output_val_dir).mkdir(parents=True, exist_ok=True)
 
     timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_file = os.path.join(logs_dir, f"Log-{timestamp_str}.txt")
+    log_file = Path(logs_dir) / f"Log-{timestamp_str}.txt"
 
-    if os.path.exists(log_file):
+    if log_file.exists():
         os.remove(log_file)
 
     if seed is None:
@@ -1255,8 +1255,8 @@ def main(
         transforms.Normalize([0.5] * 3, [0.5] * 3)
     ])
 
-    train_dir = os.path.join(dataset_root, "dataset_train")
-    val_dir = os.path.join(dataset_root, "dataset_val")
+    train_dir = Path(dataset_root) / "dataset_train"
+    val_dir = Path(dataset_root) / "dataset_val"
 
     training_dataset = PairedHistologyDataset(
         train_dir,
@@ -1344,13 +1344,13 @@ def main(
 
     # Puliamo la cartella di output del training per non mischiare materiale di run diverse.
     for file in os.listdir(output_train_dir):
-        file_path = os.path.join(output_train_dir, file)
-        if os.path.isfile(file_path):
+        file_path = Path(output_train_dir) / file
+        if file_path.is_file():
             os.remove(file_path)
 
     start_epoch = 0
     if resume_checkpoint is not None:
-        if os.path.exists(resume_checkpoint):
+        if Path(resume_checkpoint).exists():
             start_epoch = load_checkpoint(
                 resume_checkpoint,
                 generator,
@@ -1428,10 +1428,7 @@ def main(
 
         # Salviamo checkpoint periodici: se il training si interrompe, non si riparte da zero.
         if (epoch + 1) % checkpoint_rate == 0:
-            checkpoint_path = os.path.join(
-                checkpoints_dir,
-                f"ep{epoch:03d}.pth"
-            )
+            checkpoint_path = Path(checkpoints_dir) / f"ep{epoch:03d}.pth"
             save_checkpoint(
                 checkpoint_path,
                 epoch,
