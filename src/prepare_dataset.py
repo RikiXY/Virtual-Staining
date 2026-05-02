@@ -7,11 +7,6 @@ extracts paired patches, and creates the `dataset_train`, `dataset_val`, and
 `dataset_test` splits.
 """
 
-# The original filename was `ollie_wan_kenobi`, born from an internal joke:
-# we needed an "all-in-one" script, which gradually turned into "Ollie Wan",
-# and from there "Kenobi" felt like the only possible ending.
-# Ironically, none of the collaborators had even seen Star Wars.
-
 import cv2, random, shutil
 import argparse
 import json
