@@ -78,8 +78,8 @@ def calculate_mask(img: np.ndarray) -> np.ndarray:
     
     # [ITA] Binarizza l'immagine con una soglia
     # [EN] Binarizes the image with a threshold
-    # ----- DA FAR VEDERE AD ANDREA ----- 
-    # Vogliamo rendere la soglia un parametro? Sì
+    # ----- TO REVIEW WITH ANDREA -----
+    # Do we want to make the threshold a parameter? Yes
     _, binary = cv2.threshold(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 230, 255, cv2.THRESH_BINARY)
 
     # [ITA] Trova i componenti connessi
@@ -306,10 +306,10 @@ def align_images(img1: np.ndarray, img2: np.ndarray, mask1: Optional[np.ndarray]
     return img2_aligned, mask2_aligned, warp_matrix
 
 def align_from_scaled(img1: np.ndarray, img2: np.ndarray, scale: float = 0.5, mask1: Optional[np.ndarray] = None, mask2: Optional[np.ndarray] = None, nfeatures: int = 10000, ed_distance: int = 200) -> tuple[np.ndarray, Optional[np.ndarray], np.ndarray]:
-    # ----- DA FAR VEDERE AD ANDREA -----
-    # vogliamo mettere il fattore di scala come parametro? Sì
-    # vogliamo mettere la soglia di distanza euclidea come parametro? Sì
-    # vogliamo mettere il numero di features come parametro? Sì
+    # ----- TO REVIEW WITH ANDREA -----
+    # do we want to make the scale factor a parameter? Yes
+    # do we want to make the Euclidean distance threshold a parameter? Yes
+    # do we want to make the number of features a parameter? Yes
     """
     Aligns two images by first scaling them, estimating the transformation on the scaled images, and then applying the transformation to the original images.
     
@@ -514,7 +514,7 @@ def split_items(items: list, ratios: list[int]) -> list[list]:
     if any(ratio < 0 for ratio in ratios):
         raise ValueError("I rapporti devono essere >= 0")
     
-    # Mescolamento casuale della lista
+    # Random shuffle of the list
     shuffled = items.copy()
     random.shuffle(shuffled)
 
@@ -771,10 +771,10 @@ def main(
     # [ITA] Estrazione delle sottoimmagini
     # [EN] Extracting sub-images
     print(MESSAGES["extracting_subimages"][lang])
-    # ----- DA FAR VEDERE AD ANDREA -----
-    # Vogliamo mettere il margine come parametro? Sì
-    # Vogliamo mettere le dimensioni delle sottoimmagini come parametro? Sì
-    # Vogliamo mettere lo spostamento della griglia come parametro? Sì
+    # ----- TO REVIEW WITH ANDREA -----
+    # Do we want to make the margin a parameter? Yes
+    # Do we want to make the sub-image size a parameter? Yes
+    # Do we want to make the grid step a parameter? Yes
     
     source_images, source_masks, positions = divide_image_with_grid(
         source_image[margin:-margin, margin:-margin],
