@@ -337,8 +337,8 @@ class DoubleConv(nn.Module):
         out_channels (int): Numero di canali in uscita.
     """
     def __init__(self, in_channels, out_channels):
-        conv_params = SETTINGS["double_conv"]
         super(DoubleConv, self).__init__()
+        conv_params = SETTINGS["double_conv"]
         # Due convoluzioni di fila sono un blocco molto usato nelle U-Net:
         # la prima inizia a trasformare le feature, la seconda le rifinisce.
         self.double_conv = nn.Sequential(
