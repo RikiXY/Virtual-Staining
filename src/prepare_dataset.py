@@ -743,8 +743,9 @@ def main(
     print(MESSAGES["masks_calculated"][lang])
     # [ITA] Salvataggio delle maschere
     # [EN] Saving masks
-    cv2.imwrite(os.path.join(path, f"mask_{source_stem}{source_suffix}"), source_mask)
-    cv2.imwrite(os.path.join(path, f"mask_{target_stem}{target_suffix}"), target_mask)
+    if save_masks:
+        cv2.imwrite(os.path.join(path, f"mask_{source_stem}{source_suffix}"), source_mask)
+        cv2.imwrite(os.path.join(path, f"mask_{target_stem}{target_suffix}"), target_mask)
     print(MESSAGES["mask_saved"][lang])
     # =========================================================
 
