@@ -108,8 +108,8 @@ def build_parser():
     train_parser.add_argument(
         "--num-workers",
         type=int,
-        default=12,
-        help="Number of DataLoader workers (default: 12)"
+        default=min(4, os.cpu_count() or 1),
+        help="Number of DataLoader workers (default: min(4, cpu_count))"
     )
     train_parser.add_argument(
         "--image-size",
@@ -1089,7 +1089,7 @@ def main(
     n_epochs,
     seed=None,
     batch_size=8,
-    n_workers=12,
+    n_workers=min(4, os.cpu_count() or 1),
     image_size=(256, 256),
     log_rate=15,
     checkpoint_rate=10,
