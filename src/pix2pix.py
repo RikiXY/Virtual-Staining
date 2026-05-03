@@ -7,6 +7,7 @@ import argparse
 from pathlib import Path
 
 from virtual_staining.utils.cli import ANSI, use_color, style, print_section, print_info
+from virtual_staining.training.config import TrainingConfig
 
 from PIL import Image
 import numpy as np
@@ -432,30 +433,8 @@ def save_checkpoint(
     opt_D,
     scaler_G,
     scaler_D,
-    l1_weight,
-    lr_g,
-    lr_d,
-    beta1,
-    beta2,
-    image_size=None,
-    batch_size=None,
-    num_workers=None,
-    dataset_root=None
+    config: TrainingConfig,
 ):
-    """
-    Saves a model checkpoint.
-
-    Args:
-        checkpoint_path (str): Path where the checkpoint will be saved.
-        epoch (int): Current epoch.
-        G (nn.Module): Generator model.
-        D (nn.Module): Discriminator model.
-        opt_G (torch.optim.Optimizer): Generator optimiser.
-        opt_D (torch.optim.Optimizer): Discriminator optimiser.
-        scaler_G (torch.cuda.amp.GradScaler): GradScaler for the generator.
-        scaler_D (torch.cuda.amp.GradScaler): GradScaler for the discriminator.
-    """
-
     checkpoint = {
         "epoch": epoch,
         "generator_state_dict": G.state_dict(),
@@ -464,15 +443,15 @@ def save_checkpoint(
         "optimizerD_state_dict": opt_D.state_dict(),
         "scalerG_state_dict": scaler_G.state_dict(),
         "scalerD_state_dict": scaler_D.state_dict(),
-        "l1_weight": l1_weight,
-        "lr_g": lr_g,
-        "lr_d": lr_d,
-        "beta1": beta1,
-        "beta2": beta2,
-        "image_size": image_size,
-        "batch_size": batch_size,
-        "num_workers": num_workers,
-        "dataset_root": str(dataset_root) if dataset_root is not None else None,
+        "l1_weight": config.l1_weight,
+        "lr_g": config.lr_g,
+        "lr_d": config.lr_d,
+        "beta1": config.beta1,
+        "beta2": config.beta2,
+        "image_size": config.image_size,
+        "batch_size": config.batch_size,
+        "num_workers": config.num_workers,
+        "dataset_root": str(config.dataset_root),
     }
     torch.save(checkpoint, checkpoint_path)
 
@@ -799,29 +778,14 @@ def train_one_epoch(
     return last_loss_G, last_loss_D
 
 # --------------------- Main ---------------------
-def main(
-    dataset_root,
-    run_root,
-    logs_dir,
-    checkpoints_dir,
-    output_val_dir,
-    output_train_dir,
-    n_epochs,
-    seed=None,
-    batch_size=8,
-    n_workers=min(4, os.cpu_count() or 1),
-    image_size=(256, 256),
-    log_rate=15,
-    checkpoint_rate=10,
-    validate_rate=1,
-    resume_checkpoint=None,
-    l1_weight=25.0,
-    lr_g=2e-4,
-    lr_d=2e-4,
-    beta1=0.5,
-    beta2=0.999
-):
+def main(config: TrainingConfig):
     start_time = time.time()
+
+    paths = build_workspace_paths(config.run_root)
+    logs_dir = paths["logs_dir"]
+    checkpoints_dir = paths["checkpoints_dir"]
+    output_val_dir = paths["output_val_dir"]
+    output_train_dir = paths["output_train_dir"]
 
     Path(logs_dir).mkdir(parents=True, exist_ok=True)
     Path(checkpoints_dir).mkdir(parents=True, exist_ok=True)
@@ -834,6 +798,7 @@ def main(
     if log_file.exists():
         os.remove(log_file)
 
+    seed = config.seed
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
 
@@ -845,31 +810,24 @@ def main(
     log_message(f"Device: {device} ({device_name})", log_file)
 
     transform = transforms.Compose([
-        transforms.Resize(image_size),
+        transforms.Resize(config.image_size),
         transforms.ToTensor(),
         transforms.Normalize([0.5] * 3, [0.5] * 3)
     ])
 
-    train_dir = Path(dataset_root) / "dataset_train"
-    val_dir = Path(dataset_root) / "dataset_val"
+    train_dir = Path(config.dataset_root) / "dataset_train"
+    val_dir = Path(config.dataset_root) / "dataset_val"
 
-    training_dataset = PairedHistologyDataset(
-        train_dir,
-        transform=transform
-    )
+    training_dataset = PairedHistologyDataset(train_dir, transform=transform)
+    validation_dataset = PairedHistologyDataset(val_dir, transform=transform)
 
-    validation_dataset = PairedHistologyDataset(
-        val_dir,
-        transform=transform
-    )
-    
     first_train_pair_info = get_first_pair_size(training_dataset)
     first_val_pair_info = get_first_pair_size(validation_dataset)
 
     run_config = {
         "timestamp": timestamp_str,
-        "dataset_root": str(dataset_root),
-        "run_root": str(run_root),
+        "dataset_root": str(config.dataset_root),
+        "run_root": str(config.run_root),
         "logs_dir": str(logs_dir),
         "checkpoints_dir": str(checkpoints_dir),
         "output_train_dir": str(output_train_dir),
@@ -878,19 +836,19 @@ def main(
         "val_dir": str(val_dir),
         "seed": seed,
         "device": str(device),
-        "epochs": n_epochs,
-        "batch_size": batch_size,
-        "num_workers": n_workers,
-        "image_size_resize": list(image_size),
-        "log_rate": log_rate,
-        "checkpoint_rate": checkpoint_rate,
-        "validate_rate": validate_rate,
-        "resume_checkpoint": str(resume_checkpoint) if resume_checkpoint else None,
-        "l1_weight": l1_weight,
-        "lr_g": lr_g,
-        "lr_d": lr_d,
-        "beta1": beta1,
-        "beta2": beta2,
+        "epochs": config.epochs,
+        "batch_size": config.batch_size,
+        "num_workers": config.num_workers,
+        "image_size_resize": list(config.image_size),
+        "log_rate": config.log_rate,
+        "checkpoint_rate": config.checkpoint_rate,
+        "validate_rate": config.validate_rate,
+        "resume_checkpoint": str(config.resume) if config.resume else None,
+        "l1_weight": config.l1_weight,
+        "lr_g": config.lr_g,
+        "lr_d": config.lr_d,
+        "beta1": config.beta1,
+        "beta2": config.beta2,
         "train_samples": len(training_dataset),
         "val_samples": len(validation_dataset),
         "first_train_pair_info": first_train_pair_info,
@@ -899,32 +857,32 @@ def main(
 
     training_loader = DataLoader(
         training_dataset,
-        batch_size=batch_size,
+        batch_size=config.batch_size,
         shuffle=True,
-        num_workers=n_workers,
-        pin_memory=(device.type == "cuda")
+        num_workers=config.num_workers,
+        pin_memory=(device.type == "cuda"),
     )
 
     validation_loader = DataLoader(
         validation_dataset,
-        batch_size=batch_size,
+        batch_size=config.batch_size,
         shuffle=False,
-        num_workers=n_workers,
-        pin_memory=(device.type == "cuda")
+        num_workers=config.num_workers,
+        pin_memory=(device.type == "cuda"),
     )
-    
+
     run_config["train_batches"] = len(training_loader)
     run_config["val_batches"] = len(validation_loader)
 
-    config_path = save_run_config(run_config, run_root)
+    config_path = save_run_config(run_config, config.run_root)
     log_run_header(log_file, run_config)
     log_message(f"Run config saved to {config_path}", log_file, use_stdout=False)
 
     generator = UNetGenerator().to(device)
     discriminator = PatchGANDiscriminator().to(device)
 
-    opt_G = optim.Adam(generator.parameters(), lr=lr_g, betas=(beta1, beta2))
-    opt_D = optim.Adam(discriminator.parameters(), lr=lr_d, betas=(beta1, beta2))
+    opt_G = optim.Adam(generator.parameters(), lr=config.lr_g, betas=(config.beta1, config.beta2))
+    opt_D = optim.Adam(discriminator.parameters(), lr=config.lr_d, betas=(config.beta1, config.beta2))
 
     amp_enabled = is_amp_enabled(device)
     scaler_G = GradScaler(enabled=amp_enabled)
@@ -940,10 +898,10 @@ def main(
             os.remove(file_path)
 
     start_epoch = 0
-    if resume_checkpoint is not None:
-        if Path(resume_checkpoint).exists():
+    if config.resume is not None:
+        if Path(config.resume).exists():
             start_epoch = load_checkpoint(
-                resume_checkpoint,
+                config.resume,
                 generator,
                 discriminator,
                 opt_G,
@@ -951,19 +909,19 @@ def main(
                 scaler_G,
                 scaler_D,
                 device,
-                image_size=image_size
+                image_size=config.image_size,
             )
-            log_message(f"Checkpoint loaded from {resume_checkpoint}, epoch {start_epoch}", log_file, use_stdout=False)
+            log_message(f"Checkpoint loaded from {config.resume}, epoch {start_epoch}", log_file, use_stdout=False)
         else:
-            log_message(f"WARNING - Checkpoint not found: {resume_checkpoint}", log_file, use_stdout=False)
+            log_message(f"WARNING - Checkpoint not found: {config.resume}", log_file, use_stdout=False)
     else:
         log_message("Training started from scratch", log_file, use_stdout=False)
 
     print_section("Pix2Pix training")
-    print_info("Run root", str(run_root))
-    print_info("Dataset root", str(dataset_root))
+    print_info("Run root", str(config.run_root))
+    print_info("Dataset root", str(config.dataset_root))
     print_info("Device", str(device))
-    print_info("Epochs", str(n_epochs))
+    print_info("Epochs", str(config.epochs))
     print_info("Start epoch", str(start_epoch))
     print_info("Train samples", str(len(training_dataset)))
     print_info("Validation samples", str(len(validation_dataset)))
@@ -974,26 +932,26 @@ def main(
     print(style("Training progress:", "bold", "cyan"))
 
     progress_tracker = ProgressTracker(
-        total_epochs=n_epochs,
+        total_epochs=config.epochs,
         total_batches=len(training_loader),
         start_epoch=start_epoch,
-        warmup_batches=max(10, log_rate),
+        warmup_batches=max(10, config.log_rate),
     )
     progress_tracker.start()
 
     log_message("Training started", log_file, use_stdout=False)
     log_message(
-        f"Hyperparameters | l1_weight={l1_weight} | lr_g={lr_g} | lr_d={lr_d} | "
-        f"beta1={beta1} | beta2={beta2}",
+        f"Hyperparameters | l1_weight={config.l1_weight} | lr_g={config.lr_g} | lr_d={config.lr_d} | "
+        f"beta1={config.beta1} | beta2={config.beta2}",
         log_file,
-        use_stdout=False
+        use_stdout=False,
     )
 
     training_status = {
-        "last_checkpoint": Path(resume_checkpoint).name if resume_checkpoint else "none "
+        "last_checkpoint": Path(config.resume).name if config.resume else "none "
     }
 
-    for epoch in range(start_epoch, n_epochs):
+    for epoch in range(start_epoch, config.epochs):
         log_message(f"Starting epoch {epoch}", log_file, use_stdout=False)
 
         last_loss_G, last_loss_D = train_one_epoch(
@@ -1010,15 +968,15 @@ def main(
             epoch,
             log_file,
             progress_tracker,
-            log_rate,
-            l1_weight,
-            training_status
+            config.log_rate,
+            config.l1_weight,
+            training_status,
         )
 
         log_message(f"Finished epoch {epoch}", log_file, use_stdout=False)
 
         # Save periodic checkpoints: if training is interrupted, we do not have to start from scratch.
-        if (epoch + 1) % checkpoint_rate == 0:
+        if (epoch + 1) % config.checkpoint_rate == 0:
             checkpoint_path = Path(checkpoints_dir) / f"ep{epoch:03d}.pth"
             save_checkpoint(
                 checkpoint_path,
@@ -1029,23 +987,15 @@ def main(
                 opt_D,
                 scaler_G,
                 scaler_D,
-                l1_weight,
-                lr_g,
-                lr_d,
-                beta1,
-                beta2,
-                image_size=image_size,
-                batch_size=batch_size,
-                num_workers=n_workers,
-                dataset_root=dataset_root
+                config,
             )
             training_status["last_checkpoint"] = Path(checkpoint_path).name
             log_message(f"Checkpoint saved to {checkpoint_path} at epoch {epoch}", log_file, use_stdout=False)
-            if epoch == n_epochs - 1:
+            if epoch == config.epochs - 1:
                 update_console_progress(
                     f"{render_progress_bar(1.0)} "
                     f"global {color_progress(1.0)} | "
-                    f"ep {epoch + 1}/{n_epochs} (100%) | "
+                    f"ep {epoch + 1}/{config.epochs} (100%) | "
                     f"b {len(training_loader)}/{len(training_loader)} | "
                     f"loss_G {last_loss_G:.4f} | "
                     f"loss_D {last_loss_D:.4f} | "
@@ -1056,7 +1006,7 @@ def main(
 
         # Periodic validation measures whether the model is improving
         # on data outside the training set as well.
-        if (epoch + 1) % validate_rate == 0:
+        if (epoch + 1) % config.validate_rate == 0:
             validate(
                 generator,
                 discriminator,
@@ -1067,9 +1017,9 @@ def main(
                 epoch,
                 log_file,
                 output_val_dir,
-                l1_weight
+                config.l1_weight,
             )
-    
+
     finish_console_progress()
     total_seconds = time.time() - start_time
     log_message(f"Execution completed. Total time = {total_seconds:.2f} seconds", log_file, use_stdout=False)
@@ -1081,32 +1031,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.mode == "train":
-        run_root = Path(args.results_path) / args.run_name
-        paths = build_workspace_paths(run_root)
-        
-        
-        main(
-            dataset_root=args.dataset_root,
-            run_root=run_root,
-            logs_dir=paths["logs_dir"],
-            checkpoints_dir=paths["checkpoints_dir"],
-            output_val_dir=paths["output_val_dir"],
-            output_train_dir=paths["output_train_dir"],
-            n_epochs=args.epochs,
-            seed=args.seed,
-            batch_size=args.batch_size,
-            n_workers=args.num_workers,
-            image_size=tuple(args.image_size),
-            log_rate=args.log_rate,
-            checkpoint_rate=args.checkpoint_rate,
-            validate_rate=args.validate_rate,
-            resume_checkpoint=args.resume,
-            l1_weight=args.l1_weight,
-            lr_g=args.lr_g,
-            lr_d=args.lr_d,
-            beta1=args.beta1,
-            beta2=args.beta2
-        )
+        main(TrainingConfig.from_args(args))
 
     elif args.mode == "test":
         test_dir = Path(args.dataset_root) / "dataset_test"
