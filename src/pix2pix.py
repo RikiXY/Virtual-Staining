@@ -296,11 +296,10 @@ def is_amp_enabled(device):
     # complexity and keep behaviour as straightforward as possible.
     return isinstance(device, torch.device) and device.type == "cuda"
 
-script_dir = Path(__file__).resolve().parent
-settings_path = script_dir / "json" / "p2p_settings.json"
-
-with settings_path.open("r", encoding="utf-8") as s:
-    SETTINGS = json.load(s)
+# Fixed conv-block hyperparameters for the standard UNet architecture.
+_CONV_KERNEL = 3
+_CONV_PADDING = 1
+_POOL_KERNEL = 2
 
 class DoubleConv(nn.Module):
     """
@@ -313,14 +312,13 @@ class DoubleConv(nn.Module):
     """
     def __init__(self, in_channels, out_channels):
         super(DoubleConv, self).__init__()
-        conv_params = SETTINGS["double_conv"]
         self.double_conv = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=conv_params['kernel_size'], stride=conv_params["stride"], padding=conv_params['padding'], bias=conv_params['bias']),
+            nn.Conv2d(in_channels, out_channels, kernel_size=_CONV_KERNEL, padding=_CONV_PADDING, bias=False),
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(conv_params['inplace']),
-            nn.Conv2d(out_channels, out_channels, kernel_size=conv_params['kernel_size'], stride=conv_params["stride"], padding=conv_params['padding'], bias=conv_params['bias']),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=_CONV_KERNEL, padding=_CONV_PADDING, bias=False),
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(conv_params['inplace'])
+            nn.ReLU(inplace=True),
         )
 
     def forward(self, x):
@@ -334,10 +332,9 @@ class Down(nn.Module):
     a `DoubleConv` block to extract richer features.
     """
     def __init__(self, in_channels, out_channels):
-        down_params = SETTINGS["down"]
         super(Down, self).__init__()
         self.maxpool_conv = nn.Sequential(
-            nn.MaxPool2d(kernel_size=down_params["kernel_size"], stride=down_params["stride"]),
+            nn.MaxPool2d(kernel_size=_POOL_KERNEL, stride=_POOL_KERNEL),
             DoubleConv(in_channels, out_channels)
         )
 
@@ -353,16 +350,6 @@ class Up(nn.Module):
     """
     def __init__(self, in_channels, out_channels, bilinear=True):
         super(Up, self).__init__()
-
-        # This block belongs to the decoder. First the resolution is increased,
-        # then the decoder features are combined with the skip connection
-        # coming from the encoder.
-
-        # The code supports two upsampling strategies:
-        # - bilinear: simple and with no learnable parameters;
-        # - transposed convolution: more flexible, but with weights to learn.
-        # In bilinear mode we use a simple upsample followed by a convolution to reduce channels.
-        # In transposed convolution mode the convolution itself also performs upsampling, halving the output channels.
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
             self.conv = DoubleConv(in_channels, out_channels)
@@ -372,14 +359,7 @@ class Up(nn.Module):
             self.conv = DoubleConv(in_channels, out_channels)
 
     def forward(self, x1, x2):
-        # `x1` is the current decoder feature map, which we are upsampling.
-        # `x2` is the corresponding skip connection coming from the encoder.
         x1 = self.up(x1)
-
-        # We concatenate the channels, i.e. we join them at the same point in
-        # the network, with the goal of combining two types of information:
-        # - the context learned deep in the decoder, which has seen the image more globally;
-        # - the local details preserved by the encoder branch.
         x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
 
@@ -396,66 +376,38 @@ class OutConv(nn.Module):
         return self.conv(x)
 
 class UNetGenerator(nn.Module):
-    def __init__(self, n_channels=3, n_classes=3, bilinear=False):
+    def __init__(self, in_channels=3, out_channels=3, base_channels=64, bilinear=False):
         """
         Args:
-            n_channels (int): Number of input channels.
-            n_classes (int): Number of output channels.
+            in_channels (int): Number of input channels.
+            out_channels (int): Number of output channels.
+            base_channels (int): Number of filters in the first encoder block; doubles at each depth level.
             bilinear (bool): Whether to use bilinear upsampling or transposed convolution.
         """
         super(UNetGenerator, self).__init__()
-        self.n_channels = n_channels
-        self.n_classes = n_classes
-        self.bilinear = bilinear
-
-        # Encoder: as we go deeper, resolution decreases and channels
-        # increase. This is how the network gains context without having
-        # to keep all spatial detail at every level.
-        # Encoders, from 64 to 1024 channels
-        self.inc = DoubleConv(n_channels, 64) # Initial convolution
-        self.down1 = Down(64, 128)
-        self.down2 = Down(128, 256)
-        self.down3 = Down(256, 512)
-        self.down4 = Down(512, 1024)          # Bottleneck
-
-        # Decoder: here the process is reversed and the information is
-        # gradually brought back towards an "image-like" form.
-        # Decoders, from 1024 to 64 channels
-        self.up1 = Up(1024, 512, bilinear)
-        self.up2 = Up(512, 256, bilinear)
-        self.up3 = Up(256, 128, bilinear)
-        self.up4 = Up(128, 64, bilinear)
-
-        # Final convolution, from 64 to N channels (3 for RGB)
-        self.outc = OutConv(64, n_classes)
+        b = base_channels
+        self.inc = DoubleConv(in_channels, b)
+        self.down1 = Down(b, b * 2)
+        self.down2 = Down(b * 2, b * 4)
+        self.down3 = Down(b * 4, b * 8)
+        self.down4 = Down(b * 8, b * 16)
+        self.up1 = Up(b * 16, b * 8, bilinear)
+        self.up2 = Up(b * 8, b * 4, bilinear)
+        self.up3 = Up(b * 4, b * 2, bilinear)
+        self.up4 = Up(b * 2, b, bilinear)
+        self.outc = OutConv(b, out_channels)
 
     def forward(self, x):
-        # The U-Net forward pass follows a very regular logic:
-        # first we descend through the encoder saving the intermediate features,
-        # then we ascend through the decoder reusing those same features
-        # via the skip connections.
-
-        # For RGB images, N is 3
-        # For grayscale images, N is 1
-
-        # Encoder
-        x1 = self.inc(x)       # [N, 64, H, W]
-        x2 = self.down1(x1)    # [N, 128, H/2, W/2]
-        x3 = self.down2(x2)    # [N, 256, H/4, W/4]
-        x4 = self.down3(x3)    # [N, 512, H/8, W/8]
-        x5 = self.down4(x4)    # [N, 1024, H/16, W/16]
-
-        # `x5` is the bottleneck: the most compressed and most abstract representation.
-        # Here the network retains the global context of the image.
-        # Decoder
-        x = self.up1(x5, x4)   # Shape: [N, 512, H/8, W/8]
-        x = self.up2(x, x3)    # Shape: [N, 256, H/4, W/4]
-        x = self.up3(x, x2)    # Shape: [N, 128, H/2, W/2]
-        x = self.up4(x, x1)    # Shape: [N, 64, H, W]
-
-        # The final layer transforms the reconstructed features into the actual output.
-        logits = self.outc(x)  # Shape: [N, n_classes, H, W]
-        return logits
+        x1 = self.inc(x)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x4 = self.down3(x3)
+        x5 = self.down4(x4)
+        x = self.up1(x5, x4)
+        x = self.up2(x, x3)
+        x = self.up3(x, x2)
+        x = self.up4(x, x1)
+        return self.outc(x)
 
 # --------------------- Discriminator (PatchGAN) ---------------------
 class PatchGANDiscriminator(nn.Module):
@@ -474,22 +426,11 @@ class PatchGANDiscriminator(nn.Module):
         """
         super(PatchGANDiscriminator, self).__init__()
 
-        # PatchGAN does not produce a single final scalar, but rather
-        # a feature map, one value per observed patch.
-        # This is a very practical choice: it forces the model to care about
-        # local textures, not just the global appearance of the image.
-
-        # Convolutional blocks:
-        # 1) First block without normalisation
+        curr_dim = ndf
+        next_dim = curr_dim * 2
         layers = [
             nn.Conv2d(in_channels, ndf, kernel_size=4, stride=2, padding=1),
             nn.LeakyReLU(0.2, inplace=True),
-        ]
-
-        # 2) Downsampling blocks
-        curr_dim = ndf
-        next_dim = curr_dim * 2
-        layers += [
             nn.Conv2d(curr_dim, next_dim, kernel_size=4, stride=2, padding=1),
             nn.InstanceNorm2d(next_dim),
             nn.LeakyReLU(0.2, inplace=True),
@@ -503,25 +444,16 @@ class PatchGANDiscriminator(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
         ]
 
-        # 3) Stride = 1 for the last convolution(s), so that the receptive field is approximately 70×70 (PatchGAN).
+        # stride=1 keeps the receptive field at ~70×70 (standard PatchGAN)
         curr_dim = next_dim
         next_dim = curr_dim * 2
-        # This layer keeps stride=1 to prevent the patch size from growing too large
         layers += [
             nn.Conv2d(curr_dim, next_dim, kernel_size=4, stride=1, padding=1),
             nn.InstanceNorm2d(next_dim),
             nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(next_dim, 1, kernel_size=4, stride=1, padding=1),
         ]
 
-        # 4) Output layer
-        # The final channel is one, but distributed over a spatial grid.
-        # That is why the output is not a single scalar.
-        layers += [
-            nn.Conv2d(next_dim, 1, kernel_size=4, stride=1, padding=1)
-        ]
-        
-        # When BCEWithLogitsLoss is used, the final sigmoid is not needed
-        # because it is already incorporated into the loss.
         if use_sigmoid:
             layers += [nn.Sigmoid()]
 
@@ -536,10 +468,7 @@ class PatchGANDiscriminator(nn.Module):
         Returns:
             Tensor: Map of real/fake predictions per patch.
         """
-        # Here the channel-wise concatenation is the key step:
-        # the discriminator judges the coherence of the conditional pair,
-        # not just the quality of the real or generated target taken alone.
-        return self.model(torch.cat([x, y], dim=1)) # Concatenate source and target/output
+        return self.model(torch.cat([x, y], dim=1))
 
 # --------------------- Determinism ---------------------
 def set_seed(seed):
