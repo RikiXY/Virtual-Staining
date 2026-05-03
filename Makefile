@@ -17,7 +17,6 @@ CHECKPOINT ?=
 SOURCE_NAME ?= source.tif
 TARGET_NAME ?= target.tif
 SAVE_MASKS ?= 0
-PREPARE_LANG ?= en
 IMAGE_SIZE ?= 512 512
 GRID_MOVEMENT ?= 512 512
 MARGIN ?= 200
@@ -60,7 +59,6 @@ help:
 	@printf "  SOURCE_NAME=<file>                    Source image filename (default: $(SOURCE_NAME))\n"
 	@printf "  TARGET_NAME=<file>                    Target image filename (default: $(TARGET_NAME))\n"
 	@printf "  SAVE_MASKS=1                          Save patch-level masks in subimages/\n"
-	@printf "  PREPARE_LANG={en,it}                  Messages language for prepare-dataset (default: $(PREPARE_LANG))\n"
 	@printf "  IMAGE_SIZE=\"W H\"                      Patch size for prepare-dataset (default: $(IMAGE_SIZE))\n"
 	@printf "  GRID_MOVEMENT=\"X Y\"                   Grid movement for prepare-dataset (default: $(GRID_MOVEMENT))\n"
 	@printf "  MARGIN=<n>                            Crop margin for prepare-dataset (default: $(MARGIN))\n"
@@ -94,7 +92,7 @@ lock:
 	$(UV) lock
 
 prepare-dataset: require-dataset
-	$(PYTHON) src/prepare_dataset.py --path $(DATASET_ROOT) --source-name $(SOURCE_NAME) --target-name $(TARGET_NAME) --seed $(SEED) --lang $(PREPARE_LANG) --image-size $(IMAGE_SIZE) --grid-movement $(GRID_MOVEMENT) --margin $(MARGIN) $(SAVE_MASKS_FLAG)
+	$(PYTHON) src/prepare_dataset.py --path $(DATASET_ROOT) --source-name $(SOURCE_NAME) --target-name $(TARGET_NAME) --seed $(SEED) --image-size $(IMAGE_SIZE) --grid-movement $(GRID_MOVEMENT) --margin $(MARGIN) $(SAVE_MASKS_FLAG)
 
 train: require-config
 	$(PYTHON) src/pix2pix.py train --dataset-root $(DATASET_ROOT)/ --run-name $(RUN_NAME) --results-path $(RESULTS_PATH) --epochs $(EPOCHS) --seed $(SEED) --l1-weight $(L1)
