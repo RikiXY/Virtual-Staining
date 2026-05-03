@@ -12,7 +12,7 @@ except ImportError as exc:
         "pip install scikit-image"
     ) from exc
 
-from utils.image_io import load_rgb_image, to_float01
+from virtual_staining.utils.image_io import load_rgb_image, to_float01
 
 
 def validate_same_shape(target: np.ndarray, generated: np.ndarray) -> None:

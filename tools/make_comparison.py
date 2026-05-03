@@ -5,9 +5,9 @@ import csv
 from pathlib import Path
 from typing import Any
 
-from utils.cli import ANSI, use_color, style, print_section, print_info
-from utils.image_io import VALID_IMAGE_EXTENSIONS, open_rgb, to_float01
-from utils.metrics import color_for_metric
+from virtual_staining.utils.cli import style, print_section, print_info
+from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS, open_rgb, to_float01
+from virtual_staining.utils.metrics import color_for_metric
 
 import matplotlib.pyplot as plt
 import numpy as np

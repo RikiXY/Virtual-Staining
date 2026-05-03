@@ -6,8 +6,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from utils.cli import ANSI, use_color, style, print_section, print_info
-from utils.metrics import color_metric_value
+from virtual_staining.utils.cli import style, print_section, print_info
+from virtual_staining.utils.metrics import color_metric_value
 from virtual_staining.evaluation.statistics import (
     UnpairedGroupStats,
     UnpairedComparison,

@@ -6,7 +6,7 @@ import json
 import argparse
 from pathlib import Path
 
-from utils.cli import ANSI, use_color, style, print_section, print_info
+from virtual_staining.utils.cli import ANSI, use_color, style, print_section, print_info
 
 from PIL import Image
 import numpy as np
@@ -14,7 +14,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from torch.amp import autocast, GradScaler
 from torchvision import transforms
 from torchvision.utils import save_image
