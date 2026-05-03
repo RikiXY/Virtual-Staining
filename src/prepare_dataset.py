@@ -54,6 +54,16 @@ def pad_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
         value=255)
     return padded_image
 
+# Only the N largest connected components are considered; smaller ones are noise.
+N_TOP_COMPONENTS = 10
+# Components whose ROI std dev is below this are uniform (background) and are masked out.
+MIN_STD_DEV = 10
+
+# Each (divisor, grid) pair controls one mask pass: the image is divided into a grid of
+# (grid × grid) tiles, each of size (H/divisor × W/divisor). Using multiple passes at
+# different scales makes the mask robust to both fine and coarse background regions.
+MASK_PARAMETER_GRID = [(2, 3), (4, 6), (6, 9), (8, 15)]
+
 def calculate_mask(img: np.ndarray) -> np.ndarray:
     """
     Finds the mask for the connected components in the image.
@@ -73,12 +83,11 @@ def calculate_mask(img: np.ndarray) -> np.ndarray:
 
     _, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
 
-    n_filtered = 10
     sorted_indices = np.argsort(stats[1:, cv2.CC_STAT_AREA])[::-1] + 1
 
     mask = np.zeros_like(binary).astype(np.uint8)
 
-    for i in sorted_indices[:n_filtered]:
+    for i in sorted_indices[:N_TOP_COMPONENTS]:
         x, y, w, h, area = stats[i]
 
         if w < 100 and h < 100:
@@ -93,7 +102,7 @@ def calculate_mask(img: np.ndarray) -> np.ndarray:
 
         std_dev = cv2.meanStdDev(roi, mask=roi_mask)[1][0, 0]
 
-        if std_dev < 10:
+        if std_dev < MIN_STD_DEV:
             mask[component_mask == 255] = 255
     
     # Inverts the mask to get the foreground. The mask is 255 for the foreground and 0 for the background
@@ -588,6 +597,10 @@ def main(
     image_size: tuple[int, int] = (256, 256),
     grid_movement: tuple[int, int] = (256, 256),
     margin: int = 200,
+    min_foreground_ratio: float = 0.25,
+    max_white_ratio: float = 0.7,
+    white_threshold: int = 250,
+    max_largest_white_component_ratio: float = 0.20,
 ) -> None:
 
     if seed is None:
@@ -621,8 +634,8 @@ def main(
     )
 
     print(MESSAGES["calculate_masks"][lang])
-    source_mask = calculate_mask_with_multiple_parameters(source_image, [(2, 3), (4, 6), (6, 9), (8, 15)])
-    target_mask = calculate_mask_with_multiple_parameters(target_image, [(2, 3), (4, 6), (6, 9), (8, 15)])
+    source_mask = calculate_mask_with_multiple_parameters(source_image, MASK_PARAMETER_GRID)
+    target_mask = calculate_mask_with_multiple_parameters(target_image, MASK_PARAMETER_GRID)
     print(MESSAGES["masks_calculated"][lang])
     if save_masks:
         cv2.imwrite(Path(path) / f"mask_{source_stem}{source_suffix}", source_mask)
@@ -664,10 +677,6 @@ def main(
 
     # Final robust pair filter: check both masks
     # and the white-background ratio in source and target patches.
-    min_foreground_ratio = 0.25
-    max_white_ratio = 0.7
-    white_threshold = 250
-    max_largest_white_component_ratio = 0.20
 
     # Keep valid and discarded pairs separate so they can be inspected later.
     named_source_images = []
@@ -790,7 +799,10 @@ if __name__ == "__main__":
         "python src/prepare_dataset.py --path PATH\n"
         "       --source-name SOURCE_NAME --target-name TARGET_NAME\n"
         "       [--seed SEED] [--save-masks] [--image-size WIDTH HEIGHT]\n"
-        "       [--grid-movement STEP_X STEP_Y] [--margin MARGIN] [--lang {en,it}]"
+        "       [--grid-movement STEP_X STEP_Y] [--margin MARGIN]\n"
+        "       [--min-foreground-ratio F] [--max-white-ratio F]\n"
+        "       [--white-threshold N] [--max-largest-white-component-ratio F]\n"
+        "       [--lang {en,it}]"
     ),
         description=HELP["description"][lang_args.lang],
         formatter_class=argparse.RawTextHelpFormatter,
@@ -846,6 +858,30 @@ if __name__ == "__main__":
         default=200,
         help="Margin cropped from each border before patch extraction (default: 200)"
     )
+    parser.add_argument(
+        "--min-foreground-ratio",
+        type=float,
+        default=0.25,
+        help="Minimum foreground tissue ratio for a patch to be kept (default: 0.25)"
+    )
+    parser.add_argument(
+        "--max-white-ratio",
+        type=float,
+        default=0.7,
+        help="Maximum near-white pixel ratio for a patch to be kept (default: 0.7)"
+    )
+    parser.add_argument(
+        "--white-threshold",
+        type=int,
+        default=250,
+        help="Grayscale intensity threshold for classifying a pixel as near-white (default: 250)"
+    )
+    parser.add_argument(
+        "--max-largest-white-component-ratio",
+        type=float,
+        default=0.20,
+        help="Maximum ratio of the largest white connected component for a patch to be kept (default: 0.20)"
+    )
     args = parser.parse_args()
     lang = args.lang
 
@@ -859,5 +895,9 @@ if __name__ == "__main__":
         image_size=tuple(args.image_size),
         grid_movement=tuple(args.grid_movement),
         margin=args.margin,
+        min_foreground_ratio=args.min_foreground_ratio,
+        max_white_ratio=args.max_white_ratio,
+        white_threshold=args.white_threshold,
+        max_largest_white_component_ratio=args.max_largest_white_component_ratio,
     )
 

@@ -20,10 +20,6 @@ except ImportError as exc:
         "pip install scikit-image"
     ) from exc
 
-YLIM = 0.5 # normally this should be 1, but it is set to 0.5 to make
-# differences between models more visible in the plots, since the values
-# of many metrics tend to be low.
-
 METRIC_NAMES = ["mae", "rmse", "psnr", "ssim"]
 VALID_IMAGE_EXTENSIONS = {".tif", ".tiff", ".png"}
 
@@ -582,7 +578,6 @@ def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) ->
         plt.xlabel(metric.upper())
         plt.ylabel("Share of samples")
         plt.xlim(min_value, max_value)
-        plt.ylim(0.0, YLIM)
         plt.tight_layout()
         plt.savefig(histogram_path, dpi=200, bbox_inches="tight")
         plt.close()
