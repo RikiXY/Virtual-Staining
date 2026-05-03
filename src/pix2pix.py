@@ -6,7 +6,7 @@ import json
 import argparse
 from pathlib import Path
 
-from utils.cli import ANSI, use_color, style, print_section, print_info
+from virtual_staining.utils.cli import ANSI, use_color, style, print_section, print_info
 
 from PIL import Image
 import numpy as np
@@ -14,7 +14,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from torch.amp import autocast, GradScaler
 from torchvision import transforms
 from torchvision.utils import save_image
@@ -215,81 +215,7 @@ def build_parser():
 
     return parser
 
-class PairedHistologyDataset(Dataset):
-    VALID_IMAGE_EXTENSIONS = {".tif", ".tiff", ".png"}
-        
-    def __init__(self, folder_path, transform=None):
-        self.folder_path = folder_path
-        self.transform = transform
-        # Pairs are built only once at the start, so during training
-        # and validation we do not need to scan the directory every time.
-        self.pairs = self._discover_pairs()
-
-    def _discover_pairs(self):
-        grouped = {}
-
-        for filename in sorted(os.listdir(self.folder_path)):
-            file_path = Path(self.folder_path) / filename
-
-            if not file_path.is_file():
-                continue
-
-            suffix = Path(filename).suffix.lower()
-            if suffix not in self.VALID_IMAGE_EXTENSIONS:
-                continue
-
-            stem = Path(filename).stem
-
-            if stem.startswith("mask_") or "_mask_" in stem:
-                continue
-
-            parts = stem.split("_")
-            if len(parts) < 3:
-                continue
-
-            key = (parts[0], parts[1])
-            grouped.setdefault(key, []).append(file_path)
-
-        samples = []
-        for key in sorted(grouped):
-            files = grouped[key]
-
-            source_path = None
-            target_path = None
-
-            for file_path in files:
-                stem = Path(file_path).stem.lower()
-
-                if stem.endswith("_source"):
-                    source_path = file_path
-                elif stem.endswith("_target"):
-                    target_path = file_path
-
-            if source_path is None or target_path is None:
-                continue
-
-            samples.append((source_path, target_path))
-
-        return samples
-
-    def __len__(self):
-        # Return the number of valid pairs found.
-        return len(self.pairs)
-
-    def __getitem__(self, idx):
-        # Given an index, retrieve the common prefix and open both images in the pair.
-        source_path, target_path = self.pairs[idx]
-
-        source_image = Image.open(source_path).convert("RGB")
-        target_image = Image.open(target_path).convert("RGB")
-
-        if self.transform:
-            # The same transformation is applied to both source and target.
-            source_image = self.transform(source_image)
-            target_image = self.transform(target_image)
-
-        return source_image, target_image
-# =================================================
+from virtual_staining.data.dataset import PairedHistologyDataset
 
 def is_amp_enabled(device):
     # Mixed precision with `autocast` and `GradScaler` is mainly useful
@@ -297,179 +223,8 @@ def is_amp_enabled(device):
     # complexity and keep behaviour as straightforward as possible.
     return isinstance(device, torch.device) and device.type == "cuda"
 
-# Fixed conv-block hyperparameters for the standard UNet architecture.
-_CONV_KERNEL = 3
-_CONV_PADDING = 1
-_POOL_KERNEL = 2
-
-class DoubleConv(nn.Module):
-    """
-    Block consisting of two consecutive convolutions, each followed by
-    batch normalisation and ReLU activation.
-
-    Args:
-        in_channels (int): Number of input channels.
-        out_channels (int): Number of output channels.
-    """
-    def __init__(self, in_channels, out_channels):
-        super(DoubleConv, self).__init__()
-        self.double_conv = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=_CONV_KERNEL, padding=_CONV_PADDING, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=_CONV_KERNEL, padding=_CONV_PADDING, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-        )
-
-    def forward(self, x):
-        return self.double_conv(x)
-
-class Down(nn.Module):
-    """
-    Downsampling block for U-Net-style architectures.
-
-    Reduces the spatial resolution via max pooling and then applies
-    a `DoubleConv` block to extract richer features.
-    """
-    def __init__(self, in_channels, out_channels):
-        super(Down, self).__init__()
-        self.maxpool_conv = nn.Sequential(
-            nn.MaxPool2d(kernel_size=_POOL_KERNEL, stride=_POOL_KERNEL),
-            DoubleConv(in_channels, out_channels)
-        )
-
-    def forward(self, x):
-        return self.maxpool_conv(x)
-
-class Up(nn.Module):
-    """
-    Upsampling block followed by `DoubleConv`.
-
-    The upsampled feature map is concatenated with the encoder skip
-    connection before the final convolution.
-    """
-    def __init__(self, in_channels, out_channels, bilinear=True):
-        super(Up, self).__init__()
-        if bilinear:
-            self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-            self.conv = DoubleConv(in_channels, out_channels)
-        else:
-            self.up = nn.ConvTranspose2d(in_channels, in_channels // 2,
-                                         kernel_size=2, stride=2)
-            self.conv = DoubleConv(in_channels, out_channels)
-
-    def forward(self, x1, x2):
-        x1 = self.up(x1)
-        x = torch.cat([x2, x1], dim=1)
-        return self.conv(x)
-
-class OutConv(nn.Module):
-    """
-    Final 1x1 convolution that maps the features
-    to the required number of output channels.
-    """
-    def __init__(self, in_channels, out_channels):
-        super(OutConv, self).__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
-
-    def forward(self, x):
-        return self.conv(x)
-
-class UNetGenerator(nn.Module):
-    def __init__(self, in_channels=3, out_channels=3, base_channels=64, bilinear=False):
-        """
-        Args:
-            in_channels (int): Number of input channels.
-            out_channels (int): Number of output channels.
-            base_channels (int): Number of filters in the first encoder block; doubles at each depth level.
-            bilinear (bool): Whether to use bilinear upsampling or transposed convolution.
-        """
-        super(UNetGenerator, self).__init__()
-        b = base_channels
-        self.inc = DoubleConv(in_channels, b)
-        self.down1 = Down(b, b * 2)
-        self.down2 = Down(b * 2, b * 4)
-        self.down3 = Down(b * 4, b * 8)
-        self.down4 = Down(b * 8, b * 16)
-        self.up1 = Up(b * 16, b * 8, bilinear)
-        self.up2 = Up(b * 8, b * 4, bilinear)
-        self.up3 = Up(b * 4, b * 2, bilinear)
-        self.up4 = Up(b * 2, b, bilinear)
-        self.outc = OutConv(b, out_channels)
-
-    def forward(self, x):
-        x1 = self.inc(x)
-        x2 = self.down1(x1)
-        x3 = self.down2(x2)
-        x4 = self.down3(x3)
-        x5 = self.down4(x4)
-        x = self.up1(x5, x4)
-        x = self.up2(x, x3)
-        x = self.up3(x, x2)
-        x = self.up4(x, x1)
-        return self.outc(x)
-
-# --------------------- Discriminator (PatchGAN) ---------------------
-class PatchGANDiscriminator(nn.Module):
-    """
-    PatchGAN discriminator for image-to-image tasks.
-
-    Produces an NxN map of real/fake predictions, one per patch.
-    """
-    def __init__(self, in_channels=6, ndf=64, use_sigmoid=False):
-        """
-        Args:
-            in_channels (int): Number of input channels. In pix2pix,
-                               concatenating the RGB input and output gives 6.
-            ndf (int): Base number of discriminator filters.
-            use_sigmoid (bool): Whether to apply a final sigmoid activation.
-        """
-        super(PatchGANDiscriminator, self).__init__()
-
-        curr_dim = ndf
-        next_dim = curr_dim * 2
-        layers = [
-            nn.Conv2d(in_channels, ndf, kernel_size=4, stride=2, padding=1),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(curr_dim, next_dim, kernel_size=4, stride=2, padding=1),
-            nn.InstanceNorm2d(next_dim),
-            nn.LeakyReLU(0.2, inplace=True),
-        ]
-
-        curr_dim = next_dim
-        next_dim = curr_dim * 2
-        layers += [
-            nn.Conv2d(curr_dim, next_dim, kernel_size=4, stride=2, padding=1),
-            nn.InstanceNorm2d(next_dim),
-            nn.LeakyReLU(0.2, inplace=True),
-        ]
-
-        # stride=1 keeps the receptive field at ~70×70 (standard PatchGAN)
-        curr_dim = next_dim
-        next_dim = curr_dim * 2
-        layers += [
-            nn.Conv2d(curr_dim, next_dim, kernel_size=4, stride=1, padding=1),
-            nn.InstanceNorm2d(next_dim),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(next_dim, 1, kernel_size=4, stride=1, padding=1),
-        ]
-
-        if use_sigmoid:
-            layers += [nn.Sigmoid()]
-
-        self.model = nn.Sequential(*layers)
-
-    def forward(self, x, y):
-        """
-        Args:
-            x (Tensor): Input image.
-            y (Tensor): Real target or generated output.
-
-        Returns:
-            Tensor: Map of real/fake predictions per patch.
-        """
-        return self.model(torch.cat([x, y], dim=1))
+from virtual_staining.models.generator import DoubleConv, Down, Up, OutConv, UNetGenerator
+from virtual_staining.models.discriminator import PatchGANDiscriminator
 
 # --------------------- Determinism ---------------------
 def set_seed(seed):

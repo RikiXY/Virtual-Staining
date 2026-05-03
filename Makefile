@@ -40,9 +40,10 @@ help:
 	@printf "\nCommon targets:\n"
 	@printf "  make prepare-dataset                  Build dataset_train/val/test from source+target images\n"
 	@printf "  make train                            Train Pix2Pix\n"
-	@printf "  make test                             Run test inference\n"
+	@printf "  make infer                            Run inference with a trained checkpoint\n"
 	@printf "  make evaluate                         Evaluate generated outputs\n"
-	@printf "  make run-all                          Run train, test, and evaluate sequentially\n"
+	@printf "  make run-all                          Run train, infer, and evaluate sequentially\n"
+	@printf "  make test                             Run the unit test suite (pytest)\n"
 	@printf "  make sync                             Sync project dependencies\n"
 	@printf "  make lock                             Refresh uv.lock\n"
 	@printf "  make lint                             Run Ruff lints\n"
@@ -65,17 +66,18 @@ help:
 	@printf "  EPOCHS=<n>                            Training epochs (default: $(EPOCHS))\n"
 	@printf "  SEED=<n>                              Training seed (default: $(SEED))\n"
 	@printf "  L1=<n>                                L1 loss weight for training (default: $(L1))\n"
-	@printf "  CHECKPOINT=<path>                     Optional explicit checkpoint for test\n"
+	@printf "  CHECKPOINT=<path>                     Optional explicit checkpoint for infer\n"
 	@printf "\nExamples:\n"
 	@printf "  cp .env.make.example .env.make\n"
 	@printf "  make prepare-dataset SOURCE_NAME=source.tif TARGET_NAME=target.tif\n"
 	@printf "  make train\n"
-	@printf "  make test\n"
+	@printf "  make infer\n"
 	@printf "  make evaluate\n"
 	@printf "  make run-all\n"
+	@printf "  make test\n"
 	@printf "  make train DATASET=inv_1024 RUN_NAME=inv_P-1024_L1-50\n"
 	@printf "  make train DATASET=inv_512 RUN_NAME=inv_debug EPOCHS=10 SEED=123 L1=37\n"
-	@printf "  make test DATASET=inv_512 RUN_NAME=inv_P-512_L1-37 CHECKPOINT=local_workspace/results/inv_P-512_L1-37/checkpoints/ep042.pth\n"
+	@printf "  make infer DATASET=inv_512 RUN_NAME=inv_P-512_L1-37 CHECKPOINT=local_workspace/results/inv_P-512_L1-37/checkpoints/ep042.pth\n"
 	@printf "\n"
 
 require-config:
@@ -97,7 +99,7 @@ prepare-dataset: require-dataset
 train: require-config
 	$(PYTHON) src/pix2pix.py train --dataset-root $(DATASET_ROOT)/ --run-name $(RUN_NAME) --results-path $(RESULTS_PATH) --epochs $(EPOCHS) --seed $(SEED) --l1-weight $(L1)
 
-test: require-config
+infer: require-config
 	@test -n "$(CHECKPOINT_RESOLVED)" || (echo "No checkpoint found in $(CHECKPOINT_DIR). Set CHECKPOINT=/path/to/file.pth if needed."; exit 1)
 	$(PYTHON) src/pix2pix.py test --dataset-root $(DATASET_ROOT)/ --run-path $(RUN_PATH) --checkpoint $(CHECKPOINT_RESOLVED)
 
@@ -106,8 +108,11 @@ evaluate: require-config
 
 run-all:
 	$(MAKE) train
-	$(MAKE) test
+	$(MAKE) infer
 	$(MAKE) evaluate
+
+test:
+	$(UV) run --group dev pytest
 
 lint:
 	$(RUFF) check .

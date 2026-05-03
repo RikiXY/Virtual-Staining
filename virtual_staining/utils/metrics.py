@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from utils.cli import style
+from virtual_staining.utils.cli import style
 
 # Threshold tables: (threshold, color) pairs, evaluated in order.
 # For "higher is better" metrics (ssim, psnr), the first passing >= wins.

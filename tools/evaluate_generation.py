@@ -6,21 +6,13 @@ import statistics
 from pathlib import Path
 from typing import Any
 
-from utils.cli import ANSI, use_color, style, print_section, print_info
-from utils.image_io import VALID_IMAGE_EXTENSIONS, load_rgb_image, to_float01
-from utils.metrics import color_metric
+from virtual_staining.utils.cli import style, print_section, print_info
+from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS
+from virtual_staining.utils.metrics import color_metric
+from virtual_staining.evaluation.metrics import evaluate_pair
 
 import matplotlib.pyplot as plt
 import numpy as np
-from PIL import Image
-
-try:
-    from skimage.metrics import structural_similarity
-except ImportError as exc:
-    raise ImportError(
-        "Missing dependency: scikit-image. Install it with:\n"
-        "pip install scikit-image"
-    ) from exc
 
 METRIC_NAMES = ["mae", "rmse", "psnr", "ssim"]
 
@@ -168,15 +160,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def validate_same_shape(target: np.ndarray, generated: np.ndarray) -> None:
-    """Verifies that target and generated have exactly the same shape."""
-    if target.shape != generated.shape:
-        raise ValueError(
-            "Target and generated images must have the same shape. "
-            f"Got {target.shape} and {generated.shape}."
-        )
-
-
 def extract_sample_id(path: str | Path, suffix: str, label: str = "File") -> str:
     """Extracts the sample id by removing the expected suffix from the filename."""
     name = Path(path).stem
@@ -267,76 +250,6 @@ def resolve_output_dir(output_dir: str | None, generated_path: str | Path) -> Pa
     if output_dir is not None:
         return Path(output_dir)
     return infer_default_output_dir(generated_path)
-
-
-# ==========================================
-# Section dedicated to metric computation
-# ==========================================
-
-def compute_mae(target: np.ndarray, generated: np.ndarray) -> float:
-    """Computes the Mean Absolute Error on normalised images."""
-    return float(np.mean(np.abs(target - generated)))
-
-
-def compute_rmse(target: np.ndarray, generated: np.ndarray) -> float:
-    """Computes the Root Mean Squared Error on normalised images."""
-    return float(np.sqrt(np.mean((target - generated) ** 2)))
-
-
-def compute_psnr(target: np.ndarray, generated: np.ndarray) -> float:
-    """Computes the PSNR assuming normalised images in the [0,1] range."""
-    mse = float(np.mean((target - generated) ** 2))
-
-    if mse == 0.0:
-        return float("inf")
-
-    return float(20.0 * np.log10(1.0 / np.sqrt(mse)))
-
-
-def compute_ssim(target: np.ndarray, generated: np.ndarray) -> float:
-    """Computes the SSIM on normalised RGB images."""
-    try:
-        return float(
-            structural_similarity(
-                target,
-                generated,
-                channel_axis=2,
-                data_range=1.0,
-            )
-        )
-    except TypeError:
-        return float(
-            structural_similarity(
-                target,
-                generated,
-                multichannel=True,
-                data_range=1.0,
-            )
-        )
-
-
-def evaluate_pair(
-    target_path: str | Path,
-    generated_path: str | Path,
-) -> tuple[dict[str, float], tuple[int, int, int]]:
-    """Computes the four metrics for a target/generated pair."""
-    target = load_rgb_image(target_path)
-    generated = load_rgb_image(generated_path)
-
-    validate_same_shape(target, generated)
-    shape = target.shape
-
-    target_float = to_float01(target)
-    generated_float = to_float01(generated)
-
-    metrics = {
-        "mae": compute_mae(target_float, generated_float),
-        "rmse": compute_rmse(target_float, generated_float),
-        "psnr": compute_psnr(target_float, generated_float),
-        "ssim": compute_ssim(target_float, generated_float),
-    }
-
-    return metrics, shape
 
 
 def build_summary_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
