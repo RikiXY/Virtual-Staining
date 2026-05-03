@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from PIL import Image
+import pytest
 
 from virtual_staining.data.dataset import PairedHistologyDataset
 

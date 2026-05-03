@@ -6,13 +6,13 @@ import statistics
 from pathlib import Path
 from typing import Any
 
+import matplotlib.pyplot as plt
+import numpy as np
+
+from virtual_staining.evaluation.metrics import evaluate_pair
 from virtual_staining.utils.cli import style, print_section, print_info
 from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS
 from virtual_staining.utils.metrics import color_metric
-from virtual_staining.evaluation.metrics import evaluate_pair
-
-import matplotlib.pyplot as plt
-import numpy as np
 
 METRIC_NAMES = ["mae", "rmse", "psnr", "ssim"]
 

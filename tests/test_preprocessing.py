@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import pytest
 import numpy as np
+import pytest
 
 from virtual_staining.data.preprocessing import is_valid_patch_pair, split_items
 

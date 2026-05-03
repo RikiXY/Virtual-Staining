@@ -1,24 +1,26 @@
+import argparse
+import datetime
+import json
 import os
 import random
 import time
-import datetime
-import json
-import argparse
 from pathlib import Path
 
-from virtual_staining.utils.cli import ANSI, use_color, style, print_section, print_info
-from virtual_staining.training.config import TrainingConfig
-
-from PIL import Image
 import numpy as np
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
+from PIL import Image
 from torch.amp import autocast, GradScaler
+from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.utils import save_image
+
+from virtual_staining.data.dataset import PairedHistologyDataset
+from virtual_staining.models.discriminator import PatchGANDiscriminator
+from virtual_staining.models.generator import UNetGenerator
+from virtual_staining.training.config import TrainingConfig
+from virtual_staining.utils.cli import print_info, print_section, style
 
 
 # --------------------- Working paths ---------------------
@@ -216,7 +218,6 @@ def build_parser():
 
     return parser
 
-from virtual_staining.data.dataset import PairedHistologyDataset
 
 def is_amp_enabled(device):
     # Mixed precision with `autocast` and `GradScaler` is mainly useful
@@ -224,8 +225,6 @@ def is_amp_enabled(device):
     # complexity and keep behaviour as straightforward as possible.
     return isinstance(device, torch.device) and device.type == "cuda"
 
-from virtual_staining.models.generator import DoubleConv, Down, Up, OutConv, UNetGenerator
-from virtual_staining.models.discriminator import PatchGANDiscriminator
 
 # --------------------- Determinism ---------------------
 def set_seed(seed):

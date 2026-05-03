@@ -7,14 +7,13 @@ extracts paired patches, and creates the `dataset_train`, `dataset_val`, and
 `dataset_test` splits.
 """
 
-import cv2
-import random
 import argparse
 import csv
+import random
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
+import cv2
 
 from virtual_staining.data.preprocessing import (
     MASK_PARAMETER_GRID,
