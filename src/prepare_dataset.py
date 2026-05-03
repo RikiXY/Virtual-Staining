@@ -26,6 +26,7 @@ from virtual_staining.data.preprocessing import (
     ensure_clean_directory,
     validate_image_filename,
 )
+from virtual_staining.data.results import DatasetBuildResult
 
 
 def main(
@@ -41,7 +42,7 @@ def main(
     max_white_ratio: float = 0.7,
     white_threshold: int = 250,
     max_largest_white_component_ratio: float = 0.20,
-) -> None:
+) -> DatasetBuildResult:
 
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
@@ -215,6 +216,13 @@ def main(
             cv2.imwrite(subset_dir / target_img[1], target_img[0])
 
     print("Dataset saved")
+    return DatasetBuildResult(
+        train_count=len(split[0]),
+        val_count=len(split[1]),
+        test_count=len(split[2]),
+        skipped_count=len(discarded_source_images),
+        output_root=Path(path),
+    )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

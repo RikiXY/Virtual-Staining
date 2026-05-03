@@ -20,6 +20,7 @@ from virtual_staining.data.dataset import PairedHistologyDataset
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.config import TrainingConfig
+from virtual_staining.training.results import EpochMetrics
 from virtual_staining.utils.cli import print_info, print_section, style
 
 
@@ -586,7 +587,7 @@ def validate(
         use_stdout=False
     )
 
-    return avg_loss_G, avg_loss_D
+    return EpochMetrics(loss_G=avg_loss_G, loss_D=avg_loss_D)
 
 def test_inference(
     checkpoint_path,
@@ -774,7 +775,9 @@ def train_one_epoch(
                 log_file,
                 use_stdout=False,
             )
-    return last_loss_G, last_loss_D
+    if last_loss_G is None or last_loss_D is None:
+        raise RuntimeError("Training loader was empty; cannot compute epoch metrics.")
+    return EpochMetrics(loss_G=last_loss_G, loss_D=last_loss_D)
 
 # --------------------- Main ---------------------
 def main(config: TrainingConfig):
@@ -953,7 +956,7 @@ def main(config: TrainingConfig):
     for epoch in range(start_epoch, config.epochs):
         log_message(f"Starting epoch {epoch}", log_file, use_stdout=False)
 
-        last_loss_G, last_loss_D = train_one_epoch(
+        epoch_metrics = train_one_epoch(
             generator,
             discriminator,
             training_loader,
@@ -996,8 +999,8 @@ def main(config: TrainingConfig):
                     f"global {color_progress(1.0)} | "
                     f"ep {epoch + 1}/{config.epochs} (100%) | "
                     f"b {len(training_loader)}/{len(training_loader)} | "
-                    f"loss_G {last_loss_G:.4f} | "
-                    f"loss_D {last_loss_D:.4f} | "
+                    f"loss_G {epoch_metrics.loss_G:.4f} | "
+                    f"loss_D {epoch_metrics.loss_D:.4f} | "
                     f"elapsed {format_duration(time.time() - start_time)} | "
                     f"ETA 0s | "
                     f"ckpt {training_status['last_checkpoint']}"
