@@ -59,6 +59,11 @@ N_TOP_COMPONENTS = 10
 # Components whose ROI std dev is below this are uniform (background) and are masked out.
 MIN_STD_DEV = 10
 
+# Each (divisor, grid) pair controls one mask pass: the image is divided into a grid of
+# (grid × grid) tiles, each of size (H/divisor × W/divisor). Using multiple passes at
+# different scales makes the mask robust to both fine and coarse background regions.
+MASK_PARAMETER_GRID = [(2, 3), (4, 6), (6, 9), (8, 15)]
+
 def calculate_mask(img: np.ndarray) -> np.ndarray:
     """
     Finds the mask for the connected components in the image.
@@ -629,8 +634,8 @@ def main(
     )
 
     print(MESSAGES["calculate_masks"][lang])
-    source_mask = calculate_mask_with_multiple_parameters(source_image, [(2, 3), (4, 6), (6, 9), (8, 15)])
-    target_mask = calculate_mask_with_multiple_parameters(target_image, [(2, 3), (4, 6), (6, 9), (8, 15)])
+    source_mask = calculate_mask_with_multiple_parameters(source_image, MASK_PARAMETER_GRID)
+    target_mask = calculate_mask_with_multiple_parameters(target_image, MASK_PARAMETER_GRID)
     print(MESSAGES["masks_calculated"][lang])
     if save_masks:
         cv2.imwrite(Path(path) / f"mask_{source_stem}{source_suffix}", source_mask)
