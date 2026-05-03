@@ -62,8 +62,6 @@ def build_parser():
     formatter_class=argparse.RawTextHelpFormatter
 )
 
-    # Subparsers allow having different subcommands within the same
-    # script, each with its own arguments.
     subparsers = parser.add_subparsers(dest="mode", required=True)
 
     train_parser = subparsers.add_parser(
@@ -216,13 +214,6 @@ def build_parser():
 
     return parser
 
-# ====================[DATASET]====================
-# This dataset contains pairs of source and target images.
-# Each source image must have a corresponding target image.
-#
-# Implementing `__len__` and `__getitem__` is the minimum requirement
-# for a PyTorch `Dataset` class: the DataLoader uses these methods to
-# know how many samples exist and how to retrieve them when building batches.
 class PairedHistologyDataset(Dataset):
     VALID_IMAGE_EXTENSIONS = {".tif", ".tiff", ".png"}
         
@@ -305,27 +296,12 @@ def is_amp_enabled(device):
     # complexity and keep behaviour as straightforward as possible.
     return isinstance(device, torch.device) and device.type == "cuda"
 
-# ====================[CONFIGURATION]====================
-# Some parameters of the convolutional blocks are read from JSON.
-# This is a practical choice: architectural details remain centralised
-# and can be changed without touching the model code.
 script_dir = Path(__file__).resolve().parent
 settings_path = script_dir / "json" / "p2p_settings.json"
 
 with settings_path.open("r", encoding="utf-8") as s:
     SETTINGS = json.load(s)
-# ========================================================
 
-# ====================[GENERATOR (U-NET)]====================
-# The generator follows the classic U-Net structure:
-# encoder -> bottleneck -> decoder, with skip connections between symmetric levels.
-#
-# The idea is:
-# - the encoder compresses and builds up context;
-# - the bottleneck holds the most abstract representation;
-# - the decoder reconstructs the image;
-# - the skip connections bring back fine details that would otherwise
-#   be lost during the descent.
 class DoubleConv(nn.Module):
     """
     Block consisting of two consecutive convolutions, each followed by
@@ -338,8 +314,6 @@ class DoubleConv(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(DoubleConv, self).__init__()
         conv_params = SETTINGS["double_conv"]
-        # Two convolutions in a row are a very common block in U-Nets:
-        # the first starts transforming the features, the second refines them.
         self.double_conv = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=conv_params['kernel_size'], stride=conv_params["stride"], padding=conv_params['padding'], bias=conv_params['bias']),
             nn.BatchNorm2d(out_channels),
@@ -362,9 +336,6 @@ class Down(nn.Module):
     def __init__(self, in_channels, out_channels):
         down_params = SETTINGS["down"]
         super(Down, self).__init__()
-        # Here we halve the spatial resolution and then increase the number
-        # of channels. This is the typical encoder trade-off: less pixel-level
-        # detail, but greater capacity to represent complex patterns.
         self.maxpool_conv = nn.Sequential(
             nn.MaxPool2d(kernel_size=down_params["kernel_size"], stride=down_params["stride"]),
             DoubleConv(in_channels, out_channels)
@@ -373,7 +344,6 @@ class Down(nn.Module):
     def forward(self, x):
         return self.maxpool_conv(x)
 
-#TODO RESUME JSON IMPLEMENTATION FROM HERE
 class Up(nn.Module):
     """
     Upsampling block followed by `DoubleConv`.
@@ -488,8 +458,6 @@ class UNetGenerator(nn.Module):
         return logits
 
 # --------------------- Discriminator (PatchGAN) ---------------------
-# The discriminator evaluates the coherence of the conditional pair:
-# input image + real or generated target.
 class PatchGANDiscriminator(nn.Module):
     """
     PatchGAN discriminator for image-to-image tasks.
@@ -921,10 +889,6 @@ def save_images(path, source_tensor, output, target, epoch, batch_index):
     save_image((target * 0.5 + 0.5), Path(path) / f"epoch{epoch}_batch{batch_index}_target.tif")
 
 # --------------------- Training and Validation ---------------------
-# Training and validation serve two different roles:
-# - during training we update the model weights;
-# - during validation we measure how the model behaves on data not used
-#   for updates, therefore without backpropagation.
 def validate(
     G,
     D,
@@ -950,8 +914,6 @@ def validate(
     count = 0
     amp_enabled = is_amp_enabled(device)
 
-    # During validation we disable gradients: we save memory and time,
-    # and above all we avoid any accidental weight updates.
     with torch.no_grad():
         for i, (x, y) in enumerate(validation_loader):
             x, y = x.to(device), y.to(device)
@@ -1014,8 +976,6 @@ def test_inference(
 
     Path(output_folder).mkdir(parents=True, exist_ok=True)
 
-    # During inference we only need the generator.
-    # The discriminator is only used during training.
     G = UNetGenerator().to(device)
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
@@ -1235,8 +1195,6 @@ def main(
     device_name = torch.cuda.get_device_name(device) if device.type == "cuda" else "CPU"
     log_message(f"Device: {device} ({device_name})", log_file)
 
-    # Normalisation with mean and std equal to 0.5 maps values
-    # from [0, 1] to [-1, 1].
     transform = transforms.Compose([
         transforms.Resize(image_size),
         transforms.ToTensor(),
@@ -1290,8 +1248,6 @@ def main(
         "first_val_pair_info": first_val_pair_info,
     }
 
-    # During training we shuffle; during validation we do not, because there
-    # we are not learning but only measuring the model behaviour.
     training_loader = DataLoader(
         training_dataset,
         batch_size=batch_size,
@@ -1325,8 +1281,6 @@ def main(
     scaler_G = GradScaler(enabled=amp_enabled)
     scaler_D = GradScaler(enabled=amp_enabled)
 
-    # BCEWithLogitsLoss works directly on the discriminator logits,
-    # while L1Loss measures the direct distance between the generated output and the target.
     bce_loss = nn.BCEWithLogitsLoss()
     l1_loss = nn.L1Loss()
 
