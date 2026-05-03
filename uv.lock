@@ -1186,7 +1186,7 @@ wheels = [
 [[package]]
 name = "virtual-staining"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "matplotlib" },
     { name = "numpy" },
@@ -1199,11 +1199,11 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "matplotlib", specifier = ">=3.10.8" },
-    { name = "numpy", specifier = ">=2.4.3" },
-    { name = "opencv-python", specifier = ">=4.13.0.92" },
-    { name = "pillow", specifier = ">=12.1.1" },
-    { name = "scikit-image", specifier = ">=0.26.0" },
-    { name = "torch", specifier = ">=2.11.0" },
-    { name = "torchvision", specifier = ">=0.26.0" },
+    { name = "matplotlib", specifier = "==3.10.8" },
+    { name = "numpy", specifier = "==2.4.3" },
+    { name = "opencv-python", specifier = "==4.13.0.92" },
+    { name = "pillow", specifier = "==12.1.1" },
+    { name = "scikit-image", specifier = "==0.26.0" },
+    { name = "torch", specifier = "==2.11.0" },
+    { name = "torchvision", specifier = "==0.26.0" },
 ]

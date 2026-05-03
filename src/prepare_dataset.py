@@ -9,17 +9,11 @@ extracts paired patches, and creates the `dataset_train`, `dataset_val`, and
 
 import cv2, random, shutil
 import argparse
-import json
 import csv
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
-
-script_dir = Path(__file__).resolve()
-messages_path = script_dir.parent / "json" / "messages.json"
-with messages_path.open("r", encoding="utf-8") as m:
-    MESSAGES = json.load(m)
 
 def pad_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
     """
@@ -216,7 +210,7 @@ def align_images(img1: np.ndarray, img2: np.ndarray, mask1: Optional[np.ndarray]
     keypoints_2, descriptors_2 = sift.detectAndCompute(img2_clahe, mask2)
 
     if len(keypoints_1) < 4 or len(keypoints_2) < 4:
-        raise ValueError(MESSAGES["not_enough_features"][lang])
+        raise ValueError("Not enough features for alignment")
 
     bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
     matches = bf.match(descriptors_1, descriptors_2)
@@ -228,7 +222,7 @@ def align_images(img1: np.ndarray, img2: np.ndarray, mask1: Optional[np.ndarray]
             filtered_matches.append(match)
     
     if len(filtered_matches) < 4:
-        raise ValueError(MESSAGES["not_enough_matches"][lang])
+        raise ValueError("Not enough matches for alignment")
     
     points_1 = np.float32([keypoints_1[match.queryIdx].pt for match in filtered_matches]).reshape(-1, 1, 2)
     points_2 = np.float32([keypoints_2[match.trainIdx].pt for match in filtered_matches]).reshape(-1, 1, 2)
@@ -277,8 +271,7 @@ def align_from_scaled(img1: np.ndarray, img2: np.ndarray, scale: float = 0.5, ma
     img2_scaled = cv2.resize(img2, None, fx=scale, fy=scale)
 
     if mask1 is None or mask2 is None:
-        print(MESSAGES["scaled_mask_error"][lang])
-        raise ValueError(MESSAGES["scaled_mask_error"][lang])
+        raise ValueError("Error: the scaled mask is None. Cannot align images.")
     else:
         mask1_scaled = cv2.resize(mask1, None, fx=scale, fy=scale)
         mask2_scaled = cv2.resize(mask2, None, fx=scale, fy=scale)
@@ -607,11 +600,11 @@ def main(
         seed = random.randint(0, 2**32 - 1)
 
     random.seed(seed)
-    print(MESSAGES["seed_set"][lang].format(seed=seed))
+    print(f"Seed set to {seed}")
 
-    print(MESSAGES["loading_images"][lang].format(path=path))
+    print(f"Loading images from {path}")
     if not Path(path).exists():
-        raise FileNotFoundError(MESSAGES["check_path"][lang].format(path=path)) 
+        raise FileNotFoundError(f"The path {path} does not exist.") 
     source_file = validate_image_filename(source_name, "Source")
     target_file = validate_image_filename(target_name, "Target")
     
@@ -626,23 +619,18 @@ def main(
         raise FileNotFoundError(
             f"Missing paired files. Expected '{source_name}' and '{target_name}' inside: {path}"
         )
-    print(
-        MESSAGES["images_loaded"][lang].format(
-            source_image_shape=source_image.shape,
-            target_image_shape=target_image.shape,
-        )
-    )
+    print(f"Images loaded. Sizes: source={source_image.shape}, target={target_image.shape}")
 
-    print(MESSAGES["calculate_masks"][lang])
+    print("Calculating masks. This will take some time...")
     source_mask = calculate_mask_with_multiple_parameters(source_image, MASK_PARAMETER_GRID)
     target_mask = calculate_mask_with_multiple_parameters(target_image, MASK_PARAMETER_GRID)
-    print(MESSAGES["masks_calculated"][lang])
+    print("Masks calculated")
     if save_masks:
         cv2.imwrite(Path(path) / f"mask_{source_stem}{source_suffix}", source_mask)
         cv2.imwrite(Path(path) / f"mask_{target_stem}{target_suffix}", target_mask)
-    print(MESSAGES["mask_saved"][lang])
+    print("Masks saved")
 
-    print(MESSAGES["aligning_images"][lang])
+    print("Aligning images. This will also take some time...")
     aligned_target, aligned_target_mask, warp_matrix = align_from_scaled(
         source_image,
         target_image,
@@ -650,12 +638,12 @@ def main(
         mask2=target_mask,
         scale=0.5,
     )
-    print(MESSAGES["images_aligned"][lang])
+    print("Images aligned")
     cv2.imwrite(Path(path) / f"aligned_{target_stem}{target_suffix}", aligned_target)
     cv2.imwrite(Path(path) / f"aligned_mask_{target_stem}{target_suffix}", aligned_target_mask)
-    print(MESSAGES["images_aligned_saved"][lang])
+    print("Aligned images saved")
 
-    print(MESSAGES["extracting_subimages"][lang])
+    print("Extracting sub-images")
     
     source_images, source_masks, positions = divide_image_with_grid(
         source_image[margin:-margin, margin:-margin],
@@ -673,7 +661,7 @@ def main(
         image_size,
         positions,
     )
-    print(MESSAGES["total_subimages"][lang].format(count=len(source_images)))
+    print(f"Total pairs extracted: {len(source_images)}")
 
     # Final robust pair filter: check both masks
     # and the white-background ratio in source and target patches.
@@ -728,7 +716,7 @@ def main(
                 }
             )
 
-    print(MESSAGES["pair_renamed"][lang])
+    print("Pairs renamed")
 
     # Also prepare a discarded-patches folder for debugging and visual inspection.
     discarded_root = Path(path) / "discarded_patches"
@@ -767,10 +755,10 @@ def main(
         writer.writeheader()
         writer.writerows(discarded_log_rows)
 
-    print(MESSAGES["dataset_subdivision"][lang])
+    print("Dividing dataset into training, validation, and test")
     images = list(zip(named_source_images, named_target_images))
     split = split_items(images, [0.8, 0.05, 0.15])
-    print(MESSAGES["pair_number_division"][lang].format(train=len(split[0]), val=len(split[1]), test=len(split[2])))
+    print(f"Number of pairs for training: {len(split[0])}, validation: {len(split[1])}, test: {len(split[2])}")
 
     for i, subset in enumerate(split):
         subset_name = ["dataset_train", "dataset_val", "dataset_test"][i]
@@ -779,40 +767,26 @@ def main(
             cv2.imwrite(subset_dir / source_img[1], source_img[0])
             cv2.imwrite(subset_dir / target_img[1], target_img[0])
 
-    print(MESSAGES["dataset_saved"][lang])
+    print("Dataset saved")
 
 if __name__ == "__main__":
-    lang_parser = argparse.ArgumentParser(add_help=False)
-    lang_parser.add_argument(
-        "--lang",
-        type=str,
-        choices=["it", "en"],
-        default="en",
-        help="Language for messages (default: en)"
-    )
-    lang_args, _ = lang_parser.parse_known_args()
-    help_path = script_dir.parent / "json" / "help.json"
-    with help_path.open("r", encoding="utf-8") as h:
-        HELP = json.load(h)
     parser = argparse.ArgumentParser(
-    usage=(
-        "python src/prepare_dataset.py --path PATH\n"
-        "       --source-name SOURCE_NAME --target-name TARGET_NAME\n"
-        "       [--seed SEED] [--save-masks] [--image-size WIDTH HEIGHT]\n"
-        "       [--grid-movement STEP_X STEP_Y] [--margin MARGIN]\n"
-        "       [--min-foreground-ratio F] [--max-white-ratio F]\n"
-        "       [--white-threshold N] [--max-largest-white-component-ratio F]\n"
-        "       [--lang {en,it}]"
-    ),
-        description=HELP["description"][lang_args.lang],
+        usage=(
+            "python src/prepare_dataset.py --path PATH\n"
+            "       --source-name SOURCE_NAME --target-name TARGET_NAME\n"
+            "       [--seed SEED] [--save-masks] [--image-size WIDTH HEIGHT]\n"
+            "       [--grid-movement STEP_X STEP_Y] [--margin MARGIN]\n"
+            "       [--min-foreground-ratio F] [--max-white-ratio F]\n"
+            "       [--white-threshold N] [--max-largest-white-component-ratio F]"
+        ),
+        description="Prepares masks, aligns images, extracts subimages, and splits the dataset",
         formatter_class=argparse.RawTextHelpFormatter,
-        parents=[lang_parser]
     )
     parser.add_argument(
         "--path",
         type=str,
         required=True,
-        help=HELP["path"][lang_args.lang]
+        help="path to the folder containing <source_name>.tif and <target_name>.tif"
     )
     parser.add_argument(
         "--source-name",
@@ -829,12 +803,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--seed",
         type=int,
-        help=HELP["seed"][lang_args.lang]
+        help="random seed for reproducibility (optional)"
     )
     parser.add_argument(
         "--save-masks",
         action="store_true",
-        help=HELP["save_masks"][lang_args.lang]
+        help="if set, also saves the subimage masks"
     )
     parser.add_argument(
         "--image-size",
@@ -883,7 +857,6 @@ if __name__ == "__main__":
         help="Maximum ratio of the largest white connected component for a patch to be kept (default: 0.20)"
     )
     args = parser.parse_args()
-    lang = args.lang
 
     # Running the main function with the specified arguments
     main(
