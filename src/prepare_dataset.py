@@ -11,10 +11,10 @@ import argparse
 import csv
 import random
 from pathlib import Path
-from typing import Optional
 
 import cv2
 
+from virtual_staining.data.config import PreprocessingConfig
 from virtual_staining.data.preprocessing import (
     MASK_PARAMETER_GRID,
     calculate_mask_with_multiple_parameters,
@@ -29,43 +29,28 @@ from virtual_staining.data.preprocessing import (
 from virtual_staining.data.results import DatasetBuildResult
 
 
-def main(
-    path: str,
-    source_name: str,
-    target_name: str,
-    seed: Optional[int] = None,
-    save_masks: bool = False,
-    image_size: tuple[int, int] = (256, 256),
-    grid_movement: tuple[int, int] = (256, 256),
-    margin: int = 200,
-    min_foreground_ratio: float = 0.25,
-    max_white_ratio: float = 0.7,
-    white_threshold: int = 250,
-    max_largest_white_component_ratio: float = 0.20,
-) -> DatasetBuildResult:
-
-    if seed is None:
-        seed = random.randint(0, 2**32 - 1)
-
+def main(config: PreprocessingConfig) -> DatasetBuildResult:
+    seed = config.seed if config.seed is not None else random.randint(0, 2**32 - 1)
     random.seed(seed)
     print(f"Seed set to {seed}")
 
-    print(f"Loading images from {path}")
-    if not Path(path).exists():
-        raise FileNotFoundError(f"The path {path} does not exist.")
-    source_file = validate_image_filename(source_name, "Source")
-    target_file = validate_image_filename(target_name, "Target")
+    print(f"Loading images from {config.dataset_root}")
+    if not config.dataset_root.exists():
+        raise FileNotFoundError(f"The path {config.dataset_root} does not exist.")
+    source_file = validate_image_filename(config.source_name, "Source")
+    target_file = validate_image_filename(config.target_name, "Target")
 
     source_stem = source_file.stem
     target_stem = target_file.stem
     source_suffix = source_file.suffix.lower()
     target_suffix = target_file.suffix.lower()
 
-    source_image = cv2.imread(Path(path) / source_file.name)
-    target_image = cv2.imread(Path(path) / target_file.name)
+    source_image = cv2.imread(config.dataset_root / source_file.name)
+    target_image = cv2.imread(config.dataset_root / target_file.name)
     if source_image is None or target_image is None:
         raise FileNotFoundError(
-            f"Missing paired files. Expected '{source_name}' and '{target_name}' inside: {path}"
+            f"Missing paired files. Expected '{config.source_name}' and "
+            f"'{config.target_name}' inside: {config.dataset_root}"
         )
     print(f"Images loaded. Sizes: source={source_image.shape}, target={target_image.shape}")
 
@@ -73,9 +58,9 @@ def main(
     source_mask = calculate_mask_with_multiple_parameters(source_image, MASK_PARAMETER_GRID)
     target_mask = calculate_mask_with_multiple_parameters(target_image, MASK_PARAMETER_GRID)
     print("Masks calculated")
-    if save_masks:
-        cv2.imwrite(Path(path) / f"mask_{source_stem}{source_suffix}", source_mask)
-        cv2.imwrite(Path(path) / f"mask_{target_stem}{target_suffix}", target_mask)
+    if config.save_masks:
+        cv2.imwrite(config.dataset_root / f"mask_{source_stem}{source_suffix}", source_mask)
+        cv2.imwrite(config.dataset_root / f"mask_{target_stem}{target_suffix}", target_mask)
     print("Masks saved")
 
     print("Aligning images. This will also take some time...")
@@ -87,34 +72,33 @@ def main(
         scale=0.5,
     )
     print("Images aligned")
-    cv2.imwrite(Path(path) / f"aligned_{target_stem}{target_suffix}", aligned_target)
-    cv2.imwrite(Path(path) / f"aligned_mask_{target_stem}{target_suffix}", aligned_target_mask)
+    cv2.imwrite(config.dataset_root / f"aligned_{target_stem}{target_suffix}", aligned_target)
+    cv2.imwrite(
+        config.dataset_root / f"aligned_mask_{target_stem}{target_suffix}",
+        aligned_target_mask,
+    )
     print("Aligned images saved")
 
     print("Extracting sub-images")
-
+    m = config.margin
     source_images, source_masks, positions = divide_image_with_grid(
-        source_image[margin:-margin, margin:-margin],
-        image_size,
-        grid_movement,
-        source_mask[margin:-margin, margin:-margin],
+        source_image[m:-m, m:-m],
+        config.image_size,
+        config.grid_movement,
+        source_mask[m:-m, m:-m],
     )
     target_images = divide_image_with_positions(
-        aligned_target[margin:-margin, margin:-margin],
-        image_size,
+        aligned_target[m:-m, m:-m],
+        config.image_size,
         positions,
     )
     target_masks = divide_image_with_positions(
-        aligned_target_mask[margin:-margin, margin:-margin],
-        image_size,
+        aligned_target_mask[m:-m, m:-m],
+        config.image_size,
         positions,
     )
     print(f"Total pairs extracted: {len(source_images)}")
 
-    # Final robust pair filter: check both masks
-    # and the white-background ratio in source and target patches.
-
-    # Keep valid and discarded pairs separate so they can be inspected later.
     named_source_images = []
     named_target_images = []
     discarded_source_images = []
@@ -136,10 +120,10 @@ def main(
             target_img=target_img,
             source_mask=source_patch_mask,
             target_mask=target_patch_mask,
-            min_foreground_ratio=min_foreground_ratio,
-            max_white_ratio=max_white_ratio,
-            white_threshold=white_threshold,
-            max_largest_white_component_ratio=max_largest_white_component_ratio,
+            min_foreground_ratio=config.min_foreground_ratio,
+            max_white_ratio=config.max_white_ratio,
+            white_threshold=config.white_threshold,
+            max_largest_white_component_ratio=config.max_largest_white_component_ratio,
         )
 
         if is_valid:
@@ -166,15 +150,13 @@ def main(
 
     print("Pairs renamed")
 
-    # Also prepare a discarded-patches folder for debugging and visual inspection.
-    discarded_root = Path(path) / "discarded_patches"
+    discarded_root = config.dataset_root / "discarded_patches"
     discarded_source_dir = discarded_root / "source"
     discarded_target_dir = discarded_root / "target"
 
-    # Clean output folders to avoid leftovers from previous runs.
-    ensure_clean_directory(Path(path) / "dataset_train")
-    ensure_clean_directory(Path(path) / "dataset_val")
-    ensure_clean_directory(Path(path) / "dataset_test")
+    ensure_clean_directory(config.dataset_root / "dataset_train")
+    ensure_clean_directory(config.dataset_root / "dataset_val")
+    ensure_clean_directory(config.dataset_root / "dataset_test")
     ensure_clean_directory(discarded_source_dir)
     ensure_clean_directory(discarded_target_dir)
 
@@ -205,12 +187,15 @@ def main(
 
     print("Dividing dataset into training, validation, and test")
     images = list(zip(named_source_images, named_target_images))
-    split = split_items(images, [0.8, 0.05, 0.15])
-    print(f"Number of pairs for training: {len(split[0])}, validation: {len(split[1])}, test: {len(split[2])}")
+    split = split_items(images, [config.train_ratio, config.val_ratio, config.test_ratio])
+    print(
+        f"Number of pairs for training: {len(split[0])}, "
+        f"validation: {len(split[1])}, test: {len(split[2])}"
+    )
 
     for i, subset in enumerate(split):
         subset_name = ["dataset_train", "dataset_val", "dataset_test"][i]
-        subset_dir = Path(path) / subset_name
+        subset_dir = config.dataset_root / subset_name
         for source_img, target_img in subset:
             cv2.imwrite(subset_dir / source_img[1], source_img[0])
             cv2.imwrite(subset_dir / target_img[1], target_img[0])
@@ -221,8 +206,9 @@ def main(
         val_count=len(split[1]),
         test_count=len(split[2]),
         skipped_count=len(discarded_source_images),
-        output_root=Path(path),
+        output_root=config.dataset_root,
     )
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -312,18 +298,4 @@ if __name__ == "__main__":
         help="Maximum ratio of the largest white connected component for a patch to be kept (default: 0.20)"
     )
     args = parser.parse_args()
-
-    main(
-        path=args.path,
-        source_name=args.source_name,
-        target_name=args.target_name,
-        seed=args.seed,
-        save_masks=args.save_masks,
-        image_size=tuple(args.image_size),
-        grid_movement=tuple(args.grid_movement),
-        margin=args.margin,
-        min_foreground_ratio=args.min_foreground_ratio,
-        max_white_ratio=args.max_white_ratio,
-        white_threshold=args.white_threshold,
-        max_largest_white_component_ratio=args.max_largest_white_component_ratio,
-    )
+    main(PreprocessingConfig.from_args(args))
