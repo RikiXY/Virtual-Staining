@@ -54,6 +54,11 @@ def pad_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
         value=255)
     return padded_image
 
+# Only the N largest connected components are considered; smaller ones are noise.
+N_TOP_COMPONENTS = 10
+# Components whose ROI std dev is below this are uniform (background) and are masked out.
+MIN_STD_DEV = 10
+
 def calculate_mask(img: np.ndarray) -> np.ndarray:
     """
     Finds the mask for the connected components in the image.
@@ -73,12 +78,11 @@ def calculate_mask(img: np.ndarray) -> np.ndarray:
 
     _, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
 
-    n_filtered = 10
     sorted_indices = np.argsort(stats[1:, cv2.CC_STAT_AREA])[::-1] + 1
 
     mask = np.zeros_like(binary).astype(np.uint8)
 
-    for i in sorted_indices[:n_filtered]:
+    for i in sorted_indices[:N_TOP_COMPONENTS]:
         x, y, w, h, area = stats[i]
 
         if w < 100 and h < 100:
@@ -93,7 +97,7 @@ def calculate_mask(img: np.ndarray) -> np.ndarray:
 
         std_dev = cv2.meanStdDev(roi, mask=roi_mask)[1][0, 0]
 
-        if std_dev < 10:
+        if std_dev < MIN_STD_DEV:
             mask[component_mask == 255] = 255
     
     # Inverts the mask to get the foreground. The mask is 255 for the foreground and 0 for the background
