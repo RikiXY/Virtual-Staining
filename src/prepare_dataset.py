@@ -588,6 +588,10 @@ def main(
     image_size: tuple[int, int] = (256, 256),
     grid_movement: tuple[int, int] = (256, 256),
     margin: int = 200,
+    min_foreground_ratio: float = 0.25,
+    max_white_ratio: float = 0.7,
+    white_threshold: int = 250,
+    max_largest_white_component_ratio: float = 0.20,
 ) -> None:
 
     if seed is None:
@@ -664,10 +668,6 @@ def main(
 
     # Final robust pair filter: check both masks
     # and the white-background ratio in source and target patches.
-    min_foreground_ratio = 0.25
-    max_white_ratio = 0.7
-    white_threshold = 250
-    max_largest_white_component_ratio = 0.20
 
     # Keep valid and discarded pairs separate so they can be inspected later.
     named_source_images = []
@@ -790,7 +790,10 @@ if __name__ == "__main__":
         "python src/prepare_dataset.py --path PATH\n"
         "       --source-name SOURCE_NAME --target-name TARGET_NAME\n"
         "       [--seed SEED] [--save-masks] [--image-size WIDTH HEIGHT]\n"
-        "       [--grid-movement STEP_X STEP_Y] [--margin MARGIN] [--lang {en,it}]"
+        "       [--grid-movement STEP_X STEP_Y] [--margin MARGIN]\n"
+        "       [--min-foreground-ratio F] [--max-white-ratio F]\n"
+        "       [--white-threshold N] [--max-largest-white-component-ratio F]\n"
+        "       [--lang {en,it}]"
     ),
         description=HELP["description"][lang_args.lang],
         formatter_class=argparse.RawTextHelpFormatter,
@@ -846,6 +849,30 @@ if __name__ == "__main__":
         default=200,
         help="Margin cropped from each border before patch extraction (default: 200)"
     )
+    parser.add_argument(
+        "--min-foreground-ratio",
+        type=float,
+        default=0.25,
+        help="Minimum foreground tissue ratio for a patch to be kept (default: 0.25)"
+    )
+    parser.add_argument(
+        "--max-white-ratio",
+        type=float,
+        default=0.7,
+        help="Maximum near-white pixel ratio for a patch to be kept (default: 0.7)"
+    )
+    parser.add_argument(
+        "--white-threshold",
+        type=int,
+        default=250,
+        help="Grayscale intensity threshold for classifying a pixel as near-white (default: 250)"
+    )
+    parser.add_argument(
+        "--max-largest-white-component-ratio",
+        type=float,
+        default=0.20,
+        help="Maximum ratio of the largest white connected component for a patch to be kept (default: 0.20)"
+    )
     args = parser.parse_args()
     lang = args.lang
 
@@ -859,5 +886,9 @@ if __name__ == "__main__":
         image_size=tuple(args.image_size),
         grid_movement=tuple(args.grid_movement),
         margin=args.margin,
+        min_foreground_ratio=args.min_foreground_ratio,
+        max_white_ratio=args.max_white_ratio,
+        white_threshold=args.white_threshold,
+        max_largest_white_component_ratio=args.max_largest_white_component_ratio,
     )
 
