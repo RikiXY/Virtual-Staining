@@ -214,7 +214,7 @@ class Trainer:
 
     Owns the training loop, validation, checkpoint save/load, progress
     reporting, and metric logging. Models and data loaders are constructed
-    outside and injected — Trainer does not hardcode architecture choices.
+    outside and injected - Trainer does not hardcode architecture choices.
     """
 
     def __init__(

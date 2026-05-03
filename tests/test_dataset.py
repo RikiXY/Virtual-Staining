@@ -19,14 +19,14 @@ def dataset_dir(tmp_path):
     _make_image(tmp_path / "00000_00000_target.png")
     _make_image(tmp_path / "00001_00001_source.png")
     _make_image(tmp_path / "00001_00001_target.png")
-    # Mask files — must be skipped
+    # Mask files - must be skipped
     _make_image(tmp_path / "mask_00002_00002_source.png")
     _make_image(tmp_path / "00002_mask_00002_target.png")
-    # Unmatched source — must be skipped (no matching target)
+    # Unmatched source - must be skipped (no matching target)
     _make_image(tmp_path / "00003_00003_source.png")
-    # Unmatched target — must be skipped (no matching source)
+    # Unmatched target - must be skipped (no matching source)
     _make_image(tmp_path / "00004_00004_target.png")
-    # Too few stem parts — must be skipped
+    # Too few stem parts - must be skipped
     _make_image(tmp_path / "invalid.png")
     return tmp_path
 

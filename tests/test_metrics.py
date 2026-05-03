@@ -16,7 +16,7 @@ def _rgb(value: float, h: int = 8, w: int = 8) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Identical images — perfect scores
+# Identical images - perfect scores
 # ---------------------------------------------------------------------------
 
 def test_mae_identical_images():
@@ -40,7 +40,7 @@ def test_ssim_identical_images():
 
 
 # ---------------------------------------------------------------------------
-# Near-inverted pair — poor scores
+# Near-inverted pair - poor scores
 # ---------------------------------------------------------------------------
 
 def test_mae_inverted_pair():
