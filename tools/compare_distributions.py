@@ -2,105 +2,17 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
+
+from utils.cli import ANSI, use_color, style, print_section, print_info
+from utils.metrics import color_metric_value
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.stats import ks_2samp, mannwhitneyu, wasserstein_distance, wilcoxon
-
-
-# =====================================
-# Section dedicated to CLI colouring
-# =====================================
-ANSI = {
-    "reset": "\033[0m",
-    "bold": "\033[1m",
-    "red": "\033[31m",
-    "green": "\033[32m",
-    "yellow": "\033[33m",
-    "blue": "\033[34m",
-    "magenta": "\033[35m",
-    "cyan": "\033[36m",
-    "orange": "\033[38;5;208m",
-}
-
-
-def use_color() -> bool:
-    """Returns True if using ANSI colours in the console makes sense."""
-    return os.environ.get("NO_COLOR") is None and sys.stdout.isatty()
-
-
-def style(text: str, *names: str) -> str:
-    """Applies an ANSI style to the text, if colour output is enabled."""
-    if not use_color():
-        return text
-    prefix = "".join(ANSI[name] for name in names if name in ANSI)
-    return prefix + text + ANSI["reset"]
-
-
-def print_section(title: str) -> None:
-    """Prints a human-readable section header in the CLI."""
-    print()
-    print(style(f"=== {title} ===", "bold", "cyan"))
-
-
-def print_info(label: str, value: str) -> None:
-    """Prints a single label-value line."""
-    print(f"{style(label + ':', 'bold', 'blue')} {value}")
-
-
-def color_metric_value(metric_name: str, value: float) -> str:
-    """Colours the main metrics using thresholds consistent with the other tools."""
-    if metric_name == "ssim":
-        if value >= 0.85:
-            color = "green"
-        elif value >= 0.75:
-            color = "yellow"
-        elif value >= 0.65:
-            color = "orange"
-        else:
-            color = "red"
-        return style(f"{value:.6f}", color)
-
-    if metric_name == "psnr":
-        if value >= 25:
-            color = "green"
-        elif value >= 20:
-            color = "yellow"
-        elif value >= 15:
-            color = "orange"
-        else:
-            color = "red"
-        return style(f"{value:.4f}", color)
-
-    if metric_name == "mae":
-        if value <= 0.06:
-            color = "green"
-        elif value <= 0.10:
-            color = "yellow"
-        elif value <= 0.16:
-            color = "orange"
-        else:
-            color = "red"
-        return style(f"{value:.6f}", color)
-
-    if metric_name == "rmse":
-        if value <= 0.08:
-            color = "green"
-        elif value <= 0.12:
-            color = "yellow"
-        elif value <= 0.20:
-            color = "orange"
-        else:
-            color = "red"
-        return style(f"{value:.6f}", color)
-
-    return f"{value:.6f}"
 
 
 def color_distance(value: float, good: float, warn: float) -> str:

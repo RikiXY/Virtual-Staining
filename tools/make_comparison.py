@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import csv
-import os
-import sys
 from pathlib import Path
 from typing import Any
+
+from utils.cli import ANSI, use_color, style, print_section, print_info
+from utils.image_io import VALID_IMAGE_EXTENSIONS, open_rgb, to_float01
+from utils.metrics import color_for_metric
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -13,7 +15,6 @@ from PIL import Image
 
 
 METRIC_SELECTION_ORDER = ["mae", "rmse", "psnr", "ssim"]
-VALID_IMAGE_EXTENSIONS = {".tif", ".tiff", ".png"}
 SELECTION_SUMMARY_FIELDNAMES = [
     "metric",
     "kind",
@@ -26,87 +27,6 @@ SELECTION_SUMMARY_FIELDNAMES = [
     "generated_path",
     "comparison_path",
 ]
-
-
-# =====================================
-# Section dedicated to CLI colouring
-# =====================================
-ANSI = {
-    "reset": "\033[0m",
-    "bold": "\033[1m",
-    "red": "\033[31m",
-    "green": "\033[32m",
-    "yellow": "\033[33m",
-    "blue": "\033[34m",
-    "magenta": "\033[35m",
-    "cyan": "\033[36m",
-    "orange": "\033[38;5;208m",
-}
-
-
-def use_color() -> bool:
-    """Returns True if using ANSI colours in the console makes sense."""
-    return os.environ.get("NO_COLOR") is None and sys.stdout.isatty()
-
-
-def style(text: str, *names: str) -> str:
-    """Applies an ANSI style to the text, if colour output is enabled."""
-    if not use_color():
-        return text
-    prefix = "".join(ANSI[name] for name in names if name in ANSI)
-    return prefix + text + ANSI["reset"]
-
-
-def print_section(title: str) -> None:
-    """Prints a human-readable section header in the CLI."""
-    print()
-    print(style(f"=== {title} ===", "bold", "cyan"))
-
-
-def print_info(label: str, value: str) -> None:
-    """Prints a single label-value line."""
-    print(f"{style(label + ':', 'bold', 'blue')} {value}")
-
-
-def color_metric(metric_name: str, metric_value: float) -> str:
-    """Returns the CLI colour associated with the metric value."""
-    if metric_name == "ssim":
-        if metric_value >= 0.85:
-            return "green"
-        if metric_value >= 0.75:
-            return "yellow"
-        if metric_value >= 0.65:
-            return "orange"
-        return "red"
-
-    if metric_name == "psnr":
-        if metric_value >= 25:
-            return "green"
-        if metric_value >= 20:
-            return "yellow"
-        if metric_value >= 15:
-            return "orange"
-        return "red"
-
-    if metric_name == "mae":
-        if metric_value <= 0.06:
-            return "green"
-        if metric_value <= 0.10:
-            return "yellow"
-        if metric_value <= 0.16:
-            return "orange"
-        return "red"
-
-    if metric_name == "rmse":
-        if metric_value <= 0.08:
-            return "green"
-        if metric_value <= 0.12:
-            return "yellow"
-        if metric_value <= 0.20:
-            return "orange"
-        return "red"
-
-    return "cyan"
 
 
 # ==========================
@@ -204,24 +124,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-# ========================================
-# Section dedicated to utility functions
-# ========================================
-
-def open_rgb(path: str | Path) -> Image.Image:
-    """Opens an image file and returns it as an RGB image."""
-    image_path = Path(path)
-
-    if not image_path.exists():
-        raise FileNotFoundError(f"Image not found: {image_path}")
-
-    if not image_path.is_file():
-        raise FileNotFoundError(f"Not a file: {image_path}")
-
-    with Image.open(image_path) as img:
-        return img.convert("RGB")
-
-
 def validate_same_size(*images: Image.Image) -> None:
     """Verifies that all images have the same size."""
     sizes = {image.size for image in images}
@@ -231,11 +133,6 @@ def validate_same_size(*images: Image.Image) -> None:
             "All images must have the same size to build a comparison panel. "
             f"Got: {sorted(sizes)}"
         )
-
-
-def to_float01(image: Image.Image) -> np.ndarray:
-    """Converts a PIL image to a float32 array normalised to [0,1]."""
-    return np.asarray(image, dtype=np.float32) / 255.0
 
 
 def compute_absolute_difference_map(generated_img: Image.Image, target_img: Image.Image) -> np.ndarray:
@@ -725,7 +622,7 @@ def print_metric_based_selection(metric_name: str, representative_rows: dict[str
     for kind, row in representative_rows.items():
         metric_value = float(row[metric_name])
         sample_id = row["sample_id"]
-        color = color_metric(metric_name, metric_value)
+        color = color_for_metric(metric_name, metric_value)
         print_info(
             f"{kind.upper()} sample",
             style(f"{sample_id} | value={metric_value:.6f}", color),

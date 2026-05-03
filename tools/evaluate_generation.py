@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 import csv
-import os
 import statistics
-import sys
 from pathlib import Path
 from typing import Any
+
+from utils.cli import ANSI, use_color, style, print_section, print_info
+from utils.image_io import VALID_IMAGE_EXTENSIONS, load_rgb_image, to_float01
+from utils.metrics import color_metric
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,7 +23,6 @@ except ImportError as exc:
     ) from exc
 
 METRIC_NAMES = ["mae", "rmse", "psnr", "ssim"]
-VALID_IMAGE_EXTENSIONS = {".tif", ".tiff", ".png"}
 
 METRIC_FIELDNAMES = [
     "sample_id",
@@ -46,95 +47,6 @@ PLOT_FIXED_RANGES = {
 }
 
 PLOT_FIXED_BINS = 30
-
-
-# =====================================
-# Section dedicated to CLI colouring
-# =====================================
-ANSI = {
-    "reset": "\033[0m",
-    "bold": "\033[1m",
-    "red": "\033[31m",
-    "green": "\033[32m",
-    "yellow": "\033[33m",
-    "blue": "\033[34m",
-    "magenta": "\033[35m",
-    "cyan": "\033[36m",
-    "orange": "\033[38;5;208m",
-}
-
-
-def use_color() -> bool:
-    """Returns True if using ANSI colours in the console makes sense."""
-    return os.environ.get("NO_COLOR") is None and sys.stdout.isatty()
-
-
-def style(text: str, *names: str) -> str:
-    """Applies an ANSI style to the text, if colour output is enabled."""
-    if not use_color():
-        return text
-    prefix = "".join(ANSI[name] for name in names if name in ANSI)
-    return prefix + text + ANSI["reset"]
-
-
-def print_section(title: str) -> None:
-    """Prints a human-readable section header in the CLI."""
-    print()
-    print(style(f"=== {title} ===", "bold", "cyan"))
-
-
-def print_info(label: str, value: str) -> None:
-    """Prints a single label-value line."""
-    print(f"{style(label + ':', 'bold', 'blue')} {value}")
-
-
-def color_metric(name: str, value: float) -> str:
-    """Colours a metric using thresholds designed for CLI reading only."""
-    if name == "ssim":
-        if value >= 0.85:
-            color = "green"
-        elif value >= 0.75:
-            color = "yellow"
-        elif value >= 0.65:
-            color = "orange"
-        else:
-            color = "red"
-        return style(f"{value:.6f}", color)
-
-    if name == "psnr":
-        if value >= 25:
-            color = "green"
-        elif value >= 20:
-            color = "yellow"
-        elif value >= 15:
-            color = "orange"
-        else:
-            color = "red"
-        return style(f"{value:.4f}", color)
-
-    if name == "mae":
-        if value <= 0.06:
-            color = "green"
-        elif value <= 0.10:
-            color = "yellow"
-        elif value <= 0.16:
-            color = "orange"
-        else:
-            color = "red"
-        return style(f"{value:.6f}", color)
-
-    if name == "rmse":
-        if value <= 0.08:
-            color = "green"
-        elif value <= 0.12:
-            color = "yellow"
-        elif value <= 0.20:
-            color = "orange"
-        else:
-            color = "red"
-        return style(f"{value:.6f}", color)
-
-    return f"{value:.6f}"
 
 
 
@@ -256,25 +168,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-# ========================================
-# Section dedicated to utility functions
-# ========================================
-
-def load_rgb_image(path: str | Path) -> np.ndarray:
-    """Loads an image from disk and returns it as a uint8 RGB array."""
-    image_path = Path(path)
-
-    if not image_path.is_file():
-        raise FileNotFoundError(f"Image not found: {image_path}")
-
-    try:
-        image = Image.open(image_path).convert("RGB")
-    except Exception as exc:
-        raise RuntimeError(f"Could not open image: {image_path}") from exc
-
-    return np.array(image)
-
-
 def validate_same_shape(target: np.ndarray, generated: np.ndarray) -> None:
     """Verifies that target and generated have exactly the same shape."""
     if target.shape != generated.shape:
@@ -282,11 +175,6 @@ def validate_same_shape(target: np.ndarray, generated: np.ndarray) -> None:
             "Target and generated images must have the same shape. "
             f"Got {target.shape} and {generated.shape}."
         )
-
-
-def to_float01(image: np.ndarray) -> np.ndarray:
-    """Converts the image from uint8 [0,255] to float32 [0,1]."""
-    return image.astype(np.float32) / 255.0
 
 
 def extract_sample_id(path: str | Path, suffix: str, label: str = "File") -> str:
