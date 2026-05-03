@@ -29,7 +29,7 @@ SELECTION_SUMMARY_FIELDNAMES = [
 
 
 # =====================================
-# Sezione dedicata alla colorazione CLI
+# Section dedicated to CLI colouring
 # =====================================
 ANSI = {
     "reset": "\033[0m",
@@ -45,12 +45,12 @@ ANSI = {
 
 
 def use_color() -> bool:
-    """Restituisce True se ha senso usare colori ANSI in console."""
+    """Returns True if using ANSI colours in the console makes sense."""
     return os.environ.get("NO_COLOR") is None and sys.stdout.isatty()
 
 
 def style(text: str, *names: str) -> str:
-    """Applica uno stile ANSI al testo, se la colorazione e abilitata."""
+    """Applies an ANSI style to the text, if colour output is enabled."""
     if not use_color():
         return text
     prefix = "".join(ANSI[name] for name in names if name in ANSI)
@@ -58,18 +58,18 @@ def style(text: str, *names: str) -> str:
 
 
 def print_section(title: str) -> None:
-    """Stampa un'intestazione di sezione leggibile in CLI."""
+    """Prints a human-readable section header in the CLI."""
     print()
     print(style(f"=== {title} ===", "bold", "cyan"))
 
 
 def print_info(label: str, value: str) -> None:
-    """Stampa una singola riga etichetta."""
+    """Prints a single label-value line."""
     print(f"{style(label + ':', 'bold', 'blue')} {value}")
 
 
 def color_metric(metric_name: str, metric_value: float) -> str:
-    """Restituisce il colore CLI associato al valore della metrica."""
+    """Returns the CLI colour associated with the metric value."""
     if metric_name == "ssim":
         if metric_value >= 0.85:
             return "green"
@@ -110,11 +110,11 @@ def color_metric(metric_name: str, metric_value: float) -> str:
 
 
 # ==========================
-# Sezione dedicata al parser
+# Section dedicated to the parser
 # ==========================
 
 def add_single_subparser(subparsers: Any) -> None:
-    """Aggiunge il sottocomando per il confronto di una singola coppia."""
+    """Adds the subcommand for comparing a single pair."""
     single_parser = subparsers.add_parser(
         "single",
         help="Create one comparison panel from source/generated/target images.",
@@ -158,7 +158,7 @@ def add_single_subparser(subparsers: Any) -> None:
 
 
 def add_from_metrics_subparser(subparsers: Any) -> None:
-    """Aggiunge il sottocomando per i pannelli rappresentativi da CSV."""
+    """Adds the subcommand for representative panels from CSV files."""
     metrics_parser = subparsers.add_parser(
         "from-metrics",
         help="Generate representative comparison panels from evaluation CSV files.",
@@ -174,7 +174,7 @@ def add_from_metrics_subparser(subparsers: Any) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Costruisce il parser principale e registra i sottocomandi disponibili."""
+    """Builds the main parser and registers the available subcommands."""
     parser = argparse.ArgumentParser(
         prog="python tools/make_comparison.py",
         description=(
@@ -205,11 +205,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # ========================================
-# Sezione dedicata alle funzioni utilities
+# Section dedicated to utility functions
 # ========================================
 
 def open_rgb(path: str | Path) -> Image.Image:
-    """Apre un file immagine e lo restituisce come immagine RGB."""
+    """Opens an image file and returns it as an RGB image."""
     image_path = Path(path)
 
     if not image_path.exists():
@@ -223,7 +223,7 @@ def open_rgb(path: str | Path) -> Image.Image:
 
 
 def validate_same_size(*images: Image.Image) -> None:
-    """Verifica che tutte le immagini abbiano la stessa dimensione."""
+    """Verifies that all images have the same size."""
     sizes = {image.size for image in images}
 
     if len(sizes) != 1:
@@ -234,19 +234,19 @@ def validate_same_size(*images: Image.Image) -> None:
 
 
 def to_float01(image: Image.Image) -> np.ndarray:
-    """Converte un'immagine PIL in array float32 normalizzato in [0,1]."""
+    """Converts a PIL image to a float32 array normalised to [0,1]."""
     return np.asarray(image, dtype=np.float32) / 255.0
 
 
 def compute_absolute_difference_map(generated_img: Image.Image, target_img: Image.Image) -> np.ndarray:
-    """Calcola la mappa MAE per pixel tra target e generated."""
+    """Computes the per-pixel MAE map between target and generated."""
     generated_float = to_float01(generated_img)
     target_float = to_float01(target_img)
     return np.mean(np.abs(target_float - generated_float), axis=2)
 
 
 def extract_generated_sample_id(path: str | Path) -> str:
-    """Estrae il sample id dal nome del generated file."""
+    """Extracts the sample id from the generated file name."""
     stem = Path(path).stem
     suffix = "_target_generated"
 
@@ -257,7 +257,7 @@ def extract_generated_sample_id(path: str | Path) -> str:
 
 
 def infer_run_dir_from_generated_path(generated_path: str | Path) -> Path:
-    """Prova a ricavare la cartella del run da un path generated dentro results/."""
+    """Tries to derive the run directory from a generated path inside results/."""
     path = Path(generated_path).resolve()
     base = path.parent if path.is_file() else path
     parts = base.parts
@@ -288,7 +288,7 @@ def infer_run_dir_from_generated_path(generated_path: str | Path) -> Path:
 
 
 def infer_default_save_path(generated_image: str | Path) -> Path:
-    """Costruisce il save path di default per un confronto singolo."""
+    """Builds the default save path for a single comparison."""
     generated_path = Path(generated_image)
     sample_id = extract_generated_sample_id(generated_path)
     run_dir = infer_run_dir_from_generated_path(generated_path)
@@ -296,20 +296,20 @@ def infer_default_save_path(generated_image: str | Path) -> Path:
 
 
 def infer_diagnostics_dir(save_path: str | Path) -> Path:
-    """Ricava la cartella diagnostics a partire dal save path del pannello."""
+    """Derives the diagnostics directory from the panel save path."""
     save_path = Path(save_path)
     return save_path.parent / "diagnostics"
 
 
 def infer_case_diagnostics_dir(save_path: str | Path, generated_image: str | Path) -> Path:
-    """Ricava la cartella diagnostics del singolo sample."""
+    """Derives the diagnostics directory for the individual sample."""
     diagnostics_dir = infer_diagnostics_dir(save_path)
     sample_id = extract_generated_sample_id(generated_image)
     return diagnostics_dir / sample_id
 
 
 def find_existing_image(base_dir: str | Path, sample_id: str, suffix: str) -> Path:
-    """Cerca un file immagine esistente provando tutte le estensioni supportate."""
+    """Searches for an existing image file by trying all supported extensions."""
     directory = Path(base_dir)
 
     for ext in sorted(VALID_IMAGE_EXTENSIONS):
@@ -323,7 +323,7 @@ def find_existing_image(base_dir: str | Path, sample_id: str, suffix: str) -> Pa
 
 
 def infer_source_path_from_row(row: dict[str, str]) -> Path:
-    """Prova a ricostruire il path della source a partire da una riga CSV."""
+    """Tries to reconstruct the source path from a CSV row."""
     sample_id = row["sample_id"]
 
     if row.get("source_path"):
@@ -350,11 +350,11 @@ def infer_source_path_from_row(row: dict[str, str]) -> Path:
 
 
 # ====================================
-# Sezione dedicata alla lettura dei CSV
+# Section dedicated to CSV reading
 # ====================================
 
 def read_summary_csv(path: str | Path) -> dict[str, dict[str, float]]:
-    """Legge summary.csv e restituisce le statistiche aggregate per metrica."""
+    """Reads summary.csv and returns the aggregate statistics per metric."""
     summary_path = Path(path)
 
     if not summary_path.is_file():
@@ -391,7 +391,7 @@ def read_summary_csv(path: str | Path) -> dict[str, dict[str, float]]:
 
 
 def read_per_image_metrics_csv(path: str | Path) -> list[dict[str, str]]:
-    """Legge per_image_metrics.csv e restituisce tutte le righe come dizionari."""
+    """Reads per_image_metrics.csv and returns all rows as dictionaries."""
     csv_path = Path(path)
 
     if not csv_path.is_file():
@@ -402,7 +402,7 @@ def read_per_image_metrics_csv(path: str | Path) -> list[dict[str, str]]:
 
 
 # ==============================================
-# Sezione dedicata alla selezione dei campioni
+# Section dedicated to sample selection
 # ==============================================
 
 def select_representative_rows(
@@ -410,7 +410,7 @@ def select_representative_rows(
     metric_summary: dict[str, float],
     per_image_rows: list[dict[str, str]],
 ) -> dict[str, dict[str, str]]:
-    """Seleziona i sample min, max e più vicino alla mediana per una metrica."""
+    """Selects the min, max and closest-to-median samples for a metric."""
     if not per_image_rows:
         raise ValueError("No per-image rows available for representative selection.")
 
@@ -428,12 +428,12 @@ def select_representative_rows(
 
 
 def build_metric_kind_row_title(metric_name: str, kind: str, sample_id: str, metric_value: float) -> str:
-    """Costruisce il titolo di riga per i pannelli aggregati."""
+    """Builds the row title for aggregated panels."""
     return f"{metric_name.upper()} | {kind.upper()} | sample={sample_id} | value={metric_value:.6f}"
 
 
 # =======================================
-# Sezione dedicata alla scrittura dei CSV
+# Section dedicated to CSV writing
 # =======================================
 
 def build_selection_summary_row(
@@ -447,7 +447,7 @@ def build_selection_summary_row(
     generated_path: Path,
     comparison_path: Path,
 ) -> dict[str, object]:
-    """Costruisce una riga standard per i CSV di selezione."""
+    """Builds a standard row for selection CSVs."""
     return {
         "metric": metric_name,
         "kind": kind,
@@ -463,7 +463,7 @@ def build_selection_summary_row(
 
 
 def write_metric_selection_summary(rows: list[dict[str, object]], save_path: str | Path) -> None:
-    """Scrive il CSV con i sample selezionati per ogni metrica."""
+    """Writes the CSV with the selected samples for each metric."""
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -474,7 +474,7 @@ def write_metric_selection_summary(rows: list[dict[str, object]], save_path: str
 
 
 # ==========================================
-# Sezione dedicata alla creazione dei pannelli
+# Section dedicated to panel creation
 # ==========================================
 
 def save_comparison_panel(
@@ -484,7 +484,7 @@ def save_comparison_panel(
     save_path: str | Path,
     suptitle: str | None = None,
 ) -> Path:
-    """Salva un pannello con source, generated, target e mappa MAE."""
+    """Saves a panel with source, generated, target and MAE map."""
     source_img = open_rgb(source_path)
     generated_img = open_rgb(generated_path)
     target_img = open_rgb(target_path)
@@ -529,7 +529,7 @@ def save_diagnostic_plots(
     target_path: str | Path,
     save_dir: str | Path,
 ) -> list[Path]:
-    """Salva i plot diagnostici del singolo sample."""
+    """Saves the diagnostic plots for the individual sample."""
     generated_img = open_rgb(generated_path)
     target_img = open_rgb(target_path)
     validate_same_size(generated_img, target_img)
@@ -614,7 +614,7 @@ def save_stacked_image_panel(
     row_titles: list[str] | None = None,
     suptitle: str | None = None,
 ) -> Path:
-    """Salva un pannello verticale composto da immagini gia generate."""
+    """Saves a vertical panel composed of already-generated images."""
     if not image_paths:
         raise ValueError("No image paths provided for stacked panel.")
 
@@ -657,7 +657,7 @@ def save_metric_diagnostics_summary(
     metric_dir: str | Path,
     diagnostic_entries: list[dict[str, object]],
 ) -> list[Path]:
-    """Salva i pannelli aggregati per una metrica sui casi min, median e max."""
+    """Saves the aggregated panels for a metric across the min, median and max cases."""
     metric_dir = Path(metric_dir)
     output_specs = [
         (
@@ -706,11 +706,11 @@ def save_metric_diagnostics_summary(
 
 
 # ====================================
-# Sezione dedicata al report testuale
+# Section dedicated to the text report
 # ====================================
 
 def print_single_summary(saved_path: Path, diagnostic_paths: list[Path]) -> None:
-    """Stampa il riepilogo finale della modalita single."""
+    """Prints the final summary of the single mode."""
     print_section("Single comparison")
     print_info("Saved comparison image", style(str(saved_path), "green"))
 
@@ -719,7 +719,7 @@ def print_single_summary(saved_path: Path, diagnostic_paths: list[Path]) -> None
 
 
 def print_metric_based_selection(metric_name: str, representative_rows: dict[str, dict[str, str]]) -> None:
-    """Stampa i sample rappresentativi scelti per una metrica."""
+    """Prints the representative samples chosen for a metric."""
     print_section(f"Metric {metric_name.upper()}")
 
     for kind, row in representative_rows.items():
@@ -733,24 +733,24 @@ def print_metric_based_selection(metric_name: str, representative_rows: dict[str
 
 
 def print_metric_run_header(run_path: Path, available_metrics: list[str]) -> None:
-    """Stampa l'intestazione generale della modalita from-metrics."""
+    """Prints the general header for the from-metrics mode."""
     print_section("Metric-based representative comparisons")
     print_info("Run path", str(run_path))
     print_info("Metrics found", ", ".join(available_metrics))
 
 
 def print_metric_saved_files(metrics_dir: Path) -> None:
-    """Stampa il riepilogo finale dei file salvati in modalita from-metrics."""
+    """Prints the final summary of files saved in from-metrics mode."""
     print_section("Saved files")
     print_info("Metric-based comparisons", style(str(metrics_dir), "bold", "magenta"))
 
 
 # =====================================
-# Sezione dedicata al flusso principale
+# Section dedicated to the main flow
 # =====================================
 
 def run_single(args: argparse.Namespace) -> None:
-    """Esegue il flusso completo per il confronto di una singola coppia."""
+    """Runs the complete flow for comparing a single pair."""
     if args.save_path is not None:
         save_path = args.save_path
     else:
@@ -787,7 +787,7 @@ def build_metric_case_artifacts(
     metric_summary: dict[str, float],
     metric_dir: Path,
 ) -> tuple[dict[str, object], dict[str, object]]:
-    """Costruisce e salva gli artefatti relativi a un caso rappresentativo."""
+    """Builds and saves the artefacts for a representative case."""
     sample_id = row["sample_id"]
     metric_value = float(row[metric_name])
 
@@ -847,7 +847,7 @@ def build_metric_case_artifacts(
 
 
 def run_from_metrics(args: argparse.Namespace) -> None:
-    """Esegue il flusso completo per i confronti selezionati a partire dai CSV."""
+    """Runs the complete flow for comparisons selected from the CSV files."""
     run_path = args.run_path.resolve()
     evaluation_dir = run_path / "evaluation"
     summary_csv = evaluation_dir / "summary.csv"

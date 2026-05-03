@@ -20,9 +20,9 @@ except ImportError as exc:
         "pip install scikit-image"
     ) from exc
 
-YLIM = 0.5 # normalmente dovrebbe essere 1 ma lo metto a 0.5 per rendere 
-# più visibili le differenze tra i modelli nei grafici, visto che i valori
-# di molte metriche tendono ad essere bassi.
+YLIM = 0.5 # normally this should be 1, but it is set to 0.5 to make
+# differences between models more visible in the plots, since the values
+# of many metrics tend to be low.
 
 METRIC_NAMES = ["mae", "rmse", "psnr", "ssim"]
 VALID_IMAGE_EXTENSIONS = {".tif", ".tiff", ".png"}
@@ -44,8 +44,8 @@ PLOT_FIXED_RANGES = {
     "mae": (0.0, 1.0),
     "rmse": (0.0, 1.0),
     "ssim": (0.0, 1.0),
-    # Il PSNR non ha un massimo teorico finito. Per confronto visivo usiamo
-    # una finestra fissa pratica, cosi gli istogrammi restano sovrapponibili.
+    # PSNR has no finite theoretical maximum. For visual comparison we use
+    # a fixed practical window, so that histograms remain comparable.
     "psnr": (0.0, 60.0),
 }
 
@@ -53,7 +53,7 @@ PLOT_FIXED_BINS = 30
 
 
 # =====================================
-# Sezione dedicata alla colorazione CLI
+# Section dedicated to CLI colouring
 # =====================================
 ANSI = {
     "reset": "\033[0m",
@@ -69,12 +69,12 @@ ANSI = {
 
 
 def use_color() -> bool:
-    """Restituisce True se ha senso usare colori ANSI in console."""
+    """Returns True if using ANSI colours in the console makes sense."""
     return os.environ.get("NO_COLOR") is None and sys.stdout.isatty()
 
 
 def style(text: str, *names: str) -> str:
-    """Applica uno stile ANSI al testo, se la colorazione e abilitata."""
+    """Applies an ANSI style to the text, if colour output is enabled."""
     if not use_color():
         return text
     prefix = "".join(ANSI[name] for name in names if name in ANSI)
@@ -82,18 +82,18 @@ def style(text: str, *names: str) -> str:
 
 
 def print_section(title: str) -> None:
-    """Stampa un'intestazione di sezione leggibile in CLI."""
+    """Prints a human-readable section header in the CLI."""
     print()
     print(style(f"=== {title} ===", "bold", "cyan"))
 
 
 def print_info(label: str, value: str) -> None:
-    """Stampa una singola riga etichetta."""
+    """Prints a single label-value line."""
     print(f"{style(label + ':', 'bold', 'blue')} {value}")
 
 
 def color_metric(name: str, value: float) -> str:
-    """Colora una metrica con soglie pensate per la sola lettura CLI."""
+    """Colours a metric using thresholds designed for CLI reading only."""
     if name == "ssim":
         if value >= 0.85:
             color = "green"
@@ -143,11 +143,11 @@ def color_metric(name: str, value: float) -> str:
 
 
 # ==========================
-# Sezione dedicata al parser
+# Section dedicated to the parser
 # ==========================
 
 def add_single_subparser(subparsers: Any) -> None:
-    """Aggiunge il sottocomando per la valutazione di una singola coppia."""
+    """Adds the subcommand for evaluating a single pair."""
     single_parser = subparsers.add_parser(
         "single",
         help="Evaluate one target/generated image pair.",
@@ -184,7 +184,7 @@ def add_single_subparser(subparsers: Any) -> None:
 
 
 def add_dataset_subparser(subparsers: Any) -> None:
-    """Aggiunge il sottocomando per la valutazione di un intero dataset."""
+    """Adds the subcommand for evaluating an entire dataset."""
     dataset_parser = subparsers.add_parser(
         "dataset",
         help="Evaluate all matching target/generated pairs in two folders.",
@@ -231,7 +231,7 @@ def add_dataset_subparser(subparsers: Any) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Costruisce il parser principale e registra i sottocomandi disponibili."""
+    """Builds the main parser and registers the available subcommands."""
     parser = argparse.ArgumentParser(
         prog="python tools/evaluate_generation.py",
         description=(
@@ -261,11 +261,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # ========================================
-# Sezione dedicata alle funzioni utilities
+# Section dedicated to utility functions
 # ========================================
 
 def load_rgb_image(path: str | Path) -> np.ndarray:
-    """Carica un'immagine da disco e la restituisce come array RGB uint8."""
+    """Loads an image from disk and returns it as a uint8 RGB array."""
     image_path = Path(path)
 
     if not image_path.is_file():
@@ -280,7 +280,7 @@ def load_rgb_image(path: str | Path) -> np.ndarray:
 
 
 def validate_same_shape(target: np.ndarray, generated: np.ndarray) -> None:
-    """Verifica che target e generated abbiano esattamente la stessa shape."""
+    """Verifies that target and generated have exactly the same shape."""
     if target.shape != generated.shape:
         raise ValueError(
             "Target and generated images must have the same shape. "
@@ -289,12 +289,12 @@ def validate_same_shape(target: np.ndarray, generated: np.ndarray) -> None:
 
 
 def to_float01(image: np.ndarray) -> np.ndarray:
-    """Converte l'immagine da uint8 [0,255] a float32 [0,1]."""
+    """Converts the image from uint8 [0,255] to float32 [0,1]."""
     return image.astype(np.float32) / 255.0
 
 
 def extract_sample_id(path: str | Path, suffix: str, label: str = "File") -> str:
-    """Estrae il sample id togliendo il suffisso atteso dal nome file."""
+    """Extracts the sample id by removing the expected suffix from the filename."""
     name = Path(path).stem
 
     if not name.endswith(suffix):
@@ -304,7 +304,7 @@ def extract_sample_id(path: str | Path, suffix: str, label: str = "File") -> str
 
 
 def extract_single_sample_id(target_path: str | Path, generated_path: str | Path) -> str:
-    """Controlla che target e generated appartengano allo stesso sample."""
+    """Checks that target and generated belong to the same sample."""
     target_id = extract_sample_id(target_path, "_target", "Target")
     generated_id = extract_sample_id(generated_path, "_target_generated", "Generated")
 
@@ -318,7 +318,7 @@ def extract_single_sample_id(target_path: str | Path, generated_path: str | Path
 
 
 def collect_image_files(directory_path: str | Path, suffix: str, label: str) -> dict[str, Path]:
-    """Raccoglie i file validi di una cartella indicizzandoli per sample id."""
+    """Collects valid files from a directory, indexed by sample id."""
     directory = Path(directory_path)
 
     if not directory.is_dir():
@@ -341,7 +341,7 @@ def collect_image_files(directory_path: str | Path, suffix: str, label: str) -> 
 
 
 def infer_default_output_dir(generated_path: str | Path) -> Path:
-    """Prova a ricavare results/NAME_RUN/evaluation da un path interno al run."""
+    """Tries to derive results/NAME_RUN/evaluation from a path inside the run."""
     path = Path(generated_path).resolve()
     base = path.parent if path.is_file() else path
     parts = base.parts
@@ -379,28 +379,28 @@ def infer_default_output_dir(generated_path: str | Path) -> Path:
 
 
 def resolve_output_dir(output_dir: str | None, generated_path: str | Path) -> Path:
-    """Usa l'output esplicito se presente, altrimenti prova a inferirlo."""
+    """Uses the explicit output path if provided, otherwise tries to infer it."""
     if output_dir is not None:
         return Path(output_dir)
     return infer_default_output_dir(generated_path)
 
 
 # ==========================================
-# Sezione dedicata al calcolo delle metriche
+# Section dedicated to metric computation
 # ==========================================
 
 def compute_mae(target: np.ndarray, generated: np.ndarray) -> float:
-    """Calcola il Mean Absolute Error su immagini normalizzate."""
+    """Computes the Mean Absolute Error on normalised images."""
     return float(np.mean(np.abs(target - generated)))
 
 
 def compute_rmse(target: np.ndarray, generated: np.ndarray) -> float:
-    """Calcola il Root Mean Squared Error su immagini normalizzate."""
+    """Computes the Root Mean Squared Error on normalised images."""
     return float(np.sqrt(np.mean((target - generated) ** 2)))
 
 
 def compute_psnr(target: np.ndarray, generated: np.ndarray) -> float:
-    """Calcola il PSNR assumendo immagini normalizzate nell'intervallo [0,1]."""
+    """Computes the PSNR assuming normalised images in the [0,1] range."""
     mse = float(np.mean((target - generated) ** 2))
 
     if mse == 0.0:
@@ -410,7 +410,7 @@ def compute_psnr(target: np.ndarray, generated: np.ndarray) -> float:
 
 
 def compute_ssim(target: np.ndarray, generated: np.ndarray) -> float:
-    """Calcola l'SSIM su immagini RGB normalizzate."""
+    """Computes the SSIM on normalised RGB images."""
     try:
         return float(
             structural_similarity(
@@ -435,7 +435,7 @@ def evaluate_pair(
     target_path: str | Path,
     generated_path: str | Path,
 ) -> tuple[dict[str, float], tuple[int, int, int]]:
-    """Calcola le quattro metriche per una coppia target/generated."""
+    """Computes the four metrics for a target/generated pair."""
     target = load_rgb_image(target_path)
     generated = load_rgb_image(generated_path)
 
@@ -456,7 +456,7 @@ def evaluate_pair(
 
 
 def build_summary_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
-    """Costruisce le righe aggregate del summary.csv."""
+    """Builds the aggregated rows for summary.csv."""
     summary_rows: list[dict[str, object]] = []
 
     for metric in METRIC_NAMES:
@@ -477,7 +477,7 @@ def build_summary_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]
 
 
 # =======================================
-# Sezione dedicata alla scrittura dei CSV
+# Section dedicated to CSV writing
 # =======================================
 
 def build_metric_row(
@@ -487,7 +487,7 @@ def build_metric_row(
     shape: tuple[int, int, int],
     metrics: dict[str, float],
 ) -> dict[str, object]:
-    """Costruisce una riga standard per per_image_metrics.csv."""
+    """Builds a standard row for per_image_metrics.csv."""
     height, width, channels = shape
     return {
         "sample_id": sample_id,
@@ -503,7 +503,7 @@ def build_metric_row(
     }
 
 def write_per_image_metrics_csv(rows: list[dict[str, object]], output_path: str | Path) -> None:
-    """Scrive il CSV con una riga per ogni coppia valutata."""
+    """Writes the CSV with one row per evaluated pair."""
     with Path(output_path).open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=METRIC_FIELDNAMES)
         writer.writeheader()
@@ -511,7 +511,7 @@ def write_per_image_metrics_csv(rows: list[dict[str, object]], output_path: str 
 
 
 def write_skipped_csv(rows: list[dict[str, str]], output_path: str | Path) -> None:
-    """Scrive il CSV dei sample saltati con la relativa motivazione."""
+    """Writes the CSV of skipped samples with the corresponding reason."""
     fieldnames = ["sample_id", "reason", "target_path", "generated_path"]
 
     with Path(output_path).open("w", newline="", encoding="utf-8") as file:
@@ -521,7 +521,7 @@ def write_skipped_csv(rows: list[dict[str, str]], output_path: str | Path) -> No
 
 
 def write_single_case_csv(row: dict[str, object], output_path: str | Path) -> None:
-    """Scrive il CSV prodotto dalla modalita single."""
+    """Writes the CSV produced by the single mode."""
     with Path(output_path).open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=METRIC_FIELDNAMES)
         writer.writeheader()
@@ -536,7 +536,7 @@ def write_summary_csv(
     num_pairs_evaluated: int,
     num_skipped: int,
 ) -> None:
-    """Scrive il CSV riassuntivo con conteggi globali e statistiche per metrica."""
+    """Writes the summary CSV with global counts and per-metric statistics."""
     fieldnames = ["metric", "count", "mean", "median", "std", "min", "max"]
 
     with Path(output_path).open("w", newline="", encoding="utf-8") as file:
@@ -553,18 +553,18 @@ def write_summary_csv(
 
 
 # ===========================
-# Sezione dedicata ai grafici
+# Section dedicated to plots
 # ===========================
 
 
 def get_metric_plot_range(metric: str) -> tuple[float, float]:
-    """Restituisce il range fisso usato nei grafici per una metrica."""
+    """Returns the fixed range used in plots for a metric."""
     if metric not in PLOT_FIXED_RANGES:
         raise ValueError(f"Unsupported metric for plotting: {metric}")
     return PLOT_FIXED_RANGES[metric]
 
 def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) -> list[Path]:
-    """Salva istogrammi con assi fissi e un boxplot finale riassuntivo."""
+    """Saves histograms with fixed axes and a final summary boxplot."""
     output_directory = Path(output_dir)
     output_directory.mkdir(parents=True, exist_ok=True)
     saved_paths: list[Path] = []
@@ -604,7 +604,7 @@ def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) ->
 
 
 # ====================================
-# Sezione dedicata al report testuale
+# Section dedicated to the text report
 # ====================================
 
 def print_single_result(
@@ -613,7 +613,7 @@ def print_single_result(
     metrics: dict[str, float],
     shape: tuple[int, int, int],
 ) -> None:
-    """Stampa a terminale il riepilogo di una singola valutazione."""
+    """Prints the summary of a single evaluation to the terminal."""
     height, width, channels = shape
 
     print_section("Single-pair evaluation")
@@ -634,7 +634,7 @@ def print_dataset_summary(
     skipped_rows: list[dict[str, str]],
     output_dir: Path,
 ) -> None:
-    """Stampa un riepilogo finale della modalita dataset."""
+    """Prints a final summary of the dataset mode."""
     print_section("Dataset evaluation")
     print_info("Targets found", str(len(target_files)))
     print_info("Generated found", str(len(generated_files)))
@@ -658,11 +658,11 @@ def print_dataset_summary(
 
 
 # =====================================
-# Sezione dedicata al flusso principale
+# Section dedicated to the main flow
 # =====================================
 
 def run_single(args: argparse.Namespace) -> None:
-    """Esegue il flusso completo per la modalita single."""
+    """Runs the complete flow for the single mode."""
     sample_id = extract_single_sample_id(args.target, args.generated)
     metrics, shape = evaluate_pair(args.target, args.generated)
     print_single_result(args.target, args.generated, metrics, shape)
@@ -680,7 +680,7 @@ def run_single(args: argparse.Namespace) -> None:
 
 
 def run_dataset(args: argparse.Namespace) -> None:
-    """Esegue il flusso completo per la modalita dataset."""
+    """Runs the complete flow for the dataset mode."""
     target_files = collect_image_files(args.target_dir, "_target", "Target")
     generated_files = collect_image_files(args.generated_dir, "_target_generated", "Generated")
 

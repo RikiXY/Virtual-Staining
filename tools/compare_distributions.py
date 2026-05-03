@@ -15,7 +15,7 @@ from scipy.stats import ks_2samp, mannwhitneyu, wasserstein_distance, wilcoxon
 
 
 # =====================================
-# Sezione dedicata alla colorazione CLI
+# Section dedicated to CLI colouring
 # =====================================
 ANSI = {
     "reset": "\033[0m",
@@ -31,12 +31,12 @@ ANSI = {
 
 
 def use_color() -> bool:
-    """Restituisce True se ha senso usare colori ANSI in console."""
+    """Returns True if using ANSI colours in the console makes sense."""
     return os.environ.get("NO_COLOR") is None and sys.stdout.isatty()
 
 
 def style(text: str, *names: str) -> str:
-    """Applica uno stile ANSI al testo, se la colorazione e abilitata."""
+    """Applies an ANSI style to the text, if colour output is enabled."""
     if not use_color():
         return text
     prefix = "".join(ANSI[name] for name in names if name in ANSI)
@@ -44,18 +44,18 @@ def style(text: str, *names: str) -> str:
 
 
 def print_section(title: str) -> None:
-    """Stampa un'intestazione di sezione leggibile in CLI."""
+    """Prints a human-readable section header in the CLI."""
     print()
     print(style(f"=== {title} ===", "bold", "cyan"))
 
 
 def print_info(label: str, value: str) -> None:
-    """Stampa una singola riga etichetta."""
+    """Prints a single label-value line."""
     print(f"{style(label + ':', 'bold', 'blue')} {value}")
 
 
 def color_metric_value(metric_name: str, value: float) -> str:
-    """Colora le metriche principali con soglie coerenti agli altri tool."""
+    """Colours the main metrics using thresholds consistent with the other tools."""
     if metric_name == "ssim":
         if value >= 0.85:
             color = "green"
@@ -104,7 +104,7 @@ def color_metric_value(metric_name: str, value: float) -> str:
 
 
 def color_distance(value: float, good: float, warn: float) -> str:
-    """Colora una distanza: piu e piccola, meglio e."""
+    """Colours a distance: the smaller, the better."""
     if value <= good:
         return style(f"{value:.6f}", "green")
     if value <= warn:
@@ -115,7 +115,7 @@ def color_distance(value: float, good: float, warn: float) -> str:
 
 
 def color_pvalue(value: float) -> str:
-    """Colora un p-value come forza dell'evidenza di differenza."""
+    """Colours a p-value according to the strength of evidence for a difference."""
     if value < 0.001:
         return style(f"{value:.6g}", "green")
     if value < 0.01:
@@ -126,7 +126,7 @@ def color_pvalue(value: float) -> str:
 
 
 def color_share(value: float) -> str:
-    """Colora una quota tra 0 e 1."""
+    """Colours a share between 0 and 1."""
     if value >= 0.70:
         return style(f"{value:.6f}", "green")
     if value >= 0.40:
@@ -137,7 +137,7 @@ def color_share(value: float) -> str:
 
 
 def color_signed_delta(value: float) -> str:
-    """Colora un delta signed: positivo meglio per B, negativo meglio per A."""
+    """Colours a signed delta: positive favours B, negative favours A."""
     if value > 0:
         return style(f"{value:.6f}", "green")
     if value < 0:
@@ -146,7 +146,7 @@ def color_signed_delta(value: float) -> str:
 
 
 # =========================================
-# Sezione dedicata alle strutture risultati
+# Section dedicated to result structures
 # =========================================
 @dataclass
 class UnpairedGroupStats:
@@ -188,10 +188,10 @@ class PairedSummary:
 
 
 # ==========================
-# Sezione dedicata al parser
+# Section dedicated to the parser
 # ==========================
 def add_direction_arguments(parser: argparse.ArgumentParser) -> None:
-    """Aggiunge gli argomenti che definiscono la direzione della metrica."""
+    """Adds the arguments that define the metric direction."""
     parser.add_argument(
         "--higher-is-better",
         action="store_true",
@@ -205,7 +205,7 @@ def add_direction_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def add_common_comparison_arguments(parser: argparse.ArgumentParser) -> None:
-    """Aggiunge gli argomenti comuni alle due modalita di confronto."""
+    """Adds the arguments common to both comparison modes."""
     parser.add_argument(
         "--csv-a",
         required=True,
@@ -240,7 +240,7 @@ def add_common_comparison_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def add_unpaired_subparser(subparsers: Any) -> None:
-    """Aggiunge il sottocomando per distribuzioni non appaiate."""
+    """Adds the subcommand for unpaired distributions."""
     parser = subparsers.add_parser(
         "unpaired",
         help="Compare two independent metric distributions.",
@@ -279,7 +279,7 @@ def add_unpaired_subparser(subparsers: Any) -> None:
 
 
 def add_paired_subparser(subparsers: Any) -> None:
-    """Aggiunge il sottocomando per distribuzioni appaiate sullo stesso sample."""
+    """Adds the subcommand for paired distributions on the same samples."""
     parser = subparsers.add_parser(
         "paired",
         help="Compare two paired metric distributions on the same samples.",
@@ -325,7 +325,7 @@ def add_paired_subparser(subparsers: Any) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Costruisce il parser principale e registra i sottocomandi disponibili."""
+    """Builds the main parser and registers the available subcommands."""
     parser = argparse.ArgumentParser(
         prog="python tools/compare_distributions.py",
         description=(
@@ -362,16 +362,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def validate_direction(args: argparse.Namespace) -> None:
-    """Verifica che sia stata scelta esattamente una direzione della metrica."""
+    """Verifies that exactly one metric direction has been chosen."""
     if args.higher_is_better == args.lower_is_better:
         raise SystemExit("Choose exactly one between --higher-is-better and --lower-is-better.")
 
 
 # ========================================
-# Sezione dedicata alle funzioni utilities
+# Section dedicated to utility functions
 # ========================================
 def resolve_input_csv(path_like: str | Path) -> Path:
-    """Risolve un CSV diretto o una directory contenente per_image_metrics.csv."""
+    """Resolves a direct CSV path or a directory containing per_image_metrics.csv."""
     path = Path(path_like)
 
     if path.is_dir():
@@ -387,13 +387,13 @@ def resolve_input_csv(path_like: str | Path) -> Path:
 
 
 def load_metric_frame(csv_path: str | Path) -> pd.DataFrame:
-    """Carica un CSV di metriche come DataFrame."""
+    """Loads a metrics CSV as a DataFrame."""
     resolved_csv = resolve_input_csv(csv_path)
     return pd.read_csv(resolved_csv)
 
 
 def load_metric_values(csv_path: str | Path, column: str) -> np.ndarray:
-    """Carica una colonna numerica da CSV scartando valori mancanti o non validi."""
+    """Loads a numeric column from a CSV, discarding missing or invalid values."""
     df = load_metric_frame(csv_path)
 
     if column not in df.columns:
@@ -408,7 +408,7 @@ def load_metric_values(csv_path: str | Path, column: str) -> np.ndarray:
 
 
 def choose_unpaired_better_label(group_a: UnpairedGroupStats, group_b: UnpairedGroupStats, comparison: UnpairedComparison) -> str:
-    """Sceglie il gruppo migliore combinando i segnali principali del confronto."""
+    """Chooses the better group by combining the main signals from the comparison."""
     score_a = 0
     score_b = 0
 
@@ -426,7 +426,7 @@ def choose_unpaired_better_label(group_a: UnpairedGroupStats, group_b: UnpairedG
 
 
 def choose_paired_better_label(mean_signed_delta: float, label_a: str, label_b: str) -> str:
-    """Sceglie il gruppo migliore nel confronto paired in base al delta signed medio."""
+    """Chooses the better group in the paired comparison based on the mean signed delta."""
     if mean_signed_delta > 0:
         return label_b
     if mean_signed_delta < 0:
@@ -435,7 +435,7 @@ def choose_paired_better_label(mean_signed_delta: float, label_a: str, label_b: 
 
 
 # ==========================================
-# Sezione dedicata al calcolo delle metriche
+# Section dedicated to metric computation
 # ==========================================
 def compute_unpaired_group_stats(
     values: np.ndarray,
@@ -443,7 +443,7 @@ def compute_unpaired_group_stats(
     thresholds: Iterable[float],
     higher_is_better: bool,
 ) -> UnpairedGroupStats:
-    """Calcola le statistiche descrittive essenziali di un gruppo non appaiato."""
+    """Computes the essential descriptive statistics of an unpaired group."""
     p25, p75 = np.percentile(values, [25, 75])
 
     if higher_is_better:
@@ -467,7 +467,7 @@ def choose_threshold_favors(
     label_a: str,
     label_b: str,
 ) -> str:
-    """Sceglie il gruppo favorito confrontando la media delle quote sopra/sotto soglia."""
+    """Chooses the favoured group by comparing the mean of the above/below-threshold shares."""
     mean_a = float(np.mean(list(shares_a.values()))) if shares_a else 0.0
     mean_b = float(np.mean(list(shares_b.values()))) if shares_b else 0.0
 
@@ -485,7 +485,7 @@ def compute_unpaired_comparison(
     group_b: UnpairedGroupStats,
     higher_is_better: bool,
 ) -> UnpairedComparison:
-    """Calcola i confronti principali tra due distribuzioni non appaiate."""
+    """Computes the main comparisons between two unpaired distributions."""
     mann_whitney = mannwhitneyu(a, b, alternative="two-sided")
     ks = ks_2samp(a, b, alternative="two-sided")
 
@@ -524,7 +524,7 @@ def align_paired_frames(
     sample_id_column: str,
     metric_column: str,
 ) -> pd.DataFrame:
-    """Allinea due CSV sullo stesso sample_id per il confronto paired."""
+    """Aligns two CSVs on the same sample_id for the paired comparison."""
     frame_a = load_metric_frame(csv_a)
     frame_b = load_metric_frame(csv_b)
 
@@ -554,7 +554,7 @@ def compute_paired_summary(
     tolerance: float,
     higher_is_better: bool,
 ) -> PairedSummary:
-    """Calcola il riepilogo principale per il confronto paired."""
+    """Computes the main summary for the paired comparison."""
     raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(dtype=float)
     signed_delta = raw_delta if higher_is_better else -raw_delta
 
@@ -591,14 +591,14 @@ def compute_paired_summary(
 
 
 # =======================================
-# Sezione dedicata alla scrittura output
+# Section dedicated to output writing
 # =======================================
 def save_unpaired_group_statistics(
     group_a: UnpairedGroupStats,
     group_b: UnpairedGroupStats,
     output_dir: Path,
 ) -> None:
-    """Salva group_statistics.csv con una riga per gruppo."""
+    """Saves group_statistics.csv with one row per group."""
     pd.DataFrame([asdict(group_a), asdict(group_b)]).to_csv(output_dir / "group_statistics.csv", index=False)
 
 
@@ -608,7 +608,7 @@ def save_unpaired_summary_json(
     comparison: UnpairedComparison,
     output_dir: Path,
 ) -> None:
-    """Salva un riepilogo JSON del confronto unpaired."""
+    """Saves a JSON summary of the unpaired comparison."""
     payload = {
         "group_a": asdict(group_a),
         "group_b": asdict(group_b),
@@ -618,7 +618,7 @@ def save_unpaired_summary_json(
 
 
 def save_paired_summary_json(summary: PairedSummary, output_dir: Path) -> None:
-    """Salva un riepilogo JSON del confronto paired."""
+    """Saves a JSON summary of the paired comparison."""
     (output_dir / "summary.json").write_text(json.dumps(asdict(summary), indent=2), encoding="utf-8")
 
 
@@ -629,7 +629,7 @@ def save_unpaired_report_txt(
     args: argparse.Namespace,
     output_dir: Path,
 ) -> None:
-    """Salva report.txt per il confronto unpaired."""
+    """Saves report.txt for the unpaired comparison."""
     lines = [
         f"Metric: {args.column}",
         f"Direction: {'higher is better' if args.higher_is_better else 'lower is better'}",
@@ -652,7 +652,7 @@ def save_unpaired_report_txt(
 
 
 def save_paired_report_txt(summary: PairedSummary, args: argparse.Namespace, output_dir: Path) -> None:
-    """Salva report.txt per il confronto paired."""
+    """Saves report.txt for the paired comparison."""
     lines = [
         f"Metric: {args.column}",
         f"Direction: {'higher is better' if args.higher_is_better else 'lower is better'}",
@@ -673,10 +673,10 @@ def save_paired_report_txt(summary: PairedSummary, args: argparse.Namespace, out
 
 
 # ===========================
-# Sezione dedicata ai grafici
+# Section dedicated to plots
 # ===========================
 def ecdf(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Costruisce la funzione di distribuzione empirica del campione."""
+    """Builds the empirical cumulative distribution function of the sample."""
     x = np.sort(values)
     y = np.arange(1, values.size + 1) / values.size
     return x, y
@@ -691,7 +691,7 @@ def plot_distribution_histogram(
     column: str,
     output_dir: Path,
 ) -> None:
-    """Salva l'istogramma di confronto tra due distribuzioni."""
+    """Saves the comparison histogram between two distributions."""
     plt.figure(figsize=(9, 5))
     plt.hist(a, bins=edges, density=True, alpha=0.45, label=label_a)
     plt.hist(b, bins=edges, density=True, alpha=0.45, label=label_b)
@@ -712,7 +712,7 @@ def plot_distribution_ecdf(
     column: str,
     output_dir: Path,
 ) -> None:
-    """Salva il confronto tra le distribuzioni empiriche cumulative."""
+    """Saves the comparison between the empirical cumulative distributions."""
     xa, ya = ecdf(a)
     xb, yb = ecdf(b)
 
@@ -729,7 +729,7 @@ def plot_distribution_ecdf(
 
 
 def plot_paired_delta_histogram(signed_delta: np.ndarray, column: str, output_dir: Path) -> None:
-    """Salva l'istogramma dei delta signed del confronto paired."""
+    """Saves the histogram of signed deltas for the paired comparison."""
     plt.figure(figsize=(9, 5))
     plt.hist(signed_delta, bins=30)
     plt.axvline(0.0, linestyle="--", linewidth=1)
@@ -748,7 +748,7 @@ def plot_paired_scatter(
     column: str,
     output_dir: Path,
 ) -> None:
-    """Salva lo scatter paired A vs B con diagonale di parita."""
+    """Saves the paired scatter plot A vs B with a parity diagonal."""
     values_a = merged["value_a"].to_numpy(dtype=float)
     values_b = merged["value_b"].to_numpy(dtype=float)
     min_value = min(float(values_a.min()), float(values_b.min()))
@@ -766,10 +766,10 @@ def plot_paired_scatter(
 
 
 # ====================================
-# Sezione dedicata al report testuale
+# Section dedicated to the text report
 # ====================================
 def print_unpaired_group_summary(group: UnpairedGroupStats, metric_name: str) -> None:
-    """Stampa il riepilogo CLI di un gruppo non appaiato."""
+    """Prints the CLI summary of an unpaired group."""
     print_section(f"Group {group.label}")
     print_info("Samples", str(group.n))
     print_info("Mean", color_metric_value(metric_name, group.mean))
@@ -787,7 +787,7 @@ def print_unpaired_cli_summary(
     args: argparse.Namespace,
     output_dir: Path,
 ) -> None:
-    """Stampa in CLI il riepilogo del confronto unpaired."""
+    """Prints the CLI summary of the unpaired comparison."""
     print_section("Input")
     print_info("Metric", args.column)
     print_info("Direction", "higher is better" if args.higher_is_better else "lower is better")
@@ -813,7 +813,7 @@ def print_unpaired_cli_summary(
 
 
 def print_paired_cli_summary(summary: PairedSummary, args: argparse.Namespace, output_dir: Path) -> None:
-    """Stampa in CLI il riepilogo del confronto paired."""
+    """Prints the CLI summary of the paired comparison."""
     print_section("Input")
     print_info("Metric", args.column)
     print_info("Direction", "higher is better" if args.higher_is_better else "lower is better")
@@ -837,10 +837,10 @@ def print_paired_cli_summary(summary: PairedSummary, args: argparse.Namespace, o
 
 
 # =====================================
-# Sezione dedicata al flusso principale
+# Section dedicated to the main flow
 # =====================================
 def run_unpaired(args: argparse.Namespace) -> None:
-    """Esegue il flusso completo per il confronto tra distribuzioni non appaiate."""
+    """Runs the complete flow for the comparison between unpaired distributions."""
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -878,7 +878,7 @@ def run_unpaired(args: argparse.Namespace) -> None:
 
 
 def run_paired(args: argparse.Namespace) -> None:
-    """Esegue il flusso completo per il confronto paired sullo stesso sample."""
+    """Runs the complete flow for the paired comparison on the same samples."""
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 

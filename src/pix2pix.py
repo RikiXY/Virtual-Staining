@@ -19,10 +19,10 @@ from torchvision import transforms
 from torchvision.utils import save_image
 
 
-# --------------------- Percorsi di lavoro ---------------------
-# Questa funzione costruisce tutti i percorsi principali del progetto
-# partendo da una sola root. Evita di spargere stringhe hardcoded nel
-#  resto del file.
+# --------------------- Working paths ---------------------
+# This function builds all the main project paths starting from a single
+# root. It avoids scattering hardcoded strings throughout the rest of
+# the file.
 def build_workspace_paths(run_root: str | Path) -> dict:
     root = Path(run_root)
 
@@ -36,9 +36,9 @@ def build_workspace_paths(run_root: str | Path) -> dict:
     }
 
 
-# --------------------- Argomenti da riga di comando ---------------------
-# Separiamo parser e logica. 
-# Lo script supporta due modalità distinte: addestramento e test.
+# --------------------- Command-line arguments ---------------------
+# We separate parser and logic.
+# The script supports two distinct modes: training and testing.
 def build_parser():
     parser = argparse.ArgumentParser(
     prog="python src/pix2pix.py",
@@ -62,8 +62,6 @@ def build_parser():
     formatter_class=argparse.RawTextHelpFormatter
 )
 
-    # I subparser permettono di avere sottocomandi diversi all'interno
-    # dello stesso script, ciascuno con i propri argomenti.
     subparsers = parser.add_subparsers(dest="mode", required=True)
 
     train_parser = subparsers.add_parser(
@@ -216,22 +214,14 @@ def build_parser():
 
     return parser
 
-# ====================[DATASET]====================
-# Questo dataset contiene coppie di immagini source e target.
-# A ogni immagine source deve corrispondere la rispettiva immagine target.
-#
-# Implementare `__len__` e `__getitem__` è il requisito minimo richiesto
-# da PyTorch per una classe `Dataset`: il DataLoader usa questi metodi per
-# sapere quanti campioni esistono e come recuperarli quando costruisce i batch.
 class PairedHistologyDataset(Dataset):
     VALID_IMAGE_EXTENSIONS = {".tif", ".tiff", ".png"}
         
     def __init__(self, folder_path, transform=None):
         self.folder_path = folder_path
         self.transform = transform
-        # Le coppie vengono costruite una volta sola all'inizio, così
-        # durante training e validation non dobbiamo esplorare la cartella
-        # ogni volta.
+        # Pairs are built only once at the start, so during training
+        # and validation we do not need to scan the directory every time.
         self.pairs = self._discover_pairs()
 
     def _discover_pairs(self):
@@ -282,18 +272,18 @@ class PairedHistologyDataset(Dataset):
         return samples
 
     def __len__(self):
-        # Restituiamo quante coppie valide sono state trovate.
+        # Return the number of valid pairs found.
         return len(self.pairs)
 
     def __getitem__(self, idx):
-        # Dato un indice, recuperiamo il prefisso comune e apriamo entrambe le immagini della coppia.
+        # Given an index, retrieve the common prefix and open both images in the pair.
         source_path, target_path = self.pairs[idx]
 
         source_image = Image.open(source_path).convert("RGB")
         target_image = Image.open(target_path).convert("RGB")
 
         if self.transform:
-            # La stessa trasformazione viene applicata a source e target.
+            # The same transformation is applied to both source and target.
             source_image = self.transform(source_image)
             target_image = self.transform(target_image)
 
@@ -301,46 +291,29 @@ class PairedHistologyDataset(Dataset):
 # =================================================
 
 def is_amp_enabled(device):
-    # La mixed precision con `autocast` e `GradScaler` ha senso soprattutto
-    # su GPU CUDA. Su CPU lasciamo tutto disattivato per evitare complessità
-    # inutile e mantenere il comportamento più lineare possibile.
+    # Mixed precision with `autocast` and `GradScaler` is mainly useful
+    # on CUDA GPUs. On CPU we leave everything disabled to avoid unnecessary
+    # complexity and keep behaviour as straightforward as possible.
     return isinstance(device, torch.device) and device.type == "cuda"
 
-# ====================[CONFIGURAZIONE]====================
-# Alcuni parametri dei blocchi convoluzionali vengono letti da JSON.
-# è una scelta pratica: i dettagli architetturali restano centralizzati
-# e modificabili senza dover ritoccare il codice del modello.
 script_dir = Path(__file__).resolve().parent
 settings_path = script_dir / "json" / "p2p_settings.json"
 
 with settings_path.open("r", encoding="utf-8") as s:
     SETTINGS = json.load(s)
-# ========================================================
 
-# ====================[GENERATOR (U-NET)]====================
-# Il generatore segue la struttura classica della U-Net:
-# encoder -> bottleneck -> decoder, con skip connections tra livelli simmetrici.
-#
-# L'idea è questa:
-# - l'encoder comprime e amplia il contesto;
-# - il bottleneck conserva una rappresentazione più astratta;
-# - il decoder ricostruisce l'immagine;
-# - le skip connections riportano indietro dettagli fini che altrimenti
-#   andrebbero persi nella discesa.
 class DoubleConv(nn.Module):
     """
-    Blocco composto da due convoluzioni consecutive, ciascuna seguita
-    da batch normalization e attivazione ReLU.
+    Block consisting of two consecutive convolutions, each followed by
+    batch normalisation and ReLU activation.
 
     Args:
-        in_channels (int): Numero di canali in ingresso.
-        out_channels (int): Numero di canali in uscita.
+        in_channels (int): Number of input channels.
+        out_channels (int): Number of output channels.
     """
     def __init__(self, in_channels, out_channels):
         super(DoubleConv, self).__init__()
         conv_params = SETTINGS["double_conv"]
-        # Due convoluzioni di fila sono un blocco molto usato nelle U-Net:
-        # la prima inizia a trasformare le feature, la seconda le rifinisce.
         self.double_conv = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=conv_params['kernel_size'], stride=conv_params["stride"], padding=conv_params['padding'], bias=conv_params['bias']),
             nn.BatchNorm2d(out_channels),
@@ -355,17 +328,14 @@ class DoubleConv(nn.Module):
 
 class Down(nn.Module):
     """
-    Blocco di downsampling per architetture in stile U-Net.
+    Downsampling block for U-Net-style architectures.
 
-    Riduce la risoluzione spaziale tramite max pooling e poi applica
-    un blocco `DoubleConv` per estrarre feature più ricche.
+    Reduces the spatial resolution via max pooling and then applies
+    a `DoubleConv` block to extract richer features.
     """
     def __init__(self, in_channels, out_channels):
         down_params = SETTINGS["down"]
         super(Down, self).__init__()
-        # Qui dimezziamo la risoluzione spaziale e poi aumentiamo il numero
-        # di canali. è il compromesso tipico dell'encoder: meno dettaglio
-        # pixel per pixel, ma più capacità di rappresentare pattern complessi.
         self.maxpool_conv = nn.Sequential(
             nn.MaxPool2d(kernel_size=down_params["kernel_size"], stride=down_params["stride"]),
             DoubleConv(in_channels, out_channels)
@@ -374,26 +344,25 @@ class Down(nn.Module):
     def forward(self, x):
         return self.maxpool_conv(x)
 
-#TODO RIPRENDI A IMPLEMENTARE IL JSON DA QUI
 class Up(nn.Module):
     """
-    Blocco di upsampling seguito da `DoubleConv`.
+    Upsampling block followed by `DoubleConv`.
 
-    La feature map risalita viene concatenata con la skip connection
-    dell'encoder prima della convoluzione finale.
+    The upsampled feature map is concatenated with the encoder skip
+    connection before the final convolution.
     """
     def __init__(self, in_channels, out_channels, bilinear=True):
         super(Up, self).__init__()
 
-        # Questo blocco appartiene al decoder. Prima si risale di risoluzione,
-        # poi si combinano le feature del decoder con la skip connection
-        # proveniente dall'encoder.
-        
-        # Il codice supporta due strategie di upsampling:
-        # - bilinear: semplice e senza parametri addestrabili;
-        # - transposed convolution: più flessibile, ma con pesi da imparare.
-        # In bilinear usiamo un semplice upsampling seguito da una convoluzione per ridurre i canali.
-        # In transposed convolution invece la convoluzione stessa fa anche da upsampling, dimezzando i canali in uscita.
+        # This block belongs to the decoder. First the resolution is increased,
+        # then the decoder features are combined with the skip connection
+        # coming from the encoder.
+
+        # The code supports two upsampling strategies:
+        # - bilinear: simple and with no learnable parameters;
+        # - transposed convolution: more flexible, but with weights to learn.
+        # In bilinear mode we use a simple upsample followed by a convolution to reduce channels.
+        # In transposed convolution mode the convolution itself also performs upsampling, halving the output channels.
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
             self.conv = DoubleConv(in_channels, out_channels)
@@ -403,21 +372,21 @@ class Up(nn.Module):
             self.conv = DoubleConv(in_channels, out_channels)
 
     def forward(self, x1, x2):
-        # `x1` è la feature map corrente del decoder, che stiamo riallargando.
-        # `x2` è la skip connection corrispondente arrivata dall'encoder.
+        # `x1` is the current decoder feature map, which we are upsampling.
+        # `x2` is the corresponding skip connection coming from the encoder.
         x1 = self.up(x1)
-        
-        # Concateniamo i canali, ovvero li uniamo nello stesso punto della rete,
-        # con l'obiettivo di combinare insieme due tipi di informazione:
-        # - il contesto appreso in profondità dal decoder, che ha visto l'immagine in modo più globale;
-        # - i dettagli locali conservati dal ramo encoder.
+
+        # We concatenate the channels, i.e. we join them at the same point in
+        # the network, with the goal of combining two types of information:
+        # - the context learned deep in the decoder, which has seen the image more globally;
+        # - the local details preserved by the encoder branch.
         x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
 
 class OutConv(nn.Module):
     """
-    Convoluzione finale 1x1 che porta le feature
-    al numero di canali richiesto in output.
+    Final 1x1 convolution that maps the features
+    to the required number of output channels.
     """
     def __init__(self, in_channels, out_channels):
         super(OutConv, self).__init__()
@@ -430,44 +399,44 @@ class UNetGenerator(nn.Module):
     def __init__(self, n_channels=3, n_classes=3, bilinear=False):
         """
         Args:
-            n_channels (int): Numero di canali in input.
-            n_classes (int): Numero di canali in output.
-            bilinear (bool): Se usare upsampling bilineare o transposed convolution.
+            n_channels (int): Number of input channels.
+            n_classes (int): Number of output channels.
+            bilinear (bool): Whether to use bilinear upsampling or transposed convolution.
         """
         super(UNetGenerator, self).__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes
         self.bilinear = bilinear
 
-        # Encoder: man mano che scendiamo, la risoluzione cala e i canali
-        # aumentano. è il modo con cui la rete guadagna contesto senza
-        # dover mantenere tutto il dettaglio spaziale a ogni livello.
-        # Encoders, versione da 64 a 1024
-        self.inc = DoubleConv(n_channels, 64) # Convoluzione iniziale
+        # Encoder: as we go deeper, resolution decreases and channels
+        # increase. This is how the network gains context without having
+        # to keep all spatial detail at every level.
+        # Encoders, from 64 to 1024 channels
+        self.inc = DoubleConv(n_channels, 64) # Initial convolution
         self.down1 = Down(64, 128)
         self.down2 = Down(128, 256)
         self.down3 = Down(256, 512)
         self.down4 = Down(512, 1024)          # Bottleneck
 
-        # Decoder: qui il processo si inverte e l'informazione viene riportata
-        # gradualmente verso una forma di nuovo "immagine-like".
-        # Decoders, versione da 1024 a 64
+        # Decoder: here the process is reversed and the information is
+        # gradually brought back towards an "image-like" form.
+        # Decoders, from 1024 to 64 channels
         self.up1 = Up(1024, 512, bilinear)
         self.up2 = Up(512, 256, bilinear)
         self.up3 = Up(256, 128, bilinear)
         self.up4 = Up(128, 64, bilinear)
 
-        # Convoluzione finale, versione da 64 a N (Per RGB è 3)
+        # Final convolution, from 64 to N channels (3 for RGB)
         self.outc = OutConv(64, n_classes)
 
     def forward(self, x):
-        # Il forward della U-Net ha una logica molto regolare:
-        # prima si scende nell'encoder salvando le feature intermedie,
-        # poi si risale nel decoder riusando quelle stesse feature
-        # tramite le skip connections.
+        # The U-Net forward pass follows a very regular logic:
+        # first we descend through the encoder saving the intermediate features,
+        # then we ascend through the decoder reusing those same features
+        # via the skip connections.
 
-        # Per immagini RGB, N vale 3
-        # Per immagini grayscale, N vale 1
+        # For RGB images, N is 3
+        # For grayscale images, N is 1
 
         # Encoder
         x1 = self.inc(x)       # [N, 64, H, W]
@@ -476,50 +445,48 @@ class UNetGenerator(nn.Module):
         x4 = self.down3(x3)    # [N, 512, H/8, W/8]
         x5 = self.down4(x4)    # [N, 1024, H/16, W/16]
 
-        # `x5` è il bottleneck: la rappresentazione più compressa e più astratta.
-        # Qui la rete conserva il contesto globale dell'immagine.
+        # `x5` is the bottleneck: the most compressed and most abstract representation.
+        # Here the network retains the global context of the image.
         # Decoder
         x = self.up1(x5, x4)   # Shape: [N, 512, H/8, W/8]
         x = self.up2(x, x3)    # Shape: [N, 256, H/4, W/4]
         x = self.up3(x, x2)    # Shape: [N, 128, H/2, W/2]
         x = self.up4(x, x1)    # Shape: [N, 64, H, W]
 
-        # Il layer finale trasforma le feature ricostruite nell'output vero e proprio.
+        # The final layer transforms the reconstructed features into the actual output.
         logits = self.outc(x)  # Shape: [N, n_classes, H, W]
         return logits
 
-# --------------------- Discriminatore (PatchGAN) ---------------------
-# Il discriminatore valuta la coerenza della coppia condizionale:
-# immagine di partenza + target reale o generato.
+# --------------------- Discriminator (PatchGAN) ---------------------
 class PatchGANDiscriminator(nn.Module):
     """
-    Discriminatore PatchGAN per task image-to-image.
+    PatchGAN discriminator for image-to-image tasks.
 
-    Produce una mappa NxN di predizioni real/fake, una per ogni patch.
+    Produces an NxN map of real/fake predictions, one per patch.
     """
     def __init__(self, in_channels=6, ndf=64, use_sigmoid=False):
         """
         Args:
-            in_channels (int): Numero di canali in ingresso. In pix2pix,
-                               concatenando input e output RGB si arriva a 6.
-            ndf (int): Numero base di filtri del discriminatore.
-            use_sigmoid (bool): Se applicare una sigmoid finale.
+            in_channels (int): Number of input channels. In pix2pix,
+                               concatenating the RGB input and output gives 6.
+            ndf (int): Base number of discriminator filters.
+            use_sigmoid (bool): Whether to apply a final sigmoid activation.
         """
         super(PatchGANDiscriminator, self).__init__()
 
-        # PatchGAN non produce un singolo scalare finale, ma bensì
-        # una feature map, una per ogni patch osservata dall'uscita.
-        # è una scelta molto pratica: costringe il modello a curare le
-        # texture locali, non soltanto l'aspetto globale dell'immagine.
+        # PatchGAN does not produce a single final scalar, but rather
+        # a feature map, one value per observed patch.
+        # This is a very practical choice: it forces the model to care about
+        # local textures, not just the global appearance of the image.
 
-        # Blocchi della convoluzione:
-        # 1) Primo blocco senza normalizzazione
+        # Convolutional blocks:
+        # 1) First block without normalisation
         layers = [
             nn.Conv2d(in_channels, ndf, kernel_size=4, stride=2, padding=1),
             nn.LeakyReLU(0.2, inplace=True),
         ]
 
-        # 2) Blocchi di downsampling
+        # 2) Downsampling blocks
         curr_dim = ndf
         next_dim = curr_dim * 2
         layers += [
@@ -536,25 +503,25 @@ class PatchGANDiscriminator(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
         ]
 
-        # 3) Stride = 1 per l’ultima/e convoluzione/i, in modo che il campo ricettivo sia circa 70×70 (PatchGAN).
+        # 3) Stride = 1 for the last convolution(s), so that the receptive field is approximately 70×70 (PatchGAN).
         curr_dim = next_dim
         next_dim = curr_dim * 2
-        # Questo layer mantie stride=1 per evitare che la dimensione delle patch cresca troppo
+        # This layer keeps stride=1 to prevent the patch size from growing too large
         layers += [
             nn.Conv2d(curr_dim, next_dim, kernel_size=4, stride=1, padding=1),
             nn.InstanceNorm2d(next_dim),
             nn.LeakyReLU(0.2, inplace=True),
         ]
 
-        # 4) Layer di output
-        # Il canale finale è uno, ma distribuito su una griglia spaziale.
-        # Per questo l'output non è uno scalare singolo.
+        # 4) Output layer
+        # The final channel is one, but distributed over a spatial grid.
+        # That is why the output is not a single scalar.
         layers += [
             nn.Conv2d(next_dim, 1, kernel_size=4, stride=1, padding=1)
         ]
         
-        # Quando si usa BCEWithLogitsLoss la sigmoid finale non serve,
-        # perchè è già incorporata nella loss.
+        # When BCEWithLogitsLoss is used, the final sigmoid is not needed
+        # because it is already incorporated into the loss.
         if use_sigmoid:
             layers += [nn.Sigmoid()]
 
@@ -563,20 +530,20 @@ class PatchGANDiscriminator(nn.Module):
     def forward(self, x, y):
         """
         Args:
-            x (Tensor): Immagine di input.
-            y (Tensor): Target reale o output generato.
+            x (Tensor): Input image.
+            y (Tensor): Real target or generated output.
 
         Returns:
-            Tensor: Mappa di predizioni real/fake per patch.
+            Tensor: Map of real/fake predictions per patch.
         """
-        # Qui la concatenazione lungo i canali è il passaggio chiave:
-        # il discriminatore giudica la coerenza della coppia condizionale,
-        # non solo la qualità del target reale o generato preso da solo.
-        return self.model(torch.cat([x, y], dim=1)) # Concatena source e target/output
+        # Here the channel-wise concatenation is the key step:
+        # the discriminator judges the coherence of the conditional pair,
+        # not just the quality of the real or generated target taken alone.
+        return self.model(torch.cat([x, y], dim=1)) # Concatenate source and target/output
 
-# --------------------- Determinismo ---------------------
+# --------------------- Determinism ---------------------
 def set_seed(seed):
-    # Fissare il seed riduce molto la variabilità e aiuta quando si confrontano esperimenti.
+    # Fixing the seed greatly reduces variability and helps when comparing experiments.
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
@@ -588,8 +555,8 @@ def set_seed(seed):
 
 # --------------------- Logging ---------------------
 def log_message(message, log_file, show_time=True, use_stdout=True):
-    # Loggiamo su file, oltre che a schermo, perchè così
-    # dopo ore o giorni si puo' capire cosa è successo.
+    # We log to file as well as to the screen, so that after hours or
+    # days one can understand what happened.
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if show_time:
         message = f"[{now_str}] {message}"
@@ -600,8 +567,8 @@ def log_message(message, log_file, show_time=True, use_stdout=True):
 
 def get_first_pair_size(dataset):
     """
-    Restituisce la dimensione reale su disco della prima coppia del dataset.
-    Serve per distinguere tra patch native e resize applicato dal training.
+    Returns the actual on-disk size of the first pair in the dataset.
+    Useful to distinguish between native patches and the resize applied during training.
     """
     if len(dataset) == 0:
         return None
@@ -631,7 +598,7 @@ def save_run_config(run_config, run_root):
 
 def log_run_header(log_file, run_config):
     """
-    Scrive nel log un riepilogo iniziale ordinato della run.
+    Writes an ordered initial summary of the run to the log.
     """
     log_message("=" * 80, log_file, show_time=False, use_stdout=False)
     log_message("RUN CONFIGURATION", log_file, show_time=False, use_stdout=False)
@@ -716,12 +683,12 @@ ANSI = {
 
 
 def use_color() -> bool:
-    """Restituisce True se ha senso usare colori ANSI in console."""
+    """Returns True if using ANSI colours in the console makes sense."""
     return os.environ.get("NO_COLOR") is None and sys.stdout.isatty()
 
 
 def style(text: str, *names: str) -> str:
-    """Applica uno stile ANSI al testo, se la colorazione è abilitata."""
+    """Applies an ANSI style to the text, if colour output is enabled."""
     if not use_color():
         return text
 
@@ -739,7 +706,7 @@ def print_info(label: str, value: str) -> None:
 
 
 def format_duration(seconds):
-    """Formatta una durata in modo leggibile."""
+    """Formats a duration in a human-readable way."""
     if seconds is None:
         return "--"
 
@@ -791,7 +758,7 @@ def render_progress_bar(progress: float, width: int = 40) -> str:
 
 
 def update_console_progress(message: str) -> None:
-    """Aggiorna una singola riga di progresso in console."""
+    """Updates a single progress line in the console."""
     try:
         terminal_width = os.get_terminal_size().columns
     except OSError:
@@ -802,19 +769,19 @@ def update_console_progress(message: str) -> None:
 
 
 def finish_console_progress() -> None:
-    """Chiude la riga di progresso corrente."""
+    """Closes the current progress line."""
     print()
 
 
 # --------------------- Checkpoints ---------------------
 def save_checkpoint(
-    checkpoint_path, 
-    epoch, 
-    G, 
-    D, 
-    opt_G, 
-    opt_D, 
-    scaler_G, 
+    checkpoint_path,
+    epoch,
+    G,
+    D,
+    opt_G,
+    opt_D,
+    scaler_G,
     scaler_D,
     l1_weight,
     lr_g,
@@ -827,17 +794,17 @@ def save_checkpoint(
     dataset_root=None
 ):
     """
-    Salva un checkpoint del modello.
+    Saves a model checkpoint.
 
     Args:
-        checkpoint_path (str): Percorso dove salvare il checkpoint.
-        epoch (int): Epoca corrente.
-        G (nn.Module): Modello del generatore.
-        D (nn.Module): Modello del discriminatore.
-        opt_G (torch.optim.Optimizer): Ottimizzatore del generatore.
-        opt_D (torch.optim.Optimizer): Ottimizzatore del discriminatore.
-        scaler_G (torch.cuda.amp.GradScaler): GradScaler per il generatore.
-        scaler_D (torch.cuda.amp.GradScaler): GradScaler per il discriminatore.
+        checkpoint_path (str): Path where the checkpoint will be saved.
+        epoch (int): Current epoch.
+        G (nn.Module): Generator model.
+        D (nn.Module): Discriminator model.
+        opt_G (torch.optim.Optimizer): Generator optimiser.
+        opt_D (torch.optim.Optimizer): Discriminator optimiser.
+        scaler_G (torch.cuda.amp.GradScaler): GradScaler for the generator.
+        scaler_D (torch.cuda.amp.GradScaler): GradScaler for the discriminator.
     """
 
     checkpoint = {
@@ -862,22 +829,22 @@ def save_checkpoint(
 
 def load_checkpoint(checkpoint_path, G, D, opt_G, opt_D, scaler_G, scaler_D, device=None, image_size=(256, 256)):
     """
-    Carica un checkpoint del modello.
+    Loads a model checkpoint.
 
     Args:
-        checkpoint_path (str): Percorso del checkpoint da caricare.
-        G (nn.Module): Modello del generatore.
-        D (nn.Module): Modello del discriminatore.
-        opt_G (torch.optim.Optimizer): Ottimizzatore del generatore.
-        opt_D (torch.optim.Optimizer): Ottimizzatore del discriminatore.
-        scaler_G (torch.cuda.amp.GradScaler): GradScaler per il generatore.
-        scaler_D (torch.cuda.amp.GradScaler): GradScaler per il discriminatore.
-        image_size (tuple): Dimensioni dell'immagine utilizzate durante il training.
-        device (torch.device): Dispositivo su cui caricare i modelli.
+        checkpoint_path (str): Path to the checkpoint to load.
+        G (nn.Module): Generator model.
+        D (nn.Module): Discriminator model.
+        opt_G (torch.optim.Optimizer): Generator optimiser.
+        opt_D (torch.optim.Optimizer): Discriminator optimiser.
+        scaler_G (torch.cuda.amp.GradScaler): GradScaler for the generator.
+        scaler_D (torch.cuda.amp.GradScaler): GradScaler for the discriminator.
+        image_size (tuple): Image dimensions used during training.
+        device (torch.device): Device on which to load the models.
     """
-    # Qui non carichiamo solo i pesi dei modelli, ma anche optimizer e scaler.
-    # Questo rende il resume davvero coerente con il punto in cui il training
-    # era stato interrotto.
+    # Here we load not only the model weights, but also the optimiser and scaler.
+    # This makes the resume truly consistent with the point at which training
+    # was interrupted.
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
     checkpoint_image_size = checkpoint.get("image_size")
@@ -898,48 +865,44 @@ def load_checkpoint(checkpoint_path, G, D, opt_G, opt_D, scaler_G, scaler_D, dev
     opt_D.load_state_dict(checkpoint['optimizerD_state_dict'])
     scaler_G.load_state_dict(checkpoint['scalerG_state_dict'])
     scaler_D.load_state_dict(checkpoint['scalerD_state_dict'])
-    # Riprendiamo dall'epoca successiva per non ripetere quella già completata.
+    # We resume from the next epoch to avoid repeating the one already completed.
     start_epoch = checkpoint['epoch'] + 1
     return start_epoch
 
-# --------------------- Funzioni utili ---------------------
+# --------------------- Utility functions ---------------------
 def save_images(path, source_tensor, output, target, epoch, batch_index):
     """
-    Salva le immagini di input, output e target in formato TIF.
+    Saves the input, output and target images in TIF format.
 
     Args:
-        path (str): Percorso della cartella di salvataggio.
-        source_tensor (Tensor): Immagine di input.
-        output (Tensor): Immagine generata dal modello.
-        target (Tensor): Immagine target corrispondente all'input corrente.
-        epoch (int): Numero dell'epoca corrente.
-        batch_index (int): Indice del batch corrente.
+        path (str): Path to the save directory.
+        source_tensor (Tensor): Input image.
+        output (Tensor): Image generated by the model.
+        target (Tensor): Target image corresponding to the current input.
+        epoch (int): Current epoch number.
+        batch_index (int): Current batch index.
     """
-    # Le immagini sono normalizzate in [-1, 1]; prima di salvarle per uso umano
-    # dobbiamo riportarle nell'intervallo [0, 1].
+    # Images are normalised to [-1, 1]; before saving them for human viewing
+    # we need to bring them back to the [0, 1] range.
     save_image((source_tensor * 0.5 + 0.5), Path(path) / f"epoch{epoch}_batch{batch_index}_input.tif")
     save_image((output * 0.5 + 0.5), Path(path) / f"epoch{epoch}_batch{batch_index}_output.tif")
     save_image((target * 0.5 + 0.5), Path(path) / f"epoch{epoch}_batch{batch_index}_target.tif")
 
-# --------------------- Training e Validazione ---------------------
-# Training e validation hanno due ruoli diversi:
-# - nel training aggiorniamo i pesi del modello;
-# - nella validation misuriamo come si comporta su dati non usati
-#   per gli aggiornamenti, quindi senza backpropagation.
+# --------------------- Training and Validation ---------------------
 def validate(
-    G, 
-    D, 
-    validation_loader, 
-    device, 
-    bce_loss, 
-    l1_loss, epoch, 
-    log_file, 
-    output_val_dir, 
+    G,
+    D,
+    validation_loader,
+    device,
+    bce_loss,
+    l1_loss, epoch,
+    log_file,
+    output_val_dir,
     l1_weight
 ):
     """
-    Esegue un pass di validazione e calcola le loss medie
-    di generatore e discriminatore.
+    Runs a validation pass and computes the average losses
+    for the generator and discriminator.
     """
     G.eval()
     D.eval()
@@ -951,15 +914,13 @@ def validate(
     count = 0
     amp_enabled = is_amp_enabled(device)
 
-    # In validazione disattiviamo i gradienti: risparmiamo memoria e tempo,
-    # e soprattutto evitiamo qualunque aggiornamento accidentale dei pesi.
     with torch.no_grad():
         for i, (x, y) in enumerate(validation_loader):
             x, y = x.to(device), y.to(device)
 
-            # `autocast` abilita la mixed precision quando il device lo supporta.
-            # In pratica alcune operazioni vengono svolte in precisione ridotta
-            # per guadagnare velocità e memoria.
+            # `autocast` enables mixed precision when the device supports it.
+            # In practice, some operations are performed in reduced precision
+            # to gain speed and save memory.
             with autocast(device_type=device.type, enabled=amp_enabled):
                 fake = G(x)
 
@@ -969,23 +930,23 @@ def validate(
                 real_label = torch.ones_like(D_real, device=device)
                 fake_label = torch.zeros_like(D_fake, device=device)
 
-                # BCE misura la parte adversarial: quanto bene il discriminatore
-                # distingue coppie reali e coppie false.
+                # BCE measures the adversarial component: how well the discriminator
+                # distinguishes real pairs from fake ones.
                 loss_D = bce_loss(D_real, real_label) + bce_loss(D_fake, fake_label)
 
-                # La loss del generatore combina due obiettivi:
-                # 1) ingannare il discriminatore;
-                # 2) restare vicino al target corretto.
-                
-                # La componente L1 è utile per evitare output plausibili ma
-                # scollegati dal target specifico del campione attuale.
+                # The generator loss combines two objectives:
+                # 1) fool the discriminator;
+                # 2) stay close to the correct target.
+
+                # The L1 component is useful to prevent plausible outputs that are
+                # disconnected from the specific target of the current sample.
                 loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * l1_weight
 
             total_loss_D += loss_D.item()
             total_loss_G += loss_G.item()
             count += 1
 
-            # Salviamo qualche preview.
+            # Save a few previews.
             if i < 5:
                 save_images(output_val_dir, x[0], fake[0], y[0], epoch, i)
 
@@ -1008,15 +969,13 @@ def test_inference(
     device=None
 ):
     """
-    Esegue inferenza sul test set e salva le immagini generate.
+    Runs inference on the test set and saves the generated images.
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     Path(output_folder).mkdir(parents=True, exist_ok=True)
 
-    # In inferenza ci serve soltanto il generatore.
-    # Il discriminatore serve solo in training.
     G = UNetGenerator().to(device)
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
@@ -1035,8 +994,8 @@ def test_inference(
     G.load_state_dict(checkpoint["generator_state_dict"])
     G.eval()
 
-    # Il preprocessing deve restare coerente con quello del training,
-    # altrimenti il modello riceverebbe input distribuiti in modo diverso.
+    # Preprocessing must stay consistent with training,
+    # otherwise the model would receive inputs with a different distribution.
     transform = transforms.Compose([
         transforms.Resize(image_size),
         transforms.ToTensor(),
@@ -1062,7 +1021,7 @@ def test_inference(
             with autocast(device_type=device.type, enabled=amp_enabled):
                 fake_target = G(img_tensor)
 
-            # Riportiamo l'output nell'intervallo adatto al salvataggio.
+            # Bring the output back to the range suitable for saving.
             fake_target = (fake_target * 0.5) + 0.5
             fake_target = fake_target.clamp(0, 1)
 
@@ -1090,7 +1049,7 @@ def train_one_epoch(
     training_status
 ):
     """
-    Addestra generatore e discriminatore per una singola epoca.
+    Trains the generator and discriminator for a single epoch.
     """
     G.train()
     D.train()
@@ -1103,11 +1062,11 @@ def train_one_epoch(
         x, y = x.to(device), y.to(device)
 
         # ---------- DISCRIMINATOR ----------
-        # Prima aggiorniamo il discriminatore. In questo step il suo compito
-        # è distinguere le coppie reali `(x, y)` da quelle sintetiche `(x, fake)`.
+        # We update the discriminator first. In this step its task is to
+        # distinguish real pairs `(x, y)` from synthetic ones `(x, fake)`.
         with autocast(device_type=device.type, enabled=amp_enabled):
-            # `.detach()` è fondamentale: vogliamo usare l'output del generatore
-            # come esempio falso per D, ma senza far tornare il gradiente dentro G.
+            # `.detach()` is essential: we want to use the generator output
+            # as a fake example for D, but without letting gradients flow back into G.
             fake = G(x).detach()
 
             D_real = D(x, y)
@@ -1119,23 +1078,23 @@ def train_one_epoch(
             loss_D = bce_loss(D_real, real_label) + bce_loss(D_fake, fake_label)
 
         opt_D.zero_grad()
-        # Con mixed precision il GradScaler aiuta a evitare problemi numerici
-        # durante il backward in precisione ridotta.
+        # With mixed precision, GradScaler helps avoid numerical issues
+        # during the backward pass in reduced precision.
         scaler_D.scale(loss_D).backward()
         scaler_D.step(opt_D)
         scaler_D.update()
 
         # ---------- GENERATOR ----------
-        # Ora aggiorniamo il generatore. Qui NON facciamo detach, perchè
-        # adesso vogliamo che il gradiente attraversi davvero G e lo corregga.
+        # Now we update the generator. Here we do NOT detach, because
+        # we want the gradient to actually flow through G and correct it.
         with autocast(device_type=device.type, enabled=amp_enabled):
             fake = G(x)
             D_fake = D(x, fake)
 
-            # La loss del generatore combina due spinte complementari:
-            # - BCE adversarial: far sembrare l'output abbastanza realistico
-            #   da "convincere" il discriminatore;
-            # - L1: mantenere fedeltà verso il target reale.
+            # The generator loss combines two complementary drives:
+            # - adversarial BCE: make the output look realistic enough
+            #   to "fool" the discriminator;
+            # - L1: maintain fidelity towards the real target.
             loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * l1_weight
 
         opt_G.zero_grad()
@@ -1236,8 +1195,6 @@ def main(
     device_name = torch.cuda.get_device_name(device) if device.type == "cuda" else "CPU"
     log_message(f"Device: {device} ({device_name})", log_file)
 
-    # La normalizzazione con media e std pari a 0.5 porta i valori
-    # da [0, 1] a [-1, 1].
     transform = transforms.Compose([
         transforms.Resize(image_size),
         transforms.ToTensor(),
@@ -1291,8 +1248,6 @@ def main(
         "first_val_pair_info": first_val_pair_info,
     }
 
-    # In training facciamo shuffle; in validation no, perchè lì non stiamo
-    # imparando ma solo misurando il comportamento del modello.
     training_loader = DataLoader(
         training_dataset,
         batch_size=batch_size,
@@ -1326,12 +1281,10 @@ def main(
     scaler_G = GradScaler(enabled=amp_enabled)
     scaler_D = GradScaler(enabled=amp_enabled)
 
-    # BCEWithLogitsLoss lavora direttamente sui logits del discriminatore,
-    # mentre L1Loss misura la distanza diretta tra output generato e target.
     bce_loss = nn.BCEWithLogitsLoss()
     l1_loss = nn.L1Loss()
 
-    # Puliamo la cartella di output del training per non mischiare materiale di run diverse.
+    # Clean the training output directory to avoid mixing material from different runs.
     for file in os.listdir(output_train_dir):
         file_path = Path(output_train_dir) / file
         if file_path.is_file():
@@ -1415,7 +1368,7 @@ def main(
 
         log_message(f"Finished epoch {epoch}", log_file, use_stdout=False)
 
-        # Salviamo checkpoint periodici: se il training si interrompe, non si riparte da zero.
+        # Save periodic checkpoints: if training is interrupted, we do not have to start from scratch.
         if (epoch + 1) % checkpoint_rate == 0:
             checkpoint_path = Path(checkpoints_dir) / f"ep{epoch:03d}.pth"
             save_checkpoint(
@@ -1452,8 +1405,8 @@ def main(
                     f"ckpt {training_status['last_checkpoint']}"
                 )
 
-        # La validation periodica misura se il modello sta migliorando
-        # anche fuori dal training set.
+        # Periodic validation measures whether the model is improving
+        # on data outside the training set as well.
         if (epoch + 1) % validate_rate == 0:
             validate(
                 generator,
