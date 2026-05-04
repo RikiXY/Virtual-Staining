@@ -1,0 +1,24 @@
+# Preprocessing configuration for the dataset preparation pipeline.
+# Pass this file to prepare_dataset.py with --config.
+# Any field can be overridden on the command line.
+#
+# dataset_root, source_name, and target_name must be set before use.
+
+dataset_root: /path/to/dataset
+source_name: source.tif
+target_name: target.tif
+
+image_size: [256, 256]
+grid_movement: [256, 256]
+margin: 200
+seed: null
+save_masks: false
+
+train_ratio: 0.8
+val_ratio: 0.05
+test_ratio: 0.15
+
+min_foreground_ratio: 0.25
+max_white_ratio: 0.7
+white_threshold: 250
+max_largest_white_component_ratio: 0.20

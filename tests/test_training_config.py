@@ -91,6 +91,20 @@ def test_from_yaml(tmp_path):
     assert config.run_root == Path("/results") / "yaml_run"
 
 
+def test_from_args_partial_namespace():
+    """from_args() falls back to dataclass defaults when optional fields are absent (SUPPRESS)."""
+    args = argparse.Namespace(dataset_root="/data", run_name="test_run", epochs=10)
+    config = TrainingConfig.from_args(args)
+    assert config.results_path == Path("local_workspace/results")
+    assert config.image_size == (256, 256)
+    assert config.batch_size == 8
+    assert config.lr_g == pytest.approx(2e-4)
+    assert config.l1_weight == pytest.approx(25.0)
+    assert config.seed is None
+    assert config.resume is None
+    assert config.log_rate == 15
+
+
 def test_to_yaml_round_trip(tmp_path):
     config = TrainingConfig.from_args(_make_namespace(seed=42, epochs=20))
     yaml_file = tmp_path / "config.yaml"

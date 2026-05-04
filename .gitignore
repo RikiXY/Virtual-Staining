@@ -18,6 +18,9 @@
 __pycache__/
 *.py[cod]
 
+# Pytest temp files
+.pytest_tmp/
+
 # Local Makefile env
 .env.make
 
