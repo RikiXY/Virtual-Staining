@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 import numpy as np
@@ -105,8 +106,28 @@ def test_trainer_smoke_run_creates_expected_files(smoke_trainer):
     assert (run_root / "run_config.json").exists()
     assert (run_root / "config.yaml").exists()
     assert (run_root / "environment.json").exists()
+    assert (run_root / "metrics.csv").exists()
     assert any((run_root / "logs").glob("*.txt"))
     assert any((run_root / "checkpoints").glob("*.pth"))
+
+
+def test_trainer_metrics_csv_structure(smoke_trainer):
+    trainer, config = smoke_trainer
+
+    trainer.train(seed=42)
+
+    metrics_path = config.run_root / "metrics.csv"
+    with open(metrics_path, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+
+    assert len(rows) == config.epochs
+    assert set(rows[0].keys()) == {"epoch", "loss_G_train", "loss_D_train", "loss_G_val", "loss_D_val"}
+    # validate_rate=1 in smoke config, so val columns are present every epoch
+    for row in rows:
+        assert row["loss_G_val"] != ""
+        assert row["loss_D_val"] != ""
+        assert float(row["loss_G_train"]) > 0
+        assert float(row["loss_D_train"]) > 0
 
 
 def test_trainer_checkpoint_round_trip(smoke_trainer):

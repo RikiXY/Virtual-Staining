@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import datetime
 import json
 import os
@@ -349,39 +350,57 @@ class Trainer:
             )
         }
 
-        for epoch in range(start_epoch, self.config.epochs):
-            _log_message(f"Starting epoch {epoch}", log_file, use_stdout=False)
-
-            epoch_metrics = self._train_epoch(
-                epoch, log_file, progress_tracker, training_status
+        metrics_path = self.config.run_root / "metrics.csv"
+        with open(metrics_path, "w", newline="", encoding="utf-8") as metrics_file:
+            metrics_writer = csv.DictWriter(
+                metrics_file,
+                fieldnames=["epoch", "loss_G_train", "loss_D_train", "loss_G_val", "loss_D_val"],
             )
+            metrics_writer.writeheader()
 
-            _log_message(f"Finished epoch {epoch}", log_file, use_stdout=False)
+            for epoch in range(start_epoch, self.config.epochs):
+                _log_message(f"Starting epoch {epoch}", log_file, use_stdout=False)
 
-            if (epoch + 1) % self.config.checkpoint_rate == 0:
-                checkpoint_path = self._checkpoints_dir / f"ep{epoch:03d}.pth"
-                self.save_checkpoint(checkpoint_path, epoch)
-                training_status["last_checkpoint"] = checkpoint_path.name
-                _log_message(
-                    f"Checkpoint saved to {checkpoint_path} at epoch {epoch}",
-                    log_file,
-                    use_stdout=False,
+                epoch_metrics = self._train_epoch(
+                    epoch, log_file, progress_tracker, training_status
                 )
-                if epoch == self.config.epochs - 1:
-                    _update_console_progress(
-                        f"{_render_progress_bar(1.0)} "
-                        f"global {_color_progress(1.0)} | "
-                        f"ep {epoch + 1}/{self.config.epochs} (100%) | "
-                        f"b {len(self.train_loader)}/{len(self.train_loader)} | "
-                        f"loss_G {epoch_metrics.loss_G:.4f} | "
-                        f"loss_D {epoch_metrics.loss_D:.4f} | "
-                        f"elapsed {_format_duration(time.time() - start_time)} | "
-                        f"ETA 0s | "
-                        f"ckpt {training_status['last_checkpoint']}"
-                    )
 
-            if (epoch + 1) % self.config.validate_rate == 0:
-                self._validate(epoch, log_file)
+                _log_message(f"Finished epoch {epoch}", log_file, use_stdout=False)
+
+                if (epoch + 1) % self.config.checkpoint_rate == 0:
+                    checkpoint_path = self._checkpoints_dir / f"ep{epoch:03d}.pth"
+                    self.save_checkpoint(checkpoint_path, epoch)
+                    training_status["last_checkpoint"] = checkpoint_path.name
+                    _log_message(
+                        f"Checkpoint saved to {checkpoint_path} at epoch {epoch}",
+                        log_file,
+                        use_stdout=False,
+                    )
+                    if epoch == self.config.epochs - 1:
+                        _update_console_progress(
+                            f"{_render_progress_bar(1.0)} "
+                            f"global {_color_progress(1.0)} | "
+                            f"ep {epoch + 1}/{self.config.epochs} (100%) | "
+                            f"b {len(self.train_loader)}/{len(self.train_loader)} | "
+                            f"loss_G {epoch_metrics.loss_G:.4f} | "
+                            f"loss_D {epoch_metrics.loss_D:.4f} | "
+                            f"elapsed {_format_duration(time.time() - start_time)} | "
+                            f"ETA 0s | "
+                            f"ckpt {training_status['last_checkpoint']}"
+                        )
+
+                val_metrics = None
+                if (epoch + 1) % self.config.validate_rate == 0:
+                    val_metrics = self._validate(epoch, log_file)
+
+                metrics_writer.writerow({
+                    "epoch": epoch,
+                    "loss_G_train": f"{epoch_metrics.loss_G:.6f}",
+                    "loss_D_train": f"{epoch_metrics.loss_D:.6f}",
+                    "loss_G_val": f"{val_metrics.loss_G:.6f}" if val_metrics else "",
+                    "loss_D_val": f"{val_metrics.loss_D:.6f}" if val_metrics else "",
+                })
+                metrics_file.flush()
 
         _finish_console_progress()
         total_seconds = time.time() - start_time
