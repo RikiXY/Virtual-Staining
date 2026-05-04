@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 
@@ -46,23 +47,21 @@ def compute_psnr(target: np.ndarray, generated: np.ndarray) -> float:
 def compute_ssim(target: np.ndarray, generated: np.ndarray) -> float:
     """Computes the SSIM on normalised RGB images."""
     try:
-        return float(
-            structural_similarity(
-                target,
-                generated,
-                channel_axis=2,
-                data_range=1.0,
-            )
+        result = structural_similarity(
+            target,
+            generated,
+            channel_axis=2,
+            data_range=1.0,
         )
+        return float(cast(float, result))
     except TypeError:
-        return float(
-            structural_similarity(
-                target,
-                generated,
-                multichannel=True,
-                data_range=1.0,
-            )
+        result = structural_similarity(
+            target,
+            generated,
+            multichannel=True,
+            data_range=1.0,
         )
+        return float(cast(float, result))
 
 
 def evaluate_pair(

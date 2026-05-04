@@ -38,5 +38,6 @@ extend-exclude = ["docs/notebooks"]
 include = ["virtual_staining", "tests"]
 exclude = ["docs/notebooks", "src", "tools"]
 reportPrivateImportUsage = false
+useLibraryCodeForTypes = false
 
 [tool.uv]

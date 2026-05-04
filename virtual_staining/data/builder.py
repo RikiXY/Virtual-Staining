@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import random
+from typing import Any, cast
 
 import cv2
 import numpy as np
@@ -56,7 +57,7 @@ class DatasetBuilder:
         self._named_target_images: list[tuple[np.ndarray, str]] | None = None
         self._discarded_source_images: list[tuple[np.ndarray, str]] | None = None
         self._discarded_target_images: list[tuple[np.ndarray, str]] | None = None
-        self._discarded_log_rows: list[dict] | None = None
+        self._discarded_log_rows: list[dict[str, Any]] | None = None
 
     # ------------------------------------------------------------------
     # Pipeline stages
@@ -96,7 +97,12 @@ class DatasetBuilder:
 
     def align(self) -> None:
         """Align the target image to the source reference frame."""
-        if self._source_mask is None:
+        if (
+            self._source_image is None
+            or self._target_image is None
+            or self._source_mask is None
+            or self._target_mask is None
+        ):
             raise RuntimeError("compute_masks() must be called before align()")
 
         print("Aligning images...")
@@ -107,6 +113,8 @@ class DatasetBuilder:
             mask2=self._target_mask,
             scale=0.5,
         )
+        if aligned_target_mask is None:
+            raise RuntimeError("Alignment did not return a target mask")
         self._aligned_target = aligned_target
         self._aligned_target_mask = aligned_target_mask
 
@@ -120,7 +128,12 @@ class DatasetBuilder:
 
     def extract_patches(self) -> None:
         """Extract paired patches from the source and aligned target images."""
-        if self._aligned_target is None:
+        if (
+            self._source_image is None
+            or self._source_mask is None
+            or self._aligned_target is None
+            or self._aligned_target_mask is None
+        ):
             raise RuntimeError("align() must be called before extract_patches()")
 
         m = self.config.margin
@@ -135,6 +148,8 @@ class DatasetBuilder:
             self.config.grid_movement,
             _crop(self._source_mask),
         )
+        if source_masks is None:
+            raise RuntimeError("Patch extraction did not return source masks")
         target_images = divide_image_with_positions(
             _crop(self._aligned_target),
             self.config.image_size,
@@ -154,7 +169,13 @@ class DatasetBuilder:
 
     def filter_patches(self) -> None:
         """Classify each patch pair as valid or discarded based on quality thresholds."""
-        if self._positions is None:
+        if (
+            self._positions is None
+            or self._source_patches is None
+            or self._source_patch_masks is None
+            or self._target_patches is None
+            or self._target_patch_masks is None
+        ):
             raise RuntimeError(
                 "extract_patches() must be called before filter_patches()"
             )
@@ -163,7 +184,7 @@ class DatasetBuilder:
         named_target: list[tuple[np.ndarray, str]] = []
         discarded_source: list[tuple[np.ndarray, str]] = []
         discarded_target: list[tuple[np.ndarray, str]] = []
-        log_rows: list[dict] = []
+        log_rows: list[dict[str, Any]] = []
 
         for (x, y), src, src_mask, tgt, tgt_mask in zip(
             self._positions,
@@ -211,7 +232,7 @@ class DatasetBuilder:
                         "target_largest_white_component_ratio": debug_info[
                             "target_largest_white_component_ratio"
                         ],
-                        "reasons": ";".join(debug_info["reasons"]),
+                        "reasons": ";".join(cast(list[str], debug_info["reasons"])),
                     }
                 )
 
@@ -223,7 +244,13 @@ class DatasetBuilder:
 
     def split_and_save(self) -> DatasetBuildResult:
         """Split valid pairs into train/val/test and write all output files."""
-        if self._named_source_images is None:
+        if (
+            self._named_source_images is None
+            or self._named_target_images is None
+            or self._discarded_source_images is None
+            or self._discarded_target_images is None
+            or self._discarded_log_rows is None
+        ):
             raise RuntimeError(
                 "filter_patches() must be called before split_and_save()"
             )

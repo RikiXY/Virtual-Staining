@@ -4,7 +4,7 @@ import os
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import replace
-from typing import TypeVar
+from typing import Any, TypeVar, cast
 
 T = TypeVar("T")
 
@@ -63,4 +63,4 @@ def apply_namespace_overrides(
             field_name = field
         overrides[field_name] = value
 
-    return replace(config, **overrides) if overrides else config
+    return cast(T, replace(cast(Any, config), **overrides)) if overrides else config

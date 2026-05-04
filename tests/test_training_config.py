@@ -10,7 +10,7 @@ from virtual_staining.training.config import TrainingConfig
 
 
 def _make_namespace(**overrides: object) -> argparse.Namespace:
-    defaults = dict(
+    defaults: dict[str, object] = dict(
         dataset_root="data/root",
         results_path="results",
         run_name="my_run",

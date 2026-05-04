@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import random
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TypeVar
 
 import cv2
 import numpy as np
@@ -19,6 +20,7 @@ MIN_STD_DEV = 10
 MASK_PARAMETER_GRID = [(2, 3), (4, 6), (6, 9), (8, 15)]
 
 ALLOWED_EXTENSIONS = {".tif", ".tiff", ".png"}
+T = TypeVar("T")
 
 
 def pad_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
@@ -212,7 +214,7 @@ def align_images(
     img1_clahe = clahe.apply(img1_clahe)
     img2_clahe = clahe.apply(img2_clahe)
 
-    sift = cv2.SIFT_create(nfeatures=nfeatures)
+    sift = cv2.SIFT_create(nfeatures=nfeatures)  # type: ignore[attr-defined]
     keypoints_1, descriptors_1 = sift.detectAndCompute(img1_clahe, mask1)
     keypoints_2, descriptors_2 = sift.detectAndCompute(img2_clahe, mask2)
 
@@ -234,11 +236,13 @@ def align_images(
     if len(filtered_matches) < 4:
         raise ValueError("Not enough matches for alignment")
 
-    points_1 = np.float32(
-        [keypoints_1[match.queryIdx].pt for match in filtered_matches]
+    points_1 = np.asarray(
+        [keypoints_1[match.queryIdx].pt for match in filtered_matches],
+        dtype=np.float32,
     ).reshape(-1, 1, 2)
-    points_2 = np.float32(
-        [keypoints_2[match.trainIdx].pt for match in filtered_matches]
+    points_2 = np.asarray(
+        [keypoints_2[match.trainIdx].pt for match in filtered_matches],
+        dtype=np.float32,
     ).reshape(-1, 1, 2)
 
     warp_matrix, mask = cv2.estimateAffinePartial2D(points_2, points_1)
@@ -438,7 +442,7 @@ def divide_image_with_positions(
     return images
 
 
-def split_items(items: list, ratios: list[int]) -> list[list]:
+def split_items(items: list[T], ratios: Sequence[float]) -> list[list[T]]:
     """
     Splits the input list into N sublists according to the specified ratios.
 
@@ -464,7 +468,7 @@ def split_items(items: list, ratios: list[int]) -> list[list]:
     shuffled = items.copy()
     random.shuffle(shuffled)
 
-    output = []
+    output: list[list[T]] = []
     start = 0
     for ratio in ratios:
         end = start + int(len(shuffled) * ratio)

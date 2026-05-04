@@ -10,7 +10,7 @@ from virtual_staining.data.config import PreprocessingConfig
 
 
 def _make_namespace(**overrides: object) -> argparse.Namespace:
-    defaults = dict(
+    defaults: dict[str, object] = dict(
         path="/data/samples",
         source_name="source.tif",
         target_name="target.tif",
