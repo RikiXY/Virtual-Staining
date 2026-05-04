@@ -50,6 +50,16 @@ Main runtime dependencies:
 
 Dependencies are declared in `pyproject.toml` and the development shell is defined in `flake.nix`.
 
+### Dependency pinning
+
+`pyproject.toml` declares minimum compatibility bounds (e.g. `torch>=2.0`). The exact versions used in development are pinned in `uv.lock`, which records every package and its hash. To reproduce the exact environment:
+
+```bash
+make sync
+```
+
+`make lock` re-resolves against the bounds in `pyproject.toml` and updates `uv.lock`. Run it when you intentionally want to upgrade dependencies.
+
 ## Development Environment
 
 Recommended setup:

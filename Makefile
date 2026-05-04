@@ -44,8 +44,8 @@ help:
 	@printf "  make evaluate                         Evaluate generated outputs\n"
 	@printf "  make run-all                          Run train, infer, and evaluate sequentially\n"
 	@printf "  make test                             Run the unit test suite (pytest)\n"
-	@printf "  make sync                             Sync project dependencies\n"
-	@printf "  make lock                             Refresh uv.lock\n"
+	@printf "  make sync                             Install exact versions from uv.lock (reproducible)\n"
+	@printf "  make lock                             Re-resolve dependencies and update uv.lock\n"
 	@printf "  make lint                             Run Ruff lints\n"
 	@printf "  make format                           Format code with Ruff\n"
 	@printf "  make format-check                     Check formatting without changing files\n"
@@ -88,7 +88,7 @@ require-dataset:
 	@test -n "$(DATASET)" || (echo "DATASET is empty. Set it once, e.g. export DATASET=inv_512"; exit 1)
 
 sync:
-	$(UV) sync
+	$(UV) sync --frozen
 
 lock:
 	$(UV) lock
