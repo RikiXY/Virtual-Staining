@@ -5,13 +5,13 @@ import csv
 from pathlib import Path
 from typing import Any
 
-from virtual_staining.utils.cli import style, print_section, print_info
-from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS, open_rgb, to_float01
-from virtual_staining.utils.metrics import color_for_metric
-
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
+
+from virtual_staining.utils.cli import style, print_section, print_info
+from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS, open_rgb, to_float01
+from virtual_staining.utils.metrics import color_for_metric
 
 
 METRIC_SELECTION_ORDER = ["mae", "rmse", "psnr", "ssim"]

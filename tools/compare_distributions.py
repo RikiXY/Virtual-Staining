@@ -6,8 +6,10 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from virtual_staining.utils.cli import style, print_section, print_info
-from virtual_staining.utils.metrics import color_metric_value
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
 from virtual_staining.evaluation.statistics import (
     UnpairedGroupStats,
     UnpairedComparison,
@@ -18,10 +20,8 @@ from virtual_staining.evaluation.statistics import (
     compute_paired_summary,
     align_paired_frames,
 )
-
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
+from virtual_staining.utils.cli import style, print_section, print_info
+from virtual_staining.utils.metrics import color_metric_value
 
 
 def color_distance(value: float, good: float, warn: float) -> str:

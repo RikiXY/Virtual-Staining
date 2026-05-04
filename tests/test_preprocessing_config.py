@@ -1,0 +1,158 @@
+from __future__ import annotations
+
+import argparse
+import textwrap
+from pathlib import Path
+
+import pytest
+
+from virtual_staining.data.config import PreprocessingConfig
+
+
+def _make_namespace(**overrides):
+    defaults = dict(
+        path="/data/samples",
+        source_name="source.tif",
+        target_name="target.tif",
+        seed=None,
+        save_masks=False,
+        image_size=[256, 256],
+        grid_movement=[256, 256],
+        margin=200,
+        min_foreground_ratio=0.25,
+        max_white_ratio=0.7,
+        white_threshold=250,
+        max_largest_white_component_ratio=0.20,
+    )
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
+
+
+def test_from_args_basic():
+    config = PreprocessingConfig.from_args(_make_namespace())
+    assert config.dataset_root == Path("/data/samples")
+    assert config.source_name == "source.tif"
+    assert config.target_name == "target.tif"
+    assert config.image_size == (256, 256)
+    assert config.grid_movement == (256, 256)
+    assert config.margin == 200
+    assert config.seed is None
+    assert config.save_masks is False
+
+
+def test_from_args_thresholds():
+    config = PreprocessingConfig.from_args(
+        _make_namespace(
+            min_foreground_ratio=0.3,
+            max_white_ratio=0.6,
+            white_threshold=240,
+            max_largest_white_component_ratio=0.15,
+        )
+    )
+    assert config.min_foreground_ratio == pytest.approx(0.3)
+    assert config.max_white_ratio == pytest.approx(0.6)
+    assert config.white_threshold == 240
+    assert config.max_largest_white_component_ratio == pytest.approx(0.15)
+
+
+def test_from_args_with_seed():
+    config = PreprocessingConfig.from_args(_make_namespace(seed=99))
+    assert config.seed == 99
+
+
+def test_from_args_default_split_ratios():
+    config = PreprocessingConfig.from_args(_make_namespace())
+    assert config.train_ratio == pytest.approx(0.8)
+    assert config.val_ratio == pytest.approx(0.05)
+    assert config.test_ratio == pytest.approx(0.15)
+
+
+def test_frozen():
+    config = PreprocessingConfig.from_args(_make_namespace())
+    with pytest.raises((AttributeError, TypeError)):
+        config.margin = 999  # type: ignore[misc]
+
+
+def test_from_yaml(tmp_path):
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data/samples
+        source_name: he.tif
+        target_name: masson.tif
+        image_size: [512, 512]
+        grid_movement: [256, 256]
+        margin: 100
+        seed: 7
+        save_masks: true
+        train_ratio: 0.7
+        val_ratio: 0.1
+        test_ratio: 0.2
+        min_foreground_ratio: 0.3
+        max_white_ratio: 0.6
+        white_threshold: 240
+        max_largest_white_component_ratio: 0.15
+    """)
+    yaml_file = tmp_path / "preprocessing.yaml"
+    yaml_file.write_text(yaml_content)
+
+    config = PreprocessingConfig.from_yaml(yaml_file)
+    assert config.dataset_root == Path("/data/samples")
+    assert config.source_name == "he.tif"
+    assert config.target_name == "masson.tif"
+    assert config.image_size == (512, 512)
+    assert config.margin == 100
+    assert config.seed == 7
+    assert config.save_masks is True
+    assert config.train_ratio == pytest.approx(0.7)
+    assert config.val_ratio == pytest.approx(0.1)
+    assert config.test_ratio == pytest.approx(0.2)
+    assert config.min_foreground_ratio == pytest.approx(0.3)
+    assert config.white_threshold == 240
+
+
+def test_to_yaml_round_trip(tmp_path):
+    config = PreprocessingConfig(
+        dataset_root=Path("/data/samples"),
+        source_name="he.tif",
+        target_name="masson.tif",
+        image_size=(512, 512),
+        grid_movement=(256, 256),
+        margin=100,
+        seed=7,
+        save_masks=True,
+        train_ratio=0.7,
+        val_ratio=0.1,
+        test_ratio=0.2,
+        min_foreground_ratio=0.3,
+        max_white_ratio=0.6,
+        white_threshold=240,
+        max_largest_white_component_ratio=0.15,
+    )
+    yaml_file = tmp_path / "config.yaml"
+    config.to_yaml(yaml_file)
+    assert yaml_file.exists()
+    loaded = PreprocessingConfig.from_yaml(yaml_file)
+    assert loaded == config
+
+
+def test_from_yaml_defaults_for_optional_fields(tmp_path):
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data/samples
+        source_name: source.tif
+        target_name: target.tif
+    """)
+    yaml_file = tmp_path / "minimal.yaml"
+    yaml_file.write_text(yaml_content)
+
+    config = PreprocessingConfig.from_yaml(yaml_file)
+    assert config.image_size == (256, 256)
+    assert config.grid_movement == (256, 256)
+    assert config.margin == 200
+    assert config.seed is None
+    assert config.save_masks is False
+    assert config.train_ratio == pytest.approx(0.8)
+    assert config.val_ratio == pytest.approx(0.05)
+    assert config.test_ratio == pytest.approx(0.15)
+    assert config.min_foreground_ratio == pytest.approx(0.25)
+    assert config.max_white_ratio == pytest.approx(0.7)
+    assert config.white_threshold == 250
+    assert config.max_largest_white_component_ratio == pytest.approx(0.20)

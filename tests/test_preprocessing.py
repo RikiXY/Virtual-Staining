@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import pytest
 import numpy as np
+import pytest
 
 from virtual_staining.data.preprocessing import is_valid_patch_pair, split_items
 
@@ -74,7 +74,7 @@ def _call(
 
 
 # ---------------------------------------------------------------------------
-# is_valid_patch_pair — acceptance
+# is_valid_patch_pair - acceptance
 # ---------------------------------------------------------------------------
 
 def test_valid_pair_is_accepted():
@@ -86,7 +86,7 @@ def test_valid_pair_is_accepted():
 
 
 # ---------------------------------------------------------------------------
-# is_valid_patch_pair — rejection reasons
+# is_valid_patch_pair - rejection reasons
 # ---------------------------------------------------------------------------
 
 def test_rejects_low_source_foreground():
@@ -123,7 +123,7 @@ def test_rejects_high_target_white_ratio():
 
 
 # ---------------------------------------------------------------------------
-# is_valid_patch_pair — debug_info keys
+# is_valid_patch_pair - debug_info keys
 # ---------------------------------------------------------------------------
 
 def test_debug_info_contains_required_keys():
