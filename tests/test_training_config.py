@@ -91,6 +91,15 @@ def test_from_yaml(tmp_path):
     assert config.run_root == Path("/results") / "yaml_run"
 
 
+def test_to_yaml_round_trip(tmp_path):
+    config = TrainingConfig.from_args(_make_namespace(seed=42, epochs=20))
+    yaml_file = tmp_path / "config.yaml"
+    config.to_yaml(yaml_file)
+    assert yaml_file.exists()
+    loaded = TrainingConfig.from_yaml(yaml_file)
+    assert loaded == config
+
+
 def test_from_yaml_defaults_for_optional_fields(tmp_path):
     yaml_content = textwrap.dedent("""\
         dataset_root: /data

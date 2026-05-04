@@ -16,6 +16,7 @@ from torchvision.utils import save_image
 from virtual_staining.training.config import TrainingConfig
 from virtual_staining.training.results import EpochMetrics
 from virtual_staining.utils.cli import print_info, print_section, style
+from virtual_staining.utils.env import collect_environment
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +75,7 @@ def _get_first_pair_size(dataset) -> dict | None:
 def _save_run_config(run_config: dict, run_root: Path) -> Path:
     config_path = run_root / "run_config.json"
     with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(run_config, f, indent=4)
+        json.dump(run_config, f, indent=4, default=str)
     return config_path
 
 
@@ -271,6 +272,11 @@ class Trainer:
         ]:
             d.mkdir(parents=True, exist_ok=True)
 
+        env = collect_environment()
+        self.config.to_yaml(self.config.run_root / "config.yaml")
+        with open(self.config.run_root / "environment.json", "w", encoding="utf-8") as f:
+            json.dump(env, f, indent=2, default=str)
+
         timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         log_file = self._logs_dir / f"Log-{timestamp_str}.txt"
         if log_file.exists():
@@ -284,7 +290,7 @@ class Trainer:
         _log_message(f"Seed set to {seed}", log_file, use_stdout=False)
         _log_message(f"Device: {self.device} ({device_name})", log_file)
 
-        run_config = self._build_run_config(seed, timestamp_str, log_file)
+        run_config = self._build_run_config(seed, timestamp_str, log_file, env)
         config_path = _save_run_config(run_config, self.config.run_root)
         _log_run_header(log_file, run_config)
         _log_message(f"Run config saved to {config_path}", log_file, use_stdout=False)
@@ -587,7 +593,7 @@ class Trainer:
         return EpochMetrics(loss_G=avg_loss_G, loss_D=avg_loss_D)
 
     def _build_run_config(
-        self, seed: int, timestamp_str: str, log_file: Path
+        self, seed: int, timestamp_str: str, log_file: Path, environment: dict
     ) -> dict:
         return {
             "timestamp": timestamp_str,
@@ -621,4 +627,5 @@ class Trainer:
             "first_train_pair_info": _get_first_pair_size(self.train_loader.dataset),
             "first_val_pair_info": _get_first_pair_size(self.val_loader.dataset),
             "detailed_log": str(log_file),
+            "environment": environment,
         }

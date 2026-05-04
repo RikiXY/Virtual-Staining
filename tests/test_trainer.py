@@ -103,6 +103,8 @@ def test_trainer_smoke_run_creates_expected_files(smoke_trainer):
 
     run_root = config.run_root
     assert (run_root / "run_config.json").exists()
+    assert (run_root / "config.yaml").exists()
+    assert (run_root / "environment.json").exists()
     assert any((run_root / "logs").glob("*.txt"))
     assert any((run_root / "checkpoints").glob("*.pth"))
 

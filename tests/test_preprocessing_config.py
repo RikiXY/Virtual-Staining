@@ -109,6 +109,31 @@ def test_from_yaml(tmp_path):
     assert config.white_threshold == 240
 
 
+def test_to_yaml_round_trip(tmp_path):
+    config = PreprocessingConfig(
+        dataset_root=Path("/data/samples"),
+        source_name="he.tif",
+        target_name="masson.tif",
+        image_size=(512, 512),
+        grid_movement=(256, 256),
+        margin=100,
+        seed=7,
+        save_masks=True,
+        train_ratio=0.7,
+        val_ratio=0.1,
+        test_ratio=0.2,
+        min_foreground_ratio=0.3,
+        max_white_ratio=0.6,
+        white_threshold=240,
+        max_largest_white_component_ratio=0.15,
+    )
+    yaml_file = tmp_path / "config.yaml"
+    config.to_yaml(yaml_file)
+    assert yaml_file.exists()
+    loaded = PreprocessingConfig.from_yaml(yaml_file)
+    assert loaded == config
+
+
 def test_from_yaml_defaults_for_optional_fields(tmp_path):
     yaml_content = textwrap.dedent("""\
         dataset_root: /data/samples

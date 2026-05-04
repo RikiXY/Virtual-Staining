@@ -125,6 +125,18 @@ def test_run_all_discarded_log_is_written(builder_config: PreprocessingConfig) -
     assert len(lines) == result.skipped_count + 1
 
 
+def test_run_all_saves_config_and_environment(builder_config: PreprocessingConfig) -> None:
+    with _PATCHES[0], _PATCHES[1]:
+        DatasetBuilder(builder_config).run_all()
+
+    root = builder_config.dataset_root
+    assert (root / "config.yaml").exists()
+    assert (root / "environment.json").exists()
+
+    loaded = PreprocessingConfig.from_yaml(root / "config.yaml")
+    assert loaded == builder_config
+
+
 def test_missing_dataset_root_raises(tmp_path: Path) -> None:
     config = PreprocessingConfig(
         dataset_root=tmp_path / "nonexistent",

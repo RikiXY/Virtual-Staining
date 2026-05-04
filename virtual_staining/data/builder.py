@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 
 from virtual_staining.data.config import PreprocessingConfig
+from virtual_staining.utils.env import collect_environment
 from virtual_staining.data.preprocessing import (
     MASK_PARAMETER_GRID,
     align_from_scaled,
@@ -281,6 +282,13 @@ class DatasetBuilder:
         )
         random.seed(seed)
         print(f"Seed set to {seed}")
+
+        import json
+
+        root = self.config.dataset_root
+        self.config.to_yaml(root / "config.yaml")
+        with open(root / "environment.json", "w", encoding="utf-8") as f:
+            json.dump(collect_environment(), f, indent=2, default=str)
 
         self.compute_masks()
         self.align()

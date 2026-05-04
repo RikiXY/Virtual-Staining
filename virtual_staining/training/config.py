@@ -29,6 +29,31 @@ class TrainingConfig:
     def run_root(self) -> Path:
         return self.results_path / self.run_name
 
+    def to_yaml(self, path: str | Path) -> None:
+        import yaml
+
+        data = {
+            "dataset_root": str(self.dataset_root),
+            "results_path": str(self.results_path),
+            "run_name": self.run_name,
+            "image_size": list(self.image_size),
+            "batch_size": self.batch_size,
+            "epochs": self.epochs,
+            "lr_g": self.lr_g,
+            "lr_d": self.lr_d,
+            "beta1": self.beta1,
+            "beta2": self.beta2,
+            "l1_weight": self.l1_weight,
+            "seed": self.seed,
+            "num_workers": self.num_workers,
+            "validate_rate": self.validate_rate,
+            "checkpoint_rate": self.checkpoint_rate,
+            "log_rate": self.log_rate,
+            "resume": self.resume,
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(data, f, default_flow_style=False)
+
     @classmethod
     def from_args(cls, args) -> TrainingConfig:
         return cls(

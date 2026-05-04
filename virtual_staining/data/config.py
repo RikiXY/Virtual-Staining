@@ -42,6 +42,29 @@ class PreprocessingConfig:
             max_largest_white_component_ratio=args.max_largest_white_component_ratio,
         )
 
+    def to_yaml(self, path: str | Path) -> None:
+        import yaml
+
+        data = {
+            "dataset_root": str(self.dataset_root),
+            "source_name": self.source_name,
+            "target_name": self.target_name,
+            "image_size": list(self.image_size),
+            "grid_movement": list(self.grid_movement),
+            "margin": self.margin,
+            "seed": self.seed,
+            "save_masks": self.save_masks,
+            "train_ratio": self.train_ratio,
+            "val_ratio": self.val_ratio,
+            "test_ratio": self.test_ratio,
+            "min_foreground_ratio": self.min_foreground_ratio,
+            "max_white_ratio": self.max_white_ratio,
+            "white_threshold": self.white_threshold,
+            "max_largest_white_component_ratio": self.max_largest_white_component_ratio,
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(data, f, default_flow_style=False)
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> PreprocessingConfig:
         import yaml
