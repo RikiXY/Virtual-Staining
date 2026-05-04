@@ -1,0 +1,26 @@
+# Training configuration for the Pix2Pix model.
+# Pass this file to pix2pix.py train with --config.
+# Any field can be overridden on the command line.
+#
+# dataset_root, run_name, and epochs must be set before use.
+
+dataset_root: /path/to/dataset
+results_path: local_workspace/results
+run_name: my_run
+epochs: 100
+
+image_size: [256, 256]
+batch_size: 8
+
+lr_g: 0.0002
+lr_d: 0.0002
+beta1: 0.5
+beta2: 0.999
+l1_weight: 25.0
+
+seed: null
+num_workers: 4
+validate_rate: 10
+checkpoint_rate: 10
+log_rate: 15
+resume: null

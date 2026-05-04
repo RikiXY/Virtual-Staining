@@ -109,6 +109,20 @@ def test_from_yaml(tmp_path):
     assert config.white_threshold == 240
 
 
+def test_from_args_partial_namespace():
+    """from_args() falls back to dataclass defaults when optional fields are absent (SUPPRESS)."""
+    args = argparse.Namespace(path="/data/samples", source_name="s.tif", target_name="t.tif")
+    config = PreprocessingConfig.from_args(args)
+    assert config.image_size == (256, 256)
+    assert config.grid_movement == (256, 256)
+    assert config.margin == 200
+    assert config.seed is None
+    assert config.save_masks is False
+    assert config.train_ratio == pytest.approx(0.8)
+    assert config.min_foreground_ratio == pytest.approx(0.25)
+    assert config.white_threshold == 250
+
+
 def test_to_yaml_round_trip(tmp_path):
     config = PreprocessingConfig(
         dataset_root=Path("/data/samples"),

@@ -1,6 +1,7 @@
 import argparse
 import os
 import random
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -68,45 +69,51 @@ def build_parser():
         formatter_class=argparse.RawTextHelpFormatter
     )
     train_parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="path to a training config YAML (CLI flags override matching fields)"
+    )
+    train_parser.add_argument(
         "--dataset-root",
         type=str,
-        required=True,
+        default=argparse.SUPPRESS,
         help="Path to the dataset root containing dataset_train/ and dataset_val/"
     )
     train_parser.add_argument(
         "--run-name",
         type=str,
-        required=True,
+        default=argparse.SUPPRESS,
         help="Name of the output run directory to create"
     )
     train_parser.add_argument(
         "--results-path",
         type=str,
-        default="local_workspace/results",
+        default=argparse.SUPPRESS,
         help="Base directory where the new run folder will be created (default: local_workspace/results)"
     )
     train_parser.add_argument(
         "--seed",
         type=int,
-        default=None,
+        default=argparse.SUPPRESS,
         help="Random seed for reproducibility. If omitted, a random seed is generated."
     )
     train_parser.add_argument(
         "--epochs",
         type=int,
-        required=True,
+        default=argparse.SUPPRESS,
         help="Number of training epochs"
     )
     train_parser.add_argument(
         "--batch-size",
         type=int,
-        default=8,
+        default=argparse.SUPPRESS,
         help="Batch size for the DataLoader (default: 8)"
     )
     train_parser.add_argument(
         "--num-workers",
         type=int,
-        default=min(4, os.cpu_count() or 1),
+        default=argparse.SUPPRESS,
         help="Number of DataLoader workers (default: min(4, cpu_count))"
     )
     train_parser.add_argument(
@@ -114,7 +121,7 @@ def build_parser():
         type=int,
         nargs=2,
         metavar=("HEIGHT", "WIDTH"),
-        default=(256, 256),
+        default=argparse.SUPPRESS,
         help=(
             "Resize images before training as HEIGHT WIDTH "
             "(default: 256 256). Use 512 512 for 512x512 patch experiments."
@@ -123,55 +130,55 @@ def build_parser():
     train_parser.add_argument(
         "--log-rate",
         type=int,
-        default=15,
+        default=argparse.SUPPRESS,
         help="Log every N batches (default: 15)"
     )
     train_parser.add_argument(
         "--checkpoint-rate",
         type=int,
-        default=10,
+        default=argparse.SUPPRESS,
         help="Save a checkpoint every N epochs (default: 10)"
     )
     train_parser.add_argument(
         "--validate-rate",
         type=int,
-        default=10,
+        default=argparse.SUPPRESS,
         help="Run validation every N epochs (default: 10)"
     )
     train_parser.add_argument(
         "--resume",
         type=str,
-        default=None,
+        default=argparse.SUPPRESS,
         help="Optional checkpoint path to resume training from"
     )
     train_parser.add_argument(
         "--l1-weight",
         type=float,
-        default=25.0,
+        default=argparse.SUPPRESS,
         help="Weight of the L1 reconstruction loss (default: 25.0)"
     )
     train_parser.add_argument(
         "--lr-g",
         type=float,
-        default=2e-4,
+        default=argparse.SUPPRESS,
         help="Learning rate for the generator (default: 2e-4)"
     )
     train_parser.add_argument(
         "--lr-d",
         type=float,
-        default=2e-4,
+        default=argparse.SUPPRESS,
         help="Learning rate for the discriminator (default: 2e-4)"
     )
     train_parser.add_argument(
         "--beta1",
         type=float,
-        default=0.5,
+        default=argparse.SUPPRESS,
         help="Adam beta1 (default: 0.5)"
     )
     train_parser.add_argument(
         "--beta2",
         type=float,
-        default=0.999,
+        default=argparse.SUPPRESS,
         help="Adam beta2 (default: 0.999)"
     )
 
@@ -211,6 +218,46 @@ def build_parser():
     )
 
     return parser
+
+
+def _apply_train_overrides(config: TrainingConfig, args: argparse.Namespace) -> TrainingConfig:
+    """Apply any CLI-specified fields on top of a YAML-loaded TrainingConfig."""
+    kw: dict = {}
+    if hasattr(args, "dataset_root"):
+        kw["dataset_root"] = Path(args.dataset_root)
+    if hasattr(args, "results_path"):
+        kw["results_path"] = Path(args.results_path)
+    if hasattr(args, "run_name"):
+        kw["run_name"] = args.run_name
+    if hasattr(args, "image_size"):
+        kw["image_size"] = tuple(args.image_size)
+    if hasattr(args, "batch_size"):
+        kw["batch_size"] = args.batch_size
+    if hasattr(args, "epochs"):
+        kw["epochs"] = args.epochs
+    if hasattr(args, "lr_g"):
+        kw["lr_g"] = args.lr_g
+    if hasattr(args, "lr_d"):
+        kw["lr_d"] = args.lr_d
+    if hasattr(args, "beta1"):
+        kw["beta1"] = args.beta1
+    if hasattr(args, "beta2"):
+        kw["beta2"] = args.beta2
+    if hasattr(args, "l1_weight"):
+        kw["l1_weight"] = args.l1_weight
+    if hasattr(args, "seed"):
+        kw["seed"] = args.seed
+    if hasattr(args, "num_workers"):
+        kw["num_workers"] = args.num_workers
+    if hasattr(args, "validate_rate"):
+        kw["validate_rate"] = args.validate_rate
+    if hasattr(args, "checkpoint_rate"):
+        kw["checkpoint_rate"] = args.checkpoint_rate
+    if hasattr(args, "log_rate"):
+        kw["log_rate"] = args.log_rate
+    if hasattr(args, "resume"):
+        kw["resume"] = args.resume
+    return replace(config, **kw) if kw else config
 
 
 def is_amp_enabled(device):
@@ -352,7 +399,22 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.mode == "train":
-        main(TrainingConfig.from_args(args))
+        if args.config:
+            config = TrainingConfig.from_yaml(args.config)
+            config = _apply_train_overrides(config, args)
+        else:
+            missing = [flag for flag, attr in [
+                ("--dataset-root", "dataset_root"),
+                ("--run-name", "run_name"),
+                ("--epochs", "epochs"),
+            ] if not hasattr(args, attr)]
+            if missing:
+                parser.error(
+                    "the following arguments are required when --config is not given: "
+                    + ", ".join(missing)
+                )
+            config = TrainingConfig.from_args(args)
+        main(config)
 
     elif args.mode == "test":
         test_dir = Path(args.dataset_root) / "dataset_test"
