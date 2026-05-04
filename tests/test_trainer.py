@@ -57,18 +57,24 @@ def _make_trainer(tmp_path: Path, checkpoint_rate: int) -> tuple[Trainer, Traini
         log_rate=1,
     )
 
-    transform = transforms.Compose([
-        transforms.Resize(config.image_size),
-        transforms.ToTensor(),
-        transforms.Normalize([0.5] * 3, [0.5] * 3),
-    ])
+    transform = transforms.Compose(
+        [
+            transforms.Resize(config.image_size),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5] * 3, [0.5] * 3),
+        ]
+    )
     train_loader = DataLoader(
         PairedHistologyDataset(train_dir, transform=transform),
-        batch_size=1, shuffle=False, num_workers=0,
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
     )
     val_loader = DataLoader(
         PairedHistologyDataset(val_dir, transform=transform),
-        batch_size=1, shuffle=False, num_workers=0,
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
     )
 
     device = torch.device("cpu")
@@ -81,14 +87,15 @@ def _make_trainer(tmp_path: Path, checkpoint_rate: int) -> tuple[Trainer, Traini
         device=device,
     ), config
 
+
 @pytest.fixture()
-def smoke_trainer(tmp_path):
+def smoke_trainer(tmp_path: Path) -> tuple[Trainer, TrainingConfig]:
     """Trainer that never saves a checkpoint (checkpoint_rate=2 > epochs=1)."""
     return _make_trainer(tmp_path, checkpoint_rate=2)
 
 
 @pytest.fixture()
-def checkpointing_trainer(tmp_path):
+def checkpointing_trainer(tmp_path: Path) -> tuple[Trainer, TrainingConfig]:
     """Trainer that saves a checkpoint every epoch, for round-trip tests."""
     return _make_trainer(tmp_path, checkpoint_rate=1)
 
@@ -97,7 +104,9 @@ def checkpointing_trainer(tmp_path):
 # Smoke tests (no checkpoint I/O)
 # ---------------------------------------------------------------------------
 
-def test_trainer_smoke_run_creates_expected_files(smoke_trainer):
+def test_trainer_smoke_run_creates_expected_files(
+    smoke_trainer: tuple[Trainer, TrainingConfig],
+) -> None:
     trainer, config = smoke_trainer
 
     trainer.train(seed=42)
@@ -110,17 +119,25 @@ def test_trainer_smoke_run_creates_expected_files(smoke_trainer):
     assert any((run_root / "logs").glob("*.txt"))
 
 
-def test_trainer_metrics_csv_structure(smoke_trainer):
+def test_trainer_metrics_csv_structure(
+    smoke_trainer: tuple[Trainer, TrainingConfig],
+) -> None:
     trainer, config = smoke_trainer
 
     trainer.train(seed=42)
 
     metrics_path = config.run_root / "metrics.csv"
-    with open(metrics_path, newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
+    with metrics_path.open(newline="", encoding="utf-8") as metrics_file:
+        rows = list(csv.DictReader(metrics_file))
 
     assert len(rows) == config.epochs
-    assert set(rows[0].keys()) == {"epoch", "loss_G_train", "loss_D_train", "loss_G_val", "loss_D_val"}
+    assert set(rows[0].keys()) == {
+        "epoch",
+        "loss_G_train",
+        "loss_D_train",
+        "loss_G_val",
+        "loss_D_val",
+    }
     # validate_rate=1, so val columns are present on every epoch
     for row in rows:
         assert row["loss_G_val"] != ""
@@ -133,7 +150,9 @@ def test_trainer_metrics_csv_structure(smoke_trainer):
 # Checkpoint round-trip (writes one real checkpoint)
 # ---------------------------------------------------------------------------
 
-def test_trainer_checkpoint_round_trip(checkpointing_trainer):
+def test_trainer_checkpoint_round_trip(
+    checkpointing_trainer: tuple[Trainer, TrainingConfig],
+) -> None:
     trainer, config = checkpointing_trainer
 
     trainer.train(seed=42)
@@ -143,11 +162,13 @@ def test_trainer_checkpoint_round_trip(checkpointing_trainer):
     device = torch.device("cpu")
     train_dir = config.dataset_root / "dataset_train"
     val_dir = config.dataset_root / "dataset_val"
-    transform = transforms.Compose([
-        transforms.Resize(config.image_size),
-        transforms.ToTensor(),
-        transforms.Normalize([0.5] * 3, [0.5] * 3),
-    ])
+    transform = transforms.Compose(
+        [
+            transforms.Resize(config.image_size),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5] * 3, [0.5] * 3),
+        ]
+    )
     train_loader = DataLoader(
         PairedHistologyDataset(train_dir, transform=transform),
         batch_size=1, num_workers=0,

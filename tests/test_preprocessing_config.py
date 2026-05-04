@@ -9,7 +9,7 @@ import pytest
 from virtual_staining.data.config import PreprocessingConfig
 
 
-def _make_namespace(**overrides):
+def _make_namespace(**overrides: object) -> argparse.Namespace:
     defaults = dict(
         path="/data/samples",
         source_name="source.tif",
@@ -28,7 +28,7 @@ def _make_namespace(**overrides):
     return argparse.Namespace(**defaults)
 
 
-def test_from_args_basic():
+def test_from_args_basic() -> None:
     config = PreprocessingConfig.from_args(_make_namespace())
     assert config.dataset_root == Path("/data/samples")
     assert config.source_name == "source.tif"
@@ -40,7 +40,7 @@ def test_from_args_basic():
     assert config.save_masks is False
 
 
-def test_from_args_thresholds():
+def test_from_args_thresholds() -> None:
     config = PreprocessingConfig.from_args(
         _make_namespace(
             min_foreground_ratio=0.3,
@@ -55,25 +55,25 @@ def test_from_args_thresholds():
     assert config.max_largest_white_component_ratio == pytest.approx(0.15)
 
 
-def test_from_args_with_seed():
+def test_from_args_with_seed() -> None:
     config = PreprocessingConfig.from_args(_make_namespace(seed=99))
     assert config.seed == 99
 
 
-def test_from_args_default_split_ratios():
+def test_from_args_default_split_ratios() -> None:
     config = PreprocessingConfig.from_args(_make_namespace())
     assert config.train_ratio == pytest.approx(0.8)
     assert config.val_ratio == pytest.approx(0.05)
     assert config.test_ratio == pytest.approx(0.15)
 
 
-def test_frozen():
+def test_frozen() -> None:
     config = PreprocessingConfig.from_args(_make_namespace())
     with pytest.raises((AttributeError, TypeError)):
         config.margin = 999  # type: ignore[misc]
 
 
-def test_from_yaml(tmp_path):
+def test_from_yaml(tmp_path: Path) -> None:
     yaml_content = textwrap.dedent("""\
         dataset_root: /data/samples
         source_name: he.tif
@@ -92,7 +92,7 @@ def test_from_yaml(tmp_path):
         max_largest_white_component_ratio: 0.15
     """)
     yaml_file = tmp_path / "preprocessing.yaml"
-    yaml_file.write_text(yaml_content)
+    yaml_file.write_text(yaml_content, encoding="utf-8")
 
     config = PreprocessingConfig.from_yaml(yaml_file)
     assert config.dataset_root == Path("/data/samples")
@@ -109,7 +109,7 @@ def test_from_yaml(tmp_path):
     assert config.white_threshold == 240
 
 
-def test_from_args_partial_namespace():
+def test_from_args_partial_namespace() -> None:
     """from_args() falls back to dataclass defaults when optional fields are absent (SUPPRESS)."""
     args = argparse.Namespace(path="/data/samples", source_name="s.tif", target_name="t.tif")
     config = PreprocessingConfig.from_args(args)
@@ -123,7 +123,7 @@ def test_from_args_partial_namespace():
     assert config.white_threshold == 250
 
 
-def test_to_yaml_round_trip(tmp_path):
+def test_to_yaml_round_trip(tmp_path: Path) -> None:
     config = PreprocessingConfig(
         dataset_root=Path("/data/samples"),
         source_name="he.tif",
@@ -148,14 +148,14 @@ def test_to_yaml_round_trip(tmp_path):
     assert loaded == config
 
 
-def test_from_yaml_defaults_for_optional_fields(tmp_path):
+def test_from_yaml_defaults_for_optional_fields(tmp_path: Path) -> None:
     yaml_content = textwrap.dedent("""\
         dataset_root: /data/samples
         source_name: source.tif
         target_name: target.tif
     """)
     yaml_file = tmp_path / "minimal.yaml"
-    yaml_file.write_text(yaml_content)
+    yaml_file.write_text(yaml_content, encoding="utf-8")
 
     config = PreprocessingConfig.from_yaml(yaml_file)
     assert config.image_size == (256, 256)

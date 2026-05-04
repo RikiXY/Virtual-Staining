@@ -9,7 +9,7 @@ import pytest
 from virtual_staining.training.config import TrainingConfig
 
 
-def _make_namespace(**overrides):
+def _make_namespace(**overrides: object) -> argparse.Namespace:
     defaults = dict(
         dataset_root="data/root",
         results_path="results",
@@ -33,7 +33,7 @@ def _make_namespace(**overrides):
     return argparse.Namespace(**defaults)
 
 
-def test_from_args_basic():
+def test_from_args_basic() -> None:
     config = TrainingConfig.from_args(_make_namespace())
     assert config.dataset_root == Path("data/root")
     assert config.run_name == "my_run"
@@ -43,23 +43,23 @@ def test_from_args_basic():
     assert config.resume is None
 
 
-def test_run_root_derived():
+def test_run_root_derived() -> None:
     config = TrainingConfig.from_args(_make_namespace(results_path="results", run_name="exp_01"))
     assert config.run_root == Path("results") / "exp_01"
 
 
-def test_from_args_with_resume():
+def test_from_args_with_resume() -> None:
     config = TrainingConfig.from_args(_make_namespace(resume="checkpoints/ep049.pth"))
     assert config.resume == "checkpoints/ep049.pth"
 
 
-def test_frozen():
+def test_frozen() -> None:
     config = TrainingConfig.from_args(_make_namespace())
     with pytest.raises((AttributeError, TypeError)):
         config.epochs = 999  # type: ignore[misc]
 
 
-def test_from_yaml(tmp_path):
+def test_from_yaml(tmp_path: Path) -> None:
     yaml_content = textwrap.dedent("""\
         dataset_root: /data
         results_path: /results
@@ -79,7 +79,7 @@ def test_from_yaml(tmp_path):
         log_rate: 10
     """)
     yaml_file = tmp_path / "train.yaml"
-    yaml_file.write_text(yaml_content)
+    yaml_file.write_text(yaml_content, encoding="utf-8")
 
     config = TrainingConfig.from_yaml(yaml_file)
     assert config.run_name == "yaml_run"
@@ -91,7 +91,7 @@ def test_from_yaml(tmp_path):
     assert config.run_root == Path("/results") / "yaml_run"
 
 
-def test_from_args_partial_namespace():
+def test_from_args_partial_namespace() -> None:
     """from_args() falls back to dataclass defaults when optional fields are absent (SUPPRESS)."""
     args = argparse.Namespace(dataset_root="/data", run_name="test_run", epochs=10)
     config = TrainingConfig.from_args(args)
@@ -105,7 +105,7 @@ def test_from_args_partial_namespace():
     assert config.log_rate == 15
 
 
-def test_to_yaml_round_trip(tmp_path):
+def test_to_yaml_round_trip(tmp_path: Path) -> None:
     config = TrainingConfig.from_args(_make_namespace(seed=42, epochs=20))
     yaml_file = tmp_path / "config.yaml"
     config.to_yaml(yaml_file)
@@ -114,7 +114,7 @@ def test_to_yaml_round_trip(tmp_path):
     assert loaded == config
 
 
-def test_from_yaml_defaults_for_optional_fields(tmp_path):
+def test_from_yaml_defaults_for_optional_fields(tmp_path: Path) -> None:
     yaml_content = textwrap.dedent("""\
         dataset_root: /data
         results_path: /results
@@ -122,7 +122,7 @@ def test_from_yaml_defaults_for_optional_fields(tmp_path):
         epochs: 10
     """)
     yaml_file = tmp_path / "minimal.yaml"
-    yaml_file.write_text(yaml_content)
+    yaml_file.write_text(yaml_content, encoding="utf-8")
 
     config = TrainingConfig.from_yaml(yaml_file)
     assert config.batch_size == 8

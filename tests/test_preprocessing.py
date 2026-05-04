@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 
@@ -10,13 +12,13 @@ from virtual_staining.data.preprocessing import is_valid_patch_pair, split_items
 # split_items
 # ---------------------------------------------------------------------------
 
-def test_split_items_covers_all_items():
+def test_split_items_covers_all_items() -> None:
     items = list(range(100))
     parts = split_items(items, [0.7, 0.15, 0.15])
     assert sum(len(p) for p in parts) == 100
 
 
-def test_split_items_respects_ratios():
+def test_split_items_respects_ratios() -> None:
     items = list(range(100))
     parts = split_items(items, [0.8, 0.1, 0.1])
     assert len(parts[0]) == 80
@@ -24,17 +26,17 @@ def test_split_items_respects_ratios():
     assert len(parts[2]) == 10
 
 
-def test_split_items_raises_on_single_ratio():
+def test_split_items_raises_on_single_ratio() -> None:
     with pytest.raises(ValueError):
         split_items([1, 2, 3], [1.0])
 
 
-def test_split_items_raises_on_sum_exceeds_one():
+def test_split_items_raises_on_sum_exceeds_one() -> None:
     with pytest.raises(ValueError):
         split_items([1, 2, 3], [0.6, 0.6])
 
 
-def test_split_items_raises_on_negative_ratio():
+def test_split_items_raises_on_negative_ratio() -> None:
     with pytest.raises(ValueError):
         split_items([1, 2, 3], [0.8, -0.1, 0.3])
 
@@ -52,15 +54,15 @@ def _solid_mask(value: int, size: int = 32) -> np.ndarray:
 
 
 def _call(
-    src_bgr,
-    tgt_bgr,
-    src_mask,
-    tgt_mask,
-    min_fg=0.25,
-    max_white=0.7,
-    white_threshold=250,
-    max_lw=0.20,
-):
+    src_bgr: np.ndarray,
+    tgt_bgr: np.ndarray,
+    src_mask: np.ndarray,
+    tgt_mask: np.ndarray,
+    min_fg: float = 0.25,
+    max_white: float = 0.7,
+    white_threshold: int = 250,
+    max_lw: float = 0.20,
+) -> tuple[bool, dict[str, Any]]:
     return is_valid_patch_pair(
         source_img=src_bgr,
         target_img=tgt_bgr,
@@ -77,8 +79,8 @@ def _call(
 # is_valid_patch_pair - acceptance
 # ---------------------------------------------------------------------------
 
-def test_valid_pair_is_accepted():
-    tissue = _solid_bgr(80)     # dark BGR → not white
+def test_valid_pair_is_accepted() -> None:
+    tissue = _solid_bgr(80)     # dark BGR, not white
     mask = _solid_mask(255)     # fully foreground
     valid, info = _call(tissue, tissue, mask, mask)
     assert valid is True
@@ -89,7 +91,7 @@ def test_valid_pair_is_accepted():
 # is_valid_patch_pair - rejection reasons
 # ---------------------------------------------------------------------------
 
-def test_rejects_low_source_foreground():
+def test_rejects_low_source_foreground() -> None:
     tissue = _solid_bgr(80)
     background_mask = _solid_mask(0)   # no foreground at all
     valid, info = _call(tissue, tissue, background_mask, _solid_mask(255))
@@ -97,14 +99,14 @@ def test_rejects_low_source_foreground():
     assert "low_source_foreground" in info["reasons"]
 
 
-def test_rejects_low_target_foreground():
+def test_rejects_low_target_foreground() -> None:
     tissue = _solid_bgr(80)
     valid, info = _call(tissue, tissue, _solid_mask(255), _solid_mask(0))
     assert valid is False
     assert "low_target_foreground" in info["reasons"]
 
 
-def test_rejects_high_source_white_ratio():
+def test_rejects_high_source_white_ratio() -> None:
     white = _solid_bgr(255)
     tissue = _solid_bgr(80)
     mask = _solid_mask(255)
@@ -113,7 +115,7 @@ def test_rejects_high_source_white_ratio():
     assert "high_source_white_ratio" in info["reasons"]
 
 
-def test_rejects_high_target_white_ratio():
+def test_rejects_high_target_white_ratio() -> None:
     white = _solid_bgr(255)
     tissue = _solid_bgr(80)
     mask = _solid_mask(255)
@@ -126,7 +128,7 @@ def test_rejects_high_target_white_ratio():
 # is_valid_patch_pair - debug_info keys
 # ---------------------------------------------------------------------------
 
-def test_debug_info_contains_required_keys():
+def test_debug_info_contains_required_keys() -> None:
     tissue = _solid_bgr(80)
     mask = _solid_mask(255)
     _, info = _call(tissue, tissue, mask, mask)
