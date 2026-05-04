@@ -129,6 +129,6 @@ check-types:
 check: lint format-check check-types
 
 clean:
-	rm -rf .ruff_cache .mypy_cache .pyright __pycache__
+	rm -rf .ruff_cache .mypy_cache .pyright __pycache__ .pytest_tmp
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
 	find . -type f \( -name "*.pyc" -o -name "*.pyo" \) -delete
