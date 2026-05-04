@@ -21,6 +21,14 @@ IMAGE_SIZE ?= 512 512
 GRID_MOVEMENT ?= 512 512
 MARGIN ?= 200
 
+# Compare args
+RUN_NAME_A ?=
+RUN_NAME_B ?=
+LABEL_A ?= $(RUN_NAME_A)
+LABEL_B ?= $(RUN_NAME_B)
+COMPARE_COLUMN ?= ssim
+COMPARE_DIRECTION ?= higher-is-better
+
 # Derived paths
 DATASET_ROOT      := local_workspace/datasets/$(DATASET)
 RESULTS_PATH      := local_workspace/results
@@ -28,6 +36,7 @@ RUN_PATH          := $(RESULTS_PATH)/$(RUN_NAME)
 CHECKPOINT_DIR    := $(RUN_PATH)/checkpoints
 DATASET_TEST_PATH := $(DATASET_ROOT)/dataset_test
 OUTPUT_TEST_PATH  := $(RUN_PATH)/output_test
+COMPARE_OUTPUT    ?= $(RESULTS_PATH)/comparisons/$(RUN_NAME_A)_vs_$(RUN_NAME_B)/$(COMPARE_COLUMN)
 
 # Auto-pick the highest checkpoint if not provided explicitly
 AUTO_CHECKPOINT := $(lastword $(sort $(wildcard $(CHECKPOINT_DIR)/ep*.pth)))
@@ -42,6 +51,8 @@ help:
 	@printf "  make train                            Train Pix2Pix\n"
 	@printf "  make infer                            Run inference with a trained checkpoint\n"
 	@printf "  make evaluate                         Evaluate generated outputs\n"
+	@printf "  make compare-unpaired                 Compare two independent metric distributions\n"
+	@printf "  make compare-paired                   Compare two runs on the same test samples\n"
 	@printf "  make run-all                          Run train, infer, and evaluate sequentially\n"
 	@printf "  make test                             Run the unit test suite (pytest)\n"
 	@printf "  make sync                             Install exact versions from uv.lock (reproducible)\n"
@@ -67,6 +78,13 @@ help:
 	@printf "  SEED=<n>                              Training seed (default: $(SEED))\n"
 	@printf "  L1=<n>                                L1 loss weight for training (default: $(L1))\n"
 	@printf "  CHECKPOINT=<path>                     Optional explicit checkpoint for infer\n"
+	@printf "  RUN_NAME_A=<name>                     First run name for compare targets\n"
+	@printf "  RUN_NAME_B=<name>                     Second run name for compare targets\n"
+	@printf "  LABEL_A=<label>                       Display label for run A (default: RUN_NAME_A)\n"
+	@printf "  LABEL_B=<label>                       Display label for run B (default: RUN_NAME_B)\n"
+	@printf "  COMPARE_COLUMN=<col>                  Metric column to compare (default: $(COMPARE_COLUMN))\n"
+	@printf "  COMPARE_DIRECTION=<dir>               higher-is-better or lower-is-better (default: $(COMPARE_DIRECTION))\n"
+	@printf "  COMPARE_OUTPUT=<path>                 Output directory for compare results\n"
 	@printf "\nExamples:\n"
 	@printf "  cp .env.make.example .env.make\n"
 	@printf "  make prepare-dataset SOURCE_NAME=source.tif TARGET_NAME=target.tif\n"
@@ -78,6 +96,8 @@ help:
 	@printf "  make train DATASET=inv_1024 RUN_NAME=inv_P-1024_L1-50\n"
 	@printf "  make train DATASET=inv_512 RUN_NAME=inv_debug EPOCHS=10 SEED=123 L1=37\n"
 	@printf "  make infer DATASET=inv_512 RUN_NAME=inv_P-512_L1-37 CHECKPOINT=local_workspace/results/inv_P-512_L1-37/checkpoints/ep042.pth\n"
+	@printf "  make compare-paired RUN_NAME_A=run_l1_25 RUN_NAME_B=run_l1_50 COMPARE_COLUMN=ssim\n"
+	@printf "  make compare-unpaired RUN_NAME_A=run_a RUN_NAME_B=run_b COMPARE_COLUMN=mae COMPARE_DIRECTION=lower-is-better\n"
 	@printf "\n"
 
 require-config:
@@ -86,6 +106,10 @@ require-config:
 
 require-dataset:
 	@test -n "$(DATASET)" || (echo "DATASET is empty. Set it once, e.g. export DATASET=inv_512"; exit 1)
+
+require-compare:
+	@test -n "$(RUN_NAME_A)" || (echo "RUN_NAME_A is empty. Set it, e.g. RUN_NAME_A=run_a"; exit 1)
+	@test -n "$(RUN_NAME_B)" || (echo "RUN_NAME_B is empty. Set it, e.g. RUN_NAME_B=run_b"; exit 1)
 
 sync:
 	$(UV) sync --frozen
@@ -105,6 +129,26 @@ infer: require-config
 
 evaluate: require-config
 	$(PYTHON) tools/evaluate_generation.py dataset --target-dir $(DATASET_TEST_PATH) --generated-dir $(OUTPUT_TEST_PATH) --save-graphs
+
+compare-unpaired: require-compare
+	$(PYTHON) tools/compare_distributions.py unpaired \
+		--csv-a $(RESULTS_PATH)/$(RUN_NAME_A)/evaluation \
+		--csv-b $(RESULTS_PATH)/$(RUN_NAME_B)/evaluation \
+		--label-a $(LABEL_A) \
+		--label-b $(LABEL_B) \
+		--column $(COMPARE_COLUMN) \
+		--$(COMPARE_DIRECTION) \
+		--output-dir $(COMPARE_OUTPUT)
+
+compare-paired: require-compare
+	$(PYTHON) tools/compare_distributions.py paired \
+		--csv-a $(RESULTS_PATH)/$(RUN_NAME_A)/evaluation \
+		--csv-b $(RESULTS_PATH)/$(RUN_NAME_B)/evaluation \
+		--label-a $(LABEL_A) \
+		--label-b $(LABEL_B) \
+		--column $(COMPARE_COLUMN) \
+		--$(COMPARE_DIRECTION) \
+		--output-dir $(COMPARE_OUTPUT)
 
 run-all:
 	$(MAKE) train
