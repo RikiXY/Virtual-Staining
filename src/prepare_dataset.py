@@ -8,12 +8,28 @@ extracts paired patches, and creates the `dataset_train`, `dataset_val`, and
 """
 
 import argparse
-from dataclasses import replace
 from pathlib import Path
 
 from virtual_staining.data.builder import DatasetBuilder
 from virtual_staining.data.config import PreprocessingConfig
 from virtual_staining.data.results import DatasetBuildResult
+from virtual_staining.utils.cli import apply_namespace_overrides
+
+
+_PREPROCESSING_OVERRIDES = {
+    "path": ("dataset_root", Path),
+    "source_name": "source_name",
+    "target_name": "target_name",
+    "image_size": ("image_size", tuple),
+    "grid_movement": ("grid_movement", tuple),
+    "margin": "margin",
+    "seed": "seed",
+    "save_masks": "save_masks",
+    "min_foreground_ratio": "min_foreground_ratio",
+    "max_white_ratio": "max_white_ratio",
+    "white_threshold": "white_threshold",
+    "max_largest_white_component_ratio": "max_largest_white_component_ratio",
+}
 
 
 def main(config: PreprocessingConfig) -> DatasetBuildResult:
@@ -22,32 +38,7 @@ def main(config: PreprocessingConfig) -> DatasetBuildResult:
 
 def _apply_overrides(config: PreprocessingConfig, args: argparse.Namespace) -> PreprocessingConfig:
     """Apply any CLI-specified fields on top of a YAML-loaded config."""
-    kw: dict = {}
-    if hasattr(args, "path"):
-        kw["dataset_root"] = Path(args.path)
-    if hasattr(args, "source_name"):
-        kw["source_name"] = args.source_name
-    if hasattr(args, "target_name"):
-        kw["target_name"] = args.target_name
-    if hasattr(args, "image_size"):
-        kw["image_size"] = tuple(args.image_size)
-    if hasattr(args, "grid_movement"):
-        kw["grid_movement"] = tuple(args.grid_movement)
-    if hasattr(args, "margin"):
-        kw["margin"] = args.margin
-    if hasattr(args, "seed"):
-        kw["seed"] = args.seed
-    if hasattr(args, "save_masks"):
-        kw["save_masks"] = args.save_masks
-    if hasattr(args, "min_foreground_ratio"):
-        kw["min_foreground_ratio"] = args.min_foreground_ratio
-    if hasattr(args, "max_white_ratio"):
-        kw["max_white_ratio"] = args.max_white_ratio
-    if hasattr(args, "white_threshold"):
-        kw["white_threshold"] = args.white_threshold
-    if hasattr(args, "max_largest_white_component_ratio"):
-        kw["max_largest_white_component_ratio"] = args.max_largest_white_component_ratio
-    return replace(config, **kw) if kw else config
+    return apply_namespace_overrides(config, args, _PREPROCESSING_OVERRIDES)
 
 
 if __name__ == "__main__":
@@ -66,8 +57,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config",
         type=str,
-        default=None,
-        help="path to a preprocessing config YAML (CLI flags override matching fields)"
+        default="config/preprocessing.yaml",
+        help=(
+            "path to a preprocessing config YAML "
+            "(default: config/preprocessing.yaml; CLI flags override fields)"
+        )
     )
     parser.add_argument(
         "--path",
@@ -147,20 +141,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    if args.config:
-        config = PreprocessingConfig.from_yaml(args.config)
-        config = _apply_overrides(config, args)
-    else:
-        missing = [flag for flag, attr in [
-            ("--path", "path"),
-            ("--source-name", "source_name"),
-            ("--target-name", "target_name"),
-        ] if not hasattr(args, attr)]
-        if missing:
-            parser.error(
-                "the following arguments are required when --config is not given: "
-                + ", ".join(missing)
-            )
-        config = PreprocessingConfig.from_args(args)
+    config = PreprocessingConfig.from_yaml(args.config)
+    config = _apply_overrides(config, args)
 
     main(config)

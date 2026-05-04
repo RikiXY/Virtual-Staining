@@ -1,6 +1,7 @@
 # Training configuration for the Pix2Pix model.
-# Pass this file to pix2pix.py train with --config.
-# Any field can be overridden on the command line.
+# Loaded by default by pix2pix.py train.
+# Precedence in Python: CLI arguments > this YAML > code defaults.
+# Make can convert Make/environment variables into CLI arguments before launching Python.
 #
 # dataset_root, run_name, and epochs must be set before use.
 

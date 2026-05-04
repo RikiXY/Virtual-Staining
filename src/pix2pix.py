@@ -1,7 +1,5 @@
 import argparse
-import os
 import random
-from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +14,28 @@ from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.config import TrainingConfig
 from virtual_staining.training.trainer import Trainer
+from virtual_staining.utils.cli import apply_namespace_overrides
+
+
+_TRAIN_OVERRIDES = {
+    "dataset_root": ("dataset_root", Path),
+    "results_path": ("results_path", Path),
+    "run_name": "run_name",
+    "image_size": ("image_size", tuple),
+    "batch_size": "batch_size",
+    "epochs": "epochs",
+    "lr_g": "lr_g",
+    "lr_d": "lr_d",
+    "beta1": "beta1",
+    "beta2": "beta2",
+    "l1_weight": "l1_weight",
+    "seed": "seed",
+    "num_workers": "num_workers",
+    "validate_rate": "validate_rate",
+    "checkpoint_rate": "checkpoint_rate",
+    "log_rate": "log_rate",
+    "resume": "resume",
+}
 
 
 # --------------------- Working paths ---------------------
@@ -71,8 +91,11 @@ def build_parser():
     train_parser.add_argument(
         "--config",
         type=str,
-        default=None,
-        help="path to a training config YAML (CLI flags override matching fields)"
+        default="config/train.yaml",
+        help=(
+            "path to a training config YAML "
+            "(default: config/train.yaml; CLI flags override fields)"
+        )
     )
     train_parser.add_argument(
         "--dataset-root",
@@ -222,42 +245,7 @@ def build_parser():
 
 def _apply_train_overrides(config: TrainingConfig, args: argparse.Namespace) -> TrainingConfig:
     """Apply any CLI-specified fields on top of a YAML-loaded TrainingConfig."""
-    kw: dict = {}
-    if hasattr(args, "dataset_root"):
-        kw["dataset_root"] = Path(args.dataset_root)
-    if hasattr(args, "results_path"):
-        kw["results_path"] = Path(args.results_path)
-    if hasattr(args, "run_name"):
-        kw["run_name"] = args.run_name
-    if hasattr(args, "image_size"):
-        kw["image_size"] = tuple(args.image_size)
-    if hasattr(args, "batch_size"):
-        kw["batch_size"] = args.batch_size
-    if hasattr(args, "epochs"):
-        kw["epochs"] = args.epochs
-    if hasattr(args, "lr_g"):
-        kw["lr_g"] = args.lr_g
-    if hasattr(args, "lr_d"):
-        kw["lr_d"] = args.lr_d
-    if hasattr(args, "beta1"):
-        kw["beta1"] = args.beta1
-    if hasattr(args, "beta2"):
-        kw["beta2"] = args.beta2
-    if hasattr(args, "l1_weight"):
-        kw["l1_weight"] = args.l1_weight
-    if hasattr(args, "seed"):
-        kw["seed"] = args.seed
-    if hasattr(args, "num_workers"):
-        kw["num_workers"] = args.num_workers
-    if hasattr(args, "validate_rate"):
-        kw["validate_rate"] = args.validate_rate
-    if hasattr(args, "checkpoint_rate"):
-        kw["checkpoint_rate"] = args.checkpoint_rate
-    if hasattr(args, "log_rate"):
-        kw["log_rate"] = args.log_rate
-    if hasattr(args, "resume"):
-        kw["resume"] = args.resume
-    return replace(config, **kw) if kw else config
+    return apply_namespace_overrides(config, args, _TRAIN_OVERRIDES)
 
 
 def is_amp_enabled(device):
@@ -399,21 +387,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.mode == "train":
-        if args.config:
-            config = TrainingConfig.from_yaml(args.config)
-            config = _apply_train_overrides(config, args)
-        else:
-            missing = [flag for flag, attr in [
-                ("--dataset-root", "dataset_root"),
-                ("--run-name", "run_name"),
-                ("--epochs", "epochs"),
-            ] if not hasattr(args, attr)]
-            if missing:
-                parser.error(
-                    "the following arguments are required when --config is not given: "
-                    + ", ".join(missing)
-                )
-            config = TrainingConfig.from_args(args)
+        config = TrainingConfig.from_yaml(args.config)
+        config = _apply_train_overrides(config, args)
         main(config)
 
     elif args.mode == "test":
