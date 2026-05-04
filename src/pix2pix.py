@@ -60,33 +60,33 @@ def build_workspace_paths(run_root: str | Path) -> dict:
 # The script supports two distinct modes: training and testing.
 def build_parser():
     parser = argparse.ArgumentParser(
-    prog="python src/pix2pix.py",
-    description="Train or test the Pix2Pix model on a paired histology dataset.",
-    epilog=(
-        "Examples:\n"
-        "  python src/pix2pix.py train "
-        "--dataset-root local_workspace/datasets/inverted_256 "
-        "--run-name inv_P-256_L1-25 "
-        "--epochs 100 "
-        "--image-size 256 256\n"
-        "\n"
-        "  python src/pix2pix.py test "
-        "--dataset-root local_workspace/datasets/inverted_256 "
-        "--run-path local_workspace/results/inv_P-256_L1-25 "
-        "--checkpoint local_workspace/results/inv_P-256_L1-25/checkpoints/ep099.pth\n"
-        "\n"
-        "Use 'python src/pix2pix.py <command> --help' "
-        "to see the options for a specific command."
-    ),
-    formatter_class=argparse.RawTextHelpFormatter
-)
+        prog="python src/pix2pix.py",
+        description="Train or test the Pix2Pix model on a paired histology dataset.",
+        epilog=(
+            "Examples:\n"
+            "  python src/pix2pix.py train "
+            "--dataset-root local_workspace/datasets/inverted_256 "
+            "--run-name inv_P-256_L1-25 "
+            "--epochs 100 "
+            "--image-size 256 256\n"
+            "\n"
+            "  python src/pix2pix.py test "
+            "--dataset-root local_workspace/datasets/inverted_256 "
+            "--run-path local_workspace/results/inv_P-256_L1-25 "
+            "--checkpoint local_workspace/results/inv_P-256_L1-25/checkpoints/ep099.pth\n"
+            "\n"
+            "Use 'python src/pix2pix.py <command> --help' "
+            "to see the options for a specific command."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
 
     subparsers = parser.add_subparsers(dest="mode", required=True)
 
     train_parser = subparsers.add_parser(
         "train",
         help="Train the Pix2Pix model",
-        formatter_class=argparse.RawTextHelpFormatter
+        formatter_class=argparse.RawTextHelpFormatter,
     )
     train_parser.add_argument(
         "--config",
@@ -95,49 +95,49 @@ def build_parser():
         help=(
             "path to a training config YAML "
             "(default: config/train.yaml; CLI flags override fields)"
-        )
+        ),
     )
     train_parser.add_argument(
         "--dataset-root",
         type=str,
         default=argparse.SUPPRESS,
-        help="Path to the dataset root containing dataset_train/ and dataset_val/"
+        help="Path to the dataset root containing dataset_train/ and dataset_val/",
     )
     train_parser.add_argument(
         "--run-name",
         type=str,
         default=argparse.SUPPRESS,
-        help="Name of the output run directory to create"
+        help="Name of the output run directory to create",
     )
     train_parser.add_argument(
         "--results-path",
         type=str,
         default=argparse.SUPPRESS,
-        help="Base directory where the new run folder will be created (default: local_workspace/results)"
+        help="Base directory where the new run folder will be created (default: local_workspace/results)",
     )
     train_parser.add_argument(
         "--seed",
         type=int,
         default=argparse.SUPPRESS,
-        help="Random seed for reproducibility. If omitted, a random seed is generated."
+        help="Random seed for reproducibility. If omitted, a random seed is generated.",
     )
     train_parser.add_argument(
         "--epochs",
         type=int,
         default=argparse.SUPPRESS,
-        help="Number of training epochs"
+        help="Number of training epochs",
     )
     train_parser.add_argument(
         "--batch-size",
         type=int,
         default=argparse.SUPPRESS,
-        help="Batch size for the DataLoader (default: 8)"
+        help="Batch size for the DataLoader (default: 8)",
     )
     train_parser.add_argument(
         "--num-workers",
         type=int,
         default=argparse.SUPPRESS,
-        help="Number of DataLoader workers (default: min(4, cpu_count))"
+        help="Number of DataLoader workers (default: min(4, cpu_count))",
     )
     train_parser.add_argument(
         "--image-size",
@@ -148,85 +148,85 @@ def build_parser():
         help=(
             "Resize images before training as HEIGHT WIDTH "
             "(default: 256 256). Use 512 512 for 512x512 patch experiments."
-        )
+        ),
     )
     train_parser.add_argument(
         "--log-rate",
         type=int,
         default=argparse.SUPPRESS,
-        help="Log every N batches (default: 15)"
+        help="Log every N batches (default: 15)",
     )
     train_parser.add_argument(
         "--checkpoint-rate",
         type=int,
         default=argparse.SUPPRESS,
-        help="Save a checkpoint every N epochs (default: 10)"
+        help="Save a checkpoint every N epochs (default: 10)",
     )
     train_parser.add_argument(
         "--validate-rate",
         type=int,
         default=argparse.SUPPRESS,
-        help="Run validation every N epochs (default: 10)"
+        help="Run validation every N epochs (default: 10)",
     )
     train_parser.add_argument(
         "--resume",
         type=str,
         default=argparse.SUPPRESS,
-        help="Optional checkpoint path to resume training from"
+        help="Optional checkpoint path to resume training from",
     )
     train_parser.add_argument(
         "--l1-weight",
         type=float,
         default=argparse.SUPPRESS,
-        help="Weight of the L1 reconstruction loss (default: 25.0)"
+        help="Weight of the L1 reconstruction loss (default: 25.0)",
     )
     train_parser.add_argument(
         "--lr-g",
         type=float,
         default=argparse.SUPPRESS,
-        help="Learning rate for the generator (default: 2e-4)"
+        help="Learning rate for the generator (default: 2e-4)",
     )
     train_parser.add_argument(
         "--lr-d",
         type=float,
         default=argparse.SUPPRESS,
-        help="Learning rate for the discriminator (default: 2e-4)"
+        help="Learning rate for the discriminator (default: 2e-4)",
     )
     train_parser.add_argument(
         "--beta1",
         type=float,
         default=argparse.SUPPRESS,
-        help="Adam beta1 (default: 0.5)"
+        help="Adam beta1 (default: 0.5)",
     )
     train_parser.add_argument(
         "--beta2",
         type=float,
         default=argparse.SUPPRESS,
-        help="Adam beta2 (default: 0.999)"
+        help="Adam beta2 (default: 0.999)",
     )
 
     test_parser = subparsers.add_parser(
         "test",
         help="Run inference on the test set",
-        formatter_class=argparse.RawTextHelpFormatter
+        formatter_class=argparse.RawTextHelpFormatter,
     )
     test_parser.add_argument(
         "--dataset-root",
         type=str,
         required=True,
-        help="Path to the dataset root containing dataset_test/"
+        help="Path to the dataset root containing dataset_test/",
     )
     test_parser.add_argument(
         "--checkpoint",
         type=str,
         required=True,
-        help="Path to the checkpoint to use for inference"
+        help="Path to the checkpoint to use for inference",
     )
     test_parser.add_argument(
         "--run-path",
         type=str,
         required=True,
-        help="Path to an existing training run containing checkpoints/ and output folders"
+        help="Path to an existing training run containing checkpoints/ and output folders",
     )
     test_parser.add_argument(
         "--image-size",
@@ -237,13 +237,15 @@ def build_parser():
         help=(
             "Resize images before inference as HEIGHT WIDTH "
             "(default: 256 256). Must match the image size used during training."
-        )
+        ),
     )
 
     return parser
 
 
-def _apply_train_overrides(config: TrainingConfig, args: argparse.Namespace) -> TrainingConfig:
+def _apply_train_overrides(
+    config: TrainingConfig, args: argparse.Namespace
+) -> TrainingConfig:
     """Apply any CLI-specified fields on top of a YAML-loaded TrainingConfig."""
     return apply_namespace_overrides(config, args, _TRAIN_OVERRIDES)
 
@@ -275,11 +277,13 @@ def main(config: TrainingConfig) -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    transform = transforms.Compose([
-        transforms.Resize(config.image_size),
-        transforms.ToTensor(),
-        transforms.Normalize([0.5] * 3, [0.5] * 3),
-    ])
+    transform = transforms.Compose(
+        [
+            transforms.Resize(config.image_size),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5] * 3, [0.5] * 3),
+        ]
+    )
 
     train_dir = Path(config.dataset_root) / "dataset_train"
     val_dir = Path(config.dataset_root) / "dataset_val"
@@ -313,11 +317,7 @@ def main(config: TrainingConfig) -> None:
 
 
 def test_inference(
-    checkpoint_path,
-    test_folder,
-    output_folder,
-    image_size=(256, 256),
-    device=None
+    checkpoint_path, test_folder, output_folder, image_size=(256, 256), device=None
 ):
     """
     Runs inference on the test set and saves the generated images.
@@ -347,11 +347,13 @@ def test_inference(
 
     # Preprocessing must stay consistent with training,
     # otherwise the model would receive inputs with a different distribution.
-    transform = transforms.Compose([
-        transforms.Resize(image_size),
-        transforms.ToTensor(),
-        transforms.Normalize([0.5] * 3, [0.5] * 3),
-    ])
+    transform = transforms.Compose(
+        [
+            transforms.Resize(image_size),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5] * 3, [0.5] * 3),
+        ]
+    )
 
     dataset = PairedHistologyDataset(test_folder, transform=transform)
 
@@ -364,7 +366,7 @@ def test_inference(
     with torch.no_grad():
         for idx, (source_tensor, _) in enumerate(dataset):
             source_path = dataset.pairs[idx][0]
-            prefix = source_path.stem[:-len("_source")]
+            prefix = source_path.stem[: -len("_source")]
             out_filename = f"{prefix}_target_generated{source_path.suffix.lower()}"
 
             img_tensor = source_tensor.unsqueeze(0).to(device)
@@ -405,5 +407,5 @@ if __name__ == "__main__":
             test_folder=str(test_dir),
             output_folder=str(paths["output_test_dir"]),
             image_size=tuple(args.image_size),
-            device=device
+            device=device,
         )

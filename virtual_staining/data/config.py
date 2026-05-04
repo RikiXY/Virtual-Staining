@@ -39,7 +39,9 @@ class PreprocessingConfig:
             min_foreground_ratio=getattr(args, "min_foreground_ratio", 0.25),
             max_white_ratio=getattr(args, "max_white_ratio", 0.7),
             white_threshold=getattr(args, "white_threshold", 250),
-            max_largest_white_component_ratio=getattr(args, "max_largest_white_component_ratio", 0.20),
+            max_largest_white_component_ratio=getattr(
+                args, "max_largest_white_component_ratio", 0.20
+            ),
         )
 
     def to_yaml(self, path: str | Path) -> None:

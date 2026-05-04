@@ -21,6 +21,7 @@ from virtual_staining.training.trainer import Trainer
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
 
+
 def _write_rgb_pair(directory: Path, prefix: str = "00000_00000") -> None:
     """Write a minimal 32x32 RGB source/target pair to *directory*."""
     arr = np.zeros((32, 32, 3), dtype=np.uint8)
@@ -28,7 +29,9 @@ def _write_rgb_pair(directory: Path, prefix: str = "00000_00000") -> None:
     Image.fromarray(arr).save(directory / f"{prefix}_target.png")
 
 
-def _make_trainer(tmp_path: Path, checkpoint_rate: int) -> tuple[Trainer, TrainingConfig]:
+def _make_trainer(
+    tmp_path: Path, checkpoint_rate: int
+) -> tuple[Trainer, TrainingConfig]:
     dataset_root = tmp_path / "dataset"
     train_dir = dataset_root / "dataset_train"
     val_dir = dataset_root / "dataset_val"
@@ -104,6 +107,7 @@ def checkpointing_trainer(tmp_path: Path) -> tuple[Trainer, TrainingConfig]:
 # Smoke tests (no checkpoint I/O)
 # ---------------------------------------------------------------------------
 
+
 def test_trainer_smoke_run_creates_expected_files(
     smoke_trainer: tuple[Trainer, TrainingConfig],
 ) -> None:
@@ -150,6 +154,7 @@ def test_trainer_metrics_csv_structure(
 # Checkpoint round-trip (writes one real checkpoint)
 # ---------------------------------------------------------------------------
 
+
 def test_trainer_checkpoint_round_trip(
     checkpointing_trainer: tuple[Trainer, TrainingConfig],
 ) -> None:
@@ -171,11 +176,13 @@ def test_trainer_checkpoint_round_trip(
     )
     train_loader = DataLoader(
         PairedHistologyDataset(train_dir, transform=transform),
-        batch_size=1, num_workers=0,
+        batch_size=1,
+        num_workers=0,
     )
     val_loader = DataLoader(
         PairedHistologyDataset(val_dir, transform=transform),
-        batch_size=1, num_workers=0,
+        batch_size=1,
+        num_workers=0,
     )
 
     trainer_2 = Trainer(

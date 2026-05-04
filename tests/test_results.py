@@ -12,6 +12,7 @@ from virtual_staining.training.results import EpochMetrics
 # EpochMetrics
 # ---------------------------------------------------------------------------
 
+
 def test_epoch_metrics_required_fields() -> None:
     metrics = EpochMetrics(loss_G=0.42, loss_D=0.18)
     assert metrics.loss_G == pytest.approx(0.42)
@@ -39,6 +40,7 @@ def test_epoch_metrics_frozen() -> None:
 # ---------------------------------------------------------------------------
 # DatasetBuildResult
 # ---------------------------------------------------------------------------
+
 
 def test_dataset_build_result_fields() -> None:
     result = DatasetBuildResult(

@@ -19,6 +19,7 @@ def _rgb(value: float, h: int = 8, w: int = 8) -> np.ndarray:
 # Identical images - perfect scores
 # ---------------------------------------------------------------------------
 
+
 def test_mae_identical_images() -> None:
     img = _rgb(0.5)
     assert compute_mae(img, img) == 0.0
@@ -43,6 +44,7 @@ def test_ssim_identical_images() -> None:
 # Near-inverted pair - poor scores
 # ---------------------------------------------------------------------------
 
+
 def test_mae_inverted_pair() -> None:
     a = _rgb(0.9)
     b = _rgb(0.1)
@@ -64,6 +66,7 @@ def test_ssim_inverted_pair_is_low() -> None:
 # ---------------------------------------------------------------------------
 # Known PSNR value
 # ---------------------------------------------------------------------------
+
 
 def test_psnr_known_value() -> None:
     # MSE = 0.1^2 = 0.01; PSNR = 20 * log10(1 / 0.1) = 20.0 dB.

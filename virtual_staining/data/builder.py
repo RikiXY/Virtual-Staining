@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import random
-from pathlib import Path
 
 import cv2
 import numpy as np
@@ -156,7 +155,9 @@ class DatasetBuilder:
     def filter_patches(self) -> None:
         """Classify each patch pair as valid or discarded based on quality thresholds."""
         if self._positions is None:
-            raise RuntimeError("extract_patches() must be called before filter_patches()")
+            raise RuntimeError(
+                "extract_patches() must be called before filter_patches()"
+            )
 
         named_source: list[tuple[np.ndarray, str]] = []
         named_target: list[tuple[np.ndarray, str]] = []
@@ -196,12 +197,20 @@ class DatasetBuilder:
                         "sample_id": f"{x:05}_{y:05}",
                         "source_name": patch_source_name,
                         "target_name": patch_target_name,
-                        "source_foreground_ratio": debug_info["source_foreground_ratio"],
-                        "target_foreground_ratio": debug_info["target_foreground_ratio"],
+                        "source_foreground_ratio": debug_info[
+                            "source_foreground_ratio"
+                        ],
+                        "target_foreground_ratio": debug_info[
+                            "target_foreground_ratio"
+                        ],
                         "source_white_ratio": debug_info["source_white_ratio"],
                         "target_white_ratio": debug_info["target_white_ratio"],
-                        "source_largest_white_component_ratio": debug_info["source_largest_white_component_ratio"],
-                        "target_largest_white_component_ratio": debug_info["target_largest_white_component_ratio"],
+                        "source_largest_white_component_ratio": debug_info[
+                            "source_largest_white_component_ratio"
+                        ],
+                        "target_largest_white_component_ratio": debug_info[
+                            "target_largest_white_component_ratio"
+                        ],
                         "reasons": ";".join(debug_info["reasons"]),
                     }
                 )
@@ -215,7 +224,9 @@ class DatasetBuilder:
     def split_and_save(self) -> DatasetBuildResult:
         """Split valid pairs into train/val/test and write all output files."""
         if self._named_source_images is None:
-            raise RuntimeError("filter_patches() must be called before split_and_save()")
+            raise RuntimeError(
+                "filter_patches() must be called before split_and_save()"
+            )
 
         root = self.config.dataset_root
         discarded_root = root / "discarded_patches"
@@ -234,13 +245,19 @@ class DatasetBuilder:
         for img, name in self._discarded_target_images:
             cv2.imwrite(str(discarded_root / "target" / name), img)
 
-        with open(discarded_root / "discarded_log.csv", "w", newline="", encoding="utf-8") as f:
+        with open(
+            discarded_root / "discarded_log.csv", "w", newline="", encoding="utf-8"
+        ) as f:
             writer = csv.DictWriter(
                 f,
                 fieldnames=[
-                    "sample_id", "source_name", "target_name",
-                    "source_foreground_ratio", "target_foreground_ratio",
-                    "source_white_ratio", "target_white_ratio",
+                    "sample_id",
+                    "source_name",
+                    "target_name",
+                    "source_foreground_ratio",
+                    "target_foreground_ratio",
+                    "source_white_ratio",
+                    "target_white_ratio",
                     "reasons",
                     "source_largest_white_component_ratio",
                     "target_largest_white_component_ratio",

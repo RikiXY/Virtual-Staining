@@ -12,6 +12,7 @@ from virtual_staining.data.preprocessing import is_valid_patch_pair, split_items
 # split_items
 # ---------------------------------------------------------------------------
 
+
 def test_split_items_covers_all_items() -> None:
     items = list(range(100))
     parts = split_items(items, [0.7, 0.15, 0.15])
@@ -44,6 +45,7 @@ def test_split_items_raises_on_negative_ratio() -> None:
 # ---------------------------------------------------------------------------
 # is_valid_patch_pair helpers
 # ---------------------------------------------------------------------------
+
 
 def _solid_bgr(value: int, size: int = 32) -> np.ndarray:
     return np.full((size, size, 3), value, dtype=np.uint8)
@@ -79,9 +81,10 @@ def _call(
 # is_valid_patch_pair - acceptance
 # ---------------------------------------------------------------------------
 
+
 def test_valid_pair_is_accepted() -> None:
-    tissue = _solid_bgr(80)     # dark BGR, not white
-    mask = _solid_mask(255)     # fully foreground
+    tissue = _solid_bgr(80)  # dark BGR, not white
+    mask = _solid_mask(255)  # fully foreground
     valid, info = _call(tissue, tissue, mask, mask)
     assert valid is True
     assert info["reasons"] == []
@@ -91,9 +94,10 @@ def test_valid_pair_is_accepted() -> None:
 # is_valid_patch_pair - rejection reasons
 # ---------------------------------------------------------------------------
 
+
 def test_rejects_low_source_foreground() -> None:
     tissue = _solid_bgr(80)
-    background_mask = _solid_mask(0)   # no foreground at all
+    background_mask = _solid_mask(0)  # no foreground at all
     valid, info = _call(tissue, tissue, background_mask, _solid_mask(255))
     assert valid is False
     assert "low_source_foreground" in info["reasons"]
@@ -127,6 +131,7 @@ def test_rejects_high_target_white_ratio() -> None:
 # ---------------------------------------------------------------------------
 # is_valid_patch_pair - debug_info keys
 # ---------------------------------------------------------------------------
+
 
 def test_debug_info_contains_required_keys() -> None:
     tissue = _solid_bgr(80)

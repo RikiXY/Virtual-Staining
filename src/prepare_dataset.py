@@ -36,7 +36,9 @@ def main(config: PreprocessingConfig) -> DatasetBuildResult:
     return DatasetBuilder(config).run_all()
 
 
-def _apply_overrides(config: PreprocessingConfig, args: argparse.Namespace) -> PreprocessingConfig:
+def _apply_overrides(
+    config: PreprocessingConfig, args: argparse.Namespace
+) -> PreprocessingConfig:
     """Apply any CLI-specified fields on top of a YAML-loaded config."""
     return apply_namespace_overrides(config, args, _PREPROCESSING_OVERRIDES)
 
@@ -61,37 +63,37 @@ if __name__ == "__main__":
         help=(
             "path to a preprocessing config YAML "
             "(default: config/preprocessing.yaml; CLI flags override fields)"
-        )
+        ),
     )
     parser.add_argument(
         "--path",
         type=str,
         default=argparse.SUPPRESS,
-        help="path to the folder containing the source and target images"
+        help="path to the folder containing the source and target images",
     )
     parser.add_argument(
         "--source-name",
         type=str,
         default=argparse.SUPPRESS,
-        help="Source image filename with extension (.tif, .tiff, .png)"
+        help="Source image filename with extension (.tif, .tiff, .png)",
     )
     parser.add_argument(
         "--target-name",
         type=str,
         default=argparse.SUPPRESS,
-        help="Target image filename with extension (.tif, .tiff, .png)"
+        help="Target image filename with extension (.tif, .tiff, .png)",
     )
     parser.add_argument(
         "--seed",
         type=int,
         default=argparse.SUPPRESS,
-        help="random seed for reproducibility (optional)"
+        help="random seed for reproducibility (optional)",
     )
     parser.add_argument(
         "--save-masks",
         action="store_true",
         default=argparse.SUPPRESS,
-        help="if set, also saves the subimage masks"
+        help="if set, also saves the subimage masks",
     )
     parser.add_argument(
         "--image-size",
@@ -99,7 +101,7 @@ if __name__ == "__main__":
         nargs=2,
         metavar=("WIDTH", "HEIGHT"),
         default=argparse.SUPPRESS,
-        help="Patch size used for extraction (default: 256 256)"
+        help="Patch size used for extraction (default: 256 256)",
     )
     parser.add_argument(
         "--grid-movement",
@@ -107,37 +109,37 @@ if __name__ == "__main__":
         nargs=2,
         metavar=("STEP_X", "STEP_Y"),
         default=argparse.SUPPRESS,
-        help="Grid step used for patch extraction (default: 256 256)"
+        help="Grid step used for patch extraction (default: 256 256)",
     )
     parser.add_argument(
         "--margin",
         type=int,
         default=argparse.SUPPRESS,
-        help="Margin cropped from each border before patch extraction (default: 200)"
+        help="Margin cropped from each border before patch extraction (default: 200)",
     )
     parser.add_argument(
         "--min-foreground-ratio",
         type=float,
         default=argparse.SUPPRESS,
-        help="Minimum foreground tissue ratio for a patch to be kept (default: 0.25)"
+        help="Minimum foreground tissue ratio for a patch to be kept (default: 0.25)",
     )
     parser.add_argument(
         "--max-white-ratio",
         type=float,
         default=argparse.SUPPRESS,
-        help="Maximum near-white pixel ratio for a patch to be kept (default: 0.7)"
+        help="Maximum near-white pixel ratio for a patch to be kept (default: 0.7)",
     )
     parser.add_argument(
         "--white-threshold",
         type=int,
         default=argparse.SUPPRESS,
-        help="Grayscale intensity threshold for classifying a pixel as near-white (default: 250)"
+        help="Grayscale intensity threshold for classifying a pixel as near-white (default: 250)",
     )
     parser.add_argument(
         "--max-largest-white-component-ratio",
         type=float,
         default=argparse.SUPPRESS,
-        help="Maximum ratio of the largest white connected component for a patch to be kept (default: 0.20)"
+        help="Maximum ratio of the largest white connected component for a patch to be kept (default: 0.20)",
     )
     args = parser.parse_args()
 

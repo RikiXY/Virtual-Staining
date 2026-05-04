@@ -17,6 +17,7 @@ from virtual_staining.data.config import PreprocessingConfig
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_synthetic_image(seed: int = 0) -> np.ndarray:
     """Return a 600x600 random-noise BGR image with no near-white pixels."""
     rng = np.random.default_rng(seed)
@@ -52,7 +53,10 @@ def _patched_builder_dependencies() -> Iterator[None]:
             "virtual_staining.data.builder.calculate_mask_with_multiple_parameters",
             side_effect=_white_mask,
         ),
-        patch("virtual_staining.data.builder.align_from_scaled", side_effect=_identity_align),
+        patch(
+            "virtual_staining.data.builder.align_from_scaled",
+            side_effect=_identity_align,
+        ),
     ):
         yield
 
@@ -60,6 +64,7 @@ def _patched_builder_dependencies() -> Iterator[None]:
 # ---------------------------------------------------------------------------
 # Fixture
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 def builder_config(tmp_path: Path) -> PreprocessingConfig:
@@ -92,6 +97,7 @@ def builder_config(tmp_path: Path) -> PreprocessingConfig:
 # Smoke tests
 # ---------------------------------------------------------------------------
 
+
 def test_run_all_creates_split_directories(builder_config: PreprocessingConfig) -> None:
     with _patched_builder_dependencies():
         DatasetBuilder(builder_config).run_all()
@@ -102,7 +108,9 @@ def test_run_all_creates_split_directories(builder_config: PreprocessingConfig) 
     assert (root / "dataset_test").exists()
 
 
-def test_run_all_result_counts_match_saved_files(builder_config: PreprocessingConfig) -> None:
+def test_run_all_result_counts_match_saved_files(
+    builder_config: PreprocessingConfig,
+) -> None:
     with _patched_builder_dependencies():
         result = DatasetBuilder(builder_config).run_all()
 
@@ -136,7 +144,9 @@ def test_run_all_discarded_log_is_written(builder_config: PreprocessingConfig) -
     assert len(lines) == result.skipped_count + 1
 
 
-def test_run_all_saves_config_and_environment(builder_config: PreprocessingConfig) -> None:
+def test_run_all_saves_config_and_environment(
+    builder_config: PreprocessingConfig,
+) -> None:
     with _patched_builder_dependencies():
         DatasetBuilder(builder_config).run_all()
 

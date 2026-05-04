@@ -7,13 +7,13 @@ from virtual_staining.utils.cli import style
 # For "lower is better" metrics (mae, rmse), the first passing <= wins.
 _SSIM_THRESHOLDS = [(0.85, "green"), (0.75, "yellow"), (0.65, "orange")]
 _PSNR_THRESHOLDS = [(25.0, "green"), (20.0, "yellow"), (15.0, "orange")]
-_MAE_THRESHOLDS  = [(0.06, "green"), (0.10, "yellow"), (0.16, "orange")]
+_MAE_THRESHOLDS = [(0.06, "green"), (0.10, "yellow"), (0.16, "orange")]
 _RMSE_THRESHOLDS = [(0.08, "green"), (0.12, "yellow"), (0.20, "orange")]
 
 _FORMAT: dict[str, str] = {
     "ssim": ".6f",
     "psnr": ".4f",
-    "mae":  ".6f",
+    "mae": ".6f",
     "rmse": ".6f",
 }
 

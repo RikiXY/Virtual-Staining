@@ -48,9 +48,8 @@ def pad_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
     left = x
     right = w - x - img.shape[1]
     padded_image = cv2.copyMakeBorder(
-        img, top, bottom, left, right,
-        borderType=cv2.BORDER_CONSTANT,
-        value=255)
+        img, top, bottom, left, right, borderType=cv2.BORDER_CONSTANT, value=255
+    )
     return padded_image
 
 
@@ -68,7 +67,9 @@ def calculate_mask(img: np.ndarray) -> np.ndarray:
     mask : np.ndarray
         Image mask.
     """
-    _, binary = cv2.threshold(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 230, 255, cv2.THRESH_BINARY)
+    _, binary = cv2.threshold(
+        cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 230, 255, cv2.THRESH_BINARY
+    )
 
     _, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
 
@@ -83,11 +84,13 @@ def calculate_mask(img: np.ndarray) -> np.ndarray:
             continue
 
         component_mask = (labels == i).astype(np.uint8) * 255
-        countours, _ = cv2.findContours(component_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        countours, _ = cv2.findContours(
+            component_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
         cv2.drawContours(component_mask, countours, -1, 255, thickness=cv2.FILLED)
 
-        roi = img[y:y+h, x:x+w]
-        roi_mask = component_mask[y:y+h, x:x+w]
+        roi = img[y : y + h, x : x + w]
+        roi_mask = component_mask[y : y + h, x : x + w]
 
         std_dev = cv2.meanStdDev(roi, mask=roi_mask)[1][0, 0]
 
@@ -99,7 +102,9 @@ def calculate_mask(img: np.ndarray) -> np.ndarray:
     return mask
 
 
-def calculate_mask_with_grid(img: np.ndarray, sub_shape: tuple[int, int], grid: int) -> np.ndarray:
+def calculate_mask_with_grid(
+    img: np.ndarray, sub_shape: tuple[int, int], grid: int
+) -> np.ndarray:
     """
     Finds the mask for the connected components of the image using a grid.
 
@@ -119,10 +124,9 @@ def calculate_mask_with_grid(img: np.ndarray, sub_shape: tuple[int, int], grid: 
     """
     mask = np.ones((img.shape[0], img.shape[1]), dtype=np.uint8) * 255
 
-    for y in range(0, img.shape[0], img.shape[0]//grid):
-        for x in range(0, img.shape[1], img.shape[1]//grid):
-
-            roi = img[y:y+sub_shape[0], x:x+sub_shape[1]]
+    for y in range(0, img.shape[0], img.shape[0] // grid):
+        for x in range(0, img.shape[1], img.shape[1] // grid):
+            roi = img[y : y + sub_shape[0], x : x + sub_shape[1]]
             roi_mask = calculate_mask(roi)
 
             roi_mask = pad_image(roi_mask, x, y, img.shape[1], img.shape[0])
@@ -131,7 +135,9 @@ def calculate_mask_with_grid(img: np.ndarray, sub_shape: tuple[int, int], grid: 
     return mask
 
 
-def calculate_mask_with_multiple_parameters(img: np.ndarray, parameters: list[tuple[int, int]]) -> np.ndarray:
+def calculate_mask_with_multiple_parameters(
+    img: np.ndarray, parameters: list[tuple[int, int]]
+) -> np.ndarray:
     """
     Calculates the mask for the input image using multiple parameter pairs.
 
@@ -150,8 +156,7 @@ def calculate_mask_with_multiple_parameters(img: np.ndarray, parameters: list[tu
     mask = np.ones((img.shape[0], img.shape[1]), dtype=np.uint8) * 255
 
     for divisor, grid in parameters:
-
-        sub_shape = (img.shape[0]//divisor, img.shape[1]//divisor)
+        sub_shape = (img.shape[0] // divisor, img.shape[1] // divisor)
 
         _mask = calculate_mask_with_grid(img, sub_shape, grid)
 
@@ -160,7 +165,14 @@ def calculate_mask_with_multiple_parameters(img: np.ndarray, parameters: list[tu
     return mask
 
 
-def align_images(img1: np.ndarray, img2: np.ndarray, mask1: Optional[np.ndarray] = None, mask2: Optional[np.ndarray] = None, nfeatures: int = 10000, ed_distance: int = 200) -> tuple[np.ndarray, Optional[np.ndarray], np.ndarray]:
+def align_images(
+    img1: np.ndarray,
+    img2: np.ndarray,
+    mask1: Optional[np.ndarray] = None,
+    mask2: Optional[np.ndarray] = None,
+    nfeatures: int = 10000,
+    ed_distance: int = 200,
+) -> tuple[np.ndarray, Optional[np.ndarray], np.ndarray]:
     """
     Aligns a moving image to a reference image.
 
@@ -212,27 +224,44 @@ def align_images(img1: np.ndarray, img2: np.ndarray, mask1: Optional[np.ndarray]
 
     filtered_matches = []
     for match in matches:
-        distance = np.linalg.norm(np.array(keypoints_1[match.queryIdx].pt) - np.array(keypoints_2[match.trainIdx].pt))
+        distance = np.linalg.norm(
+            np.array(keypoints_1[match.queryIdx].pt)
+            - np.array(keypoints_2[match.trainIdx].pt)
+        )
         if distance <= ed_distance:
             filtered_matches.append(match)
 
     if len(filtered_matches) < 4:
         raise ValueError("Not enough matches for alignment")
 
-    points_1 = np.float32([keypoints_1[match.queryIdx].pt for match in filtered_matches]).reshape(-1, 1, 2)
-    points_2 = np.float32([keypoints_2[match.trainIdx].pt for match in filtered_matches]).reshape(-1, 1, 2)
+    points_1 = np.float32(
+        [keypoints_1[match.queryIdx].pt for match in filtered_matches]
+    ).reshape(-1, 1, 2)
+    points_2 = np.float32(
+        [keypoints_2[match.trainIdx].pt for match in filtered_matches]
+    ).reshape(-1, 1, 2)
 
     warp_matrix, mask = cv2.estimateAffinePartial2D(points_2, points_1)
 
     img2_aligned = cv2.warpAffine(img2, warp_matrix, (img1.shape[1], img1.shape[0]))
     mask2_aligned = None
     if mask2 is not None:
-        mask2_aligned = cv2.warpAffine(mask2, warp_matrix, (img1.shape[1], img1.shape[0]))
+        mask2_aligned = cv2.warpAffine(
+            mask2, warp_matrix, (img1.shape[1], img1.shape[0])
+        )
 
     return img2_aligned, mask2_aligned, warp_matrix
 
 
-def align_from_scaled(img1: np.ndarray, img2: np.ndarray, scale: float = 0.5, mask1: Optional[np.ndarray] = None, mask2: Optional[np.ndarray] = None, nfeatures: int = 10000, ed_distance: int = 200) -> tuple[np.ndarray, Optional[np.ndarray], np.ndarray]:
+def align_from_scaled(
+    img1: np.ndarray,
+    img2: np.ndarray,
+    scale: float = 0.5,
+    mask1: Optional[np.ndarray] = None,
+    mask2: Optional[np.ndarray] = None,
+    nfeatures: int = 10000,
+    ed_distance: int = 200,
+) -> tuple[np.ndarray, Optional[np.ndarray], np.ndarray]:
     """
     Aligns two images by first scaling them, estimating the transformation on the scaled images, and then applying the transformation to the original images.
 
@@ -271,7 +300,14 @@ def align_from_scaled(img1: np.ndarray, img2: np.ndarray, scale: float = 0.5, ma
         mask1_scaled = cv2.resize(mask1, None, fx=scale, fy=scale)
         mask2_scaled = cv2.resize(mask2, None, fx=scale, fy=scale)
 
-    _, _, warp_matrix = align_images(img1_scaled, img2_scaled, mask1_scaled if mask1 is not None else None, mask2_scaled if mask2 is not None else None, nfeatures, ed_distance)
+    _, _, warp_matrix = align_images(
+        img1_scaled,
+        img2_scaled,
+        mask1_scaled if mask1 is not None else None,
+        mask2_scaled if mask2 is not None else None,
+        nfeatures,
+        ed_distance,
+    )
 
     warp_matrix[0, 2] /= scale
     warp_matrix[1, 2] /= scale
@@ -279,7 +315,9 @@ def align_from_scaled(img1: np.ndarray, img2: np.ndarray, scale: float = 0.5, ma
     img2_aligned = cv2.warpAffine(img2, warp_matrix, (img1.shape[1], img1.shape[0]))
     mask2_aligned = None
     if mask2 is not None:
-        mask2_aligned = cv2.warpAffine(mask2, warp_matrix, (img1.shape[1], img1.shape[0]))
+        mask2_aligned = cv2.warpAffine(
+            mask2, warp_matrix, (img1.shape[1], img1.shape[0])
+        )
 
     return img2_aligned, mask2_aligned, warp_matrix
 
@@ -306,10 +344,16 @@ def extract_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray
     roi : np.ndarray
         Region of the image
     """
-    return img[y:y+h, x:x+w]
+    return img[y : y + h, x : x + w]
 
 
-def divide_image_with_grid(img: np.ndarray, img_size: tuple[int, int], grid_movement: tuple[int, int], mask: Optional[np.ndarray] = None, max_mask_percentage=0.4) -> tuple[list[np.ndarray], Optional[list[np.ndarray]], list[tuple[int, int]]]:
+def divide_image_with_grid(
+    img: np.ndarray,
+    img_size: tuple[int, int],
+    grid_movement: tuple[int, int],
+    mask: Optional[np.ndarray] = None,
+    max_mask_percentage=0.4,
+) -> tuple[list[np.ndarray], Optional[list[np.ndarray]], list[tuple[int, int]]]:
     """
     Divides the input image into a grid of sub-images of size `img_size`.
 
@@ -341,7 +385,6 @@ def divide_image_with_grid(img: np.ndarray, img_size: tuple[int, int], grid_move
 
     for x in range(0, img.shape[1], grid_movement[0]):
         for y in range(0, img.shape[0], grid_movement[1]):
-
             roi_img = extract_image(img, x, y, img_size[0], img_size[1])
 
             if roi_img.shape[0] < img_size[1] or roi_img.shape[1] < img_size[0]:
@@ -364,7 +407,9 @@ def divide_image_with_grid(img: np.ndarray, img_size: tuple[int, int], grid_move
     return images, masks, positions
 
 
-def divide_image_with_positions(img: np.ndarray, img_size: tuple[int, int], positions: list[tuple[int, int]]) -> list[np.ndarray]:
+def divide_image_with_positions(
+    img: np.ndarray, img_size: tuple[int, int], positions: list[tuple[int, int]]
+) -> list[np.ndarray]:
     """
     Splits the image into a grid of images of size img_size using the specified positions.
 

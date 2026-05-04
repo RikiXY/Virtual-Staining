@@ -22,6 +22,7 @@ def _save_rgb(path: Path, color: tuple[int, int, int] = (128, 64, 32)) -> None:
 # VALID_IMAGE_EXTENSIONS
 # ---------------------------------------------------------------------------
 
+
 def test_valid_extensions_contains_expected() -> None:
     assert ".png" in VALID_IMAGE_EXTENSIONS
     assert ".tif" in VALID_IMAGE_EXTENSIONS
@@ -35,6 +36,7 @@ def test_valid_extensions_excludes_jpg() -> None:
 # ---------------------------------------------------------------------------
 # open_rgb
 # ---------------------------------------------------------------------------
+
 
 def test_open_rgb_returns_pil_image(tmp_path: Path) -> None:
     image_path = tmp_path / "img.png"
@@ -53,6 +55,7 @@ def test_open_rgb_raises_on_missing_file(tmp_path: Path) -> None:
 # load_rgb_image
 # ---------------------------------------------------------------------------
 
+
 def test_load_rgb_image_returns_uint8_array(tmp_path: Path) -> None:
     image_path = tmp_path / "img.png"
     _save_rgb(image_path, color=(10, 20, 30))
@@ -66,7 +69,9 @@ def test_load_rgb_image_correct_pixel_values(tmp_path: Path) -> None:
     image_path = tmp_path / "img.png"
     _save_rgb(image_path, color=(100, 150, 200))
     image = load_rgb_image(image_path)
-    np.testing.assert_array_equal(image[0, 0], np.array([100, 150, 200], dtype=np.uint8))
+    np.testing.assert_array_equal(
+        image[0, 0], np.array([100, 150, 200], dtype=np.uint8)
+    )
 
 
 def test_load_rgb_image_raises_on_missing_file(tmp_path: Path) -> None:
@@ -77,6 +82,7 @@ def test_load_rgb_image_raises_on_missing_file(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # to_float01
 # ---------------------------------------------------------------------------
+
 
 def test_to_float01_from_array() -> None:
     image = np.array([[[0, 128, 255]]], dtype=np.uint8)

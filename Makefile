@@ -1,7 +1,7 @@
 UV      ?= uv
 PYTHON  ?= $(UV) run python
 RUFF    ?= ruff
-PYRIGHT ?= pyright
+PYRIGHT ?= $(UV) run pyright
 
 ENV_FILE ?= .env.make
 

@@ -8,8 +8,7 @@ try:
     from skimage.metrics import structural_similarity
 except ImportError as exc:
     raise ImportError(
-        "Missing dependency: scikit-image. Install it with:\n"
-        "pip install scikit-image"
+        "Missing dependency: scikit-image. Install it with:\npip install scikit-image"
     ) from exc
 
 from virtual_staining.utils.image_io import load_rgb_image, to_float01

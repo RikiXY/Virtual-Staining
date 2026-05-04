@@ -31,6 +31,7 @@ def _git_commit() -> str | None:
 def _pkg_version(name: str) -> str | None:
     try:
         import importlib
+
         return getattr(importlib.import_module(name), "__version__", None)
     except ImportError:
         return None

@@ -20,9 +20,12 @@ from virtual_staining.evaluation.statistics import (
 # compute_unpaired_group_stats
 # ---------------------------------------------------------------------------
 
+
 def test_unpaired_group_stats_mean_median() -> None:
     values = np.array([0.1, 0.5, 0.9])
-    stats = compute_unpaired_group_stats(values, "A", thresholds=[0.5], higher_is_better=True)
+    stats = compute_unpaired_group_stats(
+        values, "A", thresholds=[0.5], higher_is_better=True
+    )
     assert stats.n == 3
     assert stats.mean == pytest.approx(np.mean(values))
     assert stats.median == pytest.approx(np.median(values))
@@ -30,14 +33,18 @@ def test_unpaired_group_stats_mean_median() -> None:
 
 def test_unpaired_group_stats_higher_is_better_share() -> None:
     values = np.array([0.8, 0.9, 0.6])
-    stats = compute_unpaired_group_stats(values, "A", thresholds=[0.75], higher_is_better=True)
+    stats = compute_unpaired_group_stats(
+        values, "A", thresholds=[0.75], higher_is_better=True
+    )
     # 2 of 3 values >= 0.75
     assert stats.threshold_shares["ge_0.75"] == pytest.approx(2 / 3)
 
 
 def test_unpaired_group_stats_lower_is_better_share() -> None:
     values = np.array([0.1, 0.2, 0.5])
-    stats = compute_unpaired_group_stats(values, "A", thresholds=[0.3], higher_is_better=False)
+    stats = compute_unpaired_group_stats(
+        values, "A", thresholds=[0.3], higher_is_better=False
+    )
     # 2 of 3 values <= 0.3
     assert stats.threshold_shares["le_0.30"] == pytest.approx(2 / 3)
 
@@ -46,6 +53,7 @@ def test_unpaired_group_stats_lower_is_better_share() -> None:
 # compute_unpaired_comparison
 # ---------------------------------------------------------------------------
 
+
 def _make_groups(
     a_vals: list[float],
     b_vals: list[float],
@@ -53,13 +61,19 @@ def _make_groups(
 ) -> tuple[np.ndarray, np.ndarray, UnpairedGroupStats, UnpairedGroupStats]:
     a = np.array(a_vals, dtype=float)
     b = np.array(b_vals, dtype=float)
-    ga = compute_unpaired_group_stats(a, "A", thresholds=[0.5], higher_is_better=higher_is_better)
-    gb = compute_unpaired_group_stats(b, "B", thresholds=[0.5], higher_is_better=higher_is_better)
+    ga = compute_unpaired_group_stats(
+        a, "A", thresholds=[0.5], higher_is_better=higher_is_better
+    )
+    gb = compute_unpaired_group_stats(
+        b, "B", thresholds=[0.5], higher_is_better=higher_is_better
+    )
     return a, b, ga, gb
 
 
 def test_unpaired_comparison_favors_higher_group() -> None:
-    a, b, ga, gb = _make_groups([0.5, 0.6, 0.55], [0.8, 0.85, 0.9], higher_is_better=True)
+    a, b, ga, gb = _make_groups(
+        [0.5, 0.6, 0.55], [0.8, 0.85, 0.9], higher_is_better=True
+    )
     comparison = compute_unpaired_comparison(a, b, ga, gb, higher_is_better=True)
     assert comparison.mean_favors == "B"
     assert comparison.median_favors == "B"
@@ -77,6 +91,7 @@ def test_unpaired_comparison_returns_statistics() -> None:
 # choose_paired_better_label
 # ---------------------------------------------------------------------------
 
+
 def test_paired_better_label_positive_delta() -> None:
     assert choose_paired_better_label(0.05, "A", "B") == "B"
 
@@ -93,13 +108,16 @@ def test_paired_better_label_zero() -> None:
 # compute_paired_summary
 # ---------------------------------------------------------------------------
 
+
 def _merged(a_vals: list[float], b_vals: list[float]) -> pd.DataFrame:
     return pd.DataFrame({"value_a": a_vals, "value_b": b_vals})
 
 
 def test_paired_summary_b_better() -> None:
     merged = _merged([0.5, 0.6, 0.7], [0.8, 0.9, 0.95])
-    summary = compute_paired_summary(merged, "A", "B", tolerance=0.0, higher_is_better=True)
+    summary = compute_paired_summary(
+        merged, "A", "B", tolerance=0.0, higher_is_better=True
+    )
     assert summary.better_label == "B"
     assert summary.share_b_better == pytest.approx(1.0)
     assert summary.share_a_better == pytest.approx(0.0)
@@ -107,14 +125,18 @@ def test_paired_summary_b_better() -> None:
 
 def test_paired_summary_equal_within_tolerance() -> None:
     merged = _merged([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
-    summary = compute_paired_summary(merged, "A", "B", tolerance=0.01, higher_is_better=True)
+    summary = compute_paired_summary(
+        merged, "A", "B", tolerance=0.01, higher_is_better=True
+    )
     assert summary.share_equal == pytest.approx(1.0)
     assert summary.better_label == "tie"
 
 
 def test_paired_summary_pair_count() -> None:
     merged = _merged([0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8])
-    summary = compute_paired_summary(merged, "A", "B", tolerance=0.0, higher_is_better=True)
+    summary = compute_paired_summary(
+        merged, "A", "B", tolerance=0.0, higher_is_better=True
+    )
     assert summary.n_pairs == 4
 
 
@@ -122,11 +144,14 @@ def test_paired_summary_pair_count() -> None:
 # align_paired_frames
 # ---------------------------------------------------------------------------
 
+
 def test_align_paired_frames_inner_join(tmp_path: Path) -> None:
     csv_a = tmp_path / "a.csv"
     csv_b = tmp_path / "b.csv"
     csv_a.write_text("sample_id,ssim\nimg1,0.8\nimg2,0.7\nimg3,0.6\n", encoding="utf-8")
-    csv_b.write_text("sample_id,ssim\nimg1,0.9\nimg3,0.85\n", encoding="utf-8")  # img2 missing
+    csv_b.write_text(
+        "sample_id,ssim\nimg1,0.9\nimg3,0.85\n", encoding="utf-8"
+    )  # img2 missing
 
     merged = align_paired_frames(csv_a, csv_b, "sample_id", "ssim")
 

@@ -41,10 +41,10 @@ PLOT_FIXED_RANGES = {
 PLOT_FIXED_BINS = 30
 
 
-
 # ==========================
 # Section dedicated to the parser
 # ==========================
+
 
 def add_single_subparser(subparsers: Any) -> None:
     """Adds the subcommand for evaluating a single pair."""
@@ -98,7 +98,8 @@ def add_dataset_subparser(subparsers: Any) -> None:
         dest="target_dir",
         type=str,
         required=True,
-        help=("Directory containing target images with filename stem ending in '_target'. "
+        help=(
+            "Directory containing target images with filename stem ending in '_target'. "
             "Supported extensions: .tif, .tiff, .png."
         ),
     )
@@ -107,7 +108,8 @@ def add_dataset_subparser(subparsers: Any) -> None:
         dest="generated_dir",
         type=str,
         required=True,
-        help=("Directory containing generated images with filename stem ending in '_target_generated'. "
+        help=(
+            "Directory containing generated images with filename stem ending in '_target_generated'. "
             "Supported extensions: .tif, .tiff, .png."
         ),
     )
@@ -170,7 +172,9 @@ def extract_sample_id(path: str | Path, suffix: str, label: str = "File") -> str
     return name[: -len(suffix)]
 
 
-def extract_single_sample_id(target_path: str | Path, generated_path: str | Path) -> str:
+def extract_single_sample_id(
+    target_path: str | Path, generated_path: str | Path
+) -> str:
     """Checks that target and generated belong to the same sample."""
     target_id = extract_sample_id(target_path, "_target", "Target")
     generated_id = extract_sample_id(generated_path, "_target_generated", "Generated")
@@ -184,7 +188,9 @@ def extract_single_sample_id(target_path: str | Path, generated_path: str | Path
     return target_id
 
 
-def collect_image_files(directory_path: str | Path, suffix: str, label: str) -> dict[str, Path]:
+def collect_image_files(
+    directory_path: str | Path, suffix: str, label: str
+) -> dict[str, Path]:
     """Collects valid files from a directory, indexed by sample id."""
     directory = Path(directory_path)
 
@@ -277,6 +283,7 @@ def build_summary_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]
 # Section dedicated to CSV writing
 # =======================================
 
+
 def build_metric_row(
     sample_id: str,
     target_path: str | Path,
@@ -299,7 +306,10 @@ def build_metric_row(
         "ssim": metrics["ssim"],
     }
 
-def write_per_image_metrics_csv(rows: list[dict[str, object]], output_path: str | Path) -> None:
+
+def write_per_image_metrics_csv(
+    rows: list[dict[str, object]], output_path: str | Path
+) -> None:
     """Writes the CSV with one row per evaluated pair."""
     with Path(output_path).open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=METRIC_FIELDNAMES)
@@ -360,7 +370,10 @@ def get_metric_plot_range(metric: str) -> tuple[float, float]:
         raise ValueError(f"Unsupported metric for plotting: {metric}")
     return PLOT_FIXED_RANGES[metric]
 
-def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) -> list[Path]:
+
+def save_dataset_plots(
+    rows: list[dict[str, object]], output_dir: str | Path
+) -> list[Path]:
     """Saves histograms with fixed axes and a final summary boxplot."""
     output_directory = Path(output_dir)
     output_directory.mkdir(parents=True, exist_ok=True)
@@ -403,6 +416,7 @@ def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) ->
 # Section dedicated to the text report
 # ====================================
 
+
 def print_single_result(
     target_path: str | Path,
     generated_path: str | Path,
@@ -444,18 +458,22 @@ def print_dataset_summary(
         print_section("Metric summary")
         for metric in METRIC_NAMES:
             values = [float(row[metric]) for row in per_image_rows]
-            print_info(f"{metric.upper()} mean", color_metric(metric, float(np.mean(values))))
-            print_info(f"{metric.upper()} median", color_metric(metric, float(np.median(values))))
+            print_info(
+                f"{metric.upper()} mean", color_metric(metric, float(np.mean(values)))
+            )
+            print_info(
+                f"{metric.upper()} median",
+                color_metric(metric, float(np.median(values))),
+            )
 
     print_section("Saved files")
     print_info("Evaluation dir", style(str(output_dir), "bold", "magenta"))
 
 
-
-
 # =====================================
 # Section dedicated to the main flow
 # =====================================
+
 
 def run_single(args: argparse.Namespace) -> None:
     """Runs the complete flow for the single mode."""
@@ -478,7 +496,9 @@ def run_single(args: argparse.Namespace) -> None:
 def run_dataset(args: argparse.Namespace) -> None:
     """Runs the complete flow for the dataset mode."""
     target_files = collect_image_files(args.target_dir, "_target", "Target")
-    generated_files = collect_image_files(args.generated_dir, "_target_generated", "Generated")
+    generated_files = collect_image_files(
+        args.generated_dir, "_target_generated", "Generated"
+    )
 
     output_dir = resolve_output_dir(args.output_dir, args.generated_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -560,7 +580,9 @@ def run_dataset(args: argparse.Namespace) -> None:
         for plot_path in plot_paths:
             print_info("Graph", str(plot_path))
 
-    print_dataset_summary(target_files, generated_files, per_image_rows, skipped_rows, output_dir)
+    print_dataset_summary(
+        target_files, generated_files, per_image_rows, skipped_rows, output_dir
+    )
 
 
 def main() -> None:
