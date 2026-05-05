@@ -42,74 +42,115 @@ def print_info(label: str, value: str) -> None:
     print(f"{style(label + ':', 'bold', 'blue')} {value}")
 
 
-def color_metric(name: str, value: float) -> str:
-    """Colora una metrica con soglie pensate per la sola lettura CLI."""
+def metric_color_name(name: str, value: float) -> str:
+    """Restituisce il nome del colore ANSI associato al valore della metrica."""
     if name == "ssim":
         if value >= 0.85:
-            color = "green"
-        elif value >= 0.75:
-            color = "yellow"
-        elif value >= 0.65:
-            color = "orange"
-        else:
-            color = "red"
-        return style(f"{value:.6f}", color)
+            return "green"
+        if value >= 0.75:
+            return "yellow"
+        if value >= 0.65:
+            return "orange"
+        return "red"
 
     if name == "psnr":
         if value >= 25:
-            color = "green"
-        elif value >= 20:
-            color = "yellow"
-        elif value >= 15:
-            color = "orange"
-        else:
-            color = "red"
-        return style(f"{value:.4f}", color)
+            return "green"
+        if value >= 20:
+            return "yellow"
+        if value >= 15:
+            return "orange"
+        return "red"
 
     if name == "mae":
         if value <= 0.06:
-            color = "green"
-        elif value <= 0.10:
-            color = "yellow"
-        elif value <= 0.16:
-            color = "orange"
-        else:
-            color = "red"
-        return style(f"{value:.6f}", color)
+            return "green"
+        if value <= 0.10:
+            return "yellow"
+        if value <= 0.16:
+            return "orange"
+        return "red"
 
     if name == "rmse":
         if value <= 0.08:
-            color = "green"
-        elif value <= 0.12:
-            color = "yellow"
-        elif value <= 0.20:
-            color = "orange"
-        else:
-            color = "red"
-        return style(f"{value:.6f}", color)
+            return "green"
+        if value <= 0.12:
+            return "yellow"
+        if value <= 0.20:
+            return "orange"
+        return "red"
 
     if name == "mse":
         if value <= 0.0036:
-            color = "green"
-        elif value <= 0.0100:
-            color = "yellow"
-        elif value <= 0.0256:
-            color = "orange"
-        else:
-            color = "red"
-        return style(f"{value:.6f}", color)
+            return "green"
+        if value <= 0.0100:
+            return "yellow"
+        if value <= 0.0256:
+            return "orange"
+        return "red"
 
     if name in {"pcc_gray", "pcc_rgb_mean", "pcc_r", "pcc_g", "pcc_b"}:
         if value >= 0.95:
-            color = "green"
-        elif value >= 0.90:
-            color = "yellow"
-        elif value >= 0.80:
-            color = "orange"
-        else:
-            color = "red"
-        return style(f"{value:.6f}", color)
+            return "green"
+        if value >= 0.90:
+            return "yellow"
+        if value >= 0.80:
+            return "orange"
+        return "red"
 
-    return f"{value:.6f}"
+    return "cyan"
 
+
+def color_metric(name: str, value: float) -> str:
+    """Restituisce il valore della metrica formattato e colorato."""
+    color = metric_color_name(name, value)
+
+    if name == "psnr":
+        formatted_value = f"{value:.4f}"
+    else:
+        formatted_value = f"{value:.6f}"
+
+    return style(formatted_value, color)
+
+
+def color_distance(value: float, good: float, warn: float) -> str:
+    """Colora una distanza: più è piccola, meglio è."""
+    if value <= good:
+        return style(f"{value:.6f}", "green")
+    if value <= warn:
+        return style(f"{value:.6f}", "yellow")
+    if value <= warn * 1.5:
+        return style(f"{value:.6f}", "orange")
+    return style(f"{value:.6f}", "red")
+
+
+def color_pvalue(value: float) -> str:
+    """Colora un p-value come forza dell'evidenza di differenza."""
+    if value < 0.001:
+        return style(f"{value:.6g}", "green")
+    if value < 0.01:
+        return style(f"{value:.6g}", "yellow")
+    if value < 0.05:
+        return style(f"{value:.6g}", "orange")
+    return style(f"{value:.6g}", "red")
+
+
+def color_share(value: float) -> str:
+    """Colora una quota tra 0 e 1."""
+    if value >= 0.70:
+        return style(f"{value:.6f}", "green")
+    if value >= 0.40:
+        return style(f"{value:.6f}", "yellow")
+    if value >= 0.20:
+        return style(f"{value:.6f}", "orange")
+    return style(f"{value:.6f}", "red")
+
+
+def color_signed_delta(value: float) -> str:
+    """Colora un delta signed: positivo meglio per B, negativo meglio per A."""
+    if value > 0:
+        return style(f"{value:.6f}", "green")
+    if value < 0:
+        return style(f"{value:.6f}", "red")
+    return style(f"{value:.6f}", "yellow")
 
