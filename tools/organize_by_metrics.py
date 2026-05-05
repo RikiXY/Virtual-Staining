@@ -44,7 +44,7 @@ IMAGE_COLUMNS = [
 def build_parser() -> argparse.ArgumentParser:
     """Costruisce il parser CLI."""
     parser = argparse.ArgumentParser(
-        prog="python tools/organize_by_metric.py",
+        prog="python tools/organize_by_metrics.py",
         description=(
             "Organize generated, target and source images by metric ranking. "
             "By default, the script reads RUN/evaluation/per_image_metrics.csv "
@@ -52,14 +52,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Examples:\n"
-            "  python tools/organize_by_metric.py \\\n"
+            "  python tools/organize_by_metrics.py \\\n"
             "      --run-path local_workspace/results/RUN_NAME \\\n"
-            "      --top-k 50\n"
+            "      --top-k 20\n"
             "\n"
-            "  python tools/organize_by_metric.py \\\n"
+            "  python tools/organize_by_metrics.py \\\n"
             "      --metrics-csv local_workspace/results/RUN_NAME/evaluation/per_image_metrics.csv \\\n"
             "      --output-dir local_workspace/results/RUN_NAME/evaluation/sorted_by_metrics \\\n"
-            "      --top-k 50 \\\n"
+            "      --top-k 20 \\\n"
             "      --mode hardlink\n"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
