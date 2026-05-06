@@ -41,6 +41,16 @@ PLOT_FIXED_RANGES = {
 PLOT_FIXED_BINS = 30
 
 
+def metric_value(row: dict[str, object], metric: str) -> float:
+    """Returns a metric value from a CSV-style row as a float."""
+    value = row[metric]
+    if isinstance(value, str | int | float):
+        return float(value)
+    raise TypeError(
+        f"Metric '{metric}' must be a scalar value, got {type(value).__name__}."
+    )
+
+
 # ==========================
 # Section dedicated to the parser
 # ==========================
@@ -263,7 +273,7 @@ def build_summary_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]
     summary_rows: list[dict[str, object]] = []
 
     for metric in METRIC_NAMES:
-        values = [float(row[metric]) for row in rows]
+        values = [metric_value(row, metric) for row in rows]
         summary_rows.append(
             {
                 "metric": metric,
@@ -380,14 +390,14 @@ def save_dataset_plots(
     saved_paths: list[Path] = []
 
     for metric in METRIC_NAMES:
-        values = [float(row[metric]) for row in rows]
+        values = [metric_value(row, metric) for row in rows]
         histogram_path = output_directory / f"{metric}_histogram.png"
         min_value, max_value = get_metric_plot_range(metric)
         bin_edges = np.linspace(min_value, max_value, PLOT_FIXED_BINS + 1)
 
         plt.figure(figsize=(6, 4))
         weights = np.ones(len(values), dtype=float) / len(values)
-        plt.hist(values, bins=bin_edges, weights=weights)
+        plt.hist(values, bins=bin_edges.tolist(), weights=weights)
         plt.title(f"{metric.upper()} Histogram")
         plt.xlabel(metric.upper())
         plt.ylabel("Share of samples")
@@ -400,7 +410,7 @@ def save_dataset_plots(
 
     boxplot_path = output_directory / "metrics_boxplot.png"
     plt.figure(figsize=(8, 5))
-    data = [[float(row[metric]) for row in rows] for metric in METRIC_NAMES]
+    data = [[metric_value(row, metric) for row in rows] for metric in METRIC_NAMES]
     plt.boxplot(data, tick_labels=[metric.upper() for metric in METRIC_NAMES])
     plt.title("Metrics Boxplot")
     plt.ylabel("Value")
@@ -457,7 +467,7 @@ def print_dataset_summary(
     if per_image_rows:
         print_section("Metric summary")
         for metric in METRIC_NAMES:
-            values = [float(row[metric]) for row in per_image_rows]
+            values = [metric_value(row, metric) for row in per_image_rows]
             print_info(
                 f"{metric.upper()} mean", color_metric(metric, float(np.mean(values)))
             )

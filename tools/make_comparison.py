@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -27,6 +27,23 @@ SELECTION_SUMMARY_FIELDNAMES = [
     "generated_path",
     "comparison_path",
 ]
+
+DiagnosticPathKey = Literal[
+    "comparison_path",
+    "error_histogram_path",
+    "intensity_overlay_histogram_path",
+    "target_vs_generated_scatter_by_channel_path",
+]
+
+
+class DiagnosticEntry(TypedDict):
+    kind: str
+    sample_id: str
+    metric_value: float
+    comparison_path: Path
+    error_histogram_path: Path
+    intensity_overlay_histogram_path: Path
+    target_vs_generated_scatter_by_channel_path: Path
 
 
 # ==========================
@@ -100,7 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Create side-by-side comparison panels for paired histology images, "
             "or generate representative panels from evaluation CSV files. "
-            "Supported image extensions: .tif, .tiff, .png.",
+            "Supported image extensions: .tif, .tiff, .png."
         ),
         epilog=(
             "Examples:\n"
@@ -569,11 +586,11 @@ def save_stacked_image_panel(
 def save_metric_diagnostics_summary(
     metric_name: str,
     metric_dir: str | Path,
-    diagnostic_entries: list[dict[str, object]],
+    diagnostic_entries: list[DiagnosticEntry],
 ) -> list[Path]:
     """Saves the aggregated panels for a metric across the min, median and max cases."""
     metric_dir = Path(metric_dir)
-    output_specs = [
+    output_specs: list[tuple[DiagnosticPathKey, str, str]] = [
         (
             "comparison_path",
             f"{metric_name}_comparisons_max_median_min.png",
@@ -598,7 +615,9 @@ def save_metric_diagnostics_summary(
     saved_paths: list[Path] = []
 
     for path_key, filename, suptitle in output_specs:
-        image_paths = [entry[path_key] for entry in diagnostic_entries]
+        image_paths: list[str | Path] = [
+            entry[path_key] for entry in diagnostic_entries
+        ]
         saved_path = save_stacked_image_panel(
             image_paths=image_paths,
             save_path=metric_dir / filename,
@@ -695,7 +714,7 @@ def build_metric_case_artifacts(
     row: dict[str, str],
     metric_summary: dict[str, float],
     metric_dir: Path,
-) -> tuple[dict[str, object], dict[str, object]]:
+) -> tuple[dict[str, object], DiagnosticEntry]:
     """Builds and saves the artefacts for a representative case."""
     sample_id = row["sample_id"]
     metric_value = float(row[metric_name])
@@ -728,7 +747,7 @@ def build_metric_case_artifacts(
         save_dir=diagnostics_case_dir,
     )
     diagnostic_paths_by_name = {path.name: path for path in diagnostic_paths}
-    diagnostic_entry = {
+    diagnostic_entry: DiagnosticEntry = {
         "kind": kind,
         "sample_id": sample_id,
         "metric_value": metric_value,
@@ -790,7 +809,7 @@ def run_from_metrics(args: argparse.Namespace) -> None:
             per_image_rows,
         )
         metric_selection_rows: list[dict[str, object]] = []
-        metric_diagnostic_entries: list[dict[str, object]] = []
+        metric_diagnostic_entries: list[DiagnosticEntry] = []
 
         print_metric_based_selection(metric_name, representative_rows)
 
@@ -818,7 +837,7 @@ def run_from_metrics(args: argparse.Namespace) -> None:
         )
 
         for aggregated_path in aggregated_paths:
-            print_info("Saved aggregated panel", aggregated_path)
+            print_info("Saved aggregated panel", str(aggregated_path))
 
     write_metric_selection_summary(
         selection_summary_rows,

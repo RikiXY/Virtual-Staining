@@ -1,6 +1,7 @@
 import argparse
 import random
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import torch
@@ -364,7 +365,9 @@ def test_inference(
     amp_enabled = is_amp_enabled(device)
 
     with torch.no_grad():
-        for idx, (source_tensor, _) in enumerate(dataset):
+        for idx in range(len(dataset)):
+            source_tensor, _ = dataset[idx]
+            source_tensor = cast(torch.Tensor, source_tensor)
             source_path = dataset.pairs[idx][0]
             prefix = source_path.stem[: -len("_source")]
             out_filename = f"{prefix}_target_generated{source_path.suffix.lower()}"

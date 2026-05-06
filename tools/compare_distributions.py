@@ -359,8 +359,9 @@ def plot_distribution_histogram(
 ) -> None:
     """Saves the comparison histogram between two distributions."""
     plt.figure(figsize=(9, 5))
-    plt.hist(a, bins=edges, density=True, alpha=0.45, label=label_a)
-    plt.hist(b, bins=edges, density=True, alpha=0.45, label=label_b)
+    bins = edges.tolist()
+    plt.hist(a, bins=bins, density=True, alpha=0.45, label=label_a)
+    plt.hist(b, bins=bins, density=True, alpha=0.45, label=label_b)
     plt.xlabel(column)
     plt.ylabel("Density")
     plt.title(f"Histogram comparison - {column}")

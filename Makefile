@@ -223,7 +223,7 @@ format-check:
 	$(RUFF) format --check .
 
 check-types:
-	$(PYRIGHT) virtual_staining tests
+	$(PYRIGHT)
 
 check: lint format-check check-types
 
