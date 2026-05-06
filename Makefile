@@ -1,7 +1,7 @@
 UV      ?= uv
 PYTHON  ?= $(UV) run python
-RUFF    ?= ruff
-PYRIGHT ?= $(UV) run pyright
+RUFF    ?= $(UV) run --group dev ruff
+PYRIGHT ?= $(UV) run --group dev pyright
 
 CONFIG ?= config/runs/example.yaml
 
@@ -9,28 +9,26 @@ CONFIG ?= config/runs/example.yaml
 
 help:
 	@printf "\nTargets:\n"
-	@printf "  %-24s %s\n" "prepare-dataset" "Build dataset_train/val/test from CONFIG"
+	@printf "  %-24s %s\n" "dataset" "Build dataset_train/val/test from CONFIG"
 	@printf "  %-24s %s\n" "train" "Train Pix2Pix from CONFIG"
 	@printf "  %-24s %s\n" "infer" "Run inference from CONFIG"
 	@printf "  %-24s %s\n" "evaluate" "Evaluate generated outputs from CONFIG"
-	@printf "  %-24s %s\n" "complete-run" "Run train, infer, evaluate from CONFIG"
+	@printf "  %-24s %s\n" "complete-run" "Run dataset, train, infer, evaluate from CONFIG"
+	@printf "  %-24s %s\n" "sync" "Sync uv dependencies from uv.lock"
+	@printf "  %-24s %s\n" "format" "Format Python files with ruff"
 	@printf "  %-24s %s\n" "test" "Run pytest"
-	@printf "  %-24s %s\n" "check" "Run lint, format-check, check-types"
-	@printf "  %-24s %s\n" "qa" "Run check and test"
-	@printf "  %-24s %s\n" "sync / lock / clean" "Dependency and cleanup helpers"
+	@printf "  %-24s %s\n" "qa" "Run checks and tests"
+	@printf "  %-24s %s\n" "clean" "Remove local caches"
 	@printf "\nExperiment configuration policy:\n"
 	@printf "  %-24s %s\n" "CONFIG" "$(CONFIG)"
 	@printf "  Put dataset paths, run names, image sizes, epochs, seeds,"
 	@printf " checkpoints, and evaluation paths in YAML.\n"
-	@printf "  Do not pass experiment parameters such as DATASET, RUN_NAME,"
-	@printf " IMAGE_SIZE, EPOCHS, SEED, or CHECKPOINT to make.\n"
 	@printf "\nExamples:\n"
-	@printf "  make prepare-dataset CONFIG=config/runs/example.yaml\n"
+	@printf "  make dataset CONFIG=config/runs/example.yaml\n"
 	@printf "  make train CONFIG=config/runs/example.yaml\n"
 	@printf "  make infer CONFIG=config/runs/example.yaml\n"
 	@printf "  make evaluate CONFIG=config/runs/example.yaml\n"
 	@printf "  make complete-run CONFIG=config/runs/example.yaml\n"
-	@printf "  make test\n"
 	@printf "\n"
 
 require-config:
@@ -40,10 +38,7 @@ require-config:
 sync:
 	$(UV) sync --frozen
 
-lock:
-	$(UV) lock
-
-prepare-dataset: require-config
+dataset: require-config
 	$(PYTHON) src/prepare_dataset.py --config $(CONFIG)
 
 train: require-config
@@ -56,28 +51,22 @@ evaluate: require-config
 	$(PYTHON) tools/evaluate_generation.py dataset --config $(CONFIG)
 
 complete-run: require-config
+	$(MAKE) dataset CONFIG=$(CONFIG)
 	$(MAKE) train CONFIG=$(CONFIG)
 	$(MAKE) infer CONFIG=$(CONFIG)
 	$(MAKE) evaluate CONFIG=$(CONFIG)
 
-test:
-	$(UV) run --group dev pytest
-
-lint:
-	$(RUFF) check .
-
 format:
 	$(RUFF) format .
 
-format-check:
+test:
+	$(UV) run --group dev pytest
+
+qa:
+	$(RUFF) check .
 	$(RUFF) format --check .
-
-check-types:
 	$(PYRIGHT)
-
-check: lint format-check check-types
-
-qa: check test
+	$(UV) run --group dev pytest
 
 clean:
 	rm -rf .ruff_cache .mypy_cache .pyright __pycache__ .pytest_tmp

@@ -177,10 +177,10 @@ def test_from_yaml_defaults_for_optional_fields(tmp_path: Path) -> None:
 def test_from_run_yaml_section(tmp_path: Path) -> None:
     yaml_content = textwrap.dedent("""\
         dataset_root: /data/samples
+        image_size: [512, 512]
         preprocessing:
           source_name: label_free.tif
           target_name: he.tif
-          image_size: [512, 512]
           grid_movement: [512, 512]
           save_masks: true
     """)

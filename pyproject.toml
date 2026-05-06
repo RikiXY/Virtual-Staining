@@ -25,7 +25,11 @@ build-backend = "hatchling.build"
 packages = ["virtual_staining"]
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+dev = [
+    "pyright>=1.1",
+    "pytest>=8.0",
+    "ruff>=0.8",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

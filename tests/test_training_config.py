@@ -139,11 +139,13 @@ def test_training_from_run_yaml_section(tmp_path: Path) -> None:
         dataset_root: /data
         results_path: /results
         run_name: section_run
+        image_size: [512, 512]
         training:
-          image_size: [512, 512]
           epochs: 30
           batch_size: 2
           l1_weight: 50
+          train_dir: /custom/train
+          val_dir: /custom/val
     """)
     yaml_file = tmp_path / "run.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
@@ -155,6 +157,8 @@ def test_training_from_run_yaml_section(tmp_path: Path) -> None:
     assert config.epochs == 30
     assert config.batch_size == 2
     assert config.l1_weight == pytest.approx(50)
+    assert config.dataset_train_dir == Path("/custom/train")
+    assert config.dataset_val_dir == Path("/custom/val")
 
 
 def test_inference_from_run_yaml_section(tmp_path: Path) -> None:
@@ -162,17 +166,44 @@ def test_inference_from_run_yaml_section(tmp_path: Path) -> None:
         dataset_root: /data
         results_path: /results
         run_name: section_run
+        image_size: [512, 512]
         training:
-          image_size: [512, 512]
           epochs: 30
         inference:
-          checkpoint: /results/section_run/checkpoints/ep030.pth
+          checkpoint: checkpoints/ep030.pth
+          test_dir: /custom/test
+          output_dir: /results/section_run/custom_output
     """)
     yaml_file = tmp_path / "run.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
 
     config = InferenceConfig.from_yaml(yaml_file)
-    assert config.test_dir == Path("/data") / "dataset_test"
-    assert config.output_test_dir == Path("/results") / "section_run" / "output_test"
+    assert config.test_dir == Path("/custom/test")
+    assert config.output_test_dir == Path("/results") / "section_run" / "custom_output"
     assert config.checkpoint == Path("/results/section_run/checkpoints/ep030.pth")
     assert config.image_size == (512, 512)
+
+
+def test_inference_latest_checkpoint_policy(tmp_path: Path) -> None:
+    run_root = tmp_path / "results" / "section_run"
+    checkpoint_dir = run_root / "checkpoints"
+    checkpoint_dir.mkdir(parents=True)
+    (checkpoint_dir / "ep009.pth").write_bytes(b"")
+    (checkpoint_dir / "ep019.pth").write_bytes(b"")
+
+    yaml_content = textwrap.dedent(f"""\
+        dataset_root: {tmp_path / "data"}
+        results_path: {tmp_path / "results"}
+        run_name: section_run
+        image_size: [512, 512]
+        training:
+          epochs: 30
+        inference:
+          checkpoint_policy: latest
+    """)
+    yaml_file = tmp_path / "run.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+
+    config = InferenceConfig.from_yaml(yaml_file)
+    assert config.checkpoint == checkpoint_dir / "ep019.pth"
+    assert config.output_test_dir == run_root / "output_test"

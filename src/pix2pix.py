@@ -117,18 +117,15 @@ def main(config: TrainingConfig) -> None:
         ]
     )
 
-    train_dir = Path(config.dataset_root) / "dataset_train"
-    val_dir = Path(config.dataset_root) / "dataset_val"
-
     train_loader = DataLoader(
-        PairedHistologyDataset(train_dir, transform=transform),
+        PairedHistologyDataset(config.dataset_train_dir, transform=transform),
         batch_size=config.batch_size,
         shuffle=True,
         num_workers=config.num_workers,
         pin_memory=(device.type == "cuda"),
     )
     val_loader = DataLoader(
-        PairedHistologyDataset(val_dir, transform=transform),
+        PairedHistologyDataset(config.dataset_val_dir, transform=transform),
         batch_size=config.batch_size,
         shuffle=False,
         num_workers=config.num_workers,
@@ -172,7 +169,7 @@ def test_inference(
                 "Image size mismatch between checkpoint and inference. "
                 f"Checkpoint was trained with image_size={checkpoint_image_size}, "
                 f"but inference is using image_size={requested_image_size}. "
-                "Set inference.image_size in the run config or use a matching "
+                "Set image_size in the run config or use a matching "
                 "checkpoint."
             )
     G.load_state_dict(checkpoint["generator_state_dict"])

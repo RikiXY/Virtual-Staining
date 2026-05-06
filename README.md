@@ -58,7 +58,7 @@ Dependencies are declared in `pyproject.toml` and the development shell is defin
 make sync
 ```
 
-`make lock` re-resolves against the bounds in `pyproject.toml` and updates `uv.lock`. Run it when you intentionally want to upgrade dependencies.
+`uv lock` re-resolves against the bounds in `pyproject.toml` and updates `uv.lock`. Run it when you intentionally want to upgrade dependencies.
 
 ## Development Environment
 
@@ -69,23 +69,23 @@ nix develop
 make sync
 ```
 
-The Nix shell provides:
+The Nix shell provides the base tools:
 
 - Python 3.11
 - `uv`
 - `make`
-- `ruff`
-- `pyright`
+
+Project, test, lint, and type-check dependencies are managed by `uv` from
+`pyproject.toml` and pinned in `uv.lock`.
 
 Useful development commands:
 
 ```bash
-make lint
-make format-check
-make check-types
-make check
-make lock
+make format
+make test
+make qa
 make clean
+uv lock
 ```
 
 ## Quick Start
@@ -116,16 +116,27 @@ The README examples below assume you are already inside the Nix shell so that `u
 
 ### 3. Create a run YAML
 
+Use [`config/runs/example.yaml`](config/runs/example.yaml) as the starting point
+for a complete run configuration:
+
 ```bash
 cp config/runs/example.yaml config/runs/my_run.yaml
 ```
 
-Edit the YAML and put every experiment value there: dataset paths, run name, image sizes, training hyperparameters, checkpoint path, and evaluation paths.
+Edit the YAML and put every experiment value there: dataset path, source/target
+image names, shared image size, preprocessing settings, split ratios, filtering
+thresholds, run name, training hyperparameters, checkpoint selection, and
+evaluation options. Paths under the dataset and run directory are derived by
+default, so the dataset and run name do not need to be repeated.
+The example also shows commented optional overrides for training split dirs,
+inference dirs, and evaluation dirs.
 
 ```yaml
 dataset_root: local_workspace/datasets/your_sample
 results_path: local_workspace/results
 run_name: your_run_name
+
+image_size: [256, 256]
 ```
 
 The Makefile intentionally accepts only `CONFIG` for experiment execution. Do not pass `DATASET`, `RUN_NAME`, `IMAGE_SIZE`, `EPOCHS`, `SEED`, `CHECKPOINT`, or similar run settings to `make`.
@@ -135,7 +146,7 @@ The Makefile intentionally accepts only `CONFIG` for experiment execution. Do no
 Build the paired patch dataset:
 
 ```bash
-make prepare-dataset CONFIG=config/runs/my_run.yaml
+make dataset CONFIG=config/runs/my_run.yaml
 ```
 
 Train the model, run test inference, and evaluate the outputs:
@@ -152,7 +163,8 @@ Or run the full sequence in one command:
 make complete-run CONFIG=config/runs/my_run.yaml
 ```
 
-Set `inference.checkpoint` in the YAML before running inference.
+Set `inference.checkpoint` or `inference.checkpoint_policy` in the YAML before
+running inference. The example uses `checkpoint_policy: latest`.
 
 The main outputs for a run are written under:
 
@@ -174,7 +186,7 @@ uv run python tools/make_comparison.py --help
 
 Use `make` for the standard workflow. Experiment parameters belong in the run YAML, not in Make variables.
 
-### `make prepare-dataset`
+### `make dataset`
 
 Builds `dataset_train/`, `dataset_val/`, and `dataset_test/` from one full-size paired sample.
 
@@ -185,7 +197,7 @@ Inputs:
 Example:
 
 ```bash
-make prepare-dataset CONFIG=config/runs/my_run.yaml
+make dataset CONFIG=config/runs/my_run.yaml
 ```
 
 ### `make train`
@@ -208,7 +220,7 @@ Runs inference on `dataset_test/` using a trained checkpoint and writes generate
 
 Inputs:
 
-- `CONFIG`, pointing to a run YAML with an `inference.checkpoint` value
+- `CONFIG`, pointing to a run YAML with `inference.checkpoint` or `inference.checkpoint_policy`
 
 Example:
 
@@ -228,7 +240,7 @@ make evaluate CONFIG=config/runs/my_run.yaml
 
 ### `make complete-run`
 
-Runs `train`, `infer`, and `evaluate` sequentially using the same run YAML.
+Runs `dataset`, `train`, `infer`, and `evaluate` sequentially using the same run YAML.
 
 Example:
 
@@ -367,6 +379,8 @@ uv run python tools/make_comparison.py single \
 - `src/pix2pix.py` handles training, validation, checkpoints, and test inference
 - `tools/evaluate_generation.py` handles metric evaluation
 - `tools/make_comparison.py` handles visual comparison and diagnostics
+- [`config/runs/example.yaml`](config/runs/example.yaml) documents the run
+  schema used by `dataset`, `train`, `infer`, and `evaluate`
 
 ## Input and Output Conventions
 
@@ -419,7 +433,7 @@ This setup is suitable for paired image-to-image translation, where the generate
 
 The project is usable, but still experimental in several respects.
 
-- The workflow is CLI-driven, but configuration is only partially centralized.
+- The workflow is CLI-driven and uses a run YAML for standard experiment settings.
 - The repository includes historical material alongside the current workflow.
 - Dependency management is present, but still relatively lightweight.
 

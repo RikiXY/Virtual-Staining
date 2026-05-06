@@ -42,6 +42,13 @@ PLOT_FIXED_RANGES = {
 PLOT_FIXED_BINS = 30
 
 
+def _optional_path(data: dict[str, Any], key: str, default: Path) -> Path:
+    value = data.get(key)
+    if value is None:
+        return default
+    return Path(value)
+
+
 def apply_dataset_config(args: argparse.Namespace) -> argparse.Namespace:
     raw_data = load_yaml_mapping(args.config)
     data = section_with_shared_fields(
@@ -50,10 +57,13 @@ def apply_dataset_config(args: argparse.Namespace) -> argparse.Namespace:
 
     dataset_root = Path(data["dataset_root"])
     run_root = Path(data["results_path"]) / data["run_name"]
-    args.target_dir = str(data.get("target_dir", dataset_root / "dataset_test"))
-    args.generated_dir = str(data.get("generated_dir", run_root / "output_test"))
-    output_dir = data.get("output_dir")
-    args.output_dir = str(output_dir) if output_dir is not None else None
+    args.target_dir = str(
+        _optional_path(data, "target_dir", dataset_root / "dataset_test")
+    )
+    args.generated_dir = str(
+        _optional_path(data, "generated_dir", run_root / "output_test")
+    )
+    args.output_dir = str(_optional_path(data, "output_dir", run_root / "evaluation"))
     args.save_graphs = bool(data.get("save_graphs", True))
     return args
 
