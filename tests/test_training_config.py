@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from virtual_staining.training.config import TrainingConfig
+from virtual_staining.training.config import InferenceConfig, TrainingConfig
 
 
 def _make_namespace(**overrides: object) -> argparse.Namespace:
@@ -132,3 +132,47 @@ def test_from_yaml_defaults_for_optional_fields(tmp_path: Path) -> None:
     assert config.l1_weight == pytest.approx(25.0)
     assert config.log_rate == 15
     assert config.resume is None
+
+
+def test_training_from_run_yaml_section(tmp_path: Path) -> None:
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data
+        results_path: /results
+        run_name: section_run
+        training:
+          image_size: [512, 512]
+          epochs: 30
+          batch_size: 2
+          l1_weight: 50
+    """)
+    yaml_file = tmp_path / "run.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+
+    config = TrainingConfig.from_yaml(yaml_file)
+    assert config.dataset_root == Path("/data")
+    assert config.run_root == Path("/results") / "section_run"
+    assert config.image_size == (512, 512)
+    assert config.epochs == 30
+    assert config.batch_size == 2
+    assert config.l1_weight == pytest.approx(50)
+
+
+def test_inference_from_run_yaml_section(tmp_path: Path) -> None:
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data
+        results_path: /results
+        run_name: section_run
+        training:
+          image_size: [512, 512]
+          epochs: 30
+        inference:
+          checkpoint: /results/section_run/checkpoints/ep030.pth
+    """)
+    yaml_file = tmp_path / "run.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+
+    config = InferenceConfig.from_yaml(yaml_file)
+    assert config.test_dir == Path("/data") / "dataset_test"
+    assert config.output_test_dir == Path("/results") / "section_run" / "output_test"
+    assert config.checkpoint == Path("/results/section_run/checkpoints/ep030.pth")
+    assert config.image_size == (512, 512)

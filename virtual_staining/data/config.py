@@ -4,6 +4,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from virtual_staining.run_config import load_yaml_mapping, section_with_shared_fields
+
 
 def _pair(value: object, default: tuple[int, int]) -> tuple[int, int]:
     if value is None:
@@ -81,10 +83,8 @@ class PreprocessingConfig:
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> PreprocessingConfig:
-        import yaml
-
-        with open(path, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        raw_data = load_yaml_mapping(path)
+        data = section_with_shared_fields(raw_data, "preprocessing", {"dataset_root"})
 
         return cls(
             dataset_root=Path(data["dataset_root"]),

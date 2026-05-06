@@ -5,6 +5,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from virtual_staining.run_config import load_yaml_mapping, section_with_shared_fields
+
 
 def _pair(value: object, default: tuple[int, int]) -> tuple[int, int]:
     if value is None:
@@ -90,10 +92,10 @@ class TrainingConfig:
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> TrainingConfig:
-        import yaml
-
-        with open(path, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        raw_data = load_yaml_mapping(path)
+        data = section_with_shared_fields(
+            raw_data, "training", {"dataset_root", "results_path", "run_name"}
+        )
 
         return cls(
             dataset_root=Path(data["dataset_root"]),
@@ -113,4 +115,50 @@ class TrainingConfig:
             checkpoint_rate=int(data.get("checkpoint_rate", 10)),
             log_rate=int(data.get("log_rate", 15)),
             resume=data.get("resume"),
+        )
+
+
+@dataclass(frozen=True)
+class InferenceConfig:
+    dataset_root: Path
+    results_path: Path
+    run_name: str
+    checkpoint: Path
+    image_size: tuple[int, int]
+
+    @property
+    def run_root(self) -> Path:
+        return self.results_path / self.run_name
+
+    @property
+    def test_dir(self) -> Path:
+        return self.dataset_root / "dataset_test"
+
+    @property
+    def output_test_dir(self) -> Path:
+        return self.run_root / "output_test"
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> InferenceConfig:
+        raw_data = load_yaml_mapping(path)
+        data = section_with_shared_fields(
+            raw_data, "inference", {"dataset_root", "results_path", "run_name"}
+        )
+        training_data = section_with_shared_fields(
+            raw_data, "training", {"dataset_root", "results_path", "run_name"}
+        )
+
+        if not data.get("checkpoint"):
+            raise ValueError(
+                "Config field inference.checkpoint is required for inference."
+            )
+
+        return cls(
+            dataset_root=Path(data["dataset_root"]),
+            results_path=Path(data["results_path"]),
+            run_name=data["run_name"],
+            checkpoint=Path(data["checkpoint"]),
+            image_size=_pair(
+                data.get("image_size", training_data.get("image_size")), (256, 256)
+            ),
         )

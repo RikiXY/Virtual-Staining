@@ -172,3 +172,25 @@ def test_from_yaml_defaults_for_optional_fields(tmp_path: Path) -> None:
     assert config.max_white_ratio == pytest.approx(0.7)
     assert config.white_threshold == 250
     assert config.max_largest_white_component_ratio == pytest.approx(0.20)
+
+
+def test_from_run_yaml_section(tmp_path: Path) -> None:
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data/samples
+        preprocessing:
+          source_name: label_free.tif
+          target_name: he.tif
+          image_size: [512, 512]
+          grid_movement: [512, 512]
+          save_masks: true
+    """)
+    yaml_file = tmp_path / "run.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+
+    config = PreprocessingConfig.from_yaml(yaml_file)
+    assert config.dataset_root == Path("/data/samples")
+    assert config.source_name == "label_free.tif"
+    assert config.target_name == "he.tif"
+    assert config.image_size == (512, 512)
+    assert config.grid_movement == (512, 512)
+    assert config.save_masks is True
