@@ -12,8 +12,8 @@ def _make_image(path: Path) -> None:
     Image.new("RGB", (4, 4), color=(128, 64, 32)).save(path)
 
 
-@pytest.fixture
-def dataset_dir(tmp_path):
+@pytest.fixture()
+def dataset_dir(tmp_path: Path) -> Path:
     # Two complete pairs
     _make_image(tmp_path / "00000_00000_source.png")
     _make_image(tmp_path / "00000_00000_target.png")
@@ -31,14 +31,14 @@ def dataset_dir(tmp_path):
     return tmp_path
 
 
-def test_finds_correct_pair_count(dataset_dir):
-    ds = PairedHistologyDataset(dataset_dir)
-    assert len(ds) == 2
+def test_finds_correct_pair_count(dataset_dir: Path) -> None:
+    dataset = PairedHistologyDataset(dataset_dir)
+    assert len(dataset) == 2
 
 
-def test_source_and_target_are_matched(dataset_dir):
-    ds = PairedHistologyDataset(dataset_dir)
-    for source_path, target_path in ds.pairs:
+def test_source_and_target_are_matched(dataset_dir: Path) -> None:
+    dataset = PairedHistologyDataset(dataset_dir)
+    for source_path, target_path in dataset.pairs:
         assert Path(source_path).stem.lower().endswith("_source")
         assert Path(target_path).stem.lower().endswith("_target")
         src_parts = Path(source_path).stem.split("_")
@@ -47,27 +47,27 @@ def test_source_and_target_are_matched(dataset_dir):
         assert src_parts[1] == tgt_parts[1]
 
 
-def test_skips_mask_files(dataset_dir):
-    ds = PairedHistologyDataset(dataset_dir)
-    all_names = [Path(p).name for pair in ds.pairs for p in pair]
+def test_skips_mask_files(dataset_dir: Path) -> None:
+    dataset = PairedHistologyDataset(dataset_dir)
+    all_names = [Path(path).name for pair in dataset.pairs for path in pair]
     assert all("mask_" not in name and "_mask_" not in name for name in all_names)
 
 
-def test_skips_unmatched_files(dataset_dir):
-    ds = PairedHistologyDataset(dataset_dir)
-    keys = {Path(src).stem.split("_")[1] for src, _ in ds.pairs}
+def test_skips_unmatched_files(dataset_dir: Path) -> None:
+    dataset = PairedHistologyDataset(dataset_dir)
+    keys = {Path(src).stem.split("_")[1] for src, _ in dataset.pairs}
     assert "00003" not in keys
     assert "00004" not in keys
 
 
-def test_empty_directory(tmp_path):
-    ds = PairedHistologyDataset(tmp_path)
-    assert len(ds) == 0
+def test_empty_directory(tmp_path: Path) -> None:
+    dataset = PairedHistologyDataset(tmp_path)
+    assert len(dataset) == 0
 
 
-def test_getitem_returns_pil_images(dataset_dir):
-    ds = PairedHistologyDataset(dataset_dir)
-    source, target = ds[0]
+def test_getitem_returns_pil_images(dataset_dir: Path) -> None:
+    dataset = PairedHistologyDataset(dataset_dir)
+    source, target = dataset[0]
     assert isinstance(source, Image.Image)
     assert isinstance(target, Image.Image)
     assert source.mode == "RGB"

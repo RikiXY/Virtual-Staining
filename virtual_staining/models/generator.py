@@ -16,13 +16,26 @@ class DoubleConv(nn.Module):
         in_channels (int): Number of input channels.
         out_channels (int): Number of output channels.
     """
+
     def __init__(self, in_channels, out_channels):
         super(DoubleConv, self).__init__()
         self.double_conv = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=_CONV_KERNEL, padding=_CONV_PADDING, bias=False),
+            nn.Conv2d(
+                in_channels,
+                out_channels,
+                kernel_size=_CONV_KERNEL,
+                padding=_CONV_PADDING,
+                bias=False,
+            ),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=_CONV_KERNEL, padding=_CONV_PADDING, bias=False),
+            nn.Conv2d(
+                out_channels,
+                out_channels,
+                kernel_size=_CONV_KERNEL,
+                padding=_CONV_PADDING,
+                bias=False,
+            ),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
         )
@@ -38,11 +51,12 @@ class Down(nn.Module):
     Reduces the spatial resolution via max pooling and then applies
     a `DoubleConv` block to extract richer features.
     """
+
     def __init__(self, in_channels, out_channels):
         super(Down, self).__init__()
         self.maxpool_conv = nn.Sequential(
             nn.MaxPool2d(kernel_size=_POOL_KERNEL, stride=_POOL_KERNEL),
-            DoubleConv(in_channels, out_channels)
+            DoubleConv(in_channels, out_channels),
         )
 
     def forward(self, x):
@@ -56,14 +70,16 @@ class Up(nn.Module):
     The upsampled feature map is concatenated with the encoder skip
     connection before the final convolution.
     """
+
     def __init__(self, in_channels, out_channels, bilinear=True):
         super(Up, self).__init__()
         if bilinear:
-            self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+            self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
             self.conv = DoubleConv(in_channels, out_channels)
         else:
-            self.up = nn.ConvTranspose2d(in_channels, in_channels // 2,
-                                         kernel_size=2, stride=2)
+            self.up = nn.ConvTranspose2d(
+                in_channels, in_channels // 2, kernel_size=2, stride=2
+            )
             self.conv = DoubleConv(in_channels, out_channels)
 
     def forward(self, x1, x2):
@@ -77,6 +93,7 @@ class OutConv(nn.Module):
     Final 1x1 convolution that maps the features
     to the required number of output channels.
     """
+
     def __init__(self, in_channels, out_channels):
         super(OutConv, self).__init__()
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)

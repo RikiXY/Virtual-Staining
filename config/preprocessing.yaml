@@ -1,6 +1,7 @@
 # Preprocessing configuration for the dataset preparation pipeline.
-# Pass this file to prepare_dataset.py with --config.
-# Any field can be overridden on the command line.
+# Loaded by default by prepare_dataset.py.
+# Precedence in Python: CLI arguments > this YAML > code defaults.
+# Make can convert Make/environment variables into CLI arguments before launching Python.
 #
 # dataset_root, source_name, and target_name must be set before use.
 

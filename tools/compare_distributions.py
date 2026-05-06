@@ -243,7 +243,9 @@ def build_parser() -> argparse.ArgumentParser:
 def validate_direction(args: argparse.Namespace) -> None:
     """Verifies that exactly one metric direction has been chosen."""
     if args.higher_is_better == args.lower_is_better:
-        raise SystemExit("Choose exactly one between --higher-is-better and --lower-is-better.")
+        raise SystemExit(
+            "Choose exactly one between --higher-is-better and --lower-is-better."
+        )
 
 
 # =======================================
@@ -255,7 +257,9 @@ def save_unpaired_group_statistics(
     output_dir: Path,
 ) -> None:
     """Saves group_statistics.csv with one row per group."""
-    pd.DataFrame([asdict(group_a), asdict(group_b)]).to_csv(output_dir / "group_statistics.csv", index=False)
+    pd.DataFrame([asdict(group_a), asdict(group_b)]).to_csv(
+        output_dir / "group_statistics.csv", index=False
+    )
 
 
 def save_unpaired_summary_json(
@@ -270,12 +274,16 @@ def save_unpaired_summary_json(
         "group_b": asdict(group_b),
         "comparison": asdict(comparison),
     }
-    (output_dir / "summary.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    (output_dir / "summary.json").write_text(
+        json.dumps(payload, indent=2), encoding="utf-8"
+    )
 
 
 def save_paired_summary_json(summary: PairedSummary, output_dir: Path) -> None:
     """Saves a JSON summary of the paired comparison."""
-    (output_dir / "summary.json").write_text(json.dumps(asdict(summary), indent=2), encoding="utf-8")
+    (output_dir / "summary.json").write_text(
+        json.dumps(asdict(summary), indent=2), encoding="utf-8"
+    )
 
 
 def save_unpaired_report_txt(
@@ -307,7 +315,9 @@ def save_unpaired_report_txt(
     (output_dir / "report.txt").write_text("\n".join(lines), encoding="utf-8")
 
 
-def save_paired_report_txt(summary: PairedSummary, args: argparse.Namespace, output_dir: Path) -> None:
+def save_paired_report_txt(
+    summary: PairedSummary, args: argparse.Namespace, output_dir: Path
+) -> None:
     """Saves report.txt for the paired comparison."""
     lines = [
         f"Metric: {args.column}",
@@ -349,8 +359,9 @@ def plot_distribution_histogram(
 ) -> None:
     """Saves the comparison histogram between two distributions."""
     plt.figure(figsize=(9, 5))
-    plt.hist(a, bins=edges, density=True, alpha=0.45, label=label_a)
-    plt.hist(b, bins=edges, density=True, alpha=0.45, label=label_b)
+    bins = edges.tolist()
+    plt.hist(a, bins=bins, density=True, alpha=0.45, label=label_a)
+    plt.hist(b, bins=bins, density=True, alpha=0.45, label=label_b)
     plt.xlabel(column)
     plt.ylabel("Density")
     plt.title(f"Histogram comparison - {column}")
@@ -384,7 +395,9 @@ def plot_distribution_ecdf(
     plt.close()
 
 
-def plot_paired_delta_histogram(signed_delta: np.ndarray, column: str, output_dir: Path) -> None:
+def plot_paired_delta_histogram(
+    signed_delta: np.ndarray, column: str, output_dir: Path
+) -> None:
     """Saves the histogram of signed deltas for the paired comparison."""
     plt.figure(figsize=(9, 5))
     plt.hist(signed_delta, bins=30)
@@ -412,7 +425,9 @@ def plot_paired_scatter(
 
     plt.figure(figsize=(6, 6))
     plt.scatter(values_a, values_b, s=12, alpha=0.45)
-    plt.plot([min_value, max_value], [min_value, max_value], linestyle="--", linewidth=1)
+    plt.plot(
+        [min_value, max_value], [min_value, max_value], linestyle="--", linewidth=1
+    )
     plt.xlabel(f"{label_a} {column}")
     plt.ylabel(f"{label_b} {column}")
     plt.title(f"Paired scatter - {column}")
@@ -446,7 +461,9 @@ def print_unpaired_cli_summary(
     """Prints the CLI summary of the unpaired comparison."""
     print_section("Input")
     print_info("Metric", args.column)
-    print_info("Direction", "higher is better" if args.higher_is_better else "lower is better")
+    print_info(
+        "Direction", "higher is better" if args.higher_is_better else "lower is better"
+    )
     print_info("Output dir", str(output_dir))
 
     print_unpaired_group_summary(group_a, args.column)
@@ -454,25 +471,53 @@ def print_unpaired_cli_summary(
 
     print_section("Distribution comparison")
     comparison_color = "green" if comparison.better_label != "tie" else "yellow"
-    print_info("Mean favors", style(comparison.mean_favors, comparison_color) if comparison.mean_favors != "tie" else style("tie", "yellow"))
-    print_info("Median favors", style(comparison.median_favors, comparison_color) if comparison.median_favors != "tie" else style("tie", "yellow"))
-    print_info("Threshold favors", style(comparison.threshold_favors, comparison_color) if comparison.threshold_favors != "tie" else style("tie", "yellow"))
-    print_info("Wasserstein between groups", color_distance(comparison.wasserstein_between_groups, 0.03, 0.08))
+    print_info(
+        "Mean favors",
+        style(comparison.mean_favors, comparison_color)
+        if comparison.mean_favors != "tie"
+        else style("tie", "yellow"),
+    )
+    print_info(
+        "Median favors",
+        style(comparison.median_favors, comparison_color)
+        if comparison.median_favors != "tie"
+        else style("tie", "yellow"),
+    )
+    print_info(
+        "Threshold favors",
+        style(comparison.threshold_favors, comparison_color)
+        if comparison.threshold_favors != "tie"
+        else style("tie", "yellow"),
+    )
+    print_info(
+        "Wasserstein between groups",
+        color_distance(comparison.wasserstein_between_groups, 0.03, 0.08),
+    )
     print_info("KS statistic", color_distance(comparison.ks_statistic, 0.08, 0.18))
     print_info("KS p-value", color_pvalue(comparison.ks_pvalue))
     print_info("Mann-Whitney U", f"{comparison.mannwhitney_u:.6f}")
     print_info("Mann-Whitney p-value", color_pvalue(comparison.mannwhitney_pvalue))
 
     print_section("Conclusion")
-    print(style(f"Overall unpaired comparison favors: {comparison.better_label}", "bold", comparison_color))
+    print(
+        style(
+            f"Overall unpaired comparison favors: {comparison.better_label}",
+            "bold",
+            comparison_color,
+        )
+    )
     print(style(f"Saved outputs to: {output_dir}", "bold", "magenta"))
 
 
-def print_paired_cli_summary(summary: PairedSummary, args: argparse.Namespace, output_dir: Path) -> None:
+def print_paired_cli_summary(
+    summary: PairedSummary, args: argparse.Namespace, output_dir: Path
+) -> None:
     """Prints the CLI summary of the paired comparison."""
     print_section("Input")
     print_info("Metric", args.column)
-    print_info("Direction", "higher is better" if args.higher_is_better else "lower is better")
+    print_info(
+        "Direction", "higher is better" if args.higher_is_better else "lower is better"
+    )
     print_info("Output dir", str(output_dir))
 
     print_section("Paired comparison")
@@ -488,7 +533,13 @@ def print_paired_cli_summary(summary: PairedSummary, args: argparse.Namespace, o
 
     conclusion_color = "green" if summary.better_label != "tie" else "yellow"
     print_section("Conclusion")
-    print(style(f"Overall paired comparison favors: {summary.better_label}", "bold", conclusion_color))
+    print(
+        style(
+            f"Overall paired comparison favors: {summary.better_label}",
+            "bold",
+            conclusion_color,
+        )
+    )
     print(style(f"Saved outputs to: {output_dir}", "bold", "magenta"))
 
 
@@ -528,8 +579,12 @@ def run_unpaired(args: argparse.Namespace) -> None:
     save_unpaired_report_txt(group_a, group_b, comparison, args, output_dir)
 
     edges = np.linspace(args.min_value, args.max_value, args.bins + 1)
-    plot_distribution_histogram(values_a, values_b, edges, args.label_a, args.label_b, args.column, output_dir)
-    plot_distribution_ecdf(values_a, values_b, args.label_a, args.label_b, args.column, output_dir)
+    plot_distribution_histogram(
+        values_a, values_b, edges, args.label_a, args.label_b, args.column, output_dir
+    )
+    plot_distribution_ecdf(
+        values_a, values_b, args.label_a, args.label_b, args.column, output_dir
+    )
     print_unpaired_cli_summary(group_a, group_b, comparison, args, output_dir)
 
 
@@ -555,7 +610,9 @@ def run_paired(args: argparse.Namespace) -> None:
     save_paired_summary_json(summary, output_dir)
     save_paired_report_txt(summary, args, output_dir)
 
-    raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(dtype=float)
+    raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(
+        dtype=float
+    )
     signed_delta = raw_delta if args.higher_is_better else -raw_delta
     values_a = merged["value_a"].to_numpy(dtype=float)
     values_b = merged["value_b"].to_numpy(dtype=float)

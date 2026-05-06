@@ -8,6 +8,7 @@ class PatchGANDiscriminator(nn.Module):
 
     Produces an NxN map of real/fake predictions, one per patch.
     """
+
     def __init__(self, in_channels=6, ndf=64, use_sigmoid=False):
         """
         Args:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -28,18 +28,35 @@ SELECTION_SUMMARY_FIELDNAMES = [
     "comparison_path",
 ]
 
+DiagnosticPathKey = Literal[
+    "comparison_path",
+    "error_histogram_path",
+    "intensity_overlay_histogram_path",
+    "target_vs_generated_scatter_by_channel_path",
+]
+
+
+class DiagnosticEntry(TypedDict):
+    kind: str
+    sample_id: str
+    metric_value: float
+    comparison_path: Path
+    error_histogram_path: Path
+    intensity_overlay_histogram_path: Path
+    target_vs_generated_scatter_by_channel_path: Path
+
 
 # ==========================
 # Section dedicated to the parser
 # ==========================
+
 
 def add_single_subparser(subparsers: Any) -> None:
     """Adds the subcommand for comparing a single pair."""
     single_parser = subparsers.add_parser(
         "single",
         help="Create one comparison panel from source/generated/target images.",
-        description=
-        "Create one comparison panel from source/generated/target images. "
+        description="Create one comparison panel from source/generated/target images. "
         "Supported image extensions: .tif, .tiff, .png.",
     )
     single_parser.add_argument(
@@ -82,7 +99,7 @@ def add_from_metrics_subparser(subparsers: Any) -> None:
     metrics_parser = subparsers.add_parser(
         "from-metrics",
         help="Generate representative comparison panels from evaluation CSV files.",
-        description="Generate representative comparison panels from evaluation CSV files."
+        description="Generate representative comparison panels from evaluation CSV files.",
     )
     metrics_parser.add_argument(
         "--run-path",
@@ -100,7 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Create side-by-side comparison panels for paired histology images, "
             "or generate representative panels from evaluation CSV files. "
-            "Supported image extensions: .tif, .tiff, .png.",
+            "Supported image extensions: .tif, .tiff, .png."
         ),
         epilog=(
             "Examples:\n"
@@ -135,7 +152,9 @@ def validate_same_size(*images: Image.Image) -> None:
         )
 
 
-def compute_absolute_difference_map(generated_img: Image.Image, target_img: Image.Image) -> np.ndarray:
+def compute_absolute_difference_map(
+    generated_img: Image.Image, target_img: Image.Image
+) -> np.ndarray:
     """Computes the per-pixel MAE map between target and generated."""
     generated_float = to_float01(generated_img)
     target_float = to_float01(target_img)
@@ -198,7 +217,9 @@ def infer_diagnostics_dir(save_path: str | Path) -> Path:
     return save_path.parent / "diagnostics"
 
 
-def infer_case_diagnostics_dir(save_path: str | Path, generated_image: str | Path) -> Path:
+def infer_case_diagnostics_dir(
+    save_path: str | Path, generated_image: str | Path
+) -> Path:
     """Derives the diagnostics directory for the individual sample."""
     diagnostics_dir = infer_diagnostics_dir(save_path)
     sample_id = extract_generated_sample_id(generated_image)
@@ -249,6 +270,7 @@ def infer_source_path_from_row(row: dict[str, str]) -> Path:
 # ====================================
 # Section dedicated to CSV reading
 # ====================================
+
 
 def read_summary_csv(path: str | Path) -> dict[str, dict[str, float]]:
     """Reads summary.csv and returns the aggregate statistics per metric."""
@@ -302,6 +324,7 @@ def read_per_image_metrics_csv(path: str | Path) -> list[dict[str, str]]:
 # Section dedicated to sample selection
 # ==============================================
 
+
 def select_representative_rows(
     metric_name: str,
     metric_summary: dict[str, float],
@@ -324,7 +347,9 @@ def select_representative_rows(
     }
 
 
-def build_metric_kind_row_title(metric_name: str, kind: str, sample_id: str, metric_value: float) -> str:
+def build_metric_kind_row_title(
+    metric_name: str, kind: str, sample_id: str, metric_value: float
+) -> str:
     """Builds the row title for aggregated panels."""
     return f"{metric_name.upper()} | {kind.upper()} | sample={sample_id} | value={metric_value:.6f}"
 
@@ -332,6 +357,7 @@ def build_metric_kind_row_title(metric_name: str, kind: str, sample_id: str, met
 # =======================================
 # Section dedicated to CSV writing
 # =======================================
+
 
 def build_selection_summary_row(
     metric_name: str,
@@ -359,7 +385,9 @@ def build_selection_summary_row(
     }
 
 
-def write_metric_selection_summary(rows: list[dict[str, object]], save_path: str | Path) -> None:
+def write_metric_selection_summary(
+    rows: list[dict[str, object]], save_path: str | Path
+) -> None:
     """Writes the CSV with the selected samples for each metric."""
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -373,6 +401,7 @@ def write_metric_selection_summary(rows: list[dict[str, object]], save_path: str
 # ==========================================
 # Section dedicated to panel creation
 # ==========================================
+
 
 def save_comparison_panel(
     source_path: str | Path,
@@ -487,7 +516,12 @@ def save_diagnostic_plots(
 
     for channel_index, (ax, label) in enumerate(zip(axes, channel_labels)):
         ax.hist(target[:, :, channel_index].ravel(), bins=50, alpha=0.5, label="Target")
-        ax.hist(generated[:, :, channel_index].ravel(), bins=50, alpha=0.5, label="Generated")
+        ax.hist(
+            generated[:, :, channel_index].ravel(),
+            bins=50,
+            alpha=0.5,
+            label="Generated",
+        )
         ax.set_title(f"{label} channel")
         ax.set_xlabel("Intensity")
         ax.set_xlim(0, 1)
@@ -552,11 +586,11 @@ def save_stacked_image_panel(
 def save_metric_diagnostics_summary(
     metric_name: str,
     metric_dir: str | Path,
-    diagnostic_entries: list[dict[str, object]],
+    diagnostic_entries: list[DiagnosticEntry],
 ) -> list[Path]:
     """Saves the aggregated panels for a metric across the min, median and max cases."""
     metric_dir = Path(metric_dir)
-    output_specs = [
+    output_specs: list[tuple[DiagnosticPathKey, str, str]] = [
         (
             "comparison_path",
             f"{metric_name}_comparisons_max_median_min.png",
@@ -581,15 +615,8 @@ def save_metric_diagnostics_summary(
     saved_paths: list[Path] = []
 
     for path_key, filename, suptitle in output_specs:
-        image_paths = [entry[path_key] for entry in diagnostic_entries]
-        row_titles = [
-            build_metric_kind_row_title(
-                metric_name=metric_name,
-                kind=entry["kind"],
-                sample_id=entry["sample_id"],
-                metric_value=entry["metric_value"],
-            )
-            for entry in diagnostic_entries
+        image_paths: list[str | Path] = [
+            entry[path_key] for entry in diagnostic_entries
         ]
         saved_path = save_stacked_image_panel(
             image_paths=image_paths,
@@ -606,6 +633,7 @@ def save_metric_diagnostics_summary(
 # Section dedicated to the text report
 # ====================================
 
+
 def print_single_summary(saved_path: Path, diagnostic_paths: list[Path]) -> None:
     """Prints the final summary of the single mode."""
     print_section("Single comparison")
@@ -615,7 +643,9 @@ def print_single_summary(saved_path: Path, diagnostic_paths: list[Path]) -> None
         print_info("Saved diagnostic plot", style(str(diagnostic_path), "magenta"))
 
 
-def print_metric_based_selection(metric_name: str, representative_rows: dict[str, dict[str, str]]) -> None:
+def print_metric_based_selection(
+    metric_name: str, representative_rows: dict[str, dict[str, str]]
+) -> None:
     """Prints the representative samples chosen for a metric."""
     print_section(f"Metric {metric_name.upper()}")
 
@@ -645,6 +675,7 @@ def print_metric_saved_files(metrics_dir: Path) -> None:
 # =====================================
 # Section dedicated to the main flow
 # =====================================
+
 
 def run_single(args: argparse.Namespace) -> None:
     """Runs the complete flow for comparing a single pair."""
@@ -683,7 +714,7 @@ def build_metric_case_artifacts(
     row: dict[str, str],
     metric_summary: dict[str, float],
     metric_dir: Path,
-) -> tuple[dict[str, object], dict[str, object]]:
+) -> tuple[dict[str, object], DiagnosticEntry]:
     """Builds and saves the artefacts for a representative case."""
     sample_id = row["sample_id"]
     metric_value = float(row[metric_name])
@@ -716,12 +747,14 @@ def build_metric_case_artifacts(
         save_dir=diagnostics_case_dir,
     )
     diagnostic_paths_by_name = {path.name: path for path in diagnostic_paths}
-    diagnostic_entry = {
+    diagnostic_entry: DiagnosticEntry = {
         "kind": kind,
         "sample_id": sample_id,
         "metric_value": metric_value,
         "comparison_path": saved_path,
-        "error_histogram_path": diagnostic_paths_by_name[f"{sample_id}_error_histogram.png"],
+        "error_histogram_path": diagnostic_paths_by_name[
+            f"{sample_id}_error_histogram.png"
+        ],
         "intensity_overlay_histogram_path": diagnostic_paths_by_name[
             f"{sample_id}_intensity_overlay_histogram.png"
         ],
@@ -754,7 +787,9 @@ def run_from_metrics(args: argparse.Namespace) -> None:
     metrics_dir = run_path / "comparisons" / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
     selection_summary_rows: list[dict[str, object]] = []
-    available_metrics = [metric for metric in METRIC_SELECTION_ORDER if metric in summary_rows]
+    available_metrics = [
+        metric for metric in METRIC_SELECTION_ORDER if metric in summary_rows
+    ]
 
     if not available_metrics:
         raise ValueError(
@@ -774,7 +809,7 @@ def run_from_metrics(args: argparse.Namespace) -> None:
             per_image_rows,
         )
         metric_selection_rows: list[dict[str, object]] = []
-        metric_diagnostic_entries: list[dict[str, object]] = []
+        metric_diagnostic_entries: list[DiagnosticEntry] = []
 
         print_metric_based_selection(metric_name, representative_rows)
 
@@ -790,7 +825,9 @@ def run_from_metrics(args: argparse.Namespace) -> None:
             metric_selection_rows.append(selection_row)
             metric_diagnostic_entries.append(diagnostic_entry)
 
-        write_metric_selection_summary(metric_selection_rows, metric_dir / "selection_summary.csv")
+        write_metric_selection_summary(
+            metric_selection_rows, metric_dir / "selection_summary.csv"
+        )
         kind_order = {"max": 0, "median": 1, "min": 2}
         metric_diagnostic_entries.sort(key=lambda entry: kind_order[entry["kind"]])
         aggregated_paths = save_metric_diagnostics_summary(
@@ -800,7 +837,7 @@ def run_from_metrics(args: argparse.Namespace) -> None:
         )
 
         for aggregated_path in aggregated_paths:
-            print_info("Saved aggregated panel", aggregated_path)
+            print_info("Saved aggregated panel", str(aggregated_path))
 
     write_metric_selection_summary(
         selection_summary_rows,

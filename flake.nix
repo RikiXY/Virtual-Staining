@@ -3,42 +3,52 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  outputs = { self, nixpkgs }:
+  outputs = { nixpkgs, ... }:
     let
-      system = "x86_64-linux";
-      pkgs = import nixpkgs { inherit system; };
+      lib = nixpkgs.lib;
 
-      python = pkgs.python311;
-      
-      runtimeLibs = with pkgs; [
-        stdenv.cc.cc.lib
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
       ];
+
+      forAllSystems = lib.genAttrs systems;
     in {
-      devShells.${system}.default = pkgs.mkShell {
-        packages = with pkgs; [
-          uv
-          python
-          gnumake
-          git
-          ruff
-          pyright
-        ];
-        
-        UV_PYTHON = "${python}/bin/python";
-        UV_PYTHON_DOWNLOADS = "never";
-        LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
-          pkgs.stdenv.cc.cc.lib
-        ];
+      devShells = forAllSystems (system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
 
-        shellHook = ''
-          if [ -d /usr/lib/wsl/lib ]; then
-            export LD_LIBRARY_PATH=/usr/lib/wsl/lib:$LD_LIBRARY_PATH
-          fi
+          python = pkgs.python311;
 
-          echo "Entered Nix shell"
-          echo "uv: $(uv --version)"
-          echo "python: $(${python}/bin/python3.11 --version)"
-        '';
-      };
+          linuxRuntimeLibs = [
+            pkgs.stdenv.cc.cc.lib
+          ];
+        in {
+          default = pkgs.mkShell ({
+            packages = [
+              pkgs.uv
+              python
+              pkgs.gnumake
+              pkgs.git
+            ];
+
+            UV_PYTHON = "${python}/bin/python";
+            UV_PYTHON_DOWNLOADS = "never";
+
+            shellHook = lib.optionalString pkgs.stdenv.isLinux ''
+              if [ -d /usr/lib/wsl/lib ]; then
+                export LD_LIBRARY_PATH=/usr/lib/wsl/lib:$LD_LIBRARY_PATH
+              fi
+            '' + ''
+              echo "Entered Nix shell"
+              echo "uv: $(uv --version)"
+              echo "python: $(${python}/bin/python --version)"
+            '';
+          } // lib.optionalAttrs pkgs.stdenv.isLinux {
+            LD_LIBRARY_PATH = lib.makeLibraryPath linuxRuntimeLibs;
+          });
+        });
     };
 }

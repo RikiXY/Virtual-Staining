@@ -24,6 +24,7 @@ from virtual_staining.utils.env import collect_environment
 # Module-level helpers (private to this module)
 # ---------------------------------------------------------------------------
 
+
 def _is_amp_enabled(device: torch.device) -> bool:
     return isinstance(device, torch.device) and device.type == "cuda"
 
@@ -52,9 +53,15 @@ def _save_images(
     batch_index: int,
 ) -> None:
     # Images are normalised to [-1, 1]; bring back to [0, 1] before saving.
-    save_image((source_tensor * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_input.tif")
-    save_image((output * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_output.tif")
-    save_image((target * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_target.tif")
+    save_image(
+        (source_tensor * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_input.tif"
+    )
+    save_image(
+        (output * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_output.tif"
+    )
+    save_image(
+        (target * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_target.tif"
+    )
 
 
 def _get_first_pair_size(dataset) -> dict | None:
@@ -145,6 +152,7 @@ def _finish_console_progress() -> None:
 # Progress tracker
 # ---------------------------------------------------------------------------
 
+
 class _ProgressTracker:
     def __init__(
         self,
@@ -209,6 +217,7 @@ class _ProgressTracker:
 # ---------------------------------------------------------------------------
 # Trainer
 # ---------------------------------------------------------------------------
+
 
 class Trainer:
     """
@@ -275,7 +284,9 @@ class Trainer:
 
         env = collect_environment()
         self.config.to_yaml(self.config.run_root / "config.yaml")
-        with open(self.config.run_root / "environment.json", "w", encoding="utf-8") as f:
+        with open(
+            self.config.run_root / "environment.json", "w", encoding="utf-8"
+        ) as f:
             json.dump(env, f, indent=2, default=str)
 
         timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -354,7 +365,13 @@ class Trainer:
         with open(metrics_path, "w", newline="", encoding="utf-8") as metrics_file:
             metrics_writer = csv.DictWriter(
                 metrics_file,
-                fieldnames=["epoch", "loss_G_train", "loss_D_train", "loss_G_val", "loss_D_val"],
+                fieldnames=[
+                    "epoch",
+                    "loss_G_train",
+                    "loss_D_train",
+                    "loss_G_val",
+                    "loss_D_val",
+                ],
             )
             metrics_writer.writeheader()
 
@@ -393,13 +410,19 @@ class Trainer:
                 if (epoch + 1) % self.config.validate_rate == 0:
                     val_metrics = self._validate(epoch, log_file)
 
-                metrics_writer.writerow({
-                    "epoch": epoch,
-                    "loss_G_train": f"{epoch_metrics.loss_G:.6f}",
-                    "loss_D_train": f"{epoch_metrics.loss_D:.6f}",
-                    "loss_G_val": f"{val_metrics.loss_G:.6f}" if val_metrics else "",
-                    "loss_D_val": f"{val_metrics.loss_D:.6f}" if val_metrics else "",
-                })
+                metrics_writer.writerow(
+                    {
+                        "epoch": epoch,
+                        "loss_G_train": f"{epoch_metrics.loss_G:.6f}",
+                        "loss_D_train": f"{epoch_metrics.loss_D:.6f}",
+                        "loss_G_val": f"{val_metrics.loss_G:.6f}"
+                        if val_metrics
+                        else "",
+                        "loss_D_val": f"{val_metrics.loss_D:.6f}"
+                        if val_metrics
+                        else "",
+                    }
+                )
                 metrics_file.flush()
 
         _finish_console_progress()
@@ -493,9 +516,8 @@ class Trainer:
                 D_fake = self.discriminator(x, fake)
                 real_label = torch.ones_like(D_real, device=self.device)
                 fake_label = torch.zeros_like(D_fake, device=self.device)
-                loss_D = (
-                    self._bce_loss(D_real, real_label)
-                    + self._bce_loss(D_fake, fake_label)
+                loss_D = self._bce_loss(D_real, real_label) + self._bce_loss(
+                    D_fake, fake_label
                 )
 
             self._opt_D.zero_grad()
@@ -561,7 +583,9 @@ class Trainer:
                 )
 
         if last_loss_G is None or last_loss_D is None:
-            raise RuntimeError("Training loader was empty; cannot compute epoch metrics.")
+            raise RuntimeError(
+                "Training loader was empty; cannot compute epoch metrics."
+            )
         return EpochMetrics(loss_G=last_loss_G, loss_D=last_loss_D)
 
     def _validate(self, epoch: int, log_file: Path) -> EpochMetrics:
@@ -584,9 +608,8 @@ class Trainer:
                     D_fake = self.discriminator(x, fake)
                     real_label = torch.ones_like(D_real, device=self.device)
                     fake_label = torch.zeros_like(D_fake, device=self.device)
-                    loss_D = (
-                        self._bce_loss(D_real, real_label)
-                        + self._bce_loss(D_fake, fake_label)
+                    loss_D = self._bce_loss(D_real, real_label) + self._bce_loss(
+                        D_fake, fake_label
                     )
                     loss_G = (
                         self._bce_loss(D_fake, real_label)
@@ -633,7 +656,9 @@ class Trainer:
             "log_rate": self.config.log_rate,
             "checkpoint_rate": self.config.checkpoint_rate,
             "validate_rate": self.config.validate_rate,
-            "resume_checkpoint": str(self.config.resume) if self.config.resume else None,
+            "resume_checkpoint": str(self.config.resume)
+            if self.config.resume
+            else None,
             "l1_weight": self.config.l1_weight,
             "lr_g": self.config.lr_g,
             "lr_d": self.config.lr_d,

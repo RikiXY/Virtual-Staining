@@ -1,8 +1,7 @@
 import argparse
-import os
 import random
-from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import torch
@@ -16,6 +15,28 @@ from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.config import TrainingConfig
 from virtual_staining.training.trainer import Trainer
+from virtual_staining.utils.cli import apply_namespace_overrides
+
+
+_TRAIN_OVERRIDES = {
+    "dataset_root": ("dataset_root", Path),
+    "results_path": ("results_path", Path),
+    "run_name": "run_name",
+    "image_size": ("image_size", tuple),
+    "batch_size": "batch_size",
+    "epochs": "epochs",
+    "lr_g": "lr_g",
+    "lr_d": "lr_d",
+    "beta1": "beta1",
+    "beta2": "beta2",
+    "l1_weight": "l1_weight",
+    "seed": "seed",
+    "num_workers": "num_workers",
+    "validate_rate": "validate_rate",
+    "checkpoint_rate": "checkpoint_rate",
+    "log_rate": "log_rate",
+    "resume": "resume",
+}
 
 
 # --------------------- Working paths ---------------------
@@ -40,81 +61,84 @@ def build_workspace_paths(run_root: str | Path) -> dict:
 # The script supports two distinct modes: training and testing.
 def build_parser():
     parser = argparse.ArgumentParser(
-    prog="python src/pix2pix.py",
-    description="Train or test the Pix2Pix model on a paired histology dataset.",
-    epilog=(
-        "Examples:\n"
-        "  python src/pix2pix.py train "
-        "--dataset-root local_workspace/datasets/inverted_256 "
-        "--run-name inv_P-256_L1-25 "
-        "--epochs 100 "
-        "--image-size 256 256\n"
-        "\n"
-        "  python src/pix2pix.py test "
-        "--dataset-root local_workspace/datasets/inverted_256 "
-        "--run-path local_workspace/results/inv_P-256_L1-25 "
-        "--checkpoint local_workspace/results/inv_P-256_L1-25/checkpoints/ep099.pth\n"
-        "\n"
-        "Use 'python src/pix2pix.py <command> --help' "
-        "to see the options for a specific command."
-    ),
-    formatter_class=argparse.RawTextHelpFormatter
-)
+        prog="python src/pix2pix.py",
+        description="Train or test the Pix2Pix model on a paired histology dataset.",
+        epilog=(
+            "Examples:\n"
+            "  python src/pix2pix.py train "
+            "--dataset-root local_workspace/datasets/inverted_256 "
+            "--run-name inv_P-256_L1-25 "
+            "--epochs 100 "
+            "--image-size 256 256\n"
+            "\n"
+            "  python src/pix2pix.py test "
+            "--dataset-root local_workspace/datasets/inverted_256 "
+            "--run-path local_workspace/results/inv_P-256_L1-25 "
+            "--checkpoint local_workspace/results/inv_P-256_L1-25/checkpoints/ep099.pth\n"
+            "\n"
+            "Use 'python src/pix2pix.py <command> --help' "
+            "to see the options for a specific command."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
 
     subparsers = parser.add_subparsers(dest="mode", required=True)
 
     train_parser = subparsers.add_parser(
         "train",
         help="Train the Pix2Pix model",
-        formatter_class=argparse.RawTextHelpFormatter
+        formatter_class=argparse.RawTextHelpFormatter,
     )
     train_parser.add_argument(
         "--config",
         type=str,
-        default=None,
-        help="path to a training config YAML (CLI flags override matching fields)"
+        default="config/train.yaml",
+        help=(
+            "path to a training config YAML "
+            "(default: config/train.yaml; CLI flags override fields)"
+        ),
     )
     train_parser.add_argument(
         "--dataset-root",
         type=str,
         default=argparse.SUPPRESS,
-        help="Path to the dataset root containing dataset_train/ and dataset_val/"
+        help="Path to the dataset root containing dataset_train/ and dataset_val/",
     )
     train_parser.add_argument(
         "--run-name",
         type=str,
         default=argparse.SUPPRESS,
-        help="Name of the output run directory to create"
+        help="Name of the output run directory to create",
     )
     train_parser.add_argument(
         "--results-path",
         type=str,
         default=argparse.SUPPRESS,
-        help="Base directory where the new run folder will be created (default: local_workspace/results)"
+        help="Base directory where the new run folder will be created (default: local_workspace/results)",
     )
     train_parser.add_argument(
         "--seed",
         type=int,
         default=argparse.SUPPRESS,
-        help="Random seed for reproducibility. If omitted, a random seed is generated."
+        help="Random seed for reproducibility. If omitted, a random seed is generated.",
     )
     train_parser.add_argument(
         "--epochs",
         type=int,
         default=argparse.SUPPRESS,
-        help="Number of training epochs"
+        help="Number of training epochs",
     )
     train_parser.add_argument(
         "--batch-size",
         type=int,
         default=argparse.SUPPRESS,
-        help="Batch size for the DataLoader (default: 8)"
+        help="Batch size for the DataLoader (default: 8)",
     )
     train_parser.add_argument(
         "--num-workers",
         type=int,
         default=argparse.SUPPRESS,
-        help="Number of DataLoader workers (default: min(4, cpu_count))"
+        help="Number of DataLoader workers (default: min(4, cpu_count))",
     )
     train_parser.add_argument(
         "--image-size",
@@ -125,85 +149,85 @@ def build_parser():
         help=(
             "Resize images before training as HEIGHT WIDTH "
             "(default: 256 256). Use 512 512 for 512x512 patch experiments."
-        )
+        ),
     )
     train_parser.add_argument(
         "--log-rate",
         type=int,
         default=argparse.SUPPRESS,
-        help="Log every N batches (default: 15)"
+        help="Log every N batches (default: 15)",
     )
     train_parser.add_argument(
         "--checkpoint-rate",
         type=int,
         default=argparse.SUPPRESS,
-        help="Save a checkpoint every N epochs (default: 10)"
+        help="Save a checkpoint every N epochs (default: 10)",
     )
     train_parser.add_argument(
         "--validate-rate",
         type=int,
         default=argparse.SUPPRESS,
-        help="Run validation every N epochs (default: 10)"
+        help="Run validation every N epochs (default: 10)",
     )
     train_parser.add_argument(
         "--resume",
         type=str,
         default=argparse.SUPPRESS,
-        help="Optional checkpoint path to resume training from"
+        help="Optional checkpoint path to resume training from",
     )
     train_parser.add_argument(
         "--l1-weight",
         type=float,
         default=argparse.SUPPRESS,
-        help="Weight of the L1 reconstruction loss (default: 25.0)"
+        help="Weight of the L1 reconstruction loss (default: 25.0)",
     )
     train_parser.add_argument(
         "--lr-g",
         type=float,
         default=argparse.SUPPRESS,
-        help="Learning rate for the generator (default: 2e-4)"
+        help="Learning rate for the generator (default: 2e-4)",
     )
     train_parser.add_argument(
         "--lr-d",
         type=float,
         default=argparse.SUPPRESS,
-        help="Learning rate for the discriminator (default: 2e-4)"
+        help="Learning rate for the discriminator (default: 2e-4)",
     )
     train_parser.add_argument(
         "--beta1",
         type=float,
         default=argparse.SUPPRESS,
-        help="Adam beta1 (default: 0.5)"
+        help="Adam beta1 (default: 0.5)",
     )
     train_parser.add_argument(
         "--beta2",
         type=float,
         default=argparse.SUPPRESS,
-        help="Adam beta2 (default: 0.999)"
+        help="Adam beta2 (default: 0.999)",
     )
 
     test_parser = subparsers.add_parser(
         "test",
         help="Run inference on the test set",
-        formatter_class=argparse.RawTextHelpFormatter
+        formatter_class=argparse.RawTextHelpFormatter,
     )
     test_parser.add_argument(
         "--dataset-root",
         type=str,
         required=True,
-        help="Path to the dataset root containing dataset_test/"
+        help="Path to the dataset root containing dataset_test/",
     )
     test_parser.add_argument(
         "--checkpoint",
         type=str,
         required=True,
-        help="Path to the checkpoint to use for inference"
+        help="Path to the checkpoint to use for inference",
     )
     test_parser.add_argument(
         "--run-path",
         type=str,
         required=True,
-        help="Path to an existing training run containing checkpoints/ and output folders"
+        help="Path to an existing training run containing checkpoints/ and output folders",
     )
     test_parser.add_argument(
         "--image-size",
@@ -214,50 +238,17 @@ def build_parser():
         help=(
             "Resize images before inference as HEIGHT WIDTH "
             "(default: 256 256). Must match the image size used during training."
-        )
+        ),
     )
 
     return parser
 
 
-def _apply_train_overrides(config: TrainingConfig, args: argparse.Namespace) -> TrainingConfig:
+def _apply_train_overrides(
+    config: TrainingConfig, args: argparse.Namespace
+) -> TrainingConfig:
     """Apply any CLI-specified fields on top of a YAML-loaded TrainingConfig."""
-    kw: dict = {}
-    if hasattr(args, "dataset_root"):
-        kw["dataset_root"] = Path(args.dataset_root)
-    if hasattr(args, "results_path"):
-        kw["results_path"] = Path(args.results_path)
-    if hasattr(args, "run_name"):
-        kw["run_name"] = args.run_name
-    if hasattr(args, "image_size"):
-        kw["image_size"] = tuple(args.image_size)
-    if hasattr(args, "batch_size"):
-        kw["batch_size"] = args.batch_size
-    if hasattr(args, "epochs"):
-        kw["epochs"] = args.epochs
-    if hasattr(args, "lr_g"):
-        kw["lr_g"] = args.lr_g
-    if hasattr(args, "lr_d"):
-        kw["lr_d"] = args.lr_d
-    if hasattr(args, "beta1"):
-        kw["beta1"] = args.beta1
-    if hasattr(args, "beta2"):
-        kw["beta2"] = args.beta2
-    if hasattr(args, "l1_weight"):
-        kw["l1_weight"] = args.l1_weight
-    if hasattr(args, "seed"):
-        kw["seed"] = args.seed
-    if hasattr(args, "num_workers"):
-        kw["num_workers"] = args.num_workers
-    if hasattr(args, "validate_rate"):
-        kw["validate_rate"] = args.validate_rate
-    if hasattr(args, "checkpoint_rate"):
-        kw["checkpoint_rate"] = args.checkpoint_rate
-    if hasattr(args, "log_rate"):
-        kw["log_rate"] = args.log_rate
-    if hasattr(args, "resume"):
-        kw["resume"] = args.resume
-    return replace(config, **kw) if kw else config
+    return apply_namespace_overrides(config, args, _TRAIN_OVERRIDES)
 
 
 def is_amp_enabled(device):
@@ -287,11 +278,13 @@ def main(config: TrainingConfig) -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    transform = transforms.Compose([
-        transforms.Resize(config.image_size),
-        transforms.ToTensor(),
-        transforms.Normalize([0.5] * 3, [0.5] * 3),
-    ])
+    transform = transforms.Compose(
+        [
+            transforms.Resize(config.image_size),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5] * 3, [0.5] * 3),
+        ]
+    )
 
     train_dir = Path(config.dataset_root) / "dataset_train"
     val_dir = Path(config.dataset_root) / "dataset_val"
@@ -325,11 +318,7 @@ def main(config: TrainingConfig) -> None:
 
 
 def test_inference(
-    checkpoint_path,
-    test_folder,
-    output_folder,
-    image_size=(256, 256),
-    device=None
+    checkpoint_path, test_folder, output_folder, image_size=(256, 256), device=None
 ):
     """
     Runs inference on the test set and saves the generated images.
@@ -359,11 +348,13 @@ def test_inference(
 
     # Preprocessing must stay consistent with training,
     # otherwise the model would receive inputs with a different distribution.
-    transform = transforms.Compose([
-        transforms.Resize(image_size),
-        transforms.ToTensor(),
-        transforms.Normalize([0.5] * 3, [0.5] * 3),
-    ])
+    transform = transforms.Compose(
+        [
+            transforms.Resize(image_size),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5] * 3, [0.5] * 3),
+        ]
+    )
 
     dataset = PairedHistologyDataset(test_folder, transform=transform)
 
@@ -374,9 +365,11 @@ def test_inference(
     amp_enabled = is_amp_enabled(device)
 
     with torch.no_grad():
-        for idx, (source_tensor, _) in enumerate(dataset):
+        for idx in range(len(dataset)):
+            source_tensor, _ = dataset[idx]
+            source_tensor = cast(torch.Tensor, source_tensor)
             source_path = dataset.pairs[idx][0]
-            prefix = source_path.stem[:-len("_source")]
+            prefix = source_path.stem[: -len("_source")]
             out_filename = f"{prefix}_target_generated{source_path.suffix.lower()}"
 
             img_tensor = source_tensor.unsqueeze(0).to(device)
@@ -399,21 +392,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.mode == "train":
-        if args.config:
-            config = TrainingConfig.from_yaml(args.config)
-            config = _apply_train_overrides(config, args)
-        else:
-            missing = [flag for flag, attr in [
-                ("--dataset-root", "dataset_root"),
-                ("--run-name", "run_name"),
-                ("--epochs", "epochs"),
-            ] if not hasattr(args, attr)]
-            if missing:
-                parser.error(
-                    "the following arguments are required when --config is not given: "
-                    + ", ".join(missing)
-                )
-            config = TrainingConfig.from_args(args)
+        config = TrainingConfig.from_yaml(args.config)
+        config = _apply_train_overrides(config, args)
         main(config)
 
     elif args.mode == "test":
@@ -430,5 +410,5 @@ if __name__ == "__main__":
             test_folder=str(test_dir),
             output_folder=str(paths["output_test_dir"]),
             image_size=tuple(args.image_size),
-            device=device
+            device=device,
         )

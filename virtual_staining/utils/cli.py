@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Callable, Mapping
+from dataclasses import replace
+from typing import Any, TypeVar, cast
+
+T = TypeVar("T")
 
 ANSI = {
     "reset": "\033[0m",
@@ -38,3 +43,24 @@ def print_section(title: str) -> None:
 def print_info(label: str, value: str) -> None:
     """Prints a single label-value line."""
     print(f"{style(label + ':', 'bold', 'blue')} {value}")
+
+
+def apply_namespace_overrides(
+    config: T,
+    args: object,
+    fields: Mapping[str, str | tuple[str, Callable[[object], object]]],
+) -> T:
+    overrides: dict[str, object] = {}
+    for arg_name, field in fields.items():
+        if not hasattr(args, arg_name):
+            continue
+
+        value = getattr(args, arg_name)
+        if isinstance(field, tuple):
+            field_name, transform = field
+            value = transform(value)
+        else:
+            field_name = field
+        overrides[field_name] = value
+
+    return cast(T, replace(cast(Any, config), **overrides)) if overrides else config

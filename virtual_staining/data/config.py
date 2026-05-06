@@ -1,7 +1,19 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def _pair(value: object, default: tuple[int, int]) -> tuple[int, int]:
+    if value is None:
+        return default
+    if not isinstance(value, Sequence) or isinstance(value, str):
+        raise ValueError(f"Expected a two-value sequence, got {value!r}")
+    items = tuple(value)
+    if len(items) != 2:
+        raise ValueError(f"Expected exactly two values, got {items}")
+    return int(items[0]), int(items[1])
 
 
 @dataclass(frozen=True)
@@ -28,8 +40,8 @@ class PreprocessingConfig:
             dataset_root=Path(args.path),
             source_name=args.source_name,
             target_name=args.target_name,
-            image_size=tuple(getattr(args, "image_size", (256, 256))),
-            grid_movement=tuple(getattr(args, "grid_movement", (256, 256))),
+            image_size=_pair(getattr(args, "image_size", (256, 256)), (256, 256)),
+            grid_movement=_pair(getattr(args, "grid_movement", (256, 256)), (256, 256)),
             margin=getattr(args, "margin", 200),
             seed=getattr(args, "seed", None),
             save_masks=getattr(args, "save_masks", False),
@@ -39,7 +51,9 @@ class PreprocessingConfig:
             min_foreground_ratio=getattr(args, "min_foreground_ratio", 0.25),
             max_white_ratio=getattr(args, "max_white_ratio", 0.7),
             white_threshold=getattr(args, "white_threshold", 250),
-            max_largest_white_component_ratio=getattr(args, "max_largest_white_component_ratio", 0.20),
+            max_largest_white_component_ratio=getattr(
+                args, "max_largest_white_component_ratio", 0.20
+            ),
         )
 
     def to_yaml(self, path: str | Path) -> None:
@@ -76,8 +90,8 @@ class PreprocessingConfig:
             dataset_root=Path(data["dataset_root"]),
             source_name=data["source_name"],
             target_name=data["target_name"],
-            image_size=tuple(data.get("image_size", [256, 256])),
-            grid_movement=tuple(data.get("grid_movement", [256, 256])),
+            image_size=_pair(data.get("image_size"), (256, 256)),
+            grid_movement=_pair(data.get("grid_movement"), (256, 256)),
             margin=int(data.get("margin", 200)),
             seed=data.get("seed"),
             save_masks=bool(data.get("save_masks", False)),

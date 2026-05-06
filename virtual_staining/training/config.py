@@ -1,8 +1,20 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def _pair(value: object, default: tuple[int, int]) -> tuple[int, int]:
+    if value is None:
+        return default
+    if not isinstance(value, Sequence) or isinstance(value, str):
+        raise ValueError(f"Expected a two-value sequence, got {value!r}")
+    items = tuple(value)
+    if len(items) != 2:
+        raise ValueError(f"Expected exactly two values, got {items}")
+    return int(items[0]), int(items[1])
 
 
 @dataclass(frozen=True)
@@ -60,7 +72,7 @@ class TrainingConfig:
             dataset_root=Path(args.dataset_root),
             results_path=Path(getattr(args, "results_path", "local_workspace/results")),
             run_name=args.run_name,
-            image_size=tuple(getattr(args, "image_size", (256, 256))),
+            image_size=_pair(getattr(args, "image_size", (256, 256)), (256, 256)),
             batch_size=getattr(args, "batch_size", 8),
             epochs=args.epochs,
             lr_g=getattr(args, "lr_g", 2e-4),
@@ -87,7 +99,7 @@ class TrainingConfig:
             dataset_root=Path(data["dataset_root"]),
             results_path=Path(data["results_path"]),
             run_name=data["run_name"],
-            image_size=tuple(data.get("image_size", [256, 256])),
+            image_size=_pair(data.get("image_size"), (256, 256)),
             batch_size=int(data.get("batch_size", 8)),
             epochs=int(data["epochs"]),
             lr_g=float(data.get("lr_g", 2e-4)),

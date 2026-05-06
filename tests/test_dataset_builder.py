@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,13 +17,14 @@ from virtual_staining.data.config import PreprocessingConfig
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_synthetic_image(seed: int = 0) -> np.ndarray:
     """Return a 600x600 random-noise BGR image with no near-white pixels."""
     rng = np.random.default_rng(seed)
     return rng.integers(10, 200, (600, 600, 3), dtype=np.uint8)
 
 
-def _white_mask(img: np.ndarray, _params) -> np.ndarray:
+def _white_mask(img: np.ndarray, _params: object) -> np.ndarray:
     """Full-white mask - every pixel is foreground."""
     return np.full((img.shape[0], img.shape[1]), 255, dtype=np.uint8)
 
@@ -43,9 +46,25 @@ def _identity_align(
     return tgt.copy(), aligned_mask, np.eye(2, 3, dtype=np.float64)
 
 
+@contextmanager
+def _patched_builder_dependencies() -> Iterator[None]:
+    with (
+        patch(
+            "virtual_staining.data.builder.calculate_mask_with_multiple_parameters",
+            side_effect=_white_mask,
+        ),
+        patch(
+            "virtual_staining.data.builder.align_from_scaled",
+            side_effect=_identity_align,
+        ),
+    ):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # Fixture
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 def builder_config(tmp_path: Path) -> PreprocessingConfig:
@@ -74,18 +93,13 @@ def builder_config(tmp_path: Path) -> PreprocessingConfig:
     )
 
 
-_PATCHES = [
-    patch("virtual_staining.data.builder.calculate_mask_with_multiple_parameters", side_effect=_white_mask),
-    patch("virtual_staining.data.builder.align_from_scaled", side_effect=_identity_align),
-]
-
-
 # ---------------------------------------------------------------------------
 # Smoke tests
 # ---------------------------------------------------------------------------
 
+
 def test_run_all_creates_split_directories(builder_config: PreprocessingConfig) -> None:
-    with _PATCHES[0], _PATCHES[1]:
+    with _patched_builder_dependencies():
         DatasetBuilder(builder_config).run_all()
 
     root = builder_config.dataset_root
@@ -94,8 +108,10 @@ def test_run_all_creates_split_directories(builder_config: PreprocessingConfig) 
     assert (root / "dataset_test").exists()
 
 
-def test_run_all_result_counts_match_saved_files(builder_config: PreprocessingConfig) -> None:
-    with _PATCHES[0], _PATCHES[1]:
+def test_run_all_result_counts_match_saved_files(
+    builder_config: PreprocessingConfig,
+) -> None:
+    with _patched_builder_dependencies():
         result = DatasetBuilder(builder_config).run_all()
 
     root = builder_config.dataset_root
@@ -111,22 +127,27 @@ def test_run_all_result_counts_match_saved_files(builder_config: PreprocessingCo
         ("dataset_test", result.test_count),
     ]:
         files = list((root / split_name).iterdir())
-        assert len(files) == count * 2, f"{split_name}: expected {count * 2} files, got {len(files)}"
+        expected_file_count = count * 2
+        assert len(files) == expected_file_count, (
+            f"{split_name}: expected {expected_file_count} files, got {len(files)}"
+        )
 
 
 def test_run_all_discarded_log_is_written(builder_config: PreprocessingConfig) -> None:
-    with _PATCHES[0], _PATCHES[1]:
+    with _patched_builder_dependencies():
         result = DatasetBuilder(builder_config).run_all()
 
     log = builder_config.dataset_root / "discarded_patches" / "discarded_log.csv"
     assert log.exists()
-    lines = log.read_text().splitlines()
+    lines = log.read_text(encoding="utf-8").splitlines()
     # Header + one row per discarded patch
     assert len(lines) == result.skipped_count + 1
 
 
-def test_run_all_saves_config_and_environment(builder_config: PreprocessingConfig) -> None:
-    with _PATCHES[0], _PATCHES[1]:
+def test_run_all_saves_config_and_environment(
+    builder_config: PreprocessingConfig,
+) -> None:
+    with _patched_builder_dependencies():
         DatasetBuilder(builder_config).run_all()
 
     root = builder_config.dataset_root

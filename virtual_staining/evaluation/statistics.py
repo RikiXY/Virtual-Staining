@@ -75,7 +75,9 @@ def load_metric_values(csv_path: str | Path, column: str) -> np.ndarray:
     df = load_metric_frame(csv_path)
 
     if column not in df.columns:
-        raise ValueError(f"Column '{column}' not found. Available columns: {list(df.columns)}")
+        raise ValueError(
+            f"Column '{column}' not found. Available columns: {list(df.columns)}"
+        )
 
     values = pd.to_numeric(df[column], errors="coerce").dropna().to_numpy(dtype=float)
 
@@ -111,7 +113,11 @@ def choose_unpaired_better_label(
     score_a = 0
     score_b = 0
 
-    for favored in [comparison.mean_favors, comparison.median_favors, comparison.threshold_favors]:
+    for favored in [
+        comparison.mean_favors,
+        comparison.median_favors,
+        comparison.threshold_favors,
+    ]:
         if favored == group_a.label:
             score_a += 1
         elif favored == group_b.label:
@@ -124,7 +130,9 @@ def choose_unpaired_better_label(
     return "tie"
 
 
-def choose_paired_better_label(mean_signed_delta: float, label_a: str, label_b: str) -> str:
+def choose_paired_better_label(
+    mean_signed_delta: float, label_a: str, label_b: str
+) -> str:
     """Chooses the better group in the paired comparison based on the mean signed delta."""
     if mean_signed_delta > 0:
         return label_b
@@ -143,9 +151,15 @@ def compute_unpaired_group_stats(
     p25, p75 = np.percentile(values, [25, 75])
 
     if higher_is_better:
-        shares = {f"ge_{threshold:.2f}": float(np.mean(values >= threshold)) for threshold in thresholds}
+        shares = {
+            f"ge_{threshold:.2f}": float(np.mean(values >= threshold))
+            for threshold in thresholds
+        }
     else:
-        shares = {f"le_{threshold:.2f}": float(np.mean(values <= threshold)) for threshold in thresholds}
+        shares = {
+            f"le_{threshold:.2f}": float(np.mean(values <= threshold))
+            for threshold in thresholds
+        }
 
     return UnpairedGroupStats(
         label=label,
@@ -169,11 +183,35 @@ def compute_unpaired_comparison(
     ks = ks_2samp(a, b, alternative="two-sided")
 
     if higher_is_better:
-        mean_favors = group_b.label if group_b.mean > group_a.mean else group_a.label if group_a.mean > group_b.mean else "tie"
-        median_favors = group_b.label if group_b.median > group_a.median else group_a.label if group_a.median > group_b.median else "tie"
+        mean_favors = (
+            group_b.label
+            if group_b.mean > group_a.mean
+            else group_a.label
+            if group_a.mean > group_b.mean
+            else "tie"
+        )
+        median_favors = (
+            group_b.label
+            if group_b.median > group_a.median
+            else group_a.label
+            if group_a.median > group_b.median
+            else "tie"
+        )
     else:
-        mean_favors = group_b.label if group_b.mean < group_a.mean else group_a.label if group_a.mean < group_b.mean else "tie"
-        median_favors = group_b.label if group_b.median < group_a.median else group_a.label if group_a.median < group_b.median else "tie"
+        mean_favors = (
+            group_b.label
+            if group_b.mean < group_a.mean
+            else group_a.label
+            if group_a.mean < group_b.mean
+            else "tie"
+        )
+        median_favors = (
+            group_b.label
+            if group_b.median < group_a.median
+            else group_a.label
+            if group_a.median < group_b.median
+            else "tie"
+        )
 
     threshold_favors = choose_threshold_favors(
         group_a.threshold_shares,
@@ -209,12 +247,18 @@ def align_paired_frames(
 
     for frame_name, frame in [("A", frame_a), ("B", frame_b)]:
         if sample_id_column not in frame.columns:
-            raise ValueError(f"Column '{sample_id_column}' not found in CSV {frame_name}")
+            raise ValueError(
+                f"Column '{sample_id_column}' not found in CSV {frame_name}"
+            )
         if metric_column not in frame.columns:
             raise ValueError(f"Column '{metric_column}' not found in CSV {frame_name}")
 
-    subset_a = frame_a[[sample_id_column, metric_column]].rename(columns={metric_column: "value_a"})
-    subset_b = frame_b[[sample_id_column, metric_column]].rename(columns={metric_column: "value_b"})
+    subset_a = frame_a[[sample_id_column, metric_column]].rename(
+        columns={metric_column: "value_a"}
+    )
+    subset_b = frame_b[[sample_id_column, metric_column]].rename(
+        columns={metric_column: "value_b"}
+    )
     merged = subset_a.merge(subset_b, on=sample_id_column, how="inner")
     merged["value_a"] = pd.to_numeric(merged["value_a"], errors="coerce")
     merged["value_b"] = pd.to_numeric(merged["value_b"], errors="coerce")
@@ -234,7 +278,9 @@ def compute_paired_summary(
     higher_is_better: bool,
 ) -> PairedSummary:
     """Computes the main summary for the paired comparison."""
-    raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(dtype=float)
+    raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(
+        dtype=float
+    )
     signed_delta = raw_delta if higher_is_better else -raw_delta
 
     share_b_better = float(np.mean(signed_delta > tolerance))

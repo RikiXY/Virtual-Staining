@@ -31,4 +31,18 @@ dev = ["pytest>=8.0"]
 testpaths = ["tests"]
 addopts = "--basetemp=.pytest_tmp"
 
+[tool.ruff]
+extend-exclude = ["docs/notebooks"]
+
+[tool.pyright]
+include = ["virtual_staining", "tests", "src", "tools"]
+exclude = [
+    "**/.*",
+    "**/__pycache__",
+    "**/node_modules",
+    "docs/notebooks",
+]
+reportPrivateImportUsage = false
+useLibraryCodeForTypes = false
+
 [tool.uv]
