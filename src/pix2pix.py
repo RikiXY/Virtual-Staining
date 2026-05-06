@@ -13,30 +13,8 @@ from torchvision.utils import save_image
 from virtual_staining.data.dataset import PairedHistologyDataset
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
-from virtual_staining.training.config import TrainingConfig
+from virtual_staining.training.config import InferenceConfig, TrainingConfig
 from virtual_staining.training.trainer import Trainer
-from virtual_staining.utils.cli import apply_namespace_overrides
-
-
-_TRAIN_OVERRIDES = {
-    "dataset_root": ("dataset_root", Path),
-    "results_path": ("results_path", Path),
-    "run_name": "run_name",
-    "image_size": ("image_size", tuple),
-    "batch_size": "batch_size",
-    "epochs": "epochs",
-    "lr_g": "lr_g",
-    "lr_d": "lr_d",
-    "beta1": "beta1",
-    "beta2": "beta2",
-    "l1_weight": "l1_weight",
-    "seed": "seed",
-    "num_workers": "num_workers",
-    "validate_rate": "validate_rate",
-    "checkpoint_rate": "checkpoint_rate",
-    "log_rate": "log_rate",
-    "resume": "resume",
-}
 
 
 # --------------------- Working paths ---------------------
@@ -65,16 +43,9 @@ def build_parser():
         description="Train or test the Pix2Pix model on a paired histology dataset.",
         epilog=(
             "Examples:\n"
-            "  python src/pix2pix.py train "
-            "--dataset-root local_workspace/datasets/inverted_256 "
-            "--run-name inv_P-256_L1-25 "
-            "--epochs 100 "
-            "--image-size 256 256\n"
+            "  python src/pix2pix.py train --config config/runs/example.yaml\n"
             "\n"
-            "  python src/pix2pix.py test "
-            "--dataset-root local_workspace/datasets/inverted_256 "
-            "--run-path local_workspace/results/inv_P-256_L1-25 "
-            "--checkpoint local_workspace/results/inv_P-256_L1-25/checkpoints/ep099.pth\n"
+            "  python src/pix2pix.py test --config config/runs/example.yaml\n"
             "\n"
             "Use 'python src/pix2pix.py <command> --help' "
             "to see the options for a specific command."
@@ -92,118 +63,8 @@ def build_parser():
     train_parser.add_argument(
         "--config",
         type=str,
-        default="config/train.yaml",
-        help=(
-            "path to a training config YAML "
-            "(default: config/train.yaml; CLI flags override fields)"
-        ),
-    )
-    train_parser.add_argument(
-        "--dataset-root",
-        type=str,
-        default=argparse.SUPPRESS,
-        help="Path to the dataset root containing dataset_train/ and dataset_val/",
-    )
-    train_parser.add_argument(
-        "--run-name",
-        type=str,
-        default=argparse.SUPPRESS,
-        help="Name of the output run directory to create",
-    )
-    train_parser.add_argument(
-        "--results-path",
-        type=str,
-        default=argparse.SUPPRESS,
-        help="Base directory where the new run folder will be created (default: local_workspace/results)",
-    )
-    train_parser.add_argument(
-        "--seed",
-        type=int,
-        default=argparse.SUPPRESS,
-        help="Random seed for reproducibility. If omitted, a random seed is generated.",
-    )
-    train_parser.add_argument(
-        "--epochs",
-        type=int,
-        default=argparse.SUPPRESS,
-        help="Number of training epochs",
-    )
-    train_parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=argparse.SUPPRESS,
-        help="Batch size for the DataLoader (default: 8)",
-    )
-    train_parser.add_argument(
-        "--num-workers",
-        type=int,
-        default=argparse.SUPPRESS,
-        help="Number of DataLoader workers (default: min(4, cpu_count))",
-    )
-    train_parser.add_argument(
-        "--image-size",
-        type=int,
-        nargs=2,
-        metavar=("HEIGHT", "WIDTH"),
-        default=argparse.SUPPRESS,
-        help=(
-            "Resize images before training as HEIGHT WIDTH "
-            "(default: 256 256). Use 512 512 for 512x512 patch experiments."
-        ),
-    )
-    train_parser.add_argument(
-        "--log-rate",
-        type=int,
-        default=argparse.SUPPRESS,
-        help="Log every N batches (default: 15)",
-    )
-    train_parser.add_argument(
-        "--checkpoint-rate",
-        type=int,
-        default=argparse.SUPPRESS,
-        help="Save a checkpoint every N epochs (default: 10)",
-    )
-    train_parser.add_argument(
-        "--validate-rate",
-        type=int,
-        default=argparse.SUPPRESS,
-        help="Run validation every N epochs (default: 10)",
-    )
-    train_parser.add_argument(
-        "--resume",
-        type=str,
-        default=argparse.SUPPRESS,
-        help="Optional checkpoint path to resume training from",
-    )
-    train_parser.add_argument(
-        "--l1-weight",
-        type=float,
-        default=argparse.SUPPRESS,
-        help="Weight of the L1 reconstruction loss (default: 25.0)",
-    )
-    train_parser.add_argument(
-        "--lr-g",
-        type=float,
-        default=argparse.SUPPRESS,
-        help="Learning rate for the generator (default: 2e-4)",
-    )
-    train_parser.add_argument(
-        "--lr-d",
-        type=float,
-        default=argparse.SUPPRESS,
-        help="Learning rate for the discriminator (default: 2e-4)",
-    )
-    train_parser.add_argument(
-        "--beta1",
-        type=float,
-        default=argparse.SUPPRESS,
-        help="Adam beta1 (default: 0.5)",
-    )
-    train_parser.add_argument(
-        "--beta2",
-        type=float,
-        default=argparse.SUPPRESS,
-        help="Adam beta2 (default: 0.999)",
+        default="config/runs/example.yaml",
+        help="path to the run config YAML (default: config/runs/example.yaml)",
     )
 
     test_parser = subparsers.add_parser(
@@ -212,43 +73,13 @@ def build_parser():
         formatter_class=argparse.RawTextHelpFormatter,
     )
     test_parser.add_argument(
-        "--dataset-root",
+        "--config",
         type=str,
-        required=True,
-        help="Path to the dataset root containing dataset_test/",
-    )
-    test_parser.add_argument(
-        "--checkpoint",
-        type=str,
-        required=True,
-        help="Path to the checkpoint to use for inference",
-    )
-    test_parser.add_argument(
-        "--run-path",
-        type=str,
-        required=True,
-        help="Path to an existing training run containing checkpoints/ and output folders",
-    )
-    test_parser.add_argument(
-        "--image-size",
-        type=int,
-        nargs=2,
-        metavar=("HEIGHT", "WIDTH"),
-        default=(256, 256),
-        help=(
-            "Resize images before inference as HEIGHT WIDTH "
-            "(default: 256 256). Must match the image size used during training."
-        ),
+        default="config/runs/example.yaml",
+        help="path to the run config YAML (default: config/runs/example.yaml)",
     )
 
     return parser
-
-
-def _apply_train_overrides(
-    config: TrainingConfig, args: argparse.Namespace
-) -> TrainingConfig:
-    """Apply any CLI-specified fields on top of a YAML-loaded TrainingConfig."""
-    return apply_namespace_overrides(config, args, _TRAIN_OVERRIDES)
 
 
 def is_amp_enabled(device):
@@ -286,18 +117,15 @@ def main(config: TrainingConfig) -> None:
         ]
     )
 
-    train_dir = Path(config.dataset_root) / "dataset_train"
-    val_dir = Path(config.dataset_root) / "dataset_val"
-
     train_loader = DataLoader(
-        PairedHistologyDataset(train_dir, transform=transform),
+        PairedHistologyDataset(config.dataset_train_dir, transform=transform),
         batch_size=config.batch_size,
         shuffle=True,
         num_workers=config.num_workers,
         pin_memory=(device.type == "cuda"),
     )
     val_loader = DataLoader(
-        PairedHistologyDataset(val_dir, transform=transform),
+        PairedHistologyDataset(config.dataset_val_dir, transform=transform),
         batch_size=config.batch_size,
         shuffle=False,
         num_workers=config.num_workers,
@@ -341,7 +169,8 @@ def test_inference(
                 "Image size mismatch between checkpoint and inference. "
                 f"Checkpoint was trained with image_size={checkpoint_image_size}, "
                 f"but inference is using image_size={requested_image_size}. "
-                "Pass the correct --image-size or use a matching checkpoint."
+                "Set image_size in the run config or use a matching "
+                "checkpoint."
             )
     G.load_state_dict(checkpoint["generator_state_dict"])
     G.eval()
@@ -393,22 +222,18 @@ if __name__ == "__main__":
 
     if args.mode == "train":
         config = TrainingConfig.from_yaml(args.config)
-        config = _apply_train_overrides(config, args)
         main(config)
 
     elif args.mode == "test":
-        test_dir = Path(args.dataset_root) / "dataset_test"
+        config = InferenceConfig.from_yaml(args.config)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        run_root = Path(args.run_path)
-        paths = build_workspace_paths(run_root)
-
-        print(f"Starting test for run: {run_root}")
-        print(f"Using checkpoint: {args.checkpoint}")
+        print(f"Starting test for run: {config.run_root}")
+        print(f"Using checkpoint: {config.checkpoint}")
         test_inference(
-            checkpoint_path=args.checkpoint,
-            test_folder=str(test_dir),
-            output_folder=str(paths["output_test_dir"]),
-            image_size=tuple(args.image_size),
+            checkpoint_path=config.checkpoint,
+            test_folder=str(config.test_dir),
+            output_folder=str(config.output_test_dir),
+            image_size=config.image_size,
             device=device,
         )

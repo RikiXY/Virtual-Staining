@@ -1,0 +1,94 @@
+# Copy this file for a new experiment, then edit the values in one place.
+# Run with: make <target> CONFIG=config/runs/your_run.yaml
+
+# Dataset folder containing the paired full-size input images named below.
+dataset_root: local_workspace/datasets/your_sample
+
+# All training, inference, and evaluation artifacts are grouped by run_name here.
+results_path: local_workspace/results
+run_name: example_run
+
+# One size drives both patch extraction and model resize for the standard workflow.
+image_size: [256, 256]
+
+preprocessing:
+  # Full-size paired input files inside dataset_root.
+  source_name: label_free.tif
+  target_name: stained.tif
+
+  # Optional size override. Defaults to the top-level image_size.
+  # patch_size: [256, 256]
+
+  grid_movement: [256, 256]
+  margin: 200
+
+  # Dataset split; ratios should sum to 1.0.
+  train_ratio: 0.80
+  val_ratio: 0.05
+  test_ratio: 0.15
+
+  # Patch quality filters.
+  min_foreground_ratio: 0.25
+  max_white_ratio: 0.70
+  white_threshold: 250
+  max_largest_white_component_ratio: 0.20
+
+  save_masks: false
+  seed: 42
+
+training:
+  # Optional shared-field overrides. Defaults:
+  # dataset_root: local_workspace/datasets/your_sample
+  # results_path: local_workspace/results
+  # run_name: example_run
+  # model_image_size: [256, 256]
+
+  # Optional dataset split overrides. Defaults:
+  # train_dir: local_workspace/datasets/your_sample/dataset_train
+  # val_dir: local_workspace/datasets/your_sample/dataset_val
+
+  batch_size: 8
+  epochs: 100
+
+  lr_g: 0.0002
+  lr_d: 0.0002
+  beta1: 0.5
+  beta2: 0.999
+  l1_weight: 25.0
+
+  seed: 42
+  num_workers: 4
+
+  validate_rate: 10
+  checkpoint_rate: 10
+  log_rate: 15
+  resume: null
+
+inference:
+  # Optional shared-field overrides. Defaults:
+  # dataset_root: local_workspace/datasets/your_sample
+  # results_path: local_workspace/results
+  # run_name: example_run
+  # model_image_size: [256, 256]
+
+  # Uses the newest ep*.pth file in results_path/run_name/checkpoints.
+  checkpoint_policy: latest
+  # Or choose a checkpoint explicitly. Relative paths are resolved from
+  # results_path/run_name.
+  # checkpoint: checkpoints/ep099.pth
+
+  # Optional inference directory overrides. Defaults:
+  # test_dir: local_workspace/datasets/your_sample/dataset_test
+  # output_dir: local_workspace/results/example_run/output_test
+
+evaluation:
+  # Optional shared-field overrides. Defaults:
+  # dataset_root: local_workspace/datasets/your_sample
+  # results_path: local_workspace/results
+  # run_name: example_run
+
+  # Optional evaluation directory overrides. Defaults:
+  # target_dir: local_workspace/datasets/your_sample/dataset_test
+  # generated_dir: local_workspace/results/example_run/output_test
+  # output_dir: local_workspace/results/example_run/evaluation
+  save_graphs: true

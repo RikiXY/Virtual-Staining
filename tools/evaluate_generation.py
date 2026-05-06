@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from virtual_staining.evaluation.metrics import evaluate_pair
+from virtual_staining.run_config import load_yaml_mapping, section_with_shared_fields
 from virtual_staining.utils.cli import style, print_section, print_info
 from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS
 from virtual_staining.utils.metrics import color_metric
@@ -39,6 +40,32 @@ PLOT_FIXED_RANGES = {
 }
 
 PLOT_FIXED_BINS = 30
+
+
+def _optional_path(data: dict[str, Any], key: str, default: Path) -> Path:
+    value = data.get(key)
+    if value is None:
+        return default
+    return Path(value)
+
+
+def apply_dataset_config(args: argparse.Namespace) -> argparse.Namespace:
+    raw_data = load_yaml_mapping(args.config)
+    data = section_with_shared_fields(
+        raw_data, "evaluation", {"dataset_root", "results_path", "run_name"}
+    )
+
+    dataset_root = Path(data["dataset_root"])
+    run_root = Path(data["results_path"]) / data["run_name"]
+    args.target_dir = str(
+        _optional_path(data, "target_dir", dataset_root / "dataset_test")
+    )
+    args.generated_dir = str(
+        _optional_path(data, "generated_dir", run_root / "output_test")
+    )
+    args.output_dir = str(_optional_path(data, "output_dir", run_root / "evaluation"))
+    args.save_graphs = bool(data.get("save_graphs", True))
+    return args
 
 
 def metric_value(row: dict[str, object], metric: str) -> float:
@@ -104,40 +131,10 @@ def add_dataset_subparser(subparsers: Any) -> None:
         ),
     )
     dataset_parser.add_argument(
-        "--target-dir",
-        dest="target_dir",
+        "--config",
         type=str,
-        required=True,
-        help=(
-            "Directory containing target images with filename stem ending in '_target'. "
-            "Supported extensions: .tif, .tiff, .png."
-        ),
-    )
-    dataset_parser.add_argument(
-        "--generated-dir",
-        dest="generated_dir",
-        type=str,
-        required=True,
-        help=(
-            "Directory containing generated images with filename stem ending in '_target_generated'. "
-            "Supported extensions: .tif, .tiff, .png."
-        ),
-    )
-    dataset_parser.add_argument(
-        "--output-dir",
-        dest="output_dir",
-        type=str,
-        default=None,
-        help=(
-            "Directory where evaluation outputs will be saved. If omitted, the script "
-            "tries to infer .../results/NAME_RUN/evaluation from the generated directory."
-        ),
-    )
-    dataset_parser.add_argument(
-        "--save-graphs",
-        dest="save_graphs",
-        action="store_true",
-        help="Save aggregate plots for the evaluated dataset.",
+        default="config/runs/example.yaml",
+        help="path to the run config YAML (default: config/runs/example.yaml)",
     )
     dataset_parser.set_defaults(func=run_dataset)
 
@@ -157,9 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
             "      --generated-image local_workspace/results/your_run/output_test/00512_09216_target_generated.tif\n"
             "\n"
             "  python tools/evaluate_generation.py dataset\n"
-            "      --target-dir local_workspace/datasets/your_run/dataset_test\n"
-            "      --generated-dir local_workspace/results/your_run/output_test\n"
-            "      --save-graphs\n\n"
+            "      --config config/runs/example.yaml\n\n"
             "Use 'python tools/evaluate_generation.py <command> --help' to see the options "
             "for a specific command."
         ),
@@ -505,6 +500,7 @@ def run_single(args: argparse.Namespace) -> None:
 
 def run_dataset(args: argparse.Namespace) -> None:
     """Runs the complete flow for the dataset mode."""
+    args = apply_dataset_config(args)
     target_files = collect_image_files(args.target_dir, "_target", "Target")
     generated_files = collect_image_files(
         args.generated_dir, "_target_generated", "Generated"

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from virtual_staining.training.config import TrainingConfig
+from virtual_staining.training.config import InferenceConfig, TrainingConfig
 
 
 def _make_namespace(**overrides: object) -> argparse.Namespace:
@@ -132,3 +132,147 @@ def test_from_yaml_defaults_for_optional_fields(tmp_path: Path) -> None:
     assert config.l1_weight == pytest.approx(25.0)
     assert config.log_rate == 15
     assert config.resume is None
+
+
+def test_training_from_run_yaml_section(tmp_path: Path) -> None:
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data
+        results_path: /results
+        run_name: section_run
+        image_size: [512, 512]
+        training:
+          epochs: 30
+          batch_size: 2
+          l1_weight: 50
+          train_dir: /custom/train
+          val_dir: /custom/val
+    """)
+    yaml_file = tmp_path / "run.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+
+    config = TrainingConfig.from_yaml(yaml_file)
+    assert config.dataset_root == Path("/data")
+    assert config.run_root == Path("/results") / "section_run"
+    assert config.image_size == (512, 512)
+    assert config.epochs == 30
+    assert config.batch_size == 2
+    assert config.l1_weight == pytest.approx(50)
+    assert config.dataset_train_dir == Path("/custom/train")
+    assert config.dataset_val_dir == Path("/custom/val")
+
+
+def test_inference_from_run_yaml_section(tmp_path: Path) -> None:
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data
+        results_path: /results
+        run_name: section_run
+        image_size: [512, 512]
+        training:
+          epochs: 30
+        inference:
+          checkpoint: checkpoints/ep030.pth
+          test_dir: /custom/test
+          output_dir: /results/section_run/custom_output
+    """)
+    yaml_file = tmp_path / "run.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+
+    config = InferenceConfig.from_yaml(yaml_file)
+    assert config.test_dir == Path("/custom/test")
+    assert config.output_test_dir == Path("/results") / "section_run" / "custom_output"
+    assert config.checkpoint == Path("/results/section_run/checkpoints/ep030.pth")
+    assert config.image_size == (512, 512)
+
+
+def test_inference_latest_checkpoint_policy(tmp_path: Path) -> None:
+    run_root = tmp_path / "results" / "section_run"
+    checkpoint_dir = run_root / "checkpoints"
+    checkpoint_dir.mkdir(parents=True)
+    (checkpoint_dir / "ep009.pth").write_bytes(b"")
+    (checkpoint_dir / "ep019.pth").write_bytes(b"")
+
+    yaml_content = textwrap.dedent(f"""\
+        dataset_root: {tmp_path / "data"}
+        results_path: {tmp_path / "results"}
+        run_name: section_run
+        image_size: [512, 512]
+        training:
+          epochs: 30
+        inference:
+          checkpoint_policy: latest
+    """)
+    yaml_file = tmp_path / "run.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+
+    config = InferenceConfig.from_yaml(yaml_file)
+    assert config.checkpoint == checkpoint_dir / "ep019.pth"
+    assert config.output_test_dir == run_root / "output_test"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "field"),
+    [
+        ({"run_name": ""}, "run_name"),
+        ({"image_size": [0, 256]}, "image_size"),
+        ({"batch_size": 0}, "batch_size"),
+        ({"epochs": 0}, "epochs"),
+        ({"lr_g": 0.0}, "lr_g"),
+        ({"lr_d": -0.1}, "lr_d"),
+        ({"beta1": -0.1}, "beta1"),
+        ({"beta2": 1.0}, "beta2"),
+        ({"l1_weight": -1.0}, "l1_weight"),
+        ({"num_workers": -1}, "num_workers"),
+        ({"validate_rate": 0}, "validate_rate"),
+        ({"checkpoint_rate": 0}, "checkpoint_rate"),
+        ({"log_rate": 0}, "log_rate"),
+    ],
+)
+def test_training_from_args_invalid_values_raise_value_error(
+    overrides: dict[str, object], field: str
+) -> None:
+    with pytest.raises(ValueError, match=field):
+        TrainingConfig.from_args(_make_namespace(**overrides))
+
+
+def test_training_from_yaml_invalid_image_size_raises_value_error(
+    tmp_path: Path,
+) -> None:
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data
+        results_path: /results
+        run_name: bad_training
+        image_size: [256, -1]
+        epochs: 10
+    """)
+    yaml_file = tmp_path / "bad_training.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="image_size"):
+        TrainingConfig.from_yaml(yaml_file)
+
+
+@pytest.mark.parametrize(
+    ("inference_yaml", "field"),
+    [
+        ("checkpoint: checkpoints/ep010.pth\nrun_name: ''", "run_name"),
+        ("checkpoint: checkpoints/ep010.pth\nimage_size: [0, 256]", "image_size"),
+        ("checkpoint: ''", "checkpoint"),
+        ("checkpoint: '   '", "checkpoint"),
+    ],
+)
+def test_inference_from_yaml_invalid_values_raise_value_error(
+    tmp_path: Path, inference_yaml: str, field: str
+) -> None:
+    yaml_content = (
+        "dataset_root: /data\n"
+        "results_path: /results\n"
+        "run_name: inference_run\n"
+        "image_size: [256, 256]\n"
+        "inference:\n"
+        f"{textwrap.indent(inference_yaml, '  ')}\n"
+    )
+    yaml_file = tmp_path / "bad_inference.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=field):
+        InferenceConfig.from_yaml(yaml_file)
