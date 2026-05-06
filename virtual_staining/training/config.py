@@ -28,10 +28,23 @@ def _pair_from_aliases(
     return default
 
 
+def _validate_non_empty_string(field_name: str, value: object) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string")
+
+
+def _validate_positive_pair(field_name: str, value: tuple[int, int]) -> None:
+    if len(value) != 2 or any(dimension <= 0 for dimension in value):
+        raise ValueError(f"{field_name} must contain two positive integers")
+
+
 def _resolve_checkpoint(data: dict[str, object], run_root: Path) -> Path:
     checkpoint = data.get("checkpoint")
-    if checkpoint:
-        checkpoint_path = Path(str(checkpoint))
+    if checkpoint is not None:
+        checkpoint_value = str(checkpoint)
+        if not checkpoint_value.strip():
+            raise ValueError("checkpoint must be a non-empty path")
+        checkpoint_path = Path(checkpoint_value)
         if checkpoint_path.is_absolute():
             return checkpoint_path
         return run_root / checkpoint_path
@@ -89,6 +102,36 @@ class TrainingConfig:
             return self.val_dir
         return self.dataset_root / "dataset_val"
 
+    def validate(self) -> None:
+        _validate_non_empty_string("run_name", self.run_name)
+        _validate_positive_pair("image_size", self.image_size)
+
+        for field_name, value in (
+            ("batch_size", self.batch_size),
+            ("epochs", self.epochs),
+            ("validate_rate", self.validate_rate),
+            ("checkpoint_rate", self.checkpoint_rate),
+            ("log_rate", self.log_rate),
+        ):
+            if value <= 0:
+                raise ValueError(f"{field_name} must be greater than 0")
+
+        if self.num_workers < 0:
+            raise ValueError("num_workers must be greater than or equal to 0")
+
+        for field_name, value in (("lr_g", self.lr_g), ("lr_d", self.lr_d)):
+            if value <= 0:
+                raise ValueError(f"{field_name} must be greater than 0")
+
+        for field_name, value in (("beta1", self.beta1), ("beta2", self.beta2)):
+            if value < 0 or value >= 1:
+                raise ValueError(
+                    f"{field_name} must be greater than or equal to 0 and less than 1"
+                )
+
+        if self.l1_weight < 0:
+            raise ValueError("l1_weight must be greater than or equal to 0")
+
     def to_yaml(self, path: str | Path) -> None:
         import yaml
 
@@ -116,7 +159,7 @@ class TrainingConfig:
 
     @classmethod
     def from_args(cls, args) -> TrainingConfig:
-        return cls(
+        config = cls(
             dataset_root=Path(args.dataset_root),
             results_path=Path(getattr(args, "results_path", "local_workspace/results")),
             run_name=args.run_name,
@@ -135,6 +178,8 @@ class TrainingConfig:
             log_rate=getattr(args, "log_rate", 15),
             resume=getattr(args, "resume", None),
         )
+        config.validate()
+        return config
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> TrainingConfig:
@@ -145,7 +190,7 @@ class TrainingConfig:
             {"dataset_root", "results_path", "run_name", "image_size"},
         )
 
-        return cls(
+        config = cls(
             dataset_root=Path(data["dataset_root"]),
             results_path=Path(data["results_path"]),
             run_name=data["run_name"],
@@ -168,6 +213,8 @@ class TrainingConfig:
             train_dir=Path(data["train_dir"]) if data.get("train_dir") else None,
             val_dir=Path(data["val_dir"]) if data.get("val_dir") else None,
         )
+        config.validate()
+        return config
 
 
 @dataclass(frozen=True)
@@ -196,6 +243,12 @@ class InferenceConfig:
             return self.output_dir
         return self.run_root / "output_test"
 
+    def validate(self) -> None:
+        _validate_non_empty_string("run_name", self.run_name)
+        _validate_positive_pair("image_size", self.image_size)
+        if str(self.checkpoint).strip() in {"", "."}:
+            raise ValueError("checkpoint must be a non-empty path")
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> InferenceConfig:
         raw_data = load_yaml_mapping(path)
@@ -212,7 +265,7 @@ class InferenceConfig:
 
         run_root = Path(data["results_path"]) / data["run_name"]
 
-        return cls(
+        config = cls(
             dataset_root=Path(data["dataset_root"]),
             results_path=Path(data["results_path"]),
             run_name=data["run_name"],
@@ -227,3 +280,5 @@ class InferenceConfig:
             test_dir_override=Path(data["test_dir"]) if data.get("test_dir") else None,
             output_dir=Path(data["output_dir"]) if data.get("output_dir") else None,
         )
+        config.validate()
+        return config

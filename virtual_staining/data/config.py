@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from math import isclose
 from pathlib import Path
 
 from virtual_staining.run_config import load_yaml_mapping, section_with_shared_fields
@@ -45,9 +46,52 @@ class PreprocessingConfig:
     white_threshold: int = 250
     max_largest_white_component_ratio: float = 0.20
 
+    def validate(self) -> None:
+        if not isinstance(self.source_name, str) or not self.source_name.strip():
+            raise ValueError("source_name must be a non-empty string")
+        if not isinstance(self.target_name, str) or not self.target_name.strip():
+            raise ValueError("target_name must be a non-empty string")
+        if self.source_name == self.target_name:
+            raise ValueError("target_name must differ from source_name")
+
+        for field_name, value in (
+            ("image_size", self.image_size),
+            ("grid_movement", self.grid_movement),
+        ):
+            if len(value) != 2 or any(dimension <= 0 for dimension in value):
+                raise ValueError(f"{field_name} must contain two positive integers")
+
+        if self.margin < 0:
+            raise ValueError("margin must be greater than or equal to 0")
+
+        split_ratios = {
+            "train_ratio": self.train_ratio,
+            "val_ratio": self.val_ratio,
+            "test_ratio": self.test_ratio,
+        }
+        for field_name, value in split_ratios.items():
+            if value < 0 or value > 1:
+                raise ValueError(f"{field_name} must be between 0 and 1")
+        if not isclose(sum(split_ratios.values()), 1.0):
+            raise ValueError("split ratios must sum to 1")
+
+        for field_name, value in (
+            ("min_foreground_ratio", self.min_foreground_ratio),
+            ("max_white_ratio", self.max_white_ratio),
+            (
+                "max_largest_white_component_ratio",
+                self.max_largest_white_component_ratio,
+            ),
+        ):
+            if value < 0 or value > 1:
+                raise ValueError(f"{field_name} must be between 0 and 1")
+
+        if self.white_threshold < 0 or self.white_threshold > 255:
+            raise ValueError("white_threshold must be between 0 and 255")
+
     @classmethod
     def from_args(cls, args) -> PreprocessingConfig:
-        return cls(
+        config = cls(
             dataset_root=Path(args.path),
             source_name=args.source_name,
             target_name=args.target_name,
@@ -66,6 +110,8 @@ class PreprocessingConfig:
                 args, "max_largest_white_component_ratio", 0.20
             ),
         )
+        config.validate()
+        return config
 
     def to_yaml(self, path: str | Path) -> None:
         import yaml
@@ -97,7 +143,7 @@ class PreprocessingConfig:
             raw_data, "preprocessing", {"dataset_root", "image_size"}
         )
 
-        return cls(
+        config = cls(
             dataset_root=Path(data["dataset_root"]),
             source_name=data["source_name"],
             target_name=data["target_name"],
@@ -118,3 +164,5 @@ class PreprocessingConfig:
                 data.get("max_largest_white_component_ratio", 0.20)
             ),
         )
+        config.validate()
+        return config

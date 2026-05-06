@@ -194,3 +194,43 @@ def test_from_run_yaml_section(tmp_path: Path) -> None:
     assert config.image_size == (512, 512)
     assert config.grid_movement == (512, 512)
     assert config.save_masks is True
+
+
+@pytest.mark.parametrize(
+    ("overrides", "field"),
+    [
+        ({"source_name": ""}, "source_name"),
+        ({"source_name": "same.tif", "target_name": "same.tif"}, "target_name"),
+        ({"image_size": [0, 256]}, "image_size"),
+        ({"grid_movement": [256, -1]}, "grid_movement"),
+        ({"margin": -1}, "margin"),
+        ({"train_ratio": 1.2}, "train_ratio"),
+        ({"train_ratio": 0.6, "val_ratio": 0.2, "test_ratio": 0.3}, "split"),
+        ({"min_foreground_ratio": -0.1}, "min_foreground_ratio"),
+        ({"max_white_ratio": 1.1}, "max_white_ratio"),
+        (
+            {"max_largest_white_component_ratio": 1.1},
+            "max_largest_white_component_ratio",
+        ),
+        ({"white_threshold": 256}, "white_threshold"),
+    ],
+)
+def test_from_args_invalid_values_raise_value_error(
+    overrides: dict[str, object], field: str
+) -> None:
+    with pytest.raises(ValueError, match=field):
+        PreprocessingConfig.from_args(_make_namespace(**overrides))
+
+
+def test_from_yaml_invalid_margin_raises_value_error(tmp_path: Path) -> None:
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data/samples
+        source_name: source.tif
+        target_name: target.tif
+        margin: -1
+    """)
+    yaml_file = tmp_path / "invalid.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="margin"):
+        PreprocessingConfig.from_yaml(yaml_file)

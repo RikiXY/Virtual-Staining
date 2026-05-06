@@ -207,3 +207,72 @@ def test_inference_latest_checkpoint_policy(tmp_path: Path) -> None:
     config = InferenceConfig.from_yaml(yaml_file)
     assert config.checkpoint == checkpoint_dir / "ep019.pth"
     assert config.output_test_dir == run_root / "output_test"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "field"),
+    [
+        ({"run_name": ""}, "run_name"),
+        ({"image_size": [0, 256]}, "image_size"),
+        ({"batch_size": 0}, "batch_size"),
+        ({"epochs": 0}, "epochs"),
+        ({"lr_g": 0.0}, "lr_g"),
+        ({"lr_d": -0.1}, "lr_d"),
+        ({"beta1": -0.1}, "beta1"),
+        ({"beta2": 1.0}, "beta2"),
+        ({"l1_weight": -1.0}, "l1_weight"),
+        ({"num_workers": -1}, "num_workers"),
+        ({"validate_rate": 0}, "validate_rate"),
+        ({"checkpoint_rate": 0}, "checkpoint_rate"),
+        ({"log_rate": 0}, "log_rate"),
+    ],
+)
+def test_training_from_args_invalid_values_raise_value_error(
+    overrides: dict[str, object], field: str
+) -> None:
+    with pytest.raises(ValueError, match=field):
+        TrainingConfig.from_args(_make_namespace(**overrides))
+
+
+def test_training_from_yaml_invalid_image_size_raises_value_error(
+    tmp_path: Path,
+) -> None:
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data
+        results_path: /results
+        run_name: bad_training
+        image_size: [256, -1]
+        epochs: 10
+    """)
+    yaml_file = tmp_path / "bad_training.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="image_size"):
+        TrainingConfig.from_yaml(yaml_file)
+
+
+@pytest.mark.parametrize(
+    ("inference_yaml", "field"),
+    [
+        ("checkpoint: checkpoints/ep010.pth\nrun_name: ''", "run_name"),
+        ("checkpoint: checkpoints/ep010.pth\nimage_size: [0, 256]", "image_size"),
+        ("checkpoint: ''", "checkpoint"),
+        ("checkpoint: '   '", "checkpoint"),
+    ],
+)
+def test_inference_from_yaml_invalid_values_raise_value_error(
+    tmp_path: Path, inference_yaml: str, field: str
+) -> None:
+    yaml_content = (
+        "dataset_root: /data\n"
+        "results_path: /results\n"
+        "run_name: inference_run\n"
+        "image_size: [256, 256]\n"
+        "inference:\n"
+        f"{textwrap.indent(inference_yaml, '  ')}\n"
+    )
+    yaml_file = tmp_path / "bad_inference.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=field):
+        InferenceConfig.from_yaml(yaml_file)
