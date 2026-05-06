@@ -11,14 +11,20 @@ import numpy as np
 import pandas as pd
 
 from virtual_staining.evaluation.statistics import (
-    UnpairedGroupStats,
-    UnpairedComparison,
     PairedSummary,
-    load_metric_values,
-    compute_unpaired_group_stats,
-    compute_unpaired_comparison,
-    compute_paired_summary,
+    UnpairedComparison,
+    UnpairedGroupStats,
     align_paired_frames,
+    compute_paired_summary,
+    compute_unpaired_comparison,
+    compute_unpaired_group_stats,
+    flatten_unpaired_group_stats,
+    load_metric_values,
+    resolve_comparison_inputs,
+    resolve_comparison_output_dir,
+    resolve_metric_direction,
+    resolve_plot_range,
+    resolve_thresholds,
 )
 from virtual_staining.utils.cli import style, print_section, print_info
 from virtual_staining.utils.metrics import color_metric_value
@@ -70,40 +76,70 @@ def color_signed_delta(value: float) -> str:
 # Section dedicated to the parser
 # ==========================
 def add_direction_arguments(parser: argparse.ArgumentParser) -> None:
-    """Adds the arguments that define the metric direction."""
+    """Adds optional metric direction overrides."""
     parser.add_argument(
         "--higher-is-better",
         action="store_true",
-        help="Use for metrics like SSIM and PSNR.",
+        help="Override the default metric direction for metrics like SSIM and PSNR.",
     )
     parser.add_argument(
         "--lower-is-better",
         action="store_true",
-        help="Use for metrics like MAE and RMSE.",
+        help="Override the default metric direction for metrics like MAE and RMSE.",
     )
 
 
 def add_common_comparison_arguments(parser: argparse.ArgumentParser) -> None:
     """Adds the arguments common to both comparison modes."""
     parser.add_argument(
+        "--run-a",
+        type=Path,
+        default=None,
+        help=(
+            "First run directory. The script reads "
+            "RUN_A/evaluation/per_image_metrics.csv."
+        ),
+    )
+    parser.add_argument(
+        "--run-b",
+        type=Path,
+        default=None,
+        help=(
+            "Second run directory. The script reads "
+            "RUN_B/evaluation/per_image_metrics.csv."
+        ),
+    )
+    parser.add_argument(
         "--csv-a",
-        required=True,
-        help="First CSV file or directory containing per_image_metrics.csv.",
+        default=None,
+        help=(
+            "First CSV file or directory containing per_image_metrics.csv. "
+            "Advanced alternative to --run-a."
+        ),
     )
     parser.add_argument(
         "--csv-b",
-        required=True,
-        help="Second CSV file or directory containing per_image_metrics.csv.",
+        default=None,
+        help=(
+            "Second CSV file or directory containing per_image_metrics.csv. "
+            "Advanced alternative to --run-b."
+        ),
     )
     parser.add_argument(
         "--label-a",
-        default="A",
-        help="Label shown in reports and plots for the first group.",
+        default=None,
+        help=(
+            "Label shown in reports and plots for the first group. "
+            "If omitted, inferred from --run-a or --csv-a."
+        ),
     )
     parser.add_argument(
         "--label-b",
-        default="B",
-        help="Label shown in reports and plots for the second group.",
+        default=None,
+        help=(
+            "Label shown in reports and plots for the second group. "
+            "If omitted, inferred from --run-b or --csv-b."
+        ),
     )
     parser.add_argument(
         "--column",
@@ -112,8 +148,11 @@ def add_common_comparison_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--output-dir",
-        required=True,
-        help="Directory where outputs will be saved.",
+        default=None,
+        help=(
+            "Directory where outputs will be saved. If omitted, outputs go under "
+            "results/comparisons/RUN_A_vs_RUN_B/MODE_METRIC/."
+        ),
     )
     add_direction_arguments(parser)
 
@@ -132,14 +171,20 @@ def add_unpaired_subparser(subparsers: Any) -> None:
     parser.add_argument(
         "--min-value",
         type=float,
-        default=0.0,
-        help="Minimum plausible metric value used for shared histogram bins.",
+        default=None,
+        help=(
+            "Minimum metric value used for shared histogram bins. "
+            "If omitted, inferred from metric defaults."
+        ),
     )
     parser.add_argument(
         "--max-value",
         type=float,
-        default=1.0,
-        help="Maximum plausible metric value used for shared histogram bins.",
+        default=None,
+        help=(
+            "Maximum metric value used for shared histogram bins. "
+            "If omitted, inferred from metric defaults."
+        ),
     )
     parser.add_argument(
         "--bins",
@@ -151,8 +196,11 @@ def add_unpaired_subparser(subparsers: Any) -> None:
         "--thresholds",
         nargs="*",
         type=float,
-        default=[0.65, 0.75, 0.85],
-        help="Thresholds used for share-above or share-below statistics.",
+        default=None,
+        help=(
+            "Thresholds used for share-above or share-below statistics. "
+            "If omitted, inferred from metric defaults."
+        ),
     )
     parser.set_defaults(func=run_unpaired)
 
@@ -185,13 +233,19 @@ def add_paired_subparser(subparsers: Any) -> None:
         "--min-value",
         type=float,
         default=None,
-        help="Minimum metric value used for shared histogram bins. If omitted, inferred from paired values.",
+        help=(
+            "Minimum metric value used for shared histogram bins. "
+            "If omitted, inferred from metric defaults."
+        ),
     )
     parser.add_argument(
         "--max-value",
         type=float,
         default=None,
-        help="Maximum metric value used for shared histogram bins. If omitted, inferred from paired values.",
+        help=(
+            "Maximum metric value used for shared histogram bins. "
+            "If omitted, inferred from metric defaults."
+        ),
     )
     parser.add_argument(
         "--bins",
@@ -214,22 +268,22 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Examples:\n"
             "  python tools/compare_distributions.py unpaired \\\n"
-            "      --csv-a local_workspace/results/run_a/evaluation \\\n"
-            "      --csv-b local_workspace/results/run_b/evaluation \\\n"
-            "      --label-a P-256 \\\n"
-            "      --label-b P-512 \\\n"
-            "      --column ssim \\\n"
-            "      --higher-is-better \\\n"
-            "      --output-dir local_workspace/results/comparisons/unpaired_ssim\n"
+            "      --run-a local_workspace/results/run_a \\\n"
+            "      --run-b local_workspace/results/run_b \\\n"
+            "      --column ssim\n"
             "\n"
             "  python tools/compare_distributions.py paired \\\n"
-            "      --csv-a local_workspace/results/run_a/evaluation \\\n"
-            "      --csv-b local_workspace/results/run_b/evaluation \\\n"
-            "      --label-a L1-25 \\\n"
-            "      --label-b L1-37 \\\n"
+            "      --run-a local_workspace/results/L1-25 \\\n"
+            "      --run-b local_workspace/results/L1-31 \\\n"
+            "      --column ssim\n"
+            "\n"
+            "  python tools/compare_distributions.py paired \\\n"
+            "      --csv-a custom_a/per_image_metrics.csv \\\n"
+            "      --csv-b custom_b/per_image_metrics.csv \\\n"
+            "      --label-a custom_a \\\n"
+            "      --label-b custom_b \\\n"
             "      --column ssim \\\n"
-            "      --higher-is-better \\\n"
-            "      --output-dir local_workspace/results/comparisons/paired_ssim\n"
+            "      --output-dir local_workspace/results/comparisons/custom_paired_ssim\n"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
         add_help=True,
@@ -241,11 +295,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def validate_direction(args: argparse.Namespace) -> None:
-    """Verifies that exactly one metric direction has been chosen."""
-    if args.higher_is_better == args.lower_is_better:
-        raise SystemExit(
-            "Choose exactly one between --higher-is-better and --lower-is-better."
-        )
+    """Resolves metric direction, allowing explicit CLI overrides."""
+    try:
+        args.resolved_higher_is_better = resolve_metric_direction(args)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 # =======================================
@@ -257,9 +311,48 @@ def save_unpaired_group_statistics(
     output_dir: Path,
 ) -> None:
     """Saves group_statistics.csv with one row per group."""
-    pd.DataFrame([asdict(group_a), asdict(group_b)]).to_csv(
-        output_dir / "group_statistics.csv", index=False
-    )
+    rows = [
+        flatten_unpaired_group_stats(group_a),
+        flatten_unpaired_group_stats(group_b),
+    ]
+    pd.DataFrame(rows).to_csv(output_dir / "group_statistics.csv", index=False)
+
+
+def save_unpaired_comparison_summary(
+    group_a: UnpairedGroupStats,
+    group_b: UnpairedGroupStats,
+    comparison: UnpairedComparison,
+    args: argparse.Namespace,
+    output_dir: Path,
+) -> None:
+    """Saves comparison_summary.csv for the unpaired comparison."""
+    row = {
+        "mode": "unpaired",
+        "metric": args.column,
+        "direction": (
+            "higher_is_better" if args.resolved_higher_is_better else "lower_is_better"
+        ),
+        "label_a": group_a.label,
+        "label_b": group_b.label,
+        "n_a": group_a.n,
+        "n_b": group_b.n,
+        "mean_a": group_a.mean,
+        "mean_b": group_b.mean,
+        "median_a": group_a.median,
+        "median_b": group_b.median,
+        "iqr_a": group_a.iqr,
+        "iqr_b": group_b.iqr,
+        "mean_favors": comparison.mean_favors,
+        "median_favors": comparison.median_favors,
+        "threshold_favors": comparison.threshold_favors,
+        "wasserstein_between_groups": comparison.wasserstein_between_groups,
+        "ks_statistic": comparison.ks_statistic,
+        "ks_pvalue": comparison.ks_pvalue,
+        "mannwhitney_u": comparison.mannwhitney_u,
+        "mannwhitney_pvalue": comparison.mannwhitney_pvalue,
+        "better_label": comparison.better_label,
+    }
+    pd.DataFrame([row]).to_csv(output_dir / "comparison_summary.csv", index=False)
 
 
 def save_unpaired_summary_json(
@@ -286,6 +379,59 @@ def save_paired_summary_json(summary: PairedSummary, output_dir: Path) -> None:
     )
 
 
+def save_paired_comparison_summary(
+    summary: PairedSummary,
+    args: argparse.Namespace,
+    output_dir: Path,
+) -> None:
+    """Saves comparison_summary.csv for the paired comparison."""
+    row = {
+        "mode": "paired",
+        "metric": args.column,
+        "direction": (
+            "higher_is_better" if args.resolved_higher_is_better else "lower_is_better"
+        ),
+        "label_a": summary.label_a,
+        "label_b": summary.label_b,
+        "n_pairs": summary.n_pairs,
+        "tolerance": summary.tolerance,
+        "mean_signed_delta": summary.mean_signed_delta,
+        "median_signed_delta": summary.median_signed_delta,
+        "share_b_better": summary.share_b_better,
+        "share_a_better": summary.share_a_better,
+        "share_equal": summary.share_equal,
+        "wilcoxon_statistic": summary.wilcoxon_statistic,
+        "wilcoxon_pvalue": summary.wilcoxon_pvalue,
+        "better_label": summary.better_label,
+    }
+    pd.DataFrame([row]).to_csv(output_dir / "comparison_summary.csv", index=False)
+
+
+def save_paired_sample_deltas(
+    merged: pd.DataFrame,
+    args: argparse.Namespace,
+    output_dir: Path,
+) -> None:
+    """Saves a sample-by-sample paired comparison CSV."""
+    raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(
+        dtype=float
+    )
+    signed_delta = raw_delta if args.resolved_higher_is_better else -raw_delta
+    result = merged.copy()
+    result["raw_delta_b_minus_a"] = raw_delta
+    result["signed_delta"] = signed_delta
+    result["winner"] = np.where(
+        signed_delta > args.tolerance,
+        args.resolved_label_b,
+        np.where(
+            signed_delta < -args.tolerance,
+            args.resolved_label_a,
+            "equal",
+        ),
+    )
+    result.to_csv(output_dir / "paired_sample_deltas.csv", index=False)
+
+
 def save_unpaired_report_txt(
     group_a: UnpairedGroupStats,
     group_b: UnpairedGroupStats,
@@ -296,7 +442,7 @@ def save_unpaired_report_txt(
     """Saves report.txt for the unpaired comparison."""
     lines = [
         f"Metric: {args.column}",
-        f"Direction: {'higher is better' if args.higher_is_better else 'lower is better'}",
+        f"Direction: {'higher is better' if args.resolved_higher_is_better else 'lower is better'}",
         "",
         f"{group_a.label}: n={group_a.n}, mean={group_a.mean:.6f}, median={group_a.median:.6f}, IQR={group_a.iqr:.6f}",
         f"{group_b.label}: n={group_b.n}, mean={group_b.mean:.6f}, median={group_b.median:.6f}, IQR={group_b.iqr:.6f}",
@@ -321,7 +467,7 @@ def save_paired_report_txt(
     """Saves report.txt for the paired comparison."""
     lines = [
         f"Metric: {args.column}",
-        f"Direction: {'higher is better' if args.higher_is_better else 'lower is better'}",
+        f"Direction: {'higher is better' if args.resolved_higher_is_better else 'lower is better'}",
         f"Paired samples: {summary.n_pairs}",
         f"Tolerance: {summary.tolerance:.6f}",
         "",
@@ -462,7 +608,8 @@ def print_unpaired_cli_summary(
     print_section("Input")
     print_info("Metric", args.column)
     print_info(
-        "Direction", "higher is better" if args.higher_is_better else "lower is better"
+        "Direction",
+        "higher is better" if args.resolved_higher_is_better else "lower is better",
     )
     print_info("Output dir", str(output_dir))
 
@@ -516,7 +663,8 @@ def print_paired_cli_summary(
     print_section("Input")
     print_info("Metric", args.column)
     print_info(
-        "Direction", "higher is better" if args.higher_is_better else "lower is better"
+        "Direction",
+        "higher is better" if args.resolved_higher_is_better else "lower is better",
     )
     print_info("Output dir", str(output_dir))
 
@@ -548,98 +696,104 @@ def print_paired_cli_summary(
 # =====================================
 def run_unpaired(args: argparse.Namespace) -> None:
     """Runs the complete flow for the comparison between unpaired distributions."""
-    output_dir = Path(args.output_dir)
+    resolve_comparison_inputs(args)
+    output_dir = resolve_comparison_output_dir(args)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    values_a = load_metric_values(args.csv_a, args.column)
-    values_b = load_metric_values(args.csv_b, args.column)
+    values_a = load_metric_values(args.resolved_csv_a, args.column)
+    values_b = load_metric_values(args.resolved_csv_b, args.column)
+    thresholds = resolve_thresholds(args)
+    higher_is_better = args.resolved_higher_is_better
 
     group_a = compute_unpaired_group_stats(
         values=values_a,
-        label=args.label_a,
-        thresholds=args.thresholds,
-        higher_is_better=args.higher_is_better,
+        label=args.resolved_label_a,
+        thresholds=thresholds,
+        higher_is_better=higher_is_better,
     )
     group_b = compute_unpaired_group_stats(
         values=values_b,
-        label=args.label_b,
-        thresholds=args.thresholds,
-        higher_is_better=args.higher_is_better,
+        label=args.resolved_label_b,
+        thresholds=thresholds,
+        higher_is_better=higher_is_better,
     )
     comparison = compute_unpaired_comparison(
         a=values_a,
         b=values_b,
         group_a=group_a,
         group_b=group_b,
-        higher_is_better=args.higher_is_better,
+        higher_is_better=higher_is_better,
     )
 
     save_unpaired_group_statistics(group_a, group_b, output_dir)
+    save_unpaired_comparison_summary(group_a, group_b, comparison, args, output_dir)
     save_unpaired_summary_json(group_a, group_b, comparison, output_dir)
     save_unpaired_report_txt(group_a, group_b, comparison, args, output_dir)
 
-    edges = np.linspace(args.min_value, args.max_value, args.bins + 1)
+    min_value, max_value = resolve_plot_range(args)
+    edges = np.linspace(min_value, max_value, args.bins + 1)
     plot_distribution_histogram(
-        values_a, values_b, edges, args.label_a, args.label_b, args.column, output_dir
+        values_a,
+        values_b,
+        edges,
+        args.resolved_label_a,
+        args.resolved_label_b,
+        args.column,
+        output_dir,
     )
     plot_distribution_ecdf(
-        values_a, values_b, args.label_a, args.label_b, args.column, output_dir
+        values_a,
+        values_b,
+        args.resolved_label_a,
+        args.resolved_label_b,
+        args.column,
+        output_dir,
     )
     print_unpaired_cli_summary(group_a, group_b, comparison, args, output_dir)
 
 
 def run_paired(args: argparse.Namespace) -> None:
     """Runs the complete flow for the paired comparison on the same samples."""
-    output_dir = Path(args.output_dir)
+    resolve_comparison_inputs(args)
+    output_dir = resolve_comparison_output_dir(args)
     output_dir.mkdir(parents=True, exist_ok=True)
+    higher_is_better = args.resolved_higher_is_better
 
     merged = align_paired_frames(
-        csv_a=args.csv_a,
-        csv_b=args.csv_b,
+        csv_a=args.resolved_csv_a,
+        csv_b=args.resolved_csv_b,
         sample_id_column=args.sample_id_column,
         metric_column=args.column,
     )
     summary = compute_paired_summary(
         merged=merged,
-        label_a=args.label_a,
-        label_b=args.label_b,
+        label_a=args.resolved_label_a,
+        label_b=args.resolved_label_b,
         tolerance=args.tolerance,
-        higher_is_better=args.higher_is_better,
+        higher_is_better=higher_is_better,
     )
 
+    save_paired_comparison_summary(summary, args, output_dir)
+    save_paired_sample_deltas(merged, args, output_dir)
     save_paired_summary_json(summary, output_dir)
     save_paired_report_txt(summary, args, output_dir)
 
     raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(
         dtype=float
     )
-    signed_delta = raw_delta if args.higher_is_better else -raw_delta
+    signed_delta = raw_delta if higher_is_better else -raw_delta
     values_a = merged["value_a"].to_numpy(dtype=float)
     values_b = merged["value_b"].to_numpy(dtype=float)
 
-    if args.min_value is None:
-        min_value = min(float(values_a.min()), float(values_b.min()))
-    else:
-        min_value = args.min_value
-
-    if args.max_value is None:
-        max_value = max(float(values_a.max()), float(values_b.max()))
-    else:
-        max_value = args.max_value
-
-    if min_value == max_value:
-        padding = 0.5 if min_value == 0 else abs(min_value) * 0.05
-        min_value -= padding
-        max_value += padding
-
+    min_value, max_value = resolve_plot_range(args)
     edges = np.linspace(min_value, max_value, args.bins + 1)
 
     plot_distribution_histogram(
         values_a,
         values_b,
         edges,
-        args.label_a,
-        args.label_b,
+        args.resolved_label_a,
+        args.resolved_label_b,
         args.column,
         output_dir,
     )
@@ -647,13 +801,19 @@ def run_paired(args: argparse.Namespace) -> None:
     plot_distribution_ecdf(
         values_a,
         values_b,
-        args.label_a,
-        args.label_b,
+        args.resolved_label_a,
+        args.resolved_label_b,
         args.column,
         output_dir,
     )
     plot_paired_delta_histogram(signed_delta, args.column, output_dir)
-    plot_paired_scatter(merged, args.label_a, args.label_b, args.column, output_dir)
+    plot_paired_scatter(
+        merged,
+        args.resolved_label_a,
+        args.resolved_label_b,
+        args.column,
+        output_dir,
+    )
     print_paired_cli_summary(summary, args, output_dir)
 
 

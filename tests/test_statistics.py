@@ -93,15 +93,19 @@ def test_unpaired_comparison_returns_statistics() -> None:
 
 
 def test_paired_better_label_positive_delta() -> None:
-    assert choose_paired_better_label(0.05, "A", "B") == "B"
+    assert choose_paired_better_label(0.05, 0.04, 0.8, 0.2, "A", "B") == "B"
 
 
 def test_paired_better_label_negative_delta() -> None:
-    assert choose_paired_better_label(-0.05, "A", "B") == "A"
+    assert choose_paired_better_label(-0.05, -0.04, 0.2, 0.8, "A", "B") == "A"
 
 
 def test_paired_better_label_zero() -> None:
-    assert choose_paired_better_label(0.0, "A", "B") == "tie"
+    assert choose_paired_better_label(0.0, 0.0, 0.4, 0.4, "A", "B") == "tie"
+
+
+def test_paired_better_label_uses_majority_of_signals() -> None:
+    assert choose_paired_better_label(-0.01, 0.03, 0.75, 0.25, "A", "B") == "B"
 
 
 # ---------------------------------------------------------------------------

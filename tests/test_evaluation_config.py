@@ -26,6 +26,7 @@ def test_evaluation_config_defaults_to_run_dirs(tmp_path: Path) -> None:
     )
     assert args.output_dir == str(tmp_path / "results" / "section_run" / "evaluation")
     assert args.save_graphs is False
+    assert args.hide_graphs_path is False
 
 
 def test_evaluation_config_accepts_explicit_dirs(tmp_path: Path) -> None:
@@ -46,3 +47,4 @@ def test_evaluation_config_accepts_explicit_dirs(tmp_path: Path) -> None:
     assert args.target_dir == "/custom/targets"
     assert args.generated_dir == "/custom/generated"
     assert args.output_dir == "/custom/evaluation"
+    assert args.hide_graphs_path is False

@@ -11,10 +11,14 @@ from PIL import Image
 
 from virtual_staining.utils.cli import style, print_section, print_info
 from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS, open_rgb, to_float01
-from virtual_staining.utils.metrics import color_for_metric
+from virtual_staining.utils.metrics import (
+    DEFAULT_METRICS,
+    color_for_metric,
+    is_higher_better_metric,
+)
 
 
-METRIC_SELECTION_ORDER = ["mae", "rmse", "psnr", "ssim"]
+METRIC_SELECTION_ORDER = list(DEFAULT_METRICS)
 SELECTION_SUMMARY_FIELDNAMES = [
     "metric",
     "kind",
@@ -106,6 +110,11 @@ def add_from_metrics_subparser(subparsers: Any) -> None:
         type=Path,
         required=True,
         help="Path to a run directory like local_workspace/results/NAME_RUN.",
+    )
+    metrics_parser.add_argument(
+        "--hide-graphs-path",
+        action="store_true",
+        help="Do not print the full list of saved aggregated graph paths.",
     )
     metrics_parser.set_defaults(func=run_from_metrics)
 
@@ -330,20 +339,32 @@ def select_representative_rows(
     metric_summary: dict[str, float],
     per_image_rows: list[dict[str, str]],
 ) -> dict[str, dict[str, str]]:
-    """Selects the min, max and closest-to-median samples for a metric."""
+    """Selects the best, median and worst samples for a metric."""
     if not per_image_rows:
         raise ValueError("No per-image rows available for representative selection.")
 
     def metric_value(row: dict[str, str]) -> float:
         return float(row[metric_name])
 
+    higher_is_better = is_higher_better_metric(metric_name)
+    best_row = (
+        max(per_image_rows, key=metric_value)
+        if higher_is_better
+        else min(per_image_rows, key=metric_value)
+    )
+    worst_row = (
+        min(per_image_rows, key=metric_value)
+        if higher_is_better
+        else max(per_image_rows, key=metric_value)
+    )
+
     return {
-        "max": max(per_image_rows, key=metric_value),
+        "best": best_row,
         "median": min(
             per_image_rows,
             key=lambda row: abs(metric_value(row) - metric_summary["median"]),
         ),
-        "min": min(per_image_rows, key=metric_value),
+        "worst": worst_row,
     }
 
 
@@ -588,28 +609,28 @@ def save_metric_diagnostics_summary(
     metric_dir: str | Path,
     diagnostic_entries: list[DiagnosticEntry],
 ) -> list[Path]:
-    """Saves the aggregated panels for a metric across the min, median and max cases."""
+    """Saves aggregated panels for a metric across best, median and worst cases."""
     metric_dir = Path(metric_dir)
     output_specs: list[tuple[DiagnosticPathKey, str, str]] = [
         (
             "comparison_path",
-            f"{metric_name}_comparisons_max_median_min.png",
-            f"{metric_name.upper()} - Comparison Panels (MAX / MEDIAN / MIN)",
+            f"{metric_name}_comparisons_best_median_worst.png",
+            f"{metric_name.upper()} - Comparison Panels (BEST / MEDIAN / WORST)",
         ),
         (
             "error_histogram_path",
-            f"{metric_name}_error_histograms_max_median_min.png",
-            f"{metric_name.upper()} - Absolute Error Histograms (MAX / MEDIAN / MIN)",
+            f"{metric_name}_error_histograms_best_median_worst.png",
+            f"{metric_name.upper()} - Absolute Error Histograms (BEST / MEDIAN / WORST)",
         ),
         (
             "intensity_overlay_histogram_path",
-            f"{metric_name}_intensity_overlay_histograms_max_median_min.png",
-            f"{metric_name.upper()} - Target vs Generated Intensity Histograms (MAX / MEDIAN / MIN)",
+            f"{metric_name}_intensity_overlay_histograms_best_median_worst.png",
+            f"{metric_name.upper()} - Target vs Generated Intensity Histograms (BEST / MEDIAN / WORST)",
         ),
         (
             "target_vs_generated_scatter_by_channel_path",
-            f"{metric_name}_target_vs_generated_scatters_by_channel_max_median_min.png",
-            f"{metric_name.upper()} - Target vs Generated Scatter by Channel (MAX / MEDIAN / MIN)",
+            f"{metric_name}_target_vs_generated_scatters_by_channel_best_median_worst.png",
+            f"{metric_name.upper()} - Target vs Generated Scatter by Channel (BEST / MEDIAN / WORST)",
         ),
     ]
     saved_paths: list[Path] = []
@@ -719,11 +740,16 @@ def build_metric_case_artifacts(
     sample_id = row["sample_id"]
     metric_value = float(row[metric_name])
 
-    if kind in {"min", "max", "median"}:
-        target_value = float(metric_summary[kind])
+    if kind == "best":
+        summary_key = "max" if is_higher_better_metric(metric_name) else "min"
+    elif kind == "worst":
+        summary_key = "min" if is_higher_better_metric(metric_name) else "max"
+    elif kind == "median":
+        summary_key = "median"
     else:
         raise ValueError(f"Unsupported representative kind: {kind}")
 
+    target_value = float(metric_summary[summary_key])
     source_path = infer_source_path_from_row(row)
     generated_path = Path(row["generated_path"])
     target_path = Path(row["target_path"])
@@ -787,6 +813,7 @@ def run_from_metrics(args: argparse.Namespace) -> None:
     metrics_dir = run_path / "comparisons" / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
     selection_summary_rows: list[dict[str, object]] = []
+    saved_aggregated_paths: list[Path] = []
     available_metrics = [
         metric for metric in METRIC_SELECTION_ORDER if metric in summary_rows
     ]
@@ -828,15 +855,18 @@ def run_from_metrics(args: argparse.Namespace) -> None:
         write_metric_selection_summary(
             metric_selection_rows, metric_dir / "selection_summary.csv"
         )
-        kind_order = {"max": 0, "median": 1, "min": 2}
+        kind_order = {"best": 0, "median": 1, "worst": 2}
         metric_diagnostic_entries.sort(key=lambda entry: kind_order[entry["kind"]])
         aggregated_paths = save_metric_diagnostics_summary(
             metric_name=metric_name,
             metric_dir=metric_dir,
             diagnostic_entries=metric_diagnostic_entries,
         )
+        saved_aggregated_paths.extend(aggregated_paths)
 
-        for aggregated_path in aggregated_paths:
+    if not args.hide_graphs_path:
+        print_section("Saved aggregated panels")
+        for aggregated_path in saved_aggregated_paths:
             print_info("Saved aggregated panel", str(aggregated_path))
 
     write_metric_selection_summary(

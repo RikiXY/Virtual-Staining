@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
 from scipy.stats import ks_2samp, mannwhitneyu, wasserstein_distance, wilcoxon
+
+from virtual_staining.utils.metrics import (
+    get_metric_plot_range as get_default_metric_plot_range,
+    get_metric_thresholds,
+    is_higher_better_metric,
+)
 
 
 @dataclass
@@ -131,12 +138,35 @@ def choose_unpaired_better_label(
 
 
 def choose_paired_better_label(
-    mean_signed_delta: float, label_a: str, label_b: str
+    mean_signed_delta: float,
+    median_signed_delta: float,
+    share_b_better: float,
+    share_a_better: float,
+    label_a: str,
+    label_b: str,
 ) -> str:
-    """Chooses the better group in the paired comparison based on the mean signed delta."""
+    """Chooses the better group in a paired comparison from the main signals."""
+    score_a = 0
+    score_b = 0
+
     if mean_signed_delta > 0:
+        score_b += 1
+    elif mean_signed_delta < 0:
+        score_a += 1
+
+    if median_signed_delta > 0:
+        score_b += 1
+    elif median_signed_delta < 0:
+        score_a += 1
+
+    if share_b_better > share_a_better:
+        score_b += 1
+    elif share_a_better > share_b_better:
+        score_a += 1
+
+    if score_b > score_a:
         return label_b
-    if mean_signed_delta < 0:
+    if score_a > score_b:
         return label_a
     return "tie"
 
@@ -311,5 +341,164 @@ def compute_paired_summary(
         share_equal=share_equal,
         wilcoxon_statistic=wilcoxon_statistic,
         wilcoxon_pvalue=wilcoxon_pvalue,
-        better_label=choose_paired_better_label(mean_signed_delta, label_a, label_b),
+        better_label=choose_paired_better_label(
+            mean_signed_delta=mean_signed_delta,
+            median_signed_delta=median_signed_delta,
+            share_b_better=share_b_better,
+            share_a_better=share_a_better,
+            label_a=label_a,
+            label_b=label_b,
+        ),
     )
+
+
+def resolve_plot_range(args: argparse.Namespace) -> tuple[float, float]:
+    """Resolves a metric plot range from CLI overrides or metric defaults."""
+    default_min, default_max = get_default_metric_plot_range(args.column)
+    min_value = args.min_value if args.min_value is not None else default_min
+    max_value = args.max_value if args.max_value is not None else default_max
+
+    if min_value == max_value:
+        padding = 0.5 if min_value == 0 else abs(min_value) * 0.05
+        min_value -= padding
+        max_value += padding
+
+    return float(min_value), float(max_value)
+
+
+def resolve_thresholds(args: argparse.Namespace) -> list[float]:
+    """Resolves comparison thresholds from CLI overrides or metric defaults."""
+    if getattr(args, "thresholds", None) is not None:
+        return list(args.thresholds)
+    return get_metric_thresholds(args.column)
+
+
+def resolve_run_path(run_path: str | Path) -> Path:
+    """Resolves and validates a run directory."""
+    path = Path(run_path).resolve()
+
+    if not path.is_dir():
+        raise NotADirectoryError(f"Run directory not found: {path}")
+
+    return path
+
+
+def resolve_metrics_csv_from_run(run_path: str | Path) -> Path:
+    """Returns evaluation/per_image_metrics.csv for a run directory."""
+    run_dir = resolve_run_path(run_path)
+    csv_path = run_dir / "evaluation" / "per_image_metrics.csv"
+
+    if not csv_path.is_file():
+        raise FileNotFoundError(
+            f"Could not find per_image_metrics.csv for run '{run_dir.name}'. "
+            f"Expected: {csv_path}"
+        )
+
+    return csv_path
+
+
+def infer_label_from_input(
+    run_path: str | Path | None,
+    csv_path: str | Path | None,
+    fallback: str,
+) -> str:
+    """Infers a readable label from a run path or metrics CSV path."""
+    if run_path is not None:
+        return Path(run_path).resolve().name
+
+    if csv_path is not None:
+        path = Path(csv_path).resolve()
+        if path.name == "per_image_metrics.csv" and path.parent.name == "evaluation":
+            return path.parent.parent.name
+        return path.stem
+
+    return fallback
+
+
+def resolve_comparison_inputs(args: argparse.Namespace) -> None:
+    """Resolves comparison CSVs and labels from run paths or explicit CSVs."""
+    if args.run_a is None and args.csv_a is None:
+        raise ValueError("You must provide either --run-a or --csv-a.")
+
+    if args.run_b is None and args.csv_b is None:
+        raise ValueError("You must provide either --run-b or --csv-b.")
+
+    args.resolved_csv_a = (
+        resolve_metrics_csv_from_run(args.run_a)
+        if args.run_a is not None
+        else resolve_input_csv(args.csv_a)
+    )
+    args.resolved_csv_b = (
+        resolve_metrics_csv_from_run(args.run_b)
+        if args.run_b is not None
+        else resolve_input_csv(args.csv_b)
+    )
+    args.resolved_label_a = args.label_a or infer_label_from_input(
+        run_path=args.run_a,
+        csv_path=args.csv_a,
+        fallback="A",
+    )
+    args.resolved_label_b = args.label_b or infer_label_from_input(
+        run_path=args.run_b,
+        csv_path=args.csv_b,
+        fallback="B",
+    )
+
+
+def infer_results_root_from_inputs(args: argparse.Namespace) -> Path:
+    """Infers the results root from resolved comparison inputs."""
+    for run_attr in ("run_a", "run_b"):
+        run_path = getattr(args, run_attr)
+        if run_path is not None:
+            run_dir = Path(run_path).resolve()
+            if run_dir.parent.name == "results":
+                return run_dir.parent
+
+    csv_a = Path(args.resolved_csv_a).resolve()
+    parts = csv_a.parts
+
+    if "results" in parts:
+        results_index = parts.index("results")
+        return Path(*parts[: results_index + 1])
+
+    return Path("local_workspace") / "results"
+
+
+def resolve_comparison_output_dir(args: argparse.Namespace) -> Path:
+    """Resolves the output directory for a comparison run."""
+    if args.output_dir is not None:
+        return Path(args.output_dir)
+
+    results_root = infer_results_root_from_inputs(args)
+    comparison_name = f"{args.resolved_label_a}_vs_{args.resolved_label_b}"
+    metric_dir_name = f"{args.mode}_{args.column}"
+    return results_root / "comparisons" / comparison_name / metric_dir_name
+
+
+def flatten_unpaired_group_stats(group: UnpairedGroupStats) -> dict[str, Any]:
+    """Converts grouped unpaired stats into a flat CSV row."""
+    row: dict[str, Any] = {
+        "label": group.label,
+        "n": group.n,
+        "mean": group.mean,
+        "median": group.median,
+        "iqr": group.iqr,
+    }
+
+    for threshold_name, share in group.threshold_shares.items():
+        row[f"share_{threshold_name}"] = share
+
+    return row
+
+
+def resolve_metric_direction(args: argparse.Namespace) -> bool:
+    """Resolves metric direction from explicit flags or known metric defaults."""
+    if args.higher_is_better and args.lower_is_better:
+        raise ValueError(
+            "Choose at most one between --higher-is-better and --lower-is-better."
+        )
+    if args.higher_is_better:
+        return True
+    if args.lower_is_better:
+        return False
+    return is_higher_better_metric(args.column)

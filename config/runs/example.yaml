@@ -92,3 +92,4 @@ evaluation:
   # generated_dir: local_workspace/results/example_run/output_test
   # output_dir: local_workspace/results/example_run/evaluation
   save_graphs: true
+  # hide_graphs_path: false

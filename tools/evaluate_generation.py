@@ -13,9 +13,13 @@ from virtual_staining.evaluation.metrics import evaluate_pair
 from virtual_staining.run_config import load_yaml_mapping, section_with_shared_fields
 from virtual_staining.utils.cli import style, print_section, print_info
 from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS
-from virtual_staining.utils.metrics import color_metric
+from virtual_staining.utils.metrics import (
+    DEFAULT_METRICS,
+    color_metric,
+    get_metric_plot_range as default_metric_plot_range,
+)
 
-METRIC_NAMES = ["mae", "rmse", "psnr", "ssim"]
+METRIC_NAMES = list(DEFAULT_METRICS)
 
 METRIC_FIELDNAMES = [
     "sample_id",
@@ -25,19 +29,16 @@ METRIC_FIELDNAMES = [
     "height",
     "channels",
     "mae",
+    "mse",
     "rmse",
     "psnr",
     "ssim",
+    "pcc_gray",
+    "pcc_r",
+    "pcc_g",
+    "pcc_b",
+    "pcc_rgb_mean",
 ]
-
-PLOT_FIXED_RANGES = {
-    "mae": (0.0, 1.0),
-    "rmse": (0.0, 1.0),
-    "ssim": (0.0, 1.0),
-    # PSNR has no finite theoretical maximum. For visual comparison we use
-    # a fixed practical window, so that histograms remain comparable.
-    "psnr": (0.0, 60.0),
-}
 
 PLOT_FIXED_BINS = 30
 
@@ -65,6 +66,9 @@ def apply_dataset_config(args: argparse.Namespace) -> argparse.Namespace:
     )
     args.output_dir = str(_optional_path(data, "output_dir", run_root / "evaluation"))
     args.save_graphs = bool(data.get("save_graphs", True))
+    args.hide_graphs_path = bool(
+        data.get("hide_graphs_path", getattr(args, "hide_graphs_path", False))
+    )
     return args
 
 
@@ -89,7 +93,7 @@ def add_single_subparser(subparsers: Any) -> None:
         "single",
         help="Evaluate one target/generated image pair.",
         description=(
-            "Compute MAE, RMSE, PSNR and SSIM for one target/generated pair. "
+            "Compute MAE, MSE, RMSE, PSNR, SSIM and PCC for one target/generated pair. "
             "Supported image extensions: .tif, .tiff, .png."
         ),
     )
@@ -126,7 +130,7 @@ def add_dataset_subparser(subparsers: Any) -> None:
         "dataset",
         help="Evaluate all matching target/generated pairs in two folders.",
         description=(
-            "Compute MAE, RMSE, PSNR and SSIM for all matching pairs in a dataset. "
+            "Compute MAE, MSE, RMSE, PSNR, SSIM and PCC for all matching pairs in a dataset. "
             "Supported image extensions: .tif, .tiff, .png."
         ),
     )
@@ -135,6 +139,11 @@ def add_dataset_subparser(subparsers: Any) -> None:
         type=str,
         default="config/runs/example.yaml",
         help="path to the run config YAML (default: config/runs/example.yaml)",
+    )
+    dataset_parser.add_argument(
+        "--hide-graphs-path",
+        action="store_true",
+        help="Do not print the full list of saved graph paths.",
     )
     dataset_parser.set_defaults(func=run_dataset)
 
@@ -306,9 +315,15 @@ def build_metric_row(
         "height": height,
         "channels": channels,
         "mae": metrics["mae"],
+        "mse": metrics["mse"],
         "rmse": metrics["rmse"],
         "psnr": metrics["psnr"],
         "ssim": metrics["ssim"],
+        "pcc_gray": metrics["pcc_gray"],
+        "pcc_r": metrics["pcc_r"],
+        "pcc_g": metrics["pcc_g"],
+        "pcc_b": metrics["pcc_b"],
+        "pcc_rgb_mean": metrics["pcc_rgb_mean"],
     }
 
 
@@ -371,9 +386,7 @@ def write_summary_csv(
 
 def get_metric_plot_range(metric: str) -> tuple[float, float]:
     """Returns the fixed range used in plots for a metric."""
-    if metric not in PLOT_FIXED_RANGES:
-        raise ValueError(f"Unsupported metric for plotting: {metric}")
-    return PLOT_FIXED_RANGES[metric]
+    return default_metric_plot_range(metric)
 
 
 def save_dataset_plots(
@@ -437,9 +450,12 @@ def print_single_result(
     print_info("Shape", f"{width}x{height}x{channels}")
     print()
     print_info("MAE", color_metric("mae", metrics["mae"]))
+    print_info("MSE", color_metric("mse", metrics["mse"]))
     print_info("RMSE", color_metric("rmse", metrics["rmse"]))
     print_info("PSNR", color_metric("psnr", metrics["psnr"]))
     print_info("SSIM", color_metric("ssim", metrics["ssim"]))
+    print_info("PCC gray", color_metric("pcc_gray", metrics["pcc_gray"]))
+    print_info("PCC RGB mean", color_metric("pcc_rgb_mean", metrics["pcc_rgb_mean"]))
 
 
 def print_dataset_summary(
@@ -583,8 +599,9 @@ def run_dataset(args: argparse.Namespace) -> None:
 
     if args.save_graphs and per_image_rows:
         plot_paths = save_dataset_plots(per_image_rows, output_dir)
-        for plot_path in plot_paths:
-            print_info("Graph", str(plot_path))
+        if not args.hide_graphs_path:
+            for plot_path in plot_paths:
+                print_info("Graph", str(plot_path))
 
     print_dataset_summary(
         target_files, generated_files, per_image_rows, skipped_rows, output_dir
