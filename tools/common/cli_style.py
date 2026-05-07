@@ -94,7 +94,7 @@ def metric_color_name(name: str, value: float) -> str:
             return "green"
         if value >= 0.90:
             return "yellow"
-        if value >= 0.80:
+        if value >= 0.85:
             return "orange"
         return "red"
 
