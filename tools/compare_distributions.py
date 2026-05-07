@@ -241,7 +241,17 @@ def print_unpaired_group_summary(group: UnpairedGroupStats, metric_name: str) ->
     for key, value in group.threshold_shares.items():
         print_info(key, color_share(value))
 
-
+def print_automatic_decision_disclaimer() -> None:
+    """Stampa il disclaimer relativo alla decisione automatica."""
+    print_info(
+        "*",
+        (
+            "Automatic score-based suggestion, not a definitive statistical conclusion. "
+            "Interpret it together with the detailed tables, plots and metric values."
+        ),
+    )
+    
+    
 def print_unpaired_cli_summary(
     group_a: UnpairedGroupStats,
     group_b: UnpairedGroupStats,
@@ -261,32 +271,33 @@ def print_unpaired_cli_summary(
     print_section("Distribution comparison")
     comparison_color = "green" if comparison.better_label != "tie" else "yellow"
 
+    print_info("Score A", f"{comparison.score_a:.2f}")
+    print_info("Score B", f"{comparison.score_b:.2f}")
+    print_info("Score diff", f"{comparison.score_diff:.2f}")
+
     print_info(
-        "Mean favors",
-        style(comparison.mean_favors, comparison_color)
-        if comparison.mean_favors != "tie"
-        else style("tie", "yellow"),
+        "Signed quantile shift",
+        color_signed_delta(comparison.signed_quantile_shift),
     )
+    print_info("Quantile shift favors", comparison.quantile_shift_favors)
+    print_info("Threshold favors", comparison.threshold_favors)
+    print_info("Worst tail favors", comparison.worst_tail_favors)
     print_info(
-        "Median favors",
-        style(comparison.median_favors, comparison_color)
-        if comparison.median_favors != "tie"
-        else style("tie", "yellow"),
+        "Common language B better",
+        color_share(comparison.common_language_b_better),
     )
-    print_info(
-        "Threshold favors",
-        style(comparison.threshold_favors, comparison_color)
-        if comparison.threshold_favors != "tie"
-        else style("tie", "yellow"),
-    )
+    print_info("Common language favors", comparison.common_language_favors)
+
     print_info("Wasserstein between groups", color_distance(comparison.wasserstein_between_groups, 0.03, 0.08))
     print_info("KS statistic", color_distance(comparison.ks_statistic, 0.08, 0.18))
     print_info("KS p-value", color_pvalue(comparison.ks_pvalue))
     print_info("Mann-Whitney U", f"{comparison.mannwhitney_u:.6f}")
-    print_info("Mann-Whitney p-value", color_pvalue(comparison.mannwhitney_pvalue))
 
     print_section("Conclusion")
-    print(style(f"Overall unpaired comparison favors: {comparison.better_label}", "bold", comparison_color))
+    print(style(f"Overall better*: {comparison.better_label}", "bold", comparison_color))
+    print_automatic_decision_disclaimer()
+    print(style(f"Decision strength: {comparison.decision_strength}", "bold", comparison_color))
+    print_info("Reason", comparison.reason)
     print(style(f"Saved outputs to: {output_dir}", "bold", "magenta"))
 
 
@@ -304,18 +315,31 @@ def print_paired_cli_summary(
     print_section("Paired comparison")
     print_info("Paired samples", str(summary.n_pairs))
     print_info("Tolerance", f"{summary.tolerance:.6f}")
+    print_info("Score A", f"{summary.score_a:.2f}")
+    print_info("Score B", f"{summary.score_b:.2f}")
+    print_info("Score diff", f"{summary.score_diff:.2f}")
     print_info("Mean signed delta", color_signed_delta(summary.mean_signed_delta))
     print_info("Median signed delta", color_signed_delta(summary.median_signed_delta))
+    print_info("Q10 signed delta", color_signed_delta(summary.q10_signed_delta))
+    print_info("Q90 signed delta", color_signed_delta(summary.q90_signed_delta))
     print_info(f"Share {summary.label_b} better", color_share(summary.share_b_better))
     print_info(f"Share {summary.label_a} better", color_share(summary.share_a_better))
     print_info("Share equal", color_share(summary.share_equal))
     print_info("Wilcoxon statistic", f"{summary.wilcoxon_statistic:.6f}")
     print_info("Wilcoxon p-value", color_pvalue(summary.wilcoxon_pvalue))
+    print_info("Median delta favors", summary.median_delta_favors)
+    print_info("Share improvement favors", summary.share_improvement_favors)
+    print_info("Worst delta favors", summary.worst_delta_favors)
+    print_info("Mean delta favors", summary.mean_delta_favors)
+    print_info("Wilcoxon favors", summary.wilcoxon_favors)
 
     conclusion_color = "green" if summary.better_label != "tie" else "yellow"
 
     print_section("Conclusion")
-    print(style(f"Overall paired comparison favors: {summary.better_label}", "bold", conclusion_color))
+    print(style(f"Overall better*: {summary.better_label}", "bold", conclusion_color))
+    print_automatic_decision_disclaimer()
+    print(style(f"Decision strength: {summary.decision_strength}", "bold", conclusion_color))
+    print_info("Reason", summary.reason)
     print(style(f"Saved outputs to: {output_dir}", "bold", "magenta"))
 
 
