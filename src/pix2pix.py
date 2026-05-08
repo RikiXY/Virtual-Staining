@@ -320,6 +320,28 @@ def is_amp_enabled(device):
    return isinstance(device, torch.device) and device.type == "cuda"
 
 
+def assert_finite(name: str, tensor: torch.Tensor) -> None:
+    """
+    Ferma il training appena un tensore contiene NaN o Inf.
+    Serve per individuare il primo punto reale del collasso numerico.
+    """
+    if torch.isfinite(tensor).all():
+        return
+
+    finite_values = tensor[torch.isfinite(tensor)]
+
+    if finite_values.numel() > 0:
+        stats = (
+            f"finite_min={finite_values.min().item():.6f}, "
+            f"finite_max={finite_values.max().item():.6f}, "
+            f"finite_mean={finite_values.mean().item():.6f}"
+        )
+    else:
+        stats = "no finite values"
+
+    raise RuntimeError(f"{name} contains NaN or Inf ({stats})")
+
+
 class SSIMLoss(nn.Module):
     """
     Differentiable SSIM loss for tensors normalized in [-1, 1].
@@ -366,8 +388,14 @@ class SSIMLoss(nn.Module):
         return window_2d.expand(channels, 1, self.window_size, self.window_size).contiguous()
 
     def forward(self, prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        assert_finite("SSIMLoss prediction input", prediction)
+        assert_finite("SSIMLoss target input", target)
+
         prediction = self._to_01(prediction.float()).clamp(0.0, 1.0)
         target = self._to_01(target.float()).clamp(0.0, 1.0)
+
+        assert_finite("SSIMLoss prediction [0,1]", prediction)
+        assert_finite("SSIMLoss target [0,1]", target)
 
         channels = prediction.shape[1]
         window = self._gaussian_window(
@@ -395,11 +423,18 @@ class SSIMLoss(nn.Module):
         numerator = (2 * mu_xy + c1) * (2 * sigma_xy + c2)
         denominator = (mu_x_sq + mu_y_sq + c1) * (sigma_x_sq + sigma_y_sq + c2)
 
-        ssim_map = numerator / (denominator + self.eps)
-        ssim_value = ssim_map.mean()
+        denominator = denominator.clamp_min(self.eps)
+        ssim_map = numerator / denominator
 
-        return 1.0 - ssim_value
-    
+        assert_finite("SSIMLoss ssim_map", ssim_map)
+
+        ssim_value = ssim_map.mean()
+        loss = 1.0 - ssim_value
+
+        assert_finite("SSIMLoss output", loss)
+
+        return loss
+        
     
 # ====================[CONFIGURAZIONE]====================
 # Alcuni parametri dei blocchi convoluzionali vengono letti da JSON.
