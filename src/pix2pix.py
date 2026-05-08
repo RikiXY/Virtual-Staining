@@ -12,6 +12,7 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torch.amp import autocast, GradScaler
@@ -153,6 +154,18 @@ def build_parser():
         type=float,
         default=25.0,
         help="Weight of the L1 reconstruction loss (default: 25.0)"
+    )
+    train_parser.add_argument(
+        "--ssim-weight",
+        type=float,
+        default=1.0,
+        help="Weight of the SSIM reconstruction loss (default: 0.0, disabled)"
+    )
+    train_parser.add_argument(
+        "--ssim-window-size",
+        type=int,
+        default=11,
+        help="Odd window size used for SSIM loss (default: 11)"
     )
     train_parser.add_argument(
         "--lr-g",
@@ -304,8 +317,90 @@ def is_amp_enabled(device):
     # La mixed precision con `autocast` e `GradScaler` ha senso soprattutto
     # su GPU CUDA. Su CPU lasciamo tutto disattivato per evitare complessità
     # inutile e mantenere il comportamento più lineare possibile.
-    return isinstance(device, torch.device) and device.type == "cuda"
+   return isinstance(device, torch.device) and device.type == "cuda"
 
+
+class SSIMLoss(nn.Module):
+    """
+    Differentiable SSIM loss for tensors normalized in [-1, 1].
+
+    The dataset transform normalizes RGB images from [0, 1] to [-1, 1],
+    so before computing SSIM we map tensors back to [0, 1].
+    """
+
+    def __init__(
+        self,
+        window_size: int = 11,
+        sigma: float = 1.5,
+        data_range: float = 1.0,
+        eps: float = 1e-8,
+    ):
+        super().__init__()
+        if window_size % 2 == 0:
+            raise ValueError("SSIM window_size must be odd.")
+        self.window_size = window_size
+        self.sigma = sigma
+        self.data_range = data_range
+        self.eps = eps
+
+    def _to_01(self, x: torch.Tensor) -> torch.Tensor:
+        return (x + 1.0) * 0.5
+
+    def _gaussian_window(
+        self,
+        channels: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        coords = torch.arange(
+            self.window_size,
+            device=device,
+            dtype=dtype,
+        ) - self.window_size // 2
+
+        g = torch.exp(-(coords ** 2) / (2 * self.sigma ** 2))
+        g = g / g.sum()
+        window_2d = torch.outer(g, g)
+        window_2d = window_2d / window_2d.sum()
+
+        return window_2d.expand(channels, 1, self.window_size, self.window_size).contiguous()
+
+    def forward(self, prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        prediction = self._to_01(prediction.float()).clamp(0.0, 1.0)
+        target = self._to_01(target.float()).clamp(0.0, 1.0)
+
+        channels = prediction.shape[1]
+        window = self._gaussian_window(
+            channels=channels,
+            device=prediction.device,
+            dtype=prediction.dtype,
+        )
+
+        padding = self.window_size // 2
+
+        mu_x = F.conv2d(prediction, window, padding=padding, groups=channels)
+        mu_y = F.conv2d(target, window, padding=padding, groups=channels)
+
+        mu_x_sq = mu_x.pow(2)
+        mu_y_sq = mu_y.pow(2)
+        mu_xy = mu_x * mu_y
+
+        sigma_x_sq = F.conv2d(prediction * prediction, window, padding=padding, groups=channels) - mu_x_sq
+        sigma_y_sq = F.conv2d(target * target, window, padding=padding, groups=channels) - mu_y_sq
+        sigma_xy = F.conv2d(prediction * target, window, padding=padding, groups=channels) - mu_xy
+
+        c1 = (0.01 * self.data_range) ** 2
+        c2 = (0.03 * self.data_range) ** 2
+
+        numerator = (2 * mu_xy + c1) * (2 * sigma_xy + c2)
+        denominator = (mu_x_sq + mu_y_sq + c1) * (sigma_x_sq + sigma_y_sq + c2)
+
+        ssim_map = numerator / (denominator + self.eps)
+        ssim_value = ssim_map.mean()
+
+        return 1.0 - ssim_value
+    
+    
 # ====================[CONFIGURAZIONE]====================
 # Alcuni parametri dei blocchi convoluzionali vengono letti da JSON.
 # è una scelta pratica: i dettagli architetturali restano centralizzati
@@ -817,6 +912,8 @@ def save_checkpoint(
     scaler_G, 
     scaler_D,
     l1_weight,
+    ssim_weight,
+    ssim_window_size,
     lr_g,
     lr_d,
     beta1,
@@ -849,6 +946,8 @@ def save_checkpoint(
         "scalerG_state_dict": scaler_G.state_dict(),
         "scalerD_state_dict": scaler_D.state_dict(),
         "l1_weight": l1_weight,
+        "ssim_weight": ssim_weight,
+        "ssim_window_size": ssim_window_size,
         "lr_g": lr_g,
         "lr_d": lr_d,
         "beta1": beta1,
@@ -932,10 +1031,13 @@ def validate(
     validation_loader, 
     device, 
     bce_loss, 
-    l1_loss, epoch, 
+    l1_loss, 
+    ssim_loss,
+    epoch, 
     log_file, 
     output_val_dir, 
-    l1_weight
+    l1_weight,
+    ssim_weight
 ):
     """
     Esegue un pass di validazione e calcola le loss medie
@@ -979,7 +1081,10 @@ def validate(
                 
                 # La componente L1 è utile per evitare output plausibili ma
                 # scollegati dal target specifico del campione attuale.
-                loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * l1_weight
+                loss_adv = bce_loss(D_fake, real_label)
+                loss_l1 = l1_loss(fake, y)
+                loss_ssim = ssim_loss(fake, y)
+                loss_G = loss_adv + loss_l1 * l1_weight + loss_ssim * ssim_weight
 
             total_loss_D += loss_D.item()
             total_loss_G += loss_G.item()
@@ -1093,11 +1198,13 @@ def train_one_epoch(
     scaler_D,
     bce_loss,
     l1_loss,
+    ssim_loss,
     epoch,
     log_file,
     progress_tracker,
     log_rate,
     l1_weight,
+    ssim_weight, 
     training_status
 ):
     """
@@ -1147,7 +1254,10 @@ def train_one_epoch(
             # - BCE adversarial: far sembrare l'output abbastanza realistico
             #   da "convincere" il discriminatore;
             # - L1: mantenere fedeltà verso il target reale.
-            loss_G = bce_loss(D_fake, real_label) + l1_loss(fake, y) * l1_weight
+            loss_adv = bce_loss(D_fake, real_label)
+            loss_l1 = l1_loss(fake, y)
+            loss_ssim = ssim_loss(fake, y)
+            loss_G = loss_adv + loss_l1 * l1_weight + loss_ssim * ssim_weight
 
         opt_G.zero_grad()
         scaler_G.scale(loss_G).backward()
@@ -1172,6 +1282,8 @@ def train_one_epoch(
             f"({epoch_progress:.0%}) | "
             f"b {i + 1}/{progress_tracker.total_batches} | "
             f"loss_G {loss_G.item():.4f} | "
+            f"L1 {loss_l1.item():.4f} | "
+            f"SSIM_loss {loss_ssim.item():.4f} | "
             f"loss_D {loss_D.item():.4f} | "
             f"elapsed {elapsed_str} | "
             f"ETA {eta_str} | "
@@ -1194,6 +1306,9 @@ def train_one_epoch(
 
             log_message(
                 f"[ep {epoch} | b {i}] loss_G: {loss_G.item():.4f} "
+                f"loss_adv: {loss_adv.item():.4f} "
+                f"loss_l1: {loss_l1.item():.4f} "
+                f"loss_ssim: {loss_ssim.item():.4f} "
                 f"loss_D: {loss_D.item():.4f} - "
                 f"{progress:.2%} | elapsed {elapsed_str} | ETA {eta_str} | end {end_time_str}",
                 log_file,
@@ -1219,6 +1334,8 @@ def main(
     validate_rate=1,
     resume_checkpoint=None,
     l1_weight=25.0,
+    ssim_weight=1.0,
+    ssim_window_size=11,
     lr_g=2e-4,
     lr_d=2e-4,
     beta1=0.5,
@@ -1291,6 +1408,8 @@ def main(
         "validate_rate": validate_rate,
         "resume_checkpoint": str(resume_checkpoint) if resume_checkpoint else None,
         "l1_weight": l1_weight,
+        "ssim_weight": ssim_weight,
+        "ssim_window_size": ssim_window_size,
         "lr_g": lr_g,
         "lr_d": lr_d,
         "beta1": beta1,
@@ -1340,6 +1459,7 @@ def main(
     # mentre L1Loss misura la distanza diretta tra output generato e target.
     bce_loss = nn.BCEWithLogitsLoss()
     l1_loss = nn.L1Loss()
+    ssim_loss = SSIMLoss(window_size=ssim_window_size)
 
     # Puliamo la cartella di output del training per non mischiare materiale di run diverse.
     for file in os.listdir(output_train_dir):
@@ -1391,7 +1511,9 @@ def main(
 
     log_message("Training started", log_file, use_stdout=False)
     log_message(
-        f"Hyperparameters | l1_weight={l1_weight} | lr_g={lr_g} | lr_d={lr_d} | "
+        f"Hyperparameters | l1_weight={l1_weight} "
+        f"ssim_weight={ssim_weight} | ssim_window_size={ssim_window_size} | "
+        f"lr_g={lr_g} | lr_d={lr_d} | "
         f"beta1={beta1} | beta2={beta2}",
         log_file,
         use_stdout=False
@@ -1415,11 +1537,13 @@ def main(
             scaler_D,
             bce_loss,
             l1_loss,
+            ssim_loss,
             epoch,
             log_file,
             progress_tracker,
             log_rate,
             l1_weight,
+            ssim_weight,
             training_status
         )
 
@@ -1441,6 +1565,8 @@ def main(
                 scaler_G,
                 scaler_D,
                 l1_weight,
+                ssim_weight,
+                ssim_window_size,
                 lr_g,
                 lr_d,
                 beta1,
@@ -1475,10 +1601,12 @@ def main(
                 device,
                 bce_loss,
                 l1_loss,
+                ssim_loss,
                 epoch,
                 log_file,
                 output_val_dir,
-                l1_weight
+                l1_weight,
+                ssim_weight
             )
     
     finish_console_progress()
@@ -1513,6 +1641,8 @@ if __name__ == "__main__":
             validate_rate=args.validate_rate,
             resume_checkpoint=args.resume,
             l1_weight=args.l1_weight,
+            ssim_weight=args.ssim_weight,
+            ssim_window_size=args.ssim_window_size,
             lr_g=args.lr_g,
             lr_d=args.lr_d,
             beta1=args.beta1,
