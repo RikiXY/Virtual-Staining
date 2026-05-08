@@ -434,19 +434,34 @@ class DoubleConv(nn.Module):
     def __init__(self, in_channels, out_channels):
         conv_params = SETTINGS["double_conv"]
         super(DoubleConv, self).__init__()
-        # Due convoluzioni di fila sono un blocco molto usato nelle U-Net:
-        # la prima inizia a trasformare le feature, la seconda le rifinisce.
+
         self.double_conv = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=conv_params['kernel_size'], stride=conv_params["stride"], padding=conv_params['padding'], bias=conv_params['bias']),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(conv_params['inplace']),
-            nn.Conv2d(out_channels, out_channels, kernel_size=conv_params['kernel_size'], stride=conv_params["stride"], padding=conv_params['padding'], bias=conv_params['bias']),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(conv_params['inplace'])
+            nn.Conv2d(
+                in_channels,
+                out_channels,
+                kernel_size=conv_params["kernel_size"],
+                stride=conv_params["stride"],
+                padding=conv_params["padding"],
+                bias=False,
+            ),
+            nn.InstanceNorm2d(out_channels, affine=True),
+            nn.ReLU(conv_params["inplace"]),
+
+            nn.Conv2d(
+                out_channels,
+                out_channels,
+                kernel_size=conv_params["kernel_size"],
+                stride=conv_params["stride"],
+                padding=conv_params["padding"],
+                bias=False,
+            ),
+            nn.InstanceNorm2d(out_channels, affine=True),
+            nn.ReLU(conv_params["inplace"]),
         )
 
     def forward(self, x):
         return self.double_conv(x)
+    
 
 class Down(nn.Module):
     """
@@ -516,7 +531,10 @@ class OutConv(nn.Module):
     """
     def __init__(self, in_channels, out_channels):
         super(OutConv, self).__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=1),
+            nn.Tanh(),
+        )
 
     def forward(self, x):
         return self.conv(x)
