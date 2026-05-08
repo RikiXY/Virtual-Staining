@@ -391,49 +391,55 @@ class SSIMLoss(nn.Module):
         assert_finite("SSIMLoss prediction input", prediction)
         assert_finite("SSIMLoss target input", target)
 
-        prediction = self._to_01(prediction.float()).clamp(0.0, 1.0)
-        target = self._to_01(target.float()).clamp(0.0, 1.0)
+        with torch.amp.autocast(device_type=prediction.device.type, enabled=False):
+            prediction = self._to_01(prediction.float()).clamp(0.0, 1.0)
+            target = self._to_01(target.float()).clamp(0.0, 1.0)
 
-        assert_finite("SSIMLoss prediction [0,1]", prediction)
-        assert_finite("SSIMLoss target [0,1]", target)
+            assert_finite("SSIMLoss prediction [0,1]", prediction)
+            assert_finite("SSIMLoss target [0,1]", target)
 
-        channels = prediction.shape[1]
-        window = self._gaussian_window(
-            channels=channels,
-            device=prediction.device,
-            dtype=prediction.dtype,
-        )
+            channels = prediction.shape[1]
+            window = self._gaussian_window(
+                channels=channels,
+                device=prediction.device,
+                dtype=prediction.dtype,
+            )
 
-        padding = self.window_size // 2
+            padding = self.window_size // 2
 
-        mu_x = F.conv2d(prediction, window, padding=padding, groups=channels)
-        mu_y = F.conv2d(target, window, padding=padding, groups=channels)
+            mu_x = F.conv2d(prediction, window, padding=padding, groups=channels)
+            mu_y = F.conv2d(target, window, padding=padding, groups=channels)
 
-        mu_x_sq = mu_x.pow(2)
-        mu_y_sq = mu_y.pow(2)
-        mu_xy = mu_x * mu_y
+            mu_x_sq = mu_x.pow(2)
+            mu_y_sq = mu_y.pow(2)
+            mu_xy = mu_x * mu_y
 
-        sigma_x_sq = F.conv2d(prediction * prediction, window, padding=padding, groups=channels) - mu_x_sq
-        sigma_y_sq = F.conv2d(target * target, window, padding=padding, groups=channels) - mu_y_sq
-        sigma_xy = F.conv2d(prediction * target, window, padding=padding, groups=channels) - mu_xy
+            sigma_x_sq = F.conv2d(prediction * prediction, window, padding=padding, groups=channels) - mu_x_sq
+            sigma_y_sq = F.conv2d(target * target, window, padding=padding, groups=channels) - mu_y_sq
+            sigma_xy = F.conv2d(prediction * target, window, padding=padding, groups=channels) - mu_xy
 
-        c1 = (0.01 * self.data_range) ** 2
-        c2 = (0.03 * self.data_range) ** 2
+            sigma_x_sq = sigma_x_sq.clamp_min(0.0)
+            sigma_y_sq = sigma_y_sq.clamp_min(0.0)
 
-        numerator = (2 * mu_xy + c1) * (2 * sigma_xy + c2)
-        denominator = (mu_x_sq + mu_y_sq + c1) * (sigma_x_sq + sigma_y_sq + c2)
+            c1 = (0.01 * self.data_range) ** 2
+            c2 = (0.03 * self.data_range) ** 2
 
-        denominator = denominator.clamp_min(self.eps)
-        ssim_map = numerator / denominator
+            numerator = (2 * mu_xy + c1) * (2 * sigma_xy + c2)
+            denominator = (mu_x_sq + mu_y_sq + c1) * (sigma_x_sq + sigma_y_sq + c2)
 
-        assert_finite("SSIMLoss ssim_map", ssim_map)
+            ssim_map = numerator / (denominator + self.eps)
+            ssim_map = ssim_map.clamp(-1.0, 1.0)
 
-        ssim_value = ssim_map.mean()
-        loss = 1.0 - ssim_value
+            assert_finite("SSIMLoss ssim_map", ssim_map)
 
-        assert_finite("SSIMLoss output", loss)
+            loss = 1.0 - ssim_map.mean()
 
-        return loss
+            if loss < 0.0 or loss > 2.0:
+                raise RuntimeError(f"Invalid SSIM loss after clamp: {loss.item():.6f}")
+
+            assert_finite("SSIMLoss output", loss)
+
+            return loss
         
     
 # ====================[CONFIGURAZIONE]====================
