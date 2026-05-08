@@ -159,7 +159,7 @@ def build_parser():
         "--ssim-weight",
         type=float,
         default=1.0,
-        help="Weight of the SSIM reconstruction loss (default: 0.0, disabled)"
+        help="Weight of the SSIM reconstruction loss (default: 1.0)"
     )
     train_parser.add_argument(
         "--ssim-window-size",
