@@ -189,10 +189,7 @@ def build_metric_case_artifacts(
         generated_path=generated_path,
         target_path=target_path,
         save_path=comparison_path,
-        suptitle=(
-            f"{metric_name.upper()} | {kind.upper()} | "
-            f"sample={sample_id} | value={metric_value:.6f}"
-        ),
+        suptitle=None,
     )
 
     diagnostics_case_dir = metric_dir / "diagnostics" / f"{kind}_{sample_id}"

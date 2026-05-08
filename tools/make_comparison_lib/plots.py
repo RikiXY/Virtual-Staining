@@ -238,39 +238,46 @@ def save_metric_diagnostics_summary(
     """Salva i pannelli aggregati per una metrica sui casi best, median e worst."""
     metric_dir = Path(metric_dir)
 
+    row_titles = [
+        (
+            f"{metric_name.upper()} | {str(entry['kind']).upper()} | "
+            f"sample={entry['sample_id']} | "
+            f"value={float(entry['metric_value']):.6f}"
+        )
+        for entry in diagnostic_entries
+    ]
+
     output_specs = [
         (
             "comparison_path",
             f"{metric_name}_comparisons_best_median_worst.png",
-            f"{metric_name.upper()} - Comparison Panels (BEST / MEDIAN / WORST)",
         ),
         (
             "error_histogram_path",
             f"{metric_name}_error_histograms_best_median_worst.png",
-            f"{metric_name.upper()} - Absolute Error Histograms (BEST / MEDIAN / WORST)",
         ),
         (
             "intensity_overlay_histogram_path",
             f"{metric_name}_intensity_overlay_histograms_best_median_worst.png",
-            f"{metric_name.upper()} - Target vs Generated Intensity Histograms (BEST / MEDIAN / WORST)",
         ),
         (
             "target_vs_generated_scatter_by_channel_path",
             f"{metric_name}_target_vs_generated_scatters_by_channel_best_median_worst.png",
-            f"{metric_name.upper()} - Target vs Generated Scatter by Channel (BEST / MEDIAN / WORST)",
         ),
     ]
 
     saved_paths: list[Path] = []
 
-    for path_key, filename, suptitle in output_specs:
+    for path_key, filename in output_specs:
         image_paths = [entry[path_key] for entry in diagnostic_entries]
+
         saved_path = save_stacked_image_panel(
             image_paths=image_paths,
             save_path=metric_dir / filename,
-            row_titles=None,
-            suptitle=suptitle,
+            row_titles=row_titles,
+            suptitle=None,
         )
+
         saved_paths.append(saved_path)
 
     return saved_paths
