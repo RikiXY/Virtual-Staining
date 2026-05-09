@@ -18,7 +18,8 @@ class PairedHistologyDataset(Dataset):
         self.pairs = self._discover_pairs()
 
     def _discover_pairs(self):
-        grouped = {}
+        sources: dict[str, Path] = {}
+        targets: dict[str, Path] = {}
 
         for filename in sorted(os.listdir(self.folder_path)):
             file_path = Path(self.folder_path) / filename
@@ -26,43 +27,33 @@ class PairedHistologyDataset(Dataset):
             if not file_path.is_file():
                 continue
 
-            suffix = Path(filename).suffix.lower()
-            if suffix not in self.VALID_IMAGE_EXTENSIONS:
+            if file_path.suffix.lower() not in self.VALID_IMAGE_EXTENSIONS:
                 continue
 
-            stem = Path(filename).stem
+            stem = file_path.stem
 
             if stem.startswith("mask_") or "_mask_" in stem:
                 continue
 
-            parts = stem.split("_")
-            if len(parts) < 3:
-                continue
+            stem_lower = stem.lower()
+            if stem_lower.endswith("_source"):
+                sample_id = stem[: -len("_source")]
+                if sample_id in sources:
+                    raise ValueError(
+                        f"Duplicate source file for sample ID {sample_id!r}: "
+                        f"{sources[sample_id]} and {file_path}"
+                    )
+                sources[sample_id] = file_path
+            elif stem_lower.endswith("_target"):
+                sample_id = stem[: -len("_target")]
+                if sample_id in targets:
+                    raise ValueError(
+                        f"Duplicate target file for sample ID {sample_id!r}: "
+                        f"{targets[sample_id]} and {file_path}"
+                    )
+                targets[sample_id] = file_path
 
-            key = (parts[0], parts[1])
-            grouped.setdefault(key, []).append(file_path)
-
-        samples = []
-        for key in sorted(grouped):
-            files = grouped[key]
-
-            source_path = None
-            target_path = None
-
-            for file_path in files:
-                stem = Path(file_path).stem.lower()
-
-                if stem.endswith("_source"):
-                    source_path = file_path
-                elif stem.endswith("_target"):
-                    target_path = file_path
-
-            if source_path is None or target_path is None:
-                continue
-
-            samples.append((source_path, target_path))
-
-        return samples
+        return [(sources[sid], targets[sid]) for sid in sorted(set(sources) & set(targets))]
 
     def __len__(self):
         return len(self.pairs)
