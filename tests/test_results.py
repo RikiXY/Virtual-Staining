@@ -7,7 +7,6 @@ import pytest
 from virtual_staining.data.results import DatasetBuildResult
 from virtual_staining.training.results import EpochMetrics
 
-
 # ---------------------------------------------------------------------------
 # EpochMetrics
 # ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@
 
           linuxRuntimeLibs = [
             pkgs.stdenv.cc.cc.lib
+            pkgs.zlib
           ];
         in {
           default = pkgs.mkShell ({

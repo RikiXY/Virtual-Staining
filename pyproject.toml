@@ -36,9 +36,20 @@ testpaths = ["tests"]
 addopts = "--basetemp=.pytest_tmp"
 
 [tool.ruff]
+line-length = 100
+target-version = "py311"
 extend-exclude = ["docs/notebooks"]
 
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
 [tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
 include = ["virtual_staining", "tests", "src", "tools"]
 exclude = [
     "**/.*",

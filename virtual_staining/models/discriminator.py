@@ -17,7 +17,7 @@ class PatchGANDiscriminator(nn.Module):
             ndf (int): Base number of discriminator filters.
             use_sigmoid (bool): Whether to apply a final sigmoid activation.
         """
-        super(PatchGANDiscriminator, self).__init__()
+        super().__init__()
 
         curr_dim = ndf
         next_dim = curr_dim * 2

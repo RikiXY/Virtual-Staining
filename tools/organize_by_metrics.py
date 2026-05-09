@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
             "      --top-k 20\n"
             "\n"
             "  python tools/organize_by_metrics.py \\\n"
-            "      --metrics-csv local_workspace/results/RUN_NAME/evaluation/per_image_metrics.csv \\\n"
+            "      --metrics-csv local_workspace/results/RUN_NAME/evaluation/per_image_metrics.csv \\\n"  # noqa: E501
             "      --output-dir local_workspace/results/RUN_NAME/evaluation/sorted_by_metrics \\\n"
             "      --top-k 20 \\\n"
             "      --mode hardlink\n"
@@ -125,9 +125,7 @@ def resolve_metrics_csv(args: argparse.Namespace) -> Path:
     metrics_csv = run_path / "evaluation" / "per_image_metrics.csv"
 
     if not metrics_csv.is_file():
-        raise FileNotFoundError(
-            f"Could not find per_image_metrics.csv. Expected: {metrics_csv}"
-        )
+        raise FileNotFoundError(f"Could not find per_image_metrics.csv. Expected: {metrics_csv}")
 
     return metrics_csv
 
@@ -155,9 +153,7 @@ def resolve_output_dir(args: argparse.Namespace, metrics_csv: Path) -> Path:
     if inferred_run_path is not None:
         return inferred_run_path / "evaluation" / "sorted_by_metrics"
 
-    raise ValueError(
-        "Could not infer output directory. Please provide --output-dir explicitly."
-    )
+    raise ValueError("Could not infer output directory. Please provide --output-dir explicitly.")
 
 
 def ensure_parent(path: Path) -> None:
@@ -260,9 +256,7 @@ def organize_metric(
 ) -> dict[str, Any] | None:
     """Organizes files for a single metric."""
     if metric not in df.columns:
-        print_info(
-            "Warning", style(f"Metric '{metric}' not found in CSV. Skipping.", "yellow")
-        )
+        print_info("Warning", style(f"Metric '{metric}' not found in CSV. Skipping.", "yellow"))
         return None
 
     try:
@@ -281,9 +275,7 @@ def organize_metric(
     if valid_df.empty:
         print_info(
             "Warning",
-            style(
-                f"No valid numeric values for metric '{metric}'. Skipping.", "yellow"
-            ),
+            style(f"No valid numeric values for metric '{metric}'. Skipping.", "yellow"),
         )
         return None
 
@@ -348,8 +340,7 @@ def main() -> None:
 
     if not image_columns:
         raise ValueError(
-            "No image path columns found. Expected at least one of: "
-            f"{', '.join(IMAGE_COLUMNS)}"
+            f"No image path columns found. Expected at least one of: {', '.join(IMAGE_COLUMNS)}"
         )
 
     if "sample_id" not in df.columns:

@@ -145,9 +145,7 @@ def main(config: TrainingConfig) -> None:
     ).train(seed=seed)
 
 
-def test_inference(
-    checkpoint_path, test_folder, output_folder, image_size=(256, 256), device=None
-):
+def test_inference(checkpoint_path, test_folder, output_folder, image_size=(256, 256), device=None):
     """
     Runs inference on the test set and saves the generated images.
     """

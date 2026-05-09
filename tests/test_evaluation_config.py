@@ -21,9 +21,7 @@ def test_evaluation_config_defaults_to_run_dirs(tmp_path: Path) -> None:
     args = apply_dataset_config(argparse.Namespace(config=str(yaml_file)))
 
     assert args.target_dir == str(tmp_path / "data" / "dataset_test")
-    assert args.generated_dir == str(
-        tmp_path / "results" / "section_run" / "output_test"
-    )
+    assert args.generated_dir == str(tmp_path / "results" / "section_run" / "output_test")
     assert args.output_dir == str(tmp_path / "results" / "section_run" / "evaluation")
     assert args.save_graphs is False
     assert args.hide_graphs_path is False

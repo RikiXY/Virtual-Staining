@@ -9,14 +9,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 
-from virtual_staining.utils.cli import style, print_section, print_info
+from virtual_staining.utils.cli import print_info, print_section, style
 from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS, open_rgb, to_float01
 from virtual_staining.utils.metrics import (
     DEFAULT_METRICS,
     color_for_metric,
     is_higher_better_metric,
 )
-
 
 METRIC_SELECTION_ORDER = list(DEFAULT_METRICS)
 SELECTION_SUMMARY_FIELDNAMES = [
@@ -131,9 +130,9 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Examples:\n"
             "  python tools/make_comparison.py single\n"
-            "      --source-image local_workspace/datasets/your_run/dataset_test/00512_09216_source.tif\n"
-            "      --generated-image local_workspace/results/your_run/output_test/00512_09216_target_generated.tif\n"
-            "      --target-image local_workspace/datasets/your_run/dataset_test/00512_09216_target.tif\n"
+            "      --source-image local_workspace/datasets/your_run/dataset_test/00512_09216_source.tif\n"  # noqa: E501
+            "      --generated-image local_workspace/results/your_run/output_test/00512_09216_target_generated.tif\n"  # noqa: E501
+            "      --target-image local_workspace/datasets/your_run/dataset_test/00512_09216_target.tif\n"  # noqa: E501
             "      --with-diagnostics\n"
             "\n"
             "  python tools/make_comparison.py from-metrics\n"
@@ -156,8 +155,7 @@ def validate_same_size(*images: Image.Image) -> None:
 
     if len(sizes) != 1:
         raise ValueError(
-            "All images must have the same size to build a comparison panel. "
-            f"Got: {sorted(sizes)}"
+            f"All images must have the same size to build a comparison panel. Got: {sorted(sizes)}"
         )
 
 
@@ -226,9 +224,7 @@ def infer_diagnostics_dir(save_path: str | Path) -> Path:
     return save_path.parent / "diagnostics"
 
 
-def infer_case_diagnostics_dir(
-    save_path: str | Path, generated_image: str | Path
-) -> Path:
+def infer_case_diagnostics_dir(save_path: str | Path, generated_image: str | Path) -> Path:
     """Derives the diagnostics directory for the individual sample."""
     diagnostics_dir = infer_diagnostics_dir(save_path)
     sample_id = extract_generated_sample_id(generated_image)
@@ -406,9 +402,7 @@ def build_selection_summary_row(
     }
 
 
-def write_metric_selection_summary(
-    rows: list[dict[str, object]], save_path: str | Path
-) -> None:
+def write_metric_selection_summary(rows: list[dict[str, object]], save_path: str | Path) -> None:
     """Writes the CSV with the selected samples for each metric."""
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -449,7 +443,7 @@ def save_comparison_panel(
     if len(images) == 1:
         axes = [axes]
 
-    for ax, image, title in zip(axes, images, titles):
+    for ax, image, title in zip(axes, images, titles, strict=True):
         if isinstance(image, np.ndarray):
             im = ax.imshow(image, cmap="inferno", vmin=0.0, vmax=1.0)
             fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
@@ -506,7 +500,7 @@ def save_diagnostic_plots(
     channel_labels = ["R", "G", "B"]
     fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharex=True, sharey=True)
 
-    for channel_index, (ax, label) in enumerate(zip(axes, channel_labels)):
+    for channel_index, (ax, label) in enumerate(zip(axes, channel_labels, strict=True)):
         target_channel = target[:, :, channel_index].ravel()
         generated_channel = generated[:, :, channel_index].ravel()
         n_points = min(20000, target_channel.size)
@@ -535,7 +529,7 @@ def save_diagnostic_plots(
     overlay_histogram_path = save_dir / f"{sample_id}_intensity_overlay_histogram.png"
     fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharey=True)
 
-    for channel_index, (ax, label) in enumerate(zip(axes, channel_labels)):
+    for channel_index, (ax, label) in enumerate(zip(axes, channel_labels, strict=True)):
         ax.hist(target[:, :, channel_index].ravel(), bins=50, alpha=0.5, label="Target")
         ax.hist(
             generated[:, :, channel_index].ravel(),
@@ -588,7 +582,7 @@ def save_stacked_image_panel(
     if len(images) == 1:
         axes = [axes]
 
-    for index, (ax, image, path) in enumerate(zip(axes, images, resolved_paths)):
+    for index, (ax, image, path) in enumerate(zip(axes, images, resolved_paths, strict=True)):
         ax.imshow(image)
         ax.set_title(row_titles[index] if row_titles is not None else path.stem)
         ax.axis("off")
@@ -625,20 +619,20 @@ def save_metric_diagnostics_summary(
         (
             "intensity_overlay_histogram_path",
             f"{metric_name}_intensity_overlay_histograms_best_median_worst.png",
-            f"{metric_name.upper()} - Target vs Generated Intensity Histograms (BEST / MEDIAN / WORST)",
+            f"{metric_name.upper()} - Target vs Generated Intensity Histograms"
+            " (BEST / MEDIAN / WORST)",
         ),
         (
             "target_vs_generated_scatter_by_channel_path",
             f"{metric_name}_target_vs_generated_scatters_by_channel_best_median_worst.png",
-            f"{metric_name.upper()} - Target vs Generated Scatter by Channel (BEST / MEDIAN / WORST)",
+            f"{metric_name.upper()} - Target vs Generated Scatter by Channel"
+            " (BEST / MEDIAN / WORST)",
         ),
     ]
     saved_paths: list[Path] = []
 
     for path_key, filename, suptitle in output_specs:
-        image_paths: list[str | Path] = [
-            entry[path_key] for entry in diagnostic_entries
-        ]
+        image_paths: list[str | Path] = [entry[path_key] for entry in diagnostic_entries]
         saved_path = save_stacked_image_panel(
             image_paths=image_paths,
             save_path=metric_dir / filename,
@@ -778,9 +772,7 @@ def build_metric_case_artifacts(
         "sample_id": sample_id,
         "metric_value": metric_value,
         "comparison_path": saved_path,
-        "error_histogram_path": diagnostic_paths_by_name[
-            f"{sample_id}_error_histogram.png"
-        ],
+        "error_histogram_path": diagnostic_paths_by_name[f"{sample_id}_error_histogram.png"],
         "intensity_overlay_histogram_path": diagnostic_paths_by_name[
             f"{sample_id}_intensity_overlay_histogram.png"
         ],
@@ -814,9 +806,7 @@ def run_from_metrics(args: argparse.Namespace) -> None:
     metrics_dir.mkdir(parents=True, exist_ok=True)
     selection_summary_rows: list[dict[str, object]] = []
     saved_aggregated_paths: list[Path] = []
-    available_metrics = [
-        metric for metric in METRIC_SELECTION_ORDER if metric in summary_rows
-    ]
+    available_metrics = [metric for metric in METRIC_SELECTION_ORDER if metric in summary_rows]
 
     if not available_metrics:
         raise ValueError(
@@ -852,9 +842,7 @@ def run_from_metrics(args: argparse.Namespace) -> None:
             metric_selection_rows.append(selection_row)
             metric_diagnostic_entries.append(diagnostic_entry)
 
-        write_metric_selection_summary(
-            metric_selection_rows, metric_dir / "selection_summary.csv"
-        )
+        write_metric_selection_summary(metric_selection_rows, metric_dir / "selection_summary.csv")
         kind_order = {"best": 0, "median": 1, "worst": 2}
         metric_diagnostic_entries.sort(key=lambda entry: kind_order[entry["kind"]])
         aggregated_paths = save_metric_diagnostics_summary(

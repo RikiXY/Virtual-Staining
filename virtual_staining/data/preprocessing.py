@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import dataclasses
 import random
 import shutil
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, TypeVar
+from typing import TypeVar
 
 import cv2
 import numpy as np
@@ -21,6 +23,19 @@ MASK_PARAMETER_GRID = [(2, 3), (4, 6), (6, 9), (8, 15)]
 
 ALLOWED_EXTENSIONS = {".tif", ".tiff", ".png"}
 T = TypeVar("T")
+
+MIN_INLIERS = 4
+
+
+@dataclass
+class AlignmentMetadata:
+    """Alignment statistics captured during image registration."""
+
+    n_keypoints_src: int
+    n_keypoints_tgt: int
+    n_matches: int
+    n_inliers: int
+    warp_matrix: list[list[float]]
 
 
 def pad_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
@@ -69,9 +84,7 @@ def calculate_mask(img: np.ndarray) -> np.ndarray:
     mask : np.ndarray
         Image mask.
     """
-    _, binary = cv2.threshold(
-        cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 230, 255, cv2.THRESH_BINARY
-    )
+    _, binary = cv2.threshold(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 230, 255, cv2.THRESH_BINARY)
 
     _, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
 
@@ -86,9 +99,7 @@ def calculate_mask(img: np.ndarray) -> np.ndarray:
             continue
 
         component_mask = (labels == i).astype(np.uint8) * 255
-        countours, _ = cv2.findContours(
-            component_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
+        countours, _ = cv2.findContours(component_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(component_mask, countours, -1, 255, thickness=cv2.FILLED)
 
         roi = img[y : y + h, x : x + w]
@@ -99,14 +110,13 @@ def calculate_mask(img: np.ndarray) -> np.ndarray:
         if std_dev < MIN_STD_DEV:
             mask[component_mask == 255] = 255
 
-    # Inverts the mask to get the foreground. The mask is 255 for the foreground and 0 for the background
+    # Inverts the mask to get the foreground.
+    # The mask is 255 for the foreground and 0 for the background.
     mask = cv2.bitwise_not(mask)
     return mask
 
 
-def calculate_mask_with_grid(
-    img: np.ndarray, sub_shape: tuple[int, int], grid: int
-) -> np.ndarray:
+def calculate_mask_with_grid(img: np.ndarray, sub_shape: tuple[int, int], grid: int) -> np.ndarray:
     """
     Finds the mask for the connected components of the image using a grid.
 
@@ -170,11 +180,11 @@ def calculate_mask_with_multiple_parameters(
 def align_images(
     img1: np.ndarray,
     img2: np.ndarray,
-    mask1: Optional[np.ndarray] = None,
-    mask2: Optional[np.ndarray] = None,
+    mask1: np.ndarray | None = None,
+    mask2: np.ndarray | None = None,
     nfeatures: int = 10000,
     ed_distance: int = 200,
-) -> tuple[np.ndarray, Optional[np.ndarray], np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, AlignmentMetadata]:
     """
     Aligns a moving image to a reference image.
 
@@ -201,6 +211,8 @@ def align_images(
         The aligned mask for the second image.
     warp_matrix : np.ndarray
         The transformation matrix.
+    metadata : AlignmentMetadata
+        Keypoint, match, inlier counts and the warp matrix.
     """
     clahe = cv2.createCLAHE(clipLimit=18.0, tileGridSize=(8, 8))
     img1_clahe = img1
@@ -227,8 +239,7 @@ def align_images(
     filtered_matches = []
     for match in matches:
         distance = np.linalg.norm(
-            np.array(keypoints_1[match.queryIdx].pt)
-            - np.array(keypoints_2[match.trainIdx].pt)
+            np.array(keypoints_1[match.queryIdx].pt) - np.array(keypoints_2[match.trainIdx].pt)
         )
         if distance <= ed_distance:
             filtered_matches.append(match)
@@ -245,29 +256,45 @@ def align_images(
         dtype=np.float32,
     ).reshape(-1, 1, 2)
 
-    warp_matrix, mask = cv2.estimateAffinePartial2D(points_2, points_1)
+    warp_matrix, inlier_mask = cv2.estimateAffinePartial2D(points_2, points_1)
+
+    if warp_matrix is None:
+        raise ValueError("Affine estimation failed: cv2.estimateAffinePartial2D returned None")
+
+    n_inliers = int(inlier_mask.sum()) if inlier_mask is not None else 0
+    if n_inliers < MIN_INLIERS:
+        raise ValueError(
+            f"Alignment rejected: only {n_inliers} inliers found (minimum {MIN_INLIERS} required)"
+        )
+
+    metadata = AlignmentMetadata(
+        n_keypoints_src=len(keypoints_1),
+        n_keypoints_tgt=len(keypoints_2),
+        n_matches=len(filtered_matches),
+        n_inliers=n_inliers,
+        warp_matrix=warp_matrix.tolist(),
+    )
 
     img2_aligned = cv2.warpAffine(img2, warp_matrix, (img1.shape[1], img1.shape[0]))
     mask2_aligned = None
     if mask2 is not None:
-        mask2_aligned = cv2.warpAffine(
-            mask2, warp_matrix, (img1.shape[1], img1.shape[0])
-        )
+        mask2_aligned = cv2.warpAffine(mask2, warp_matrix, (img1.shape[1], img1.shape[0]))
 
-    return img2_aligned, mask2_aligned, warp_matrix
+    return img2_aligned, mask2_aligned, warp_matrix, metadata
 
 
 def align_from_scaled(
     img1: np.ndarray,
     img2: np.ndarray,
     scale: float = 0.5,
-    mask1: Optional[np.ndarray] = None,
-    mask2: Optional[np.ndarray] = None,
+    mask1: np.ndarray | None = None,
+    mask2: np.ndarray | None = None,
     nfeatures: int = 10000,
     ed_distance: int = 200,
-) -> tuple[np.ndarray, Optional[np.ndarray], np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, AlignmentMetadata]:
     """
-    Aligns two images by first scaling them, estimating the transformation on the scaled images, and then applying the transformation to the original images.
+    Aligns two images by first scaling them, estimating the transformation on the scaled images,
+    and then applying the transformation to the original images.
 
     Parameters
     ----------
@@ -294,6 +321,8 @@ def align_from_scaled(
         The aligned mask for the second image, if provided.
     warp_matrix : np.ndarray
         The affine transformation matrix used for alignment.
+    metadata : AlignmentMetadata
+        Keypoint, match, inlier counts and the full-resolution warp matrix.
     """
     img1_scaled = cv2.resize(img1, None, fx=scale, fy=scale)
     img2_scaled = cv2.resize(img2, None, fx=scale, fy=scale)
@@ -304,7 +333,7 @@ def align_from_scaled(
         mask1_scaled = cv2.resize(mask1, None, fx=scale, fy=scale)
         mask2_scaled = cv2.resize(mask2, None, fx=scale, fy=scale)
 
-    _, _, warp_matrix = align_images(
+    _, _, warp_matrix, metadata = align_images(
         img1_scaled,
         img2_scaled,
         mask1_scaled if mask1 is not None else None,
@@ -315,15 +344,14 @@ def align_from_scaled(
 
     warp_matrix[0, 2] /= scale
     warp_matrix[1, 2] /= scale
+    metadata = dataclasses.replace(metadata, warp_matrix=warp_matrix.tolist())
 
     img2_aligned = cv2.warpAffine(img2, warp_matrix, (img1.shape[1], img1.shape[0]))
     mask2_aligned = None
     if mask2 is not None:
-        mask2_aligned = cv2.warpAffine(
-            mask2, warp_matrix, (img1.shape[1], img1.shape[0])
-        )
+        mask2_aligned = cv2.warpAffine(mask2, warp_matrix, (img1.shape[1], img1.shape[0]))
 
-    return img2_aligned, mask2_aligned, warp_matrix
+    return img2_aligned, mask2_aligned, warp_matrix, metadata
 
 
 def extract_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
@@ -355,9 +383,9 @@ def divide_image_with_grid(
     img: np.ndarray,
     img_size: tuple[int, int],
     grid_movement: tuple[int, int],
-    mask: Optional[np.ndarray] = None,
+    mask: np.ndarray | None = None,
     max_mask_percentage=0.4,
-) -> tuple[list[np.ndarray], Optional[list[np.ndarray]], list[tuple[int, int]]]:
+) -> tuple[list[np.ndarray], list[np.ndarray] | None, list[tuple[int, int]]]:
     """
     Divides the input image into a grid of sub-images of size `img_size`.
 
@@ -372,7 +400,8 @@ def divide_image_with_grid(
     mask : np.ndarray, optional
         Image mask for filtering. Default is None.
     max_mask_percentage : float, optional
-        Maximum allowed percentage of masked (non-zero) pixels for a region to be included. Default is 0.4.
+        Maximum allowed percentage of masked (non-zero) pixels for a region to be
+        included. Default is 0.4.
 
     Returns
     -------
@@ -460,10 +489,10 @@ def split_items(items: list[T], ratios: Sequence[float]) -> list[list[T]]:
     """
     if len(ratios) < 2:
         raise ValueError("At least 2 ratios must be specified")
-    if sum(ratios) > 1:
-        raise ValueError("The sum of ratios must be <= 1")
     if any(ratio < 0 for ratio in ratios):
         raise ValueError("All ratios must be >= 0")
+    if abs(sum(ratios) - 1.0) > 1e-9:
+        raise ValueError("The sum of ratios must equal 1")
 
     shuffled = items.copy()
     random.shuffle(shuffled)

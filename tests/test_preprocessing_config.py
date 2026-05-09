@@ -111,9 +111,7 @@ def test_from_yaml(tmp_path: Path) -> None:
 
 def test_from_args_partial_namespace() -> None:
     """from_args() falls back to dataclass defaults when optional fields are absent (SUPPRESS)."""
-    args = argparse.Namespace(
-        path="/data/samples", source_name="s.tif", target_name="t.tif"
-    )
+    args = argparse.Namespace(path="/data/samples", source_name="s.tif", target_name="t.tif")
     config = PreprocessingConfig.from_args(args)
     assert config.image_size == (256, 256)
     assert config.grid_movement == (256, 256)

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -11,6 +12,8 @@ from scipy.stats import ks_2samp, mannwhitneyu, wasserstein_distance, wilcoxon
 
 from virtual_staining.utils.metrics import (
     get_metric_plot_range as get_default_metric_plot_range,
+)
+from virtual_staining.utils.metrics import (
     get_metric_thresholds,
     is_higher_better_metric,
 )
@@ -82,9 +85,7 @@ def load_metric_values(csv_path: str | Path, column: str) -> np.ndarray:
     df = load_metric_frame(csv_path)
 
     if column not in df.columns:
-        raise ValueError(
-            f"Column '{column}' not found. Available columns: {list(df.columns)}"
-        )
+        raise ValueError(f"Column '{column}' not found. Available columns: {list(df.columns)}")
 
     values = pd.to_numeric(df[column], errors="coerce").dropna().to_numpy(dtype=float)
 
@@ -182,13 +183,11 @@ def compute_unpaired_group_stats(
 
     if higher_is_better:
         shares = {
-            f"ge_{threshold:.2f}": float(np.mean(values >= threshold))
-            for threshold in thresholds
+            f"ge_{threshold:.2f}": float(np.mean(values >= threshold)) for threshold in thresholds
         }
     else:
         shares = {
-            f"le_{threshold:.2f}": float(np.mean(values <= threshold))
-            for threshold in thresholds
+            f"le_{threshold:.2f}": float(np.mean(values <= threshold)) for threshold in thresholds
         }
 
     return UnpairedGroupStats(
@@ -277,18 +276,12 @@ def align_paired_frames(
 
     for frame_name, frame in [("A", frame_a), ("B", frame_b)]:
         if sample_id_column not in frame.columns:
-            raise ValueError(
-                f"Column '{sample_id_column}' not found in CSV {frame_name}"
-            )
+            raise ValueError(f"Column '{sample_id_column}' not found in CSV {frame_name}")
         if metric_column not in frame.columns:
             raise ValueError(f"Column '{metric_column}' not found in CSV {frame_name}")
 
-    subset_a = frame_a[[sample_id_column, metric_column]].rename(
-        columns={metric_column: "value_a"}
-    )
-    subset_b = frame_b[[sample_id_column, metric_column]].rename(
-        columns={metric_column: "value_b"}
-    )
+    subset_a = frame_a[[sample_id_column, metric_column]].rename(columns={metric_column: "value_a"})
+    subset_b = frame_b[[sample_id_column, metric_column]].rename(columns={metric_column: "value_b"})
     merged = subset_a.merge(subset_b, on=sample_id_column, how="inner")
     merged["value_a"] = pd.to_numeric(merged["value_a"], errors="coerce")
     merged["value_b"] = pd.to_numeric(merged["value_b"], errors="coerce")
@@ -308,9 +301,7 @@ def compute_paired_summary(
     higher_is_better: bool,
 ) -> PairedSummary:
     """Computes the main summary for the paired comparison."""
-    raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(
-        dtype=float
-    )
+    raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(dtype=float)
     signed_delta = raw_delta if higher_is_better else -raw_delta
 
     share_b_better = float(np.mean(signed_delta > tolerance))
@@ -390,8 +381,7 @@ def resolve_metrics_csv_from_run(run_path: str | Path) -> Path:
 
     if not csv_path.is_file():
         raise FileNotFoundError(
-            f"Could not find per_image_metrics.csv for run '{run_dir.name}'. "
-            f"Expected: {csv_path}"
+            f"Could not find per_image_metrics.csv for run '{run_dir.name}'. Expected: {csv_path}"
         )
 
     return csv_path
@@ -494,9 +484,7 @@ def flatten_unpaired_group_stats(group: UnpairedGroupStats) -> dict[str, Any]:
 def resolve_metric_direction(args: argparse.Namespace) -> bool:
     """Resolves metric direction from explicit flags or known metric defaults."""
     if args.higher_is_better and args.lower_is_better:
-        raise ValueError(
-            "Choose at most one between --higher-is-better and --lower-is-better."
-        )
+        raise ValueError("Choose at most one between --higher-is-better and --lower-is-better.")
     if args.higher_is_better:
         return True
     if args.lower_is_better:

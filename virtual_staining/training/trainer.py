@@ -19,7 +19,6 @@ from virtual_staining.training.results import EpochMetrics
 from virtual_staining.utils.cli import print_info, print_section, style
 from virtual_staining.utils.env import collect_environment
 
-
 # ---------------------------------------------------------------------------
 # Module-level helpers (private to this module)
 # ---------------------------------------------------------------------------
@@ -53,15 +52,9 @@ def _save_images(
     batch_index: int,
 ) -> None:
     # Images are normalised to [-1, 1]; bring back to [0, 1] before saving.
-    save_image(
-        (source_tensor * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_input.tif"
-    )
-    save_image(
-        (output * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_output.tif"
-    )
-    save_image(
-        (target * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_target.tif"
-    )
+    save_image((source_tensor * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_input.tif")
+    save_image((output * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_output.tif")
+    save_image((target * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_target.tif")
 
 
 def _get_first_pair_size(dataset) -> dict | None:
@@ -284,9 +277,7 @@ class Trainer:
 
         env = collect_environment()
         self.config.to_yaml(self.config.run_root / "config.yaml")
-        with open(
-            self.config.run_root / "environment.json", "w", encoding="utf-8"
-        ) as f:
+        with open(self.config.run_root / "environment.json", "w", encoding="utf-8") as f:
             json.dump(env, f, indent=2, default=str)
 
         timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -295,9 +286,7 @@ class Trainer:
             log_file.unlink()
 
         device_name = (
-            torch.cuda.get_device_name(self.device)
-            if self.device.type == "cuda"
-            else "CPU"
+            torch.cuda.get_device_name(self.device) if self.device.type == "cuda" else "CPU"
         )
         _log_message(f"Seed set to {seed}", log_file, use_stdout=False)
         _log_message(f"Device: {self.device} ({device_name})", log_file)
@@ -356,9 +345,7 @@ class Trainer:
         )
 
         training_status = {
-            "last_checkpoint": (
-                Path(self.config.resume).name if self.config.resume else "none "
-            )
+            "last_checkpoint": (Path(self.config.resume).name if self.config.resume else "none ")
         }
 
         metrics_path = self.config.run_root / "metrics.csv"
@@ -415,12 +402,8 @@ class Trainer:
                         "epoch": epoch,
                         "loss_G_train": f"{epoch_metrics.loss_G:.6f}",
                         "loss_D_train": f"{epoch_metrics.loss_D:.6f}",
-                        "loss_G_val": f"{val_metrics.loss_G:.6f}"
-                        if val_metrics
-                        else "",
-                        "loss_D_val": f"{val_metrics.loss_D:.6f}"
-                        if val_metrics
-                        else "",
+                        "loss_G_val": f"{val_metrics.loss_G:.6f}" if val_metrics else "",
+                        "loss_D_val": f"{val_metrics.loss_D:.6f}" if val_metrics else "",
                     }
                 )
                 metrics_file.flush()
@@ -454,12 +437,8 @@ class Trainer:
         }
         torch.save(checkpoint, checkpoint_path)
 
-    def load_checkpoint(
-        self, checkpoint_path: Path, log_file: Path | None = None
-    ) -> int:
-        checkpoint = torch.load(
-            checkpoint_path, map_location=self.device, weights_only=False
-        )
+    def load_checkpoint(self, checkpoint_path: Path, log_file: Path | None = None) -> int:
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
 
         checkpoint_image_size = checkpoint.get("image_size")
         if checkpoint_image_size is not None:
@@ -502,8 +481,9 @@ class Trainer:
         self.generator.train()
         self.discriminator.train()
 
-        last_loss_G: float | None = None
-        last_loss_D: float | None = None
+        total_loss_G = 0.0
+        total_loss_D = 0.0
+        num_batches = 0
 
         for i, (x, y) in enumerate(self.train_loader):
             x, y = x.to(self.device), y.to(self.device)
@@ -516,9 +496,7 @@ class Trainer:
                 D_fake = self.discriminator(x, fake)
                 real_label = torch.ones_like(D_real, device=self.device)
                 fake_label = torch.zeros_like(D_fake, device=self.device)
-                loss_D = self._bce_loss(D_real, real_label) + self._bce_loss(
-                    D_fake, fake_label
-                )
+                loss_D = self._bce_loss(D_real, real_label) + self._bce_loss(D_fake, fake_label)
 
             self._opt_D.zero_grad()
             self._scaler_D.scale(loss_D).backward()
@@ -539,12 +517,11 @@ class Trainer:
             self._scaler_G.step(self._opt_G)
             self._scaler_G.update()
 
-            last_loss_G = loss_G.item()
-            last_loss_D = loss_D.item()
+            total_loss_G += loss_G.item()
+            total_loss_D += loss_D.item()
+            num_batches += 1
 
-            progress, elapsed, eta, end_time = progress_tracker.calculate_progress(
-                epoch, i
-            )
+            progress, elapsed, eta, end_time = progress_tracker.calculate_progress(epoch, i)
             elapsed_str = _format_duration(elapsed)
             eta_str = _format_duration(eta)
             epoch_progress = (i + 1) / progress_tracker.total_batches
@@ -569,9 +546,7 @@ class Trainer:
                 end_time_str = (
                     "warming up"
                     if end_time is None
-                    else datetime.datetime.fromtimestamp(end_time).strftime(
-                        "%Y-%m-%d %H:%M:%S"
-                    )
+                    else datetime.datetime.fromtimestamp(end_time).strftime("%Y-%m-%d %H:%M:%S")
                 )
                 _log_message(
                     f"[ep {epoch} | b {i}] loss_G: {loss_G.item():.4f} "
@@ -582,11 +557,9 @@ class Trainer:
                     use_stdout=False,
                 )
 
-        if last_loss_G is None or last_loss_D is None:
-            raise RuntimeError(
-                "Training loader was empty; cannot compute epoch metrics."
-            )
-        return EpochMetrics(loss_G=last_loss_G, loss_D=last_loss_D)
+        if num_batches == 0:
+            raise RuntimeError("Training loader was empty; cannot compute epoch metrics.")
+        return EpochMetrics(loss_G=total_loss_G / num_batches, loss_D=total_loss_D / num_batches)
 
     def _validate(self, epoch: int, log_file: Path) -> EpochMetrics:
         self.generator.eval()
@@ -608,9 +581,7 @@ class Trainer:
                     D_fake = self.discriminator(x, fake)
                     real_label = torch.ones_like(D_real, device=self.device)
                     fake_label = torch.zeros_like(D_fake, device=self.device)
-                    loss_D = self._bce_loss(D_real, real_label) + self._bce_loss(
-                        D_fake, fake_label
-                    )
+                    loss_D = self._bce_loss(D_real, real_label) + self._bce_loss(D_fake, fake_label)
                     loss_G = (
                         self._bce_loss(D_fake, real_label)
                         + self._l1_loss(fake, y) * self.config.l1_weight
@@ -656,9 +627,7 @@ class Trainer:
             "log_rate": self.config.log_rate,
             "checkpoint_rate": self.config.checkpoint_rate,
             "validate_rate": self.config.validate_rate,
-            "resume_checkpoint": str(self.config.resume)
-            if self.config.resume
-            else None,
+            "resume_checkpoint": str(self.config.resume) if self.config.resume else None,
             "l1_weight": self.config.l1_weight,
             "lr_g": self.config.lr_g,
             "lr_d": self.config.lr_d,

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import dataclasses
+import json
 import random
 from typing import Any, cast
 
@@ -8,7 +10,6 @@ import cv2
 import numpy as np
 
 from virtual_staining.data.config import PreprocessingConfig
-from virtual_staining.utils.env import collect_environment
 from virtual_staining.data.preprocessing import (
     MASK_PARAMETER_GRID,
     align_from_scaled,
@@ -21,6 +22,7 @@ from virtual_staining.data.preprocessing import (
     validate_image_filename,
 )
 from virtual_staining.data.results import DatasetBuildResult
+from virtual_staining.utils.env import collect_environment
 
 
 class DatasetBuilder:
@@ -106,7 +108,7 @@ class DatasetBuilder:
             raise RuntimeError("compute_masks() must be called before align()")
 
         print("Aligning images...")
-        aligned_target, aligned_target_mask, _ = align_from_scaled(
+        aligned_target, aligned_target_mask, _, metadata = align_from_scaled(
             self._source_image,
             self._target_image,
             mask1=self._source_mask,
@@ -125,6 +127,8 @@ class DatasetBuilder:
             str(root / f"aligned_mask_{stem}{self._target_suffix}"),
             aligned_target_mask,
         )
+        with open(root / "alignment_metadata.json", "w", encoding="utf-8") as f:
+            json.dump(dataclasses.asdict(metadata), f, indent=2)
 
     def extract_patches(self) -> None:
         """Extract paired patches from the source and aligned target images."""
@@ -176,9 +180,7 @@ class DatasetBuilder:
             or self._target_patches is None
             or self._target_patch_masks is None
         ):
-            raise RuntimeError(
-                "extract_patches() must be called before filter_patches()"
-            )
+            raise RuntimeError("extract_patches() must be called before filter_patches()")
 
         named_source: list[tuple[np.ndarray, str]] = []
         named_target: list[tuple[np.ndarray, str]] = []
@@ -192,6 +194,7 @@ class DatasetBuilder:
             self._source_patch_masks,
             self._target_patches,
             self._target_patch_masks,
+            strict=True,
         ):
             patch_source_name = f"{x:05}_{y:05}_source{self._source_suffix}"
             patch_target_name = f"{x:05}_{y:05}_target{self._target_suffix}"
@@ -218,12 +221,8 @@ class DatasetBuilder:
                         "sample_id": f"{x:05}_{y:05}",
                         "source_name": patch_source_name,
                         "target_name": patch_target_name,
-                        "source_foreground_ratio": debug_info[
-                            "source_foreground_ratio"
-                        ],
-                        "target_foreground_ratio": debug_info[
-                            "target_foreground_ratio"
-                        ],
+                        "source_foreground_ratio": debug_info["source_foreground_ratio"],
+                        "target_foreground_ratio": debug_info["target_foreground_ratio"],
                         "source_white_ratio": debug_info["source_white_ratio"],
                         "target_white_ratio": debug_info["target_white_ratio"],
                         "source_largest_white_component_ratio": debug_info[
@@ -251,9 +250,7 @@ class DatasetBuilder:
             or self._discarded_target_images is None
             or self._discarded_log_rows is None
         ):
-            raise RuntimeError(
-                "filter_patches() must be called before split_and_save()"
-            )
+            raise RuntimeError("filter_patches() must be called before split_and_save()")
 
         root = self.config.dataset_root
         discarded_root = root / "discarded_patches"
@@ -272,9 +269,7 @@ class DatasetBuilder:
         for img, name in self._discarded_target_images:
             cv2.imwrite(str(discarded_root / "target" / name), img)
 
-        with open(
-            discarded_root / "discarded_log.csv", "w", newline="", encoding="utf-8"
-        ) as f:
+        with open(discarded_root / "discarded_log.csv", "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
                 f,
                 fieldnames=[
@@ -293,17 +288,39 @@ class DatasetBuilder:
             writer.writeheader()
             writer.writerows(self._discarded_log_rows)
 
-        pairs = list(zip(self._named_source_images, self._named_target_images))
+        pairs = list(zip(self._named_source_images, self._named_target_images, strict=True))
         split = split_items(
             pairs,
             [self.config.train_ratio, self.config.val_ratio, self.config.test_ratio],
         )
 
-        for i, subset in enumerate(split):
-            subset_dir = root / ["dataset_train", "dataset_val", "dataset_test"][i]
+        split_names = ["train", "val", "test"]
+        manifest_rows: list[dict[str, Any]] = []
+        for split_name, subset in zip(split_names, split, strict=True):
+            subset_dir = root / f"dataset_{split_name}"
             for src_pair, tgt_pair in subset:
                 cv2.imwrite(str(subset_dir / src_pair[1]), src_pair[0])
                 cv2.imwrite(str(subset_dir / tgt_pair[1]), tgt_pair[0])
+                parts = src_pair[1].split("_")
+                x, y = int(parts[0]), int(parts[1])
+                manifest_rows.append(
+                    {
+                        "sample_id": f"{x:05}_{y:05}",
+                        "split": split_name,
+                        "source_name": src_pair[1],
+                        "target_name": tgt_pair[1],
+                        "x": x,
+                        "y": y,
+                    }
+                )
+
+        with open(root / "split_manifest.csv", "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["sample_id", "split", "source_name", "target_name", "x", "y"],
+            )
+            writer.writeheader()
+            writer.writerows(manifest_rows)
 
         print(
             f"Saved: train={len(split[0])}, val={len(split[1])}, "
@@ -319,15 +336,9 @@ class DatasetBuilder:
 
     def run_all(self) -> DatasetBuildResult:
         """Run all pipeline stages in sequence and return the build result."""
-        seed = (
-            self.config.seed
-            if self.config.seed is not None
-            else random.randint(0, 2**32 - 1)
-        )
+        seed = self.config.seed if self.config.seed is not None else random.randint(0, 2**32 - 1)
         random.seed(seed)
         print(f"Seed set to {seed}")
-
-        import json
 
         root = self.config.dataset_root
         self.config.to_yaml(root / "config.yaml")

@@ -69,9 +69,7 @@ def test_load_rgb_image_correct_pixel_values(tmp_path: Path) -> None:
     image_path = tmp_path / "img.png"
     _save_rgb(image_path, color=(100, 150, 200))
     image = load_rgb_image(image_path)
-    np.testing.assert_array_equal(
-        image[0, 0], np.array([100, 150, 200], dtype=np.uint8)
-    )
+    np.testing.assert_array_equal(image[0, 0], np.array([100, 150, 200], dtype=np.uint8))
 
 
 def test_load_rgb_image_raises_on_missing_file(tmp_path: Path) -> None:
