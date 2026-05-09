@@ -394,9 +394,11 @@ def divide_image_with_grid(
     img : np.ndarray
         Input image.
     img_size : tuple[int, int]
-        Size of the region of interest (width, height).
+        Patch size as ``(width, height)``.  ``img_size[0]`` is the number of
+        columns extracted and ``img_size[1]`` is the number of rows, matching
+        the ``(width, height)`` convention used throughout the codebase.
     grid_movement : tuple[int, int]
-        Step size for moving the grid (x, y).
+        Step size for moving the grid ``(x_step, y_step)``.
     mask : np.ndarray, optional
         Image mask for filtering. Default is None.
     max_mask_percentage : float, optional
@@ -451,7 +453,7 @@ def divide_image_with_positions(
     img : np.ndarray
         Input image.
     img_size : tuple[int, int]
-        Size of the region of interest.
+        Patch size as ``(width, height)``.
     positions : list[tuple[int, int]]
         List of positions for the split images.
 

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from virtual_staining.data.config import PreprocessingConfig
+from virtual_staining.image_size import to_torchvision_hw
 
 
 def _make_namespace(**overrides: object) -> argparse.Namespace:
@@ -218,6 +219,36 @@ def test_from_args_invalid_values_raise_value_error(
 ) -> None:
     with pytest.raises(ValueError, match=field):
         PreprocessingConfig.from_args(_make_namespace(**overrides))
+
+
+def test_non_square_image_size_from_args() -> None:
+    """image_size=[320, 256] must parse as (width=320, height=256)."""
+    config = PreprocessingConfig.from_args(_make_namespace(image_size=[320, 256]))
+    assert config.image_size == (320, 256)
+
+
+def test_non_square_image_size_from_yaml(tmp_path: Path) -> None:
+    """image_size: [320, 256] in YAML must parse as (width=320, height=256)."""
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data/samples
+        source_name: source.tif
+        target_name: target.tif
+        image_size: [320, 256]
+    """)
+    yaml_file = tmp_path / "ns.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+    config = PreprocessingConfig.from_yaml(yaml_file)
+    assert config.image_size == (320, 256)
+
+
+def test_to_torchvision_hw_swaps_for_non_square() -> None:
+    """to_torchvision_hw must return (height, width) from a (width, height) pair."""
+    assert to_torchvision_hw((320, 256)) == (256, 320)
+
+
+def test_to_torchvision_hw_preserves_square() -> None:
+    """to_torchvision_hw must be a no-op for square sizes."""
+    assert to_torchvision_hw((256, 256)) == (256, 256)
 
 
 def test_from_yaml_invalid_margin_raises_value_error(tmp_path: Path) -> None:

@@ -5,10 +5,12 @@ from dataclasses import dataclass
 from math import isclose
 from pathlib import Path
 
+from virtual_staining.image_size import parse_wh_size, parse_wh_size_from_aliases
 from virtual_staining.run_config import load_yaml_mapping, section_with_shared_fields
 
 
 def _pair(value: object, default: tuple[int, int]) -> tuple[int, int]:
+    """Parse a generic two-integer tuple (e.g. grid_movement) from a config value."""
     if value is None:
         return default
     if not isinstance(value, Sequence) or isinstance(value, str):
@@ -19,22 +21,13 @@ def _pair(value: object, default: tuple[int, int]) -> tuple[int, int]:
     return int(items[0]), int(items[1])
 
 
-def _pair_from_aliases(
-    data: dict[str, object], names: tuple[str, ...], default: tuple[int, int]
-) -> tuple[int, int]:
-    for name in names:
-        if name in data:
-            return _pair(data.get(name), default)
-    return default
-
-
 @dataclass(frozen=True)
 class PreprocessingConfig:
     dataset_root: Path
     source_name: str
     target_name: str
-    image_size: tuple[int, int] = (256, 256)
-    grid_movement: tuple[int, int] = (256, 256)
+    image_size: tuple[int, int] = (256, 256)  # (width, height)
+    grid_movement: tuple[int, int] = (256, 256)  # (x_step, y_step)
     margin: int = 200
     seed: int | None = None
     save_masks: bool = False
@@ -95,7 +88,7 @@ class PreprocessingConfig:
             dataset_root=Path(args.path),
             source_name=args.source_name,
             target_name=args.target_name,
-            image_size=_pair(getattr(args, "image_size", (256, 256)), (256, 256)),
+            image_size=parse_wh_size(getattr(args, "image_size", (256, 256)), (256, 256)),
             grid_movement=_pair(getattr(args, "grid_movement", (256, 256)), (256, 256)),
             margin=getattr(args, "margin", 200),
             seed=getattr(args, "seed", None),
@@ -145,7 +138,7 @@ class PreprocessingConfig:
             dataset_root=Path(data["dataset_root"]),
             source_name=data["source_name"],
             target_name=data["target_name"],
-            image_size=_pair_from_aliases(data, ("patch_size", "image_size"), (256, 256)),
+            image_size=parse_wh_size_from_aliases(data, ("patch_size", "image_size"), (256, 256)),
             grid_movement=_pair(data.get("grid_movement"), (256, 256)),
             margin=int(data.get("margin", 200)),
             seed=data.get("seed"),

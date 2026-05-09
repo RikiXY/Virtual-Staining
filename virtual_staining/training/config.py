@@ -1,31 +1,11 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from virtual_staining.image_size import parse_wh_size, parse_wh_size_from_aliases
 from virtual_staining.run_config import load_yaml_mapping, section_with_shared_fields
-
-
-def _pair(value: object, default: tuple[int, int]) -> tuple[int, int]:
-    if value is None:
-        return default
-    if not isinstance(value, Sequence) or isinstance(value, str):
-        raise ValueError(f"Expected a two-value sequence, got {value!r}")
-    items = tuple(value)
-    if len(items) != 2:
-        raise ValueError(f"Expected exactly two values, got {items}")
-    return int(items[0]), int(items[1])
-
-
-def _pair_from_aliases(
-    data: dict[str, object], names: tuple[str, ...], default: tuple[int, int]
-) -> tuple[int, int]:
-    for name in names:
-        if name in data:
-            return _pair(data.get(name), default)
-    return default
 
 
 def _validate_non_empty_string(field_name: str, value: object) -> None:
@@ -69,7 +49,7 @@ class TrainingConfig:
     dataset_root: Path
     results_path: Path
     run_name: str
-    image_size: tuple[int, int]
+    image_size: tuple[int, int]  # (width, height)
     batch_size: int
     epochs: int
     lr_g: float
@@ -161,7 +141,7 @@ class TrainingConfig:
             dataset_root=Path(args.dataset_root),
             results_path=Path(getattr(args, "results_path", "local_workspace/results")),
             run_name=args.run_name,
-            image_size=_pair(getattr(args, "image_size", (256, 256)), (256, 256)),
+            image_size=parse_wh_size(getattr(args, "image_size", (256, 256)), (256, 256)),
             batch_size=getattr(args, "batch_size", 8),
             epochs=args.epochs,
             lr_g=getattr(args, "lr_g", 2e-4),
@@ -192,7 +172,9 @@ class TrainingConfig:
             dataset_root=Path(data["dataset_root"]),
             results_path=Path(data["results_path"]),
             run_name=data["run_name"],
-            image_size=_pair_from_aliases(data, ("model_image_size", "image_size"), (256, 256)),
+            image_size=parse_wh_size_from_aliases(
+                data, ("model_image_size", "image_size"), (256, 256)
+            ),
             batch_size=int(data.get("batch_size", 8)),
             epochs=int(data["epochs"]),
             lr_g=float(data.get("lr_g", 2e-4)),
@@ -219,7 +201,7 @@ class InferenceConfig:
     results_path: Path
     run_name: str
     checkpoint: Path
-    image_size: tuple[int, int]
+    image_size: tuple[int, int]  # (width, height)
     test_dir_override: Path | None = None
     output_dir: Path | None = None
 
@@ -266,10 +248,12 @@ class InferenceConfig:
             results_path=Path(data["results_path"]),
             run_name=data["run_name"],
             checkpoint=_resolve_checkpoint(data, run_root),
-            image_size=_pair_from_aliases(
+            image_size=parse_wh_size_from_aliases(
                 data,
                 ("model_image_size", "image_size"),
-                _pair_from_aliases(training_data, ("model_image_size", "image_size"), (256, 256)),
+                parse_wh_size_from_aliases(
+                    training_data, ("model_image_size", "image_size"), (256, 256)
+                ),
             ),
             test_dir_override=Path(data["test_dir"]) if data.get("test_dir") else None,
             output_dir=Path(data["output_dir"]) if data.get("output_dir") else None,

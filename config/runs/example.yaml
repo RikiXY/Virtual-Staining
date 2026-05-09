@@ -9,6 +9,7 @@ results_path: local_workspace/results
 run_name: example_run
 
 # One size drives both patch extraction and model resize for the standard workflow.
+# Convention: [width, height] — e.g. [320, 256] means 320 px wide, 256 px tall.
 image_size: [256, 256]
 
 preprocessing:
@@ -16,7 +17,7 @@ preprocessing:
   source_name: label_free.tif
   target_name: stained.tif
 
-  # Optional size override. Defaults to the top-level image_size.
+  # Optional size override. Defaults to the top-level image_size. [width, height].
   # patch_size: [256, 256]
 
   grid_movement: [256, 256]
@@ -41,7 +42,7 @@ training:
   # dataset_root: local_workspace/datasets/your_sample
   # results_path: local_workspace/results
   # run_name: example_run
-  # model_image_size: [256, 256]
+  # model_image_size: [256, 256]  # [width, height] override for training only
 
   # Optional dataset split overrides. Defaults:
   # train_dir: local_workspace/datasets/your_sample/dataset_train
@@ -69,7 +70,7 @@ inference:
   # dataset_root: local_workspace/datasets/your_sample
   # results_path: local_workspace/results
   # run_name: example_run
-  # model_image_size: [256, 256]
+  # model_image_size: [256, 256]  # [width, height] override for inference only
 
   # Uses the newest ep*.pth file in results_path/run_name/checkpoints.
   checkpoint_policy: latest

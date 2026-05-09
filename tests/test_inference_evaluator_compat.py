@@ -8,10 +8,12 @@ import numpy as np
 import pytest
 import torch
 from PIL import Image
+from torchvision import transforms
 
 from src.pix2pix import test_inference as run_inference
 from tools.evaluate_generation import collect_image_files, extract_single_sample_id
 from virtual_staining.evaluation.metrics import evaluate_pair
+from virtual_staining.image_size import to_torchvision_hw
 from virtual_staining.models.generator import UNetGenerator
 
 # ---------------------------------------------------------------------------
@@ -207,3 +209,52 @@ def test_inference_output_is_evaluable_end_to_end(tmp_path: Path) -> None:
     metrics, shape = evaluate_pair(target_path, generated_path)
     assert shape[2] == 3
     assert set(metrics.keys()) >= {"mae", "mse", "ssim"}
+
+
+# ---------------------------------------------------------------------------
+# Dimension-order: to_torchvision_hw correctness
+# ---------------------------------------------------------------------------
+
+
+def test_to_torchvision_hw_produces_correct_tensor_shape() -> None:
+    """Resize via to_torchvision_hw(width, height) must yield a tensor of shape (C, H, W)."""
+    width, height = 48, 32  # deliberately non-square
+    wh = (width, height)
+    resize = transforms.Resize(to_torchvision_hw(wh))
+
+    img = Image.fromarray(np.zeros((64, 64, 3), dtype=np.uint8))
+    tensor = transforms.ToTensor()(resize(img))
+
+    assert tensor.shape == (3, height, width), (
+        f"Expected tensor shape (3, {height}, {width}), got {tuple(tensor.shape)}"
+    )
+
+
+def test_inference_non_square_produces_correct_output_shape(tmp_path: Path) -> None:
+    """Inference with a non-square image_size must produce tensors of the intended (H, W)."""
+    width, height = 48, 32
+    image_size = (width, height)
+
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    checkpoint = tmp_path / "ep000.pth"
+
+    arr = np.zeros((64, 64, 3), dtype=np.uint8)
+    Image.fromarray(arr).save(test_dir / f"{_SAMPLE_ID}_source.png")
+    Image.fromarray(arr).save(test_dir / f"{_SAMPLE_ID}_target.png")
+    _save_checkpoint(checkpoint, image_size=image_size)
+
+    run_inference(
+        checkpoint_path=checkpoint,
+        test_folder=str(test_dir),
+        output_folder=str(output_dir),
+        image_size=image_size,
+        device=_DEVICE,
+    )
+
+    generated = next(output_dir.iterdir())
+    out_img = Image.open(generated)
+    assert out_img.size == (width, height), (
+        f"Expected output image size (width={width}, height={height}), got PIL size {out_img.size}"
+    )

@@ -232,6 +232,43 @@ def test_training_from_args_invalid_values_raise_value_error(
         TrainingConfig.from_args(_make_namespace(**overrides))
 
 
+def test_non_square_image_size_training_from_args() -> None:
+    """image_size=[320, 256] must parse as (width=320, height=256) in TrainingConfig."""
+    config = TrainingConfig.from_args(_make_namespace(image_size=[320, 256]))
+    assert config.image_size == (320, 256)
+
+
+def test_non_square_image_size_training_from_yaml(tmp_path: Path) -> None:
+    """image_size: [320, 256] in YAML must parse as (width=320, height=256)."""
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data
+        results_path: /results
+        run_name: ns_run
+        image_size: [320, 256]
+        epochs: 5
+    """)
+    yaml_file = tmp_path / "ns_train.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+    config = TrainingConfig.from_yaml(yaml_file)
+    assert config.image_size == (320, 256)
+
+
+def test_non_square_image_size_inference_from_yaml(tmp_path: Path) -> None:
+    """image_size: [320, 256] must be preserved through InferenceConfig parsing."""
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data
+        results_path: /results
+        run_name: ns_run
+        image_size: [320, 256]
+        inference:
+          checkpoint: checkpoints/ep010.pth
+    """)
+    yaml_file = tmp_path / "ns_infer.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+    config = InferenceConfig.from_yaml(yaml_file)
+    assert config.image_size == (320, 256)
+
+
 def test_training_from_yaml_invalid_image_size_raises_value_error(
     tmp_path: Path,
 ) -> None:
