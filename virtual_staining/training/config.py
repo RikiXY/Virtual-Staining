@@ -5,7 +5,55 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from virtual_staining.image_size import parse_wh_size, parse_wh_size_from_aliases
-from virtual_staining.run_config import load_yaml_mapping, section_with_shared_fields
+from virtual_staining.run_config import (
+    _TOP_LEVEL_KEYS,
+    load_yaml_mapping,
+    reject_unknown_keys,
+    section_with_shared_fields,
+)
+
+_TRAINING_KEYS: frozenset[str] = frozenset(
+    {
+        # shared fields and size aliases
+        "dataset_root",
+        "results_path",
+        "run_name",
+        "image_size",
+        "model_image_size",
+        # section-specific
+        "batch_size",
+        "epochs",
+        "lr_g",
+        "lr_d",
+        "beta1",
+        "beta2",
+        "l1_weight",
+        "seed",
+        "num_workers",
+        "validate_rate",
+        "checkpoint_rate",
+        "log_rate",
+        "resume",
+        "train_dir",
+        "val_dir",
+    }
+)
+
+_INFERENCE_KEYS: frozenset[str] = frozenset(
+    {
+        # shared fields and size aliases
+        "dataset_root",
+        "results_path",
+        "run_name",
+        "image_size",
+        "model_image_size",
+        # section-specific
+        "checkpoint",
+        "checkpoint_policy",
+        "test_dir",
+        "output_dir",
+    }
+)
 
 
 def _validate_non_empty_string(field_name: str, value: object) -> None:
@@ -162,11 +210,14 @@ class TrainingConfig:
     @classmethod
     def from_yaml(cls, path: str | Path) -> TrainingConfig:
         raw_data = load_yaml_mapping(path)
+        if "training" in raw_data:
+            reject_unknown_keys(raw_data, _TOP_LEVEL_KEYS, "top level")
         data = section_with_shared_fields(
             raw_data,
             "training",
             {"dataset_root", "results_path", "run_name", "image_size"},
         )
+        reject_unknown_keys(data, _TRAINING_KEYS, "training")
 
         config = cls(
             dataset_root=Path(data["dataset_root"]),
@@ -230,11 +281,14 @@ class InferenceConfig:
     @classmethod
     def from_yaml(cls, path: str | Path) -> InferenceConfig:
         raw_data = load_yaml_mapping(path)
+        if "inference" in raw_data:
+            reject_unknown_keys(raw_data, _TOP_LEVEL_KEYS, "top level")
         data = section_with_shared_fields(
             raw_data,
             "inference",
             {"dataset_root", "results_path", "run_name", "image_size"},
         )
+        reject_unknown_keys(data, _INFERENCE_KEYS, "inference")
         training_data = section_with_shared_fields(
             raw_data,
             "training",

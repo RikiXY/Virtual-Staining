@@ -6,7 +6,36 @@ from math import isclose
 from pathlib import Path
 
 from virtual_staining.image_size import parse_wh_size, parse_wh_size_from_aliases
-from virtual_staining.run_config import load_yaml_mapping, section_with_shared_fields
+from virtual_staining.run_config import (
+    _TOP_LEVEL_KEYS,
+    load_yaml_mapping,
+    parse_bool_strict,
+    reject_unknown_keys,
+    section_with_shared_fields,
+)
+
+_PREPROCESSING_KEYS: frozenset[str] = frozenset(
+    {
+        # shared fields and size aliases
+        "dataset_root",
+        "image_size",
+        "patch_size",
+        # section-specific
+        "source_name",
+        "target_name",
+        "grid_movement",
+        "margin",
+        "seed",
+        "save_masks",
+        "train_ratio",
+        "val_ratio",
+        "test_ratio",
+        "min_foreground_ratio",
+        "max_white_ratio",
+        "white_threshold",
+        "max_largest_white_component_ratio",
+    }
+)
 
 
 def _pair(value: object, default: tuple[int, int]) -> tuple[int, int]:
@@ -132,7 +161,10 @@ class PreprocessingConfig:
     @classmethod
     def from_yaml(cls, path: str | Path) -> PreprocessingConfig:
         raw_data = load_yaml_mapping(path)
+        if "preprocessing" in raw_data:
+            reject_unknown_keys(raw_data, _TOP_LEVEL_KEYS, "top level")
         data = section_with_shared_fields(raw_data, "preprocessing", {"dataset_root", "image_size"})
+        reject_unknown_keys(data, _PREPROCESSING_KEYS, "preprocessing")
 
         config = cls(
             dataset_root=Path(data["dataset_root"]),
@@ -142,7 +174,7 @@ class PreprocessingConfig:
             grid_movement=_pair(data.get("grid_movement"), (256, 256)),
             margin=int(data.get("margin", 200)),
             seed=data.get("seed"),
-            save_masks=bool(data.get("save_masks", False)),
+            save_masks=parse_bool_strict(data.get("save_masks", False), "save_masks"),
             train_ratio=float(data.get("train_ratio", 0.8)),
             val_ratio=float(data.get("val_ratio", 0.05)),
             test_ratio=float(data.get("test_ratio", 0.15)),

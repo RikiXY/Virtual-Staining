@@ -263,3 +263,57 @@ def test_from_yaml_invalid_margin_raises_value_error(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="margin"):
         PreprocessingConfig.from_yaml(yaml_file)
+
+
+def test_from_yaml_unknown_flat_key_raises(tmp_path: Path) -> None:
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data/samples
+        source_name: source.tif
+        target_name: target.tif
+        sav_masks: true
+    """)
+    yaml_file = tmp_path / "typo.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+    with pytest.raises(ValueError, match="sav_masks"):
+        PreprocessingConfig.from_yaml(yaml_file)
+
+
+def test_from_yaml_unknown_section_key_raises(tmp_path: Path) -> None:
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data/samples
+        preprocessing:
+          source_name: source.tif
+          target_name: target.tif
+          sav_masks: true
+    """)
+    yaml_file = tmp_path / "typo_section.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+    with pytest.raises(ValueError, match="sav_masks"):
+        PreprocessingConfig.from_yaml(yaml_file)
+
+
+def test_from_yaml_unknown_top_level_key_raises(tmp_path: Path) -> None:
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data/samples
+        typo_field: oops
+        preprocessing:
+          source_name: source.tif
+          target_name: target.tif
+    """)
+    yaml_file = tmp_path / "typo_top.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+    with pytest.raises(ValueError, match="typo_field"):
+        PreprocessingConfig.from_yaml(yaml_file)
+
+
+def test_from_yaml_string_bool_save_masks_raises(tmp_path: Path) -> None:
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data/samples
+        source_name: source.tif
+        target_name: target.tif
+        save_masks: "false"
+    """)
+    yaml_file = tmp_path / "str_bool.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+    with pytest.raises(TypeError, match="save_masks"):
+        PreprocessingConfig.from_yaml(yaml_file)

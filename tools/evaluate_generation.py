@@ -6,11 +6,32 @@ import statistics
 from pathlib import Path
 from typing import Any
 
-from virtual_staining.run_config import load_yaml_mapping, section_with_shared_fields
+from virtual_staining.run_config import (
+    _TOP_LEVEL_KEYS,
+    load_yaml_mapping,
+    parse_bool_strict,
+    reject_unknown_keys,
+    section_with_shared_fields,
+)
 from virtual_staining.utils.cli import print_info, print_section, style
 from virtual_staining.utils.metrics import (
     DEFAULT_METRICS,
     color_metric,
+)
+
+_EVALUATION_KEYS: frozenset[str] = frozenset(
+    {
+        # shared fields
+        "dataset_root",
+        "results_path",
+        "run_name",
+        # section-specific
+        "save_graphs",
+        "hide_graphs_path",
+        "target_dir",
+        "generated_dir",
+        "output_dir",
+    }
 )
 
 METRIC_NAMES = list(DEFAULT_METRICS)
@@ -44,18 +65,22 @@ def _optional_path(data: dict[str, Any], key: str, default: Path) -> Path:
 
 def apply_dataset_config(args: argparse.Namespace) -> argparse.Namespace:
     raw_data = load_yaml_mapping(args.config)
+    if "evaluation" in raw_data:
+        reject_unknown_keys(raw_data, _TOP_LEVEL_KEYS, "top level")
     data = section_with_shared_fields(
         raw_data, "evaluation", {"dataset_root", "results_path", "run_name"}
     )
+    reject_unknown_keys(data, _EVALUATION_KEYS, "evaluation")
 
     dataset_root = Path(data["dataset_root"])
     run_root = Path(data["results_path"]) / data["run_name"]
     args.target_dir = str(_optional_path(data, "target_dir", dataset_root / "dataset_test"))
     args.generated_dir = str(_optional_path(data, "generated_dir", run_root / "output_test"))
     args.output_dir = str(_optional_path(data, "output_dir", run_root / "evaluation"))
-    args.save_graphs = bool(data.get("save_graphs", True))
-    args.hide_graphs_path = bool(
-        data.get("hide_graphs_path", getattr(args, "hide_graphs_path", False))
+    args.save_graphs = parse_bool_strict(data.get("save_graphs", True), "save_graphs")
+    args.hide_graphs_path = parse_bool_strict(
+        data.get("hide_graphs_path", getattr(args, "hide_graphs_path", False)),
+        "hide_graphs_path",
     )
     return args
 
