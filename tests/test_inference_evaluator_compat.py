@@ -1,4 +1,5 @@
 """Tests verifying that inference output naming and shapes are compatible with the evaluator."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -100,7 +101,7 @@ def test_output_sample_id_matches_target(tmp_path: Path) -> None:
 
 
 def test_collect_image_files_finds_inference_output(tmp_path: Path) -> None:
-    """collect_image_files with '_target_generated' suffix must index inference outputs by sample ID."""
+    """collect_image_files must index '_target_generated' outputs by sample ID."""
     test_dir = tmp_path / "test"
     test_dir.mkdir()
     output_dir = tmp_path / "output"
@@ -119,8 +120,7 @@ def test_collect_image_files_finds_inference_output(tmp_path: Path) -> None:
 
     generated_files = collect_image_files(output_dir, "_target_generated", "Generated")
     assert _SAMPLE_ID in generated_files, (
-        f"Sample ID '{_SAMPLE_ID}' not found among collected files: "
-        f"{sorted(generated_files)}"
+        f"Sample ID '{_SAMPLE_ID}' not found among collected files: {sorted(generated_files)}"
     )
 
 
@@ -153,8 +153,16 @@ def test_evaluate_pair_returns_all_metrics_for_matching_shapes(tmp_path: Path) -
     metrics, shape = evaluate_pair(target_path, generated_path)
 
     expected_keys = {
-        "mae", "mse", "rmse", "psnr", "ssim",
-        "pcc_gray", "pcc_r", "pcc_g", "pcc_b", "pcc_rgb_mean",
+        "mae",
+        "mse",
+        "rmse",
+        "psnr",
+        "ssim",
+        "pcc_gray",
+        "pcc_r",
+        "pcc_g",
+        "pcc_b",
+        "pcc_rgb_mean",
     }
     assert set(metrics.keys()) == expected_keys
     assert shape == (32, 32, 3)

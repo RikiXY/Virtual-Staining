@@ -34,6 +34,7 @@ METRIC_FIELDNAMES = [
     "pcc_rgb_mean",
 ]
 
+
 def _optional_path(data: dict[str, Any], key: str, default: Path) -> Path:
     value = data.get(key)
     if value is None:
