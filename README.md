@@ -306,22 +306,36 @@ Training creates a run directory with logs, checkpoints, validation outputs, and
 
 ```text
 Virtual-Staining/
-├── archive/
+├── config/
+│   └── runs/               # run YAML files (example.yaml template)
 ├── docs/
-├── examples/
+│   ├── assets/             # qualitative result images
+│   ├── notebooks/
+│   └── reports/
+├── examples/               # example input images
 ├── local_workspace/
+│   ├── datasets/           # input paired samples (gitignored)
+│   └── results/            # run outputs (gitignored)
 ├── src/
-│   ├── json/
-│   ├── prepare_dataset.py
-│   └── pix2pix.py
+│   ├── prepare_dataset.py  # dataset preparation entry point
+│   └── pix2pix.py          # training and inference entry point
+├── tests/                  # pytest test suite
 ├── tools/
+│   ├── compare_distributions.py
 │   ├── evaluate_generation.py
-│   └── make_comparison.py
+│   ├── make_comparison.py
+│   └── organize_by_metrics.py
+├── virtual_staining/       # shared library package
+│   ├── data/
+│   ├── evaluation/
+│   ├── models/
+│   ├── training/
+│   └── utils/
 ├── Makefile
 ├── flake.nix
 ├── pyproject.toml
-├── README.md
-└── TASKS.md
+├── uv.lock
+└── README.md
 ```
 
 ## Advanced CLI Examples
@@ -436,6 +450,27 @@ The project is usable, but still experimental in several respects.
 - The workflow is CLI-driven and uses a run YAML for standard experiment settings.
 - The repository includes historical material alongside the current workflow.
 - Dependency management is present, but still relatively lightweight.
+
+### Data split and generalization
+
+The default train/validation/test split is **patch-level**: all splits are drawn
+from patches of the same slide. Metrics reported on `dataset_test/` therefore
+measure same-slide internal validation, not independent generalization. A model
+that performs well under this setting may still fail on slides or patients it
+has never seen, because nearby patches from the same tissue share texture,
+staining conditions, and artifacts.
+
+Interpreting same-slide patch metrics as evidence of generalization is
+discouraged. Stronger evidence of generalization requires one of the following:
+
+- **slide-level split** — hold out entire slides for the test set
+- **patient-level split** — hold out all slides from certain donors or cases
+- **spatial-block split** — partition each slide into non-overlapping spatial
+  blocks and assign whole blocks to each split
+
+The current pipeline does not implement these strategies. If your evaluation
+goal is generalizability to new tissue samples or new patients, the split
+strategy must be adapted before drawing conclusions from the reported metrics.
 
 ## Future Improvements
 
