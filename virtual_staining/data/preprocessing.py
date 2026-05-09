@@ -497,10 +497,13 @@ def split_items(items: list[T], ratios: Sequence[float]) -> list[list[T]]:
     shuffled = items.copy()
     random.shuffle(shuffled)
 
+    n = len(shuffled)
+    cumulative = 0.0
     output: list[list[T]] = []
     start = 0
-    for ratio in ratios:
-        end = start + int(len(shuffled) * ratio)
+    for i, ratio in enumerate(ratios):
+        cumulative += ratio
+        end = n if i == len(ratios) - 1 else round(cumulative * n)
         output.append(shuffled[start:end])
         start = end
     return output

@@ -52,6 +52,25 @@ def test_split_items_raises_on_negative_ratio() -> None:
         split_items([1, 2, 3], [0.8, -0.1, 0.3])
 
 
+def test_split_items_81_items_no_loss() -> None:
+    items = list(range(81))
+    parts = split_items(items, [0.8, 0.1, 0.1])
+    assert sum(len(p) for p in parts) == 81
+
+
+def test_split_items_101_items_no_loss() -> None:
+    items = list(range(101))
+    parts = split_items(items, [0.7, 0.15, 0.15])
+    assert sum(len(p) for p in parts) == 101
+
+
+def test_split_items_no_duplicates_no_missing() -> None:
+    items = list(range(81))
+    parts = split_items(items, [0.8, 0.1, 0.1])
+    all_items = [item for part in parts for item in part]
+    assert sorted(all_items) == items
+
+
 # ---------------------------------------------------------------------------
 # is_valid_patch_pair helpers
 # ---------------------------------------------------------------------------
