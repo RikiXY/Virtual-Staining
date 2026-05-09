@@ -6,19 +6,11 @@ import statistics
 from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
-import numpy as np
-
-from virtual_staining.evaluation.metrics import evaluate_pair
 from virtual_staining.run_config import load_yaml_mapping, section_with_shared_fields
 from virtual_staining.utils.cli import print_info, print_section, style
-from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS
 from virtual_staining.utils.metrics import (
     DEFAULT_METRICS,
     color_metric,
-)
-from virtual_staining.utils.metrics import (
-    get_metric_plot_range as default_metric_plot_range,
 )
 
 METRIC_NAMES = list(DEFAULT_METRICS)
@@ -41,9 +33,6 @@ METRIC_FIELDNAMES = [
     "pcc_b",
     "pcc_rgb_mean",
 ]
-
-PLOT_FIXED_BINS = 30
-
 
 def _optional_path(data: dict[str, Any], key: str, default: Path) -> Path:
     value = data.get(key)
@@ -198,6 +187,8 @@ def extract_single_sample_id(target_path: str | Path, generated_path: str | Path
 
 def collect_image_files(directory_path: str | Path, suffix: str, label: str) -> dict[str, Path]:
     """Collects valid files from a directory, indexed by sample id."""
+    from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS
+
     directory = Path(directory_path)
 
     if not directory.is_dir():
@@ -369,55 +360,6 @@ def write_summary_csv(
         dict_writer.writerows(summary_rows)
 
 
-# ===========================
-# Section dedicated to plots
-# ===========================
-
-
-def get_metric_plot_range(metric: str) -> tuple[float, float]:
-    """Returns the fixed range used in plots for a metric."""
-    return default_metric_plot_range(metric)
-
-
-def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) -> list[Path]:
-    """Saves histograms with fixed axes and a final summary boxplot."""
-    output_directory = Path(output_dir)
-    output_directory.mkdir(parents=True, exist_ok=True)
-    saved_paths: list[Path] = []
-
-    for metric in METRIC_NAMES:
-        values = [metric_value(row, metric) for row in rows]
-        histogram_path = output_directory / f"{metric}_histogram.png"
-        min_value, max_value = get_metric_plot_range(metric)
-        bin_edges = np.linspace(min_value, max_value, PLOT_FIXED_BINS + 1)
-
-        plt.figure(figsize=(6, 4))
-        weights = np.ones(len(values), dtype=float) / len(values)
-        plt.hist(values, bins=bin_edges.tolist(), weights=weights)
-        plt.title(f"{metric.upper()} Histogram")
-        plt.xlabel(metric.upper())
-        plt.ylabel("Share of samples")
-        plt.xlim(min_value, max_value)
-        plt.tight_layout()
-        plt.savefig(histogram_path, dpi=200, bbox_inches="tight")
-        plt.close()
-
-        saved_paths.append(histogram_path)
-
-    boxplot_path = output_directory / "metrics_boxplot.png"
-    plt.figure(figsize=(8, 5))
-    data = [[metric_value(row, metric) for row in rows] for metric in METRIC_NAMES]
-    plt.boxplot(data, tick_labels=[metric.upper() for metric in METRIC_NAMES])
-    plt.title("Metrics Boxplot")
-    plt.ylabel("Value")
-    plt.tight_layout()
-    plt.savefig(boxplot_path, dpi=200, bbox_inches="tight")
-    plt.close()
-
-    saved_paths.append(boxplot_path)
-    return saved_paths
-
-
 # ====================================
 # Section dedicated to the text report
 # ====================================
@@ -467,10 +409,12 @@ def print_dataset_summary(
         print_section("Metric summary")
         for metric in METRIC_NAMES:
             values = [metric_value(row, metric) for row in per_image_rows]
-            print_info(f"{metric.upper()} mean", color_metric(metric, float(np.mean(values))))
+            print_info(
+                f"{metric.upper()} mean", color_metric(metric, float(statistics.mean(values)))
+            )
             print_info(
                 f"{metric.upper()} median",
-                color_metric(metric, float(np.median(values))),
+                color_metric(metric, float(statistics.median(values))),
             )
 
     print_section("Saved files")
@@ -484,6 +428,8 @@ def print_dataset_summary(
 
 def run_single(args: argparse.Namespace) -> None:
     """Runs the complete flow for the single mode."""
+    from virtual_staining.evaluation.metrics import evaluate_pair
+
     sample_id = extract_single_sample_id(args.target, args.generated)
     metrics, shape = evaluate_pair(args.target, args.generated)
     print_single_result(args.target, args.generated, metrics, shape)
@@ -502,6 +448,9 @@ def run_single(args: argparse.Namespace) -> None:
 
 def run_dataset(args: argparse.Namespace) -> None:
     """Runs the complete flow for the dataset mode."""
+    from virtual_staining.evaluation.metrics import evaluate_pair
+    from virtual_staining.evaluation.plotting import save_dataset_plots
+
     args = apply_dataset_config(args)
     target_files = collect_image_files(args.target_dir, "_target", "Target")
     generated_files = collect_image_files(args.generated_dir, "_target_generated", "Generated")
