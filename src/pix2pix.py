@@ -1141,7 +1141,10 @@ def validate(
                 # scollegati dal target specifico del campione attuale.
                 loss_adv = bce_loss(D_fake, real_label)
                 loss_l1 = l1_loss(fake, y)
-                loss_ssim = ssim_loss(fake, y)
+                if ssim_weight > 0:
+                    loss_ssim = ssim_loss(fake, y)
+                else:
+                    loss_ssim = torch.zeros((), device=fake.device)
                 loss_G = loss_adv + loss_l1 * l1_weight + loss_ssim * ssim_weight
 
             total_loss_D += loss_D.item()
@@ -1314,7 +1317,10 @@ def train_one_epoch(
             # - L1: mantenere fedeltà verso il target reale.
             loss_adv = bce_loss(D_fake, real_label)
             loss_l1 = l1_loss(fake, y)
-            loss_ssim = ssim_loss(fake, y)
+            if ssim_weight > 0:
+                loss_ssim = ssim_loss(fake, y)
+            else:
+                loss_ssim = torch.zeros((), device=fake.device)
             loss_G = loss_adv + loss_l1 * l1_weight + loss_ssim * ssim_weight
 
         opt_G.zero_grad()
