@@ -485,7 +485,7 @@ class DoubleConv(nn.Module):
                 padding=conv_params["padding"],
                 bias=False,
             ),
-            nn.InstanceNorm2d(out_channels, affine=True),
+            nn.BatchNorm2d(out_channels),
             nn.ReLU(conv_params["inplace"]),
 
             nn.Conv2d(
@@ -496,7 +496,7 @@ class DoubleConv(nn.Module):
                 padding=conv_params["padding"],
                 bias=False,
             ),
-            nn.InstanceNorm2d(out_channels, affine=True),
+            nn.BatchNorm2d(out_channels),
             nn.ReLU(conv_params["inplace"]),
         )
 
@@ -574,7 +574,6 @@ class OutConv(nn.Module):
         super(OutConv, self).__init__()
         self.conv = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=1),
-            nn.Tanh(),
         )
 
     def forward(self, x):
@@ -678,7 +677,7 @@ class PatchGANDiscriminator(nn.Module):
         next_dim = curr_dim * 2
         layers += [
             nn.Conv2d(curr_dim, next_dim, kernel_size=4, stride=2, padding=1),
-            nn.InstanceNorm2d(next_dim),
+            nn.BatchNorm2d(next_dim),
             nn.LeakyReLU(0.2, inplace=True),
         ]
 
@@ -686,7 +685,7 @@ class PatchGANDiscriminator(nn.Module):
         next_dim = curr_dim * 2
         layers += [
             nn.Conv2d(curr_dim, next_dim, kernel_size=4, stride=2, padding=1),
-            nn.InstanceNorm2d(next_dim),
+            nn.BatchNorm2d(next_dim),
             nn.LeakyReLU(0.2, inplace=True),
         ]
 
@@ -696,7 +695,7 @@ class PatchGANDiscriminator(nn.Module):
         # Questo layer mantie stride=1 per evitare che la dimensione delle patch cresca troppo
         layers += [
             nn.Conv2d(curr_dim, next_dim, kernel_size=4, stride=1, padding=1),
-            nn.InstanceNorm2d(next_dim),
+            nn.BatchNorm2d(next_dim),
             nn.LeakyReLU(0.2, inplace=True),
         ]
 
