@@ -502,8 +502,9 @@ class Trainer:
         self.generator.train()
         self.discriminator.train()
 
-        last_loss_G: float | None = None
-        last_loss_D: float | None = None
+        total_loss_G = 0.0
+        total_loss_D = 0.0
+        num_batches = 0
 
         for i, (x, y) in enumerate(self.train_loader):
             x, y = x.to(self.device), y.to(self.device)
@@ -539,8 +540,9 @@ class Trainer:
             self._scaler_G.step(self._opt_G)
             self._scaler_G.update()
 
-            last_loss_G = loss_G.item()
-            last_loss_D = loss_D.item()
+            total_loss_G += loss_G.item()
+            total_loss_D += loss_D.item()
+            num_batches += 1
 
             progress, elapsed, eta, end_time = progress_tracker.calculate_progress(
                 epoch, i
@@ -582,11 +584,11 @@ class Trainer:
                     use_stdout=False,
                 )
 
-        if last_loss_G is None or last_loss_D is None:
+        if num_batches == 0:
             raise RuntimeError(
                 "Training loader was empty; cannot compute epoch metrics."
             )
-        return EpochMetrics(loss_G=last_loss_G, loss_D=last_loss_D)
+        return EpochMetrics(loss_G=total_loss_G / num_batches, loss_D=total_loss_D / num_batches)
 
     def _validate(self, epoch: int, log_file: Path) -> EpochMetrics:
         self.generator.eval()

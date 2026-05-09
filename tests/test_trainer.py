@@ -151,6 +151,83 @@ def test_trainer_metrics_csv_structure(
 
 
 # ---------------------------------------------------------------------------
+# Multi-batch averaging
+# ---------------------------------------------------------------------------
+
+
+def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
+    """Train losses in metrics.csv must be averages over all batches (not last-batch)."""
+    dataset_root = tmp_path / "dataset"
+    train_dir = dataset_root / "dataset_train"
+    val_dir = dataset_root / "dataset_val"
+    train_dir.mkdir(parents=True)
+    val_dir.mkdir(parents=True)
+
+    # Two training samples → two batches with batch_size=1.
+    _write_rgb_pair(train_dir, prefix="00000_00000")
+    _write_rgb_pair(train_dir, prefix="00001_00001")
+    _write_rgb_pair(val_dir)
+
+    config = TrainingConfig(
+        dataset_root=dataset_root,
+        results_path=tmp_path / "results",
+        run_name="avg_run",
+        image_size=(32, 32),
+        batch_size=1,
+        epochs=1,
+        lr_g=2e-4,
+        lr_d=2e-4,
+        beta1=0.5,
+        beta2=0.999,
+        l1_weight=25.0,
+        seed=0,
+        num_workers=0,
+        validate_rate=1,
+        checkpoint_rate=2,
+        log_rate=1,
+    )
+
+    transform = transforms.Compose(
+        [
+            transforms.Resize(config.image_size),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5] * 3, [0.5] * 3),
+        ]
+    )
+    device = torch.device("cpu")
+    train_loader = DataLoader(
+        PairedHistologyDataset(train_dir, transform=transform),
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
+    )
+    val_loader = DataLoader(
+        PairedHistologyDataset(val_dir, transform=transform),
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
+    )
+
+    trainer = Trainer(
+        config=config,
+        generator=UNetGenerator().to(device),
+        discriminator=PatchGANDiscriminator().to(device),
+        train_loader=train_loader,
+        val_loader=val_loader,
+        device=device,
+    )
+    trainer.train(seed=0)
+
+    metrics_path = config.run_root / "metrics.csv"
+    with metrics_path.open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert float(rows[0]["loss_G_train"]) > 0
+    assert float(rows[0]["loss_D_train"]) > 0
+
+
+# ---------------------------------------------------------------------------
 # Checkpoint round-trip (writes one real checkpoint)
 # ---------------------------------------------------------------------------
 
