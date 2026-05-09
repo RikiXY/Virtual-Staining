@@ -16,6 +16,9 @@ help:
 	@printf "  %-24s %s\n" "complete-run" "Run dataset, train, infer, evaluate from CONFIG"
 	@printf "  %-24s %s\n" "sync" "Sync uv dependencies from uv.lock"
 	@printf "  %-24s %s\n" "format" "Format Python files with ruff"
+	@printf "  %-24s %s\n" "lint" "Check Python files with ruff"
+	@printf "  %-24s %s\n" "format-check" "Check formatting without applying changes"
+	@printf "  %-24s %s\n" "check-types" "Run pyright type checker"
 	@printf "  %-24s %s\n" "test" "Run pytest"
 	@printf "  %-24s %s\n" "qa" "Run checks and tests"
 	@printf "  %-24s %s\n" "clean" "Remove local caches"
@@ -58,6 +61,15 @@ complete-run: require-config
 
 format:
 	$(RUFF) format .
+
+lint:
+	$(RUFF) check .
+
+format-check:
+	$(RUFF) format --check .
+
+check-types:
+	$(PYRIGHT)
 
 test:
 	$(UV) run --group dev pytest

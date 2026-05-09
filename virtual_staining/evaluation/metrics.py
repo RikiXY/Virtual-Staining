@@ -99,16 +99,9 @@ def compute_pcc_gray(target: np.ndarray, generated: np.ndarray) -> float:
     return compute_pcc(target_gray, generated_gray)
 
 
-def compute_pcc_rgb(
-    target: np.ndarray, generated: np.ndarray
-) -> tuple[float, float, float, float]:
+def compute_pcc_rgb(target: np.ndarray, generated: np.ndarray) -> tuple[float, float, float, float]:
     """Computes per-channel RGB PCC and the mean across RGB channels."""
-    if (
-        target.ndim != 3
-        or generated.ndim != 3
-        or target.shape[2] < 3
-        or generated.shape[2] < 3
-    ):
+    if target.ndim != 3 or generated.ndim != 3 or target.shape[2] < 3 or generated.shape[2] < 3:
         pcc = compute_pcc(target, generated)
         return float("nan"), float("nan"), float("nan"), pcc
 
@@ -116,9 +109,7 @@ def compute_pcc_rgb(
     pcc_g = compute_pcc(target[..., 1], generated[..., 1])
     pcc_b = compute_pcc(target[..., 2], generated[..., 2])
     pcc_values = np.array([pcc_r, pcc_g, pcc_b], dtype=np.float64)
-    pcc_rgb_mean = (
-        float("nan") if np.isnan(pcc_values).all() else float(np.nanmean(pcc_values))
-    )
+    pcc_rgb_mean = float("nan") if np.isnan(pcc_values).all() else float(np.nanmean(pcc_values))
     return pcc_r, pcc_g, pcc_b, pcc_rgb_mean
 
 

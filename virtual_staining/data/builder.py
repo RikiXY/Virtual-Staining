@@ -10,10 +10,8 @@ import cv2
 import numpy as np
 
 from virtual_staining.data.config import PreprocessingConfig
-from virtual_staining.utils.env import collect_environment
 from virtual_staining.data.preprocessing import (
     MASK_PARAMETER_GRID,
-    AlignmentMetadata,
     align_from_scaled,
     calculate_mask_with_multiple_parameters,
     divide_image_with_grid,
@@ -24,6 +22,7 @@ from virtual_staining.data.preprocessing import (
     validate_image_filename,
 )
 from virtual_staining.data.results import DatasetBuildResult
+from virtual_staining.utils.env import collect_environment
 
 
 class DatasetBuilder:
@@ -181,9 +180,7 @@ class DatasetBuilder:
             or self._target_patches is None
             or self._target_patch_masks is None
         ):
-            raise RuntimeError(
-                "extract_patches() must be called before filter_patches()"
-            )
+            raise RuntimeError("extract_patches() must be called before filter_patches()")
 
         named_source: list[tuple[np.ndarray, str]] = []
         named_target: list[tuple[np.ndarray, str]] = []
@@ -197,6 +194,7 @@ class DatasetBuilder:
             self._source_patch_masks,
             self._target_patches,
             self._target_patch_masks,
+            strict=True,
         ):
             patch_source_name = f"{x:05}_{y:05}_source{self._source_suffix}"
             patch_target_name = f"{x:05}_{y:05}_target{self._target_suffix}"
@@ -223,12 +221,8 @@ class DatasetBuilder:
                         "sample_id": f"{x:05}_{y:05}",
                         "source_name": patch_source_name,
                         "target_name": patch_target_name,
-                        "source_foreground_ratio": debug_info[
-                            "source_foreground_ratio"
-                        ],
-                        "target_foreground_ratio": debug_info[
-                            "target_foreground_ratio"
-                        ],
+                        "source_foreground_ratio": debug_info["source_foreground_ratio"],
+                        "target_foreground_ratio": debug_info["target_foreground_ratio"],
                         "source_white_ratio": debug_info["source_white_ratio"],
                         "target_white_ratio": debug_info["target_white_ratio"],
                         "source_largest_white_component_ratio": debug_info[
@@ -256,9 +250,7 @@ class DatasetBuilder:
             or self._discarded_target_images is None
             or self._discarded_log_rows is None
         ):
-            raise RuntimeError(
-                "filter_patches() must be called before split_and_save()"
-            )
+            raise RuntimeError("filter_patches() must be called before split_and_save()")
 
         root = self.config.dataset_root
         discarded_root = root / "discarded_patches"
@@ -277,9 +269,7 @@ class DatasetBuilder:
         for img, name in self._discarded_target_images:
             cv2.imwrite(str(discarded_root / "target" / name), img)
 
-        with open(
-            discarded_root / "discarded_log.csv", "w", newline="", encoding="utf-8"
-        ) as f:
+        with open(discarded_root / "discarded_log.csv", "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
                 f,
                 fieldnames=[
@@ -298,7 +288,7 @@ class DatasetBuilder:
             writer.writeheader()
             writer.writerows(self._discarded_log_rows)
 
-        pairs = list(zip(self._named_source_images, self._named_target_images))
+        pairs = list(zip(self._named_source_images, self._named_target_images, strict=True))
         split = split_items(
             pairs,
             [self.config.train_ratio, self.config.val_ratio, self.config.test_ratio],
@@ -306,7 +296,7 @@ class DatasetBuilder:
 
         split_names = ["train", "val", "test"]
         manifest_rows: list[dict[str, Any]] = []
-        for split_name, subset in zip(split_names, split):
+        for split_name, subset in zip(split_names, split, strict=True):
             subset_dir = root / f"dataset_{split_name}"
             for src_pair, tgt_pair in subset:
                 cv2.imwrite(str(subset_dir / src_pair[1]), src_pair[0])
@@ -346,11 +336,7 @@ class DatasetBuilder:
 
     def run_all(self) -> DatasetBuildResult:
         """Run all pipeline stages in sequence and return the build result."""
-        seed = (
-            self.config.seed
-            if self.config.seed is not None
-            else random.randint(0, 2**32 - 1)
-        )
+        seed = self.config.seed if self.config.seed is not None else random.randint(0, 2**32 - 1)
         random.seed(seed)
         print(f"Seed set to {seed}")
 

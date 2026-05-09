@@ -13,7 +13,6 @@ from virtual_staining.data.builder import DatasetBuilder
 from virtual_staining.data.config import PreprocessingConfig
 from virtual_staining.data.preprocessing import AlignmentMetadata
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -40,9 +39,7 @@ def _identity_align(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, AlignmentMetadata]:
     """Return target unchanged - simulates a perfect identity alignment."""
     aligned_mask = (
-        mask2.copy()
-        if mask2 is not None
-        else np.full(tgt.shape[:2], 255, dtype=np.uint8)
+        mask2.copy() if mask2 is not None else np.full(tgt.shape[:2], 255, dtype=np.uint8)
     )
     eye = np.eye(2, 3, dtype=np.float64)
     metadata = AlignmentMetadata(

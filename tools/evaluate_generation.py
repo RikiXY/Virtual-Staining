@@ -11,11 +11,13 @@ import numpy as np
 
 from virtual_staining.evaluation.metrics import evaluate_pair
 from virtual_staining.run_config import load_yaml_mapping, section_with_shared_fields
-from virtual_staining.utils.cli import style, print_section, print_info
+from virtual_staining.utils.cli import print_info, print_section, style
 from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS
 from virtual_staining.utils.metrics import (
     DEFAULT_METRICS,
     color_metric,
+)
+from virtual_staining.utils.metrics import (
     get_metric_plot_range as default_metric_plot_range,
 )
 
@@ -58,12 +60,8 @@ def apply_dataset_config(args: argparse.Namespace) -> argparse.Namespace:
 
     dataset_root = Path(data["dataset_root"])
     run_root = Path(data["results_path"]) / data["run_name"]
-    args.target_dir = str(
-        _optional_path(data, "target_dir", dataset_root / "dataset_test")
-    )
-    args.generated_dir = str(
-        _optional_path(data, "generated_dir", run_root / "output_test")
-    )
+    args.target_dir = str(_optional_path(data, "target_dir", dataset_root / "dataset_test"))
+    args.generated_dir = str(_optional_path(data, "generated_dir", run_root / "output_test"))
     args.output_dir = str(_optional_path(data, "output_dir", run_root / "evaluation"))
     args.save_graphs = bool(data.get("save_graphs", True))
     args.hide_graphs_path = bool(
@@ -77,9 +75,7 @@ def metric_value(row: dict[str, object], metric: str) -> float:
     value = row[metric]
     if isinstance(value, str | int | float):
         return float(value)
-    raise TypeError(
-        f"Metric '{metric}' must be a scalar value, got {type(value).__name__}."
-    )
+    raise TypeError(f"Metric '{metric}' must be a scalar value, got {type(value).__name__}.")
 
 
 # ==========================
@@ -159,8 +155,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Examples:\n"
             "  python tools/evaluate_generation.py single\n"
-            "      --target-image local_workspace/datasets/your_run/dataset_test/00512_09216_target.tif\n"
-            "      --generated-image local_workspace/results/your_run/output_test/00512_09216_target_generated.tif\n"
+            "      --target-image local_workspace/datasets/your_run/dataset_test/00512_09216_target.tif\n"  # noqa: E501
+            "      --generated-image local_workspace/results/your_run/output_test/00512_09216_target_generated.tif\n"  # noqa: E501
             "\n"
             "  python tools/evaluate_generation.py dataset\n"
             "      --config config/runs/example.yaml\n\n"
@@ -186,9 +182,7 @@ def extract_sample_id(path: str | Path, suffix: str, label: str = "File") -> str
     return name[: -len(suffix)]
 
 
-def extract_single_sample_id(
-    target_path: str | Path, generated_path: str | Path
-) -> str:
+def extract_single_sample_id(target_path: str | Path, generated_path: str | Path) -> str:
     """Checks that target and generated belong to the same sample."""
     target_id = extract_sample_id(target_path, "_target", "Target")
     generated_id = extract_sample_id(generated_path, "_target_generated", "Generated")
@@ -202,9 +196,7 @@ def extract_single_sample_id(
     return target_id
 
 
-def collect_image_files(
-    directory_path: str | Path, suffix: str, label: str
-) -> dict[str, Path]:
+def collect_image_files(directory_path: str | Path, suffix: str, label: str) -> dict[str, Path]:
     """Collects valid files from a directory, indexed by sample id."""
     directory = Path(directory_path)
 
@@ -327,9 +319,7 @@ def build_metric_row(
     }
 
 
-def write_per_image_metrics_csv(
-    rows: list[dict[str, object]], output_path: str | Path
-) -> None:
+def write_per_image_metrics_csv(rows: list[dict[str, object]], output_path: str | Path) -> None:
     """Writes the CSV with one row per evaluated pair."""
     with Path(output_path).open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=METRIC_FIELDNAMES)
@@ -389,9 +379,7 @@ def get_metric_plot_range(metric: str) -> tuple[float, float]:
     return default_metric_plot_range(metric)
 
 
-def save_dataset_plots(
-    rows: list[dict[str, object]], output_dir: str | Path
-) -> list[Path]:
+def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) -> list[Path]:
     """Saves histograms with fixed axes and a final summary boxplot."""
     output_directory = Path(output_dir)
     output_directory.mkdir(parents=True, exist_ok=True)
@@ -479,9 +467,7 @@ def print_dataset_summary(
         print_section("Metric summary")
         for metric in METRIC_NAMES:
             values = [metric_value(row, metric) for row in per_image_rows]
-            print_info(
-                f"{metric.upper()} mean", color_metric(metric, float(np.mean(values)))
-            )
+            print_info(f"{metric.upper()} mean", color_metric(metric, float(np.mean(values))))
             print_info(
                 f"{metric.upper()} median",
                 color_metric(metric, float(np.median(values))),
@@ -518,9 +504,7 @@ def run_dataset(args: argparse.Namespace) -> None:
     """Runs the complete flow for the dataset mode."""
     args = apply_dataset_config(args)
     target_files = collect_image_files(args.target_dir, "_target", "Target")
-    generated_files = collect_image_files(
-        args.generated_dir, "_target_generated", "Generated"
-    )
+    generated_files = collect_image_files(args.generated_dir, "_target_generated", "Generated")
 
     output_dir = resolve_output_dir(args.output_dir, args.generated_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -603,9 +587,7 @@ def run_dataset(args: argparse.Namespace) -> None:
             for plot_path in plot_paths:
                 print_info("Graph", str(plot_path))
 
-    print_dataset_summary(
-        target_files, generated_files, per_image_rows, skipped_rows, output_dir
-    )
+    print_dataset_summary(target_files, generated_files, per_image_rows, skipped_rows, output_dir)
 
 
 def main() -> None:

@@ -13,7 +13,6 @@ from virtual_staining.data.preprocessing import (
     split_items,
 )
 
-
 # ---------------------------------------------------------------------------
 # split_items
 # ---------------------------------------------------------------------------
@@ -172,23 +171,27 @@ def _textured_image(seed: int = 0) -> np.ndarray:
 
 def test_align_images_raises_when_warp_matrix_is_none() -> None:
     img = _textured_image()
-    with patch(
-        "virtual_staining.data.preprocessing.cv2.estimateAffinePartial2D",
-        return_value=(None, None),
+    with (
+        patch(
+            "virtual_staining.data.preprocessing.cv2.estimateAffinePartial2D",
+            return_value=(None, None),
+        ),
+        pytest.raises(ValueError, match="Affine estimation failed"),
     ):
-        with pytest.raises(ValueError, match="Affine estimation failed"):
-            align_images(img, img)
+        align_images(img, img)
 
 
 def test_align_images_raises_on_low_inlier_count() -> None:
     img = _textured_image()
     zero_inliers = np.zeros((50, 1), dtype=np.uint8)
-    with patch(
-        "virtual_staining.data.preprocessing.cv2.estimateAffinePartial2D",
-        return_value=(np.eye(2, 3, dtype=np.float64), zero_inliers),
+    with (
+        patch(
+            "virtual_staining.data.preprocessing.cv2.estimateAffinePartial2D",
+            return_value=(np.eye(2, 3, dtype=np.float64), zero_inliers),
+        ),
+        pytest.raises(ValueError, match="inliers"),
     ):
-        with pytest.raises(ValueError, match="inliers"):
-            align_images(img, img)
+        align_images(img, img)
 
 
 # ---------------------------------------------------------------------------

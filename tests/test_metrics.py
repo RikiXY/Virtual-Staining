@@ -9,8 +9,8 @@ from virtual_staining.evaluation.metrics import (
     compute_pcc,
     compute_pcc_gray,
     compute_pcc_rgb,
-    compute_rmse,
     compute_psnr,
+    compute_rmse,
     compute_ssim,
 )
 

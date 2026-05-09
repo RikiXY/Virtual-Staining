@@ -26,7 +26,7 @@ from virtual_staining.evaluation.statistics import (
     resolve_plot_range,
     resolve_thresholds,
 )
-from virtual_staining.utils.cli import style, print_section, print_info
+from virtual_staining.utils.cli import print_info, print_section, style
 from virtual_staining.utils.metrics import color_metric_value
 
 
@@ -95,19 +95,13 @@ def add_common_comparison_arguments(parser: argparse.ArgumentParser) -> None:
         "--run-a",
         type=Path,
         default=None,
-        help=(
-            "First run directory. The script reads "
-            "RUN_A/evaluation/per_image_metrics.csv."
-        ),
+        help=("First run directory. The script reads RUN_A/evaluation/per_image_metrics.csv."),
     )
     parser.add_argument(
         "--run-b",
         type=Path,
         default=None,
-        help=(
-            "Second run directory. The script reads "
-            "RUN_B/evaluation/per_image_metrics.csv."
-        ),
+        help=("Second run directory. The script reads RUN_B/evaluation/per_image_metrics.csv."),
     )
     parser.add_argument(
         "--csv-a",
@@ -329,9 +323,7 @@ def save_unpaired_comparison_summary(
     row = {
         "mode": "unpaired",
         "metric": args.column,
-        "direction": (
-            "higher_is_better" if args.resolved_higher_is_better else "lower_is_better"
-        ),
+        "direction": ("higher_is_better" if args.resolved_higher_is_better else "lower_is_better"),
         "label_a": group_a.label,
         "label_b": group_b.label,
         "n_a": group_a.n,
@@ -367,9 +359,7 @@ def save_unpaired_summary_json(
         "group_b": asdict(group_b),
         "comparison": asdict(comparison),
     }
-    (output_dir / "summary.json").write_text(
-        json.dumps(payload, indent=2), encoding="utf-8"
-    )
+    (output_dir / "summary.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def save_paired_summary_json(summary: PairedSummary, output_dir: Path) -> None:
@@ -388,9 +378,7 @@ def save_paired_comparison_summary(
     row = {
         "mode": "paired",
         "metric": args.column,
-        "direction": (
-            "higher_is_better" if args.resolved_higher_is_better else "lower_is_better"
-        ),
+        "direction": ("higher_is_better" if args.resolved_higher_is_better else "lower_is_better"),
         "label_a": summary.label_a,
         "label_b": summary.label_b,
         "n_pairs": summary.n_pairs,
@@ -413,9 +401,7 @@ def save_paired_sample_deltas(
     output_dir: Path,
 ) -> None:
     """Saves a sample-by-sample paired comparison CSV."""
-    raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(
-        dtype=float
-    )
+    raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(dtype=float)
     signed_delta = raw_delta if args.resolved_higher_is_better else -raw_delta
     result = merged.copy()
     result["raw_delta_b_minus_a"] = raw_delta
@@ -444,8 +430,14 @@ def save_unpaired_report_txt(
         f"Metric: {args.column}",
         f"Direction: {'higher is better' if args.resolved_higher_is_better else 'lower is better'}",
         "",
-        f"{group_a.label}: n={group_a.n}, mean={group_a.mean:.6f}, median={group_a.median:.6f}, IQR={group_a.iqr:.6f}",
-        f"{group_b.label}: n={group_b.n}, mean={group_b.mean:.6f}, median={group_b.median:.6f}, IQR={group_b.iqr:.6f}",
+        (
+            f"{group_a.label}: n={group_a.n}, mean={group_a.mean:.6f}, "
+            f"median={group_a.median:.6f}, IQR={group_a.iqr:.6f}"
+        ),
+        (
+            f"{group_b.label}: n={group_b.n}, mean={group_b.mean:.6f}, "
+            f"median={group_b.median:.6f}, IQR={group_b.iqr:.6f}"
+        ),
         "",
         f"Mean favors: {comparison.mean_favors}",
         f"Median favors: {comparison.median_favors}",
@@ -541,9 +533,7 @@ def plot_distribution_ecdf(
     plt.close()
 
 
-def plot_paired_delta_histogram(
-    signed_delta: np.ndarray, column: str, output_dir: Path
-) -> None:
+def plot_paired_delta_histogram(signed_delta: np.ndarray, column: str, output_dir: Path) -> None:
     """Saves the histogram of signed deltas for the paired comparison."""
     plt.figure(figsize=(9, 5))
     plt.hist(signed_delta, bins=30)
@@ -571,9 +561,7 @@ def plot_paired_scatter(
 
     plt.figure(figsize=(6, 6))
     plt.scatter(values_a, values_b, s=12, alpha=0.45)
-    plt.plot(
-        [min_value, max_value], [min_value, max_value], linestyle="--", linewidth=1
-    )
+    plt.plot([min_value, max_value], [min_value, max_value], linestyle="--", linewidth=1)
     plt.xlabel(f"{label_a} {column}")
     plt.ylabel(f"{label_b} {column}")
     plt.title(f"Paired scatter - {column}")
@@ -778,9 +766,7 @@ def run_paired(args: argparse.Namespace) -> None:
     save_paired_summary_json(summary, output_dir)
     save_paired_report_txt(summary, args, output_dir)
 
-    raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(
-        dtype=float
-    )
+    raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(dtype=float)
     signed_delta = raw_delta if higher_is_better else -raw_delta
     values_a = merged["value_a"].to_numpy(dtype=float)
     values_b = merged["value_b"].to_numpy(dtype=float)

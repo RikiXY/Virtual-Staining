@@ -44,9 +44,7 @@ def test_from_args_basic() -> None:
 
 
 def test_run_root_derived() -> None:
-    config = TrainingConfig.from_args(
-        _make_namespace(results_path="results", run_name="exp_01")
-    )
+    config = TrainingConfig.from_args(_make_namespace(results_path="results", run_name="exp_01"))
     assert config.run_root == Path("results") / "exp_01"
 
 

@@ -125,9 +125,7 @@ class TrainingConfig:
 
         for field_name, value in (("beta1", self.beta1), ("beta2", self.beta2)):
             if value < 0 or value >= 1:
-                raise ValueError(
-                    f"{field_name} must be greater than or equal to 0 and less than 1"
-                )
+                raise ValueError(f"{field_name} must be greater than or equal to 0 and less than 1")
 
         if self.l1_weight < 0:
             raise ValueError("l1_weight must be greater than or equal to 0")
@@ -194,9 +192,7 @@ class TrainingConfig:
             dataset_root=Path(data["dataset_root"]),
             results_path=Path(data["results_path"]),
             run_name=data["run_name"],
-            image_size=_pair_from_aliases(
-                data, ("model_image_size", "image_size"), (256, 256)
-            ),
+            image_size=_pair_from_aliases(data, ("model_image_size", "image_size"), (256, 256)),
             batch_size=int(data.get("batch_size", 8)),
             epochs=int(data["epochs"]),
             lr_g=float(data.get("lr_g", 2e-4)),
@@ -273,9 +269,7 @@ class InferenceConfig:
             image_size=_pair_from_aliases(
                 data,
                 ("model_image_size", "image_size"),
-                _pair_from_aliases(
-                    training_data, ("model_image_size", "image_size"), (256, 256)
-                ),
+                _pair_from_aliases(training_data, ("model_image_size", "image_size"), (256, 256)),
             ),
             test_dir_override=Path(data["test_dir"]) if data.get("test_dir") else None,
             output_dir=Path(data["output_dir"]) if data.get("output_dir") else None,

@@ -16,7 +16,6 @@ from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.config import TrainingConfig
 from virtual_staining.training.trainer import Trainer
 
-
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
@@ -29,9 +28,7 @@ def _write_rgb_pair(directory: Path, prefix: str = "00000_00000") -> None:
     Image.fromarray(arr).save(directory / f"{prefix}_target.png")
 
 
-def _make_trainer(
-    tmp_path: Path, checkpoint_rate: int
-) -> tuple[Trainer, TrainingConfig]:
+def _make_trainer(tmp_path: Path, checkpoint_rate: int) -> tuple[Trainer, TrainingConfig]:
     dataset_root = tmp_path / "dataset"
     train_dir = dataset_root / "dataset_train"
     val_dir = dataset_root / "dataset_val"

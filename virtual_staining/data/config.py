@@ -139,17 +139,13 @@ class PreprocessingConfig:
     @classmethod
     def from_yaml(cls, path: str | Path) -> PreprocessingConfig:
         raw_data = load_yaml_mapping(path)
-        data = section_with_shared_fields(
-            raw_data, "preprocessing", {"dataset_root", "image_size"}
-        )
+        data = section_with_shared_fields(raw_data, "preprocessing", {"dataset_root", "image_size"})
 
         config = cls(
             dataset_root=Path(data["dataset_root"]),
             source_name=data["source_name"],
             target_name=data["target_name"],
-            image_size=_pair_from_aliases(
-                data, ("patch_size", "image_size"), (256, 256)
-            ),
+            image_size=_pair_from_aliases(data, ("patch_size", "image_size"), (256, 256)),
             grid_movement=_pair(data.get("grid_movement"), (256, 256)),
             margin=int(data.get("margin", 200)),
             seed=data.get("seed"),

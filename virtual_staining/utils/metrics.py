@@ -71,8 +71,7 @@ def is_higher_better_metric(metric_name: str) -> bool:
     """Returns True when larger values are better for a metric."""
     if metric_name not in METRIC_DIRECTIONS:
         raise ValueError(
-            f"Unsupported metric '{metric_name}'. "
-            f"Supported metrics: {', '.join(METRIC_DIRECTIONS)}"
+            f"Unsupported metric '{metric_name}'. Supported metrics: {', '.join(METRIC_DIRECTIONS)}"
         )
     return METRIC_DIRECTIONS[metric_name]
 
@@ -81,8 +80,7 @@ def get_metric_thresholds(metric_name: str) -> list[float]:
     """Returns the default thresholds used by comparison summaries."""
     if metric_name not in METRIC_THRESHOLDS:
         raise ValueError(
-            f"Unsupported metric '{metric_name}'. "
-            f"Supported metrics: {', '.join(METRIC_THRESHOLDS)}"
+            f"Unsupported metric '{metric_name}'. Supported metrics: {', '.join(METRIC_THRESHOLDS)}"
         )
     return sorted(threshold for threshold, _ in METRIC_THRESHOLDS[metric_name])
 

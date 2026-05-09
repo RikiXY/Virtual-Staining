@@ -18,7 +18,7 @@ class DoubleConv(nn.Module):
     """
 
     def __init__(self, in_channels, out_channels):
-        super(DoubleConv, self).__init__()
+        super().__init__()
         self.double_conv = nn.Sequential(
             nn.Conv2d(
                 in_channels,
@@ -53,7 +53,7 @@ class Down(nn.Module):
     """
 
     def __init__(self, in_channels, out_channels):
-        super(Down, self).__init__()
+        super().__init__()
         self.maxpool_conv = nn.Sequential(
             nn.MaxPool2d(kernel_size=_POOL_KERNEL, stride=_POOL_KERNEL),
             DoubleConv(in_channels, out_channels),
@@ -72,14 +72,12 @@ class Up(nn.Module):
     """
 
     def __init__(self, in_channels, out_channels, bilinear=True):
-        super(Up, self).__init__()
+        super().__init__()
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
             self.conv = DoubleConv(in_channels, out_channels)
         else:
-            self.up = nn.ConvTranspose2d(
-                in_channels, in_channels // 2, kernel_size=2, stride=2
-            )
+            self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
             self.conv = DoubleConv(in_channels, out_channels)
 
     def forward(self, x1, x2):
@@ -95,7 +93,7 @@ class OutConv(nn.Module):
     """
 
     def __init__(self, in_channels, out_channels):
-        super(OutConv, self).__init__()
+        super().__init__()
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
 
     def forward(self, x):
@@ -108,10 +106,11 @@ class UNetGenerator(nn.Module):
         Args:
             in_channels (int): Number of input channels.
             out_channels (int): Number of output channels.
-            base_channels (int): Number of filters in the first encoder block; doubles at each depth level.
+            base_channels (int): Number of filters in the first encoder block;
+                doubles at each depth level.
             bilinear (bool): Whether to use bilinear upsampling or transposed convolution.
         """
-        super(UNetGenerator, self).__init__()
+        super().__init__()
         b = base_channels
         self.inc = DoubleConv(in_channels, b)
         self.down1 = Down(b, b * 2)
