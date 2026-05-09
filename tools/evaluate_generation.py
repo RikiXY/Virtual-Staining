@@ -2,15 +2,37 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import statistics
 from pathlib import Path
 from typing import Any
 
-from virtual_staining.run_config import load_yaml_mapping, section_with_shared_fields
+from virtual_staining.run_config import (
+    _TOP_LEVEL_KEYS,
+    load_yaml_mapping,
+    parse_bool_strict,
+    reject_unknown_keys,
+    section_with_shared_fields,
+)
 from virtual_staining.utils.cli import print_info, print_section, style
 from virtual_staining.utils.metrics import (
     DEFAULT_METRICS,
     color_metric,
+)
+
+_EVALUATION_KEYS: frozenset[str] = frozenset(
+    {
+        # shared fields
+        "dataset_root",
+        "results_path",
+        "run_name",
+        # section-specific
+        "save_graphs",
+        "hide_graphs_path",
+        "target_dir",
+        "generated_dir",
+        "output_dir",
+    }
 )
 
 METRIC_NAMES = list(DEFAULT_METRICS)
@@ -44,18 +66,22 @@ def _optional_path(data: dict[str, Any], key: str, default: Path) -> Path:
 
 def apply_dataset_config(args: argparse.Namespace) -> argparse.Namespace:
     raw_data = load_yaml_mapping(args.config)
+    if "evaluation" in raw_data:
+        reject_unknown_keys(raw_data, _TOP_LEVEL_KEYS, "top level")
     data = section_with_shared_fields(
         raw_data, "evaluation", {"dataset_root", "results_path", "run_name"}
     )
+    reject_unknown_keys(data, _EVALUATION_KEYS, "evaluation")
 
     dataset_root = Path(data["dataset_root"])
     run_root = Path(data["results_path"]) / data["run_name"]
     args.target_dir = str(_optional_path(data, "target_dir", dataset_root / "dataset_test"))
     args.generated_dir = str(_optional_path(data, "generated_dir", run_root / "output_test"))
     args.output_dir = str(_optional_path(data, "output_dir", run_root / "evaluation"))
-    args.save_graphs = bool(data.get("save_graphs", True))
-    args.hide_graphs_path = bool(
-        data.get("hide_graphs_path", getattr(args, "hide_graphs_path", False))
+    args.save_graphs = parse_bool_strict(data.get("save_graphs", True), "save_graphs")
+    args.hide_graphs_path = parse_bool_strict(
+        data.get("hide_graphs_path", getattr(args, "hide_graphs_path", False)),
+        "hide_graphs_path",
     )
     return args
 
@@ -257,20 +283,38 @@ def resolve_output_dir(output_dir: str | None, generated_path: str | Path) -> Pa
 
 
 def build_summary_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
-    """Builds the aggregated rows for summary.csv."""
+    """Builds the aggregated rows for summary.csv.
+
+    Statistics are computed over finite values only. Non-finite counts are
+    preserved so callers know how many inf/nan values were encountered.
+    """
     summary_rows: list[dict[str, object]] = []
 
     for metric in METRIC_NAMES:
         values = [metric_value(row, metric) for row in rows]
+        finite = [v for v in values if math.isfinite(v)]
+        non_finite_count = len(values) - len(finite)
+
+        if finite:
+            mean: float = statistics.mean(finite)
+            median: float = statistics.median(finite)
+            std: float = statistics.stdev(finite) if len(finite) > 1 else 0.0
+            min_val: float = min(finite)
+            max_val: float = max(finite)
+        else:
+            mean = median = std = min_val = max_val = float("nan")
+
         summary_rows.append(
             {
                 "metric": metric,
                 "count": len(values),
-                "mean": statistics.mean(values),
-                "median": statistics.median(values),
-                "std": statistics.stdev(values) if len(values) > 1 else 0.0,
-                "min": min(values),
-                "max": max(values),
+                "finite_count": len(finite),
+                "non_finite_count": non_finite_count,
+                "mean": mean,
+                "median": median,
+                "std": std,
+                "min": min_val,
+                "max": max_val,
             }
         )
 
@@ -346,7 +390,17 @@ def write_summary_csv(
     num_skipped: int,
 ) -> None:
     """Writes the summary CSV with global counts and per-metric statistics."""
-    fieldnames = ["metric", "count", "mean", "median", "std", "min", "max"]
+    fieldnames = [
+        "metric",
+        "count",
+        "finite_count",
+        "non_finite_count",
+        "mean",
+        "median",
+        "std",
+        "min",
+        "max",
+    ]
 
     with Path(output_path).open("w", newline="", encoding="utf-8") as file:
         writer = csv.writer(file)
@@ -410,12 +464,15 @@ def print_dataset_summary(
         print_section("Metric summary")
         for metric in METRIC_NAMES:
             values = [metric_value(row, metric) for row in per_image_rows]
+            finite = [v for v in values if math.isfinite(v)]
+            if not finite:
+                continue
             print_info(
-                f"{metric.upper()} mean", color_metric(metric, float(statistics.mean(values)))
+                f"{metric.upper()} mean", color_metric(metric, float(statistics.mean(finite)))
             )
             print_info(
                 f"{metric.upper()} median",
-                color_metric(metric, float(statistics.median(values))),
+                color_metric(metric, float(statistics.median(finite))),
             )
 
     print_section("Saved files")

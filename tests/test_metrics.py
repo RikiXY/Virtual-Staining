@@ -12,6 +12,7 @@ from virtual_staining.evaluation.metrics import (
     compute_psnr,
     compute_rmse,
     compute_ssim,
+    filter_finite_values,
 )
 
 
@@ -122,3 +123,26 @@ def test_pcc_gray_and_rgb_mean() -> None:
     assert pcc_g == pytest.approx(1.0)
     assert pcc_b == pytest.approx(1.0)
     assert pcc_rgb_mean == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# filter_finite_values utility
+# ---------------------------------------------------------------------------
+
+
+def test_filter_finite_values_removes_inf_and_nan() -> None:
+    values = [1.0, float("inf"), float("nan"), 2.0, float("-inf")]
+    assert filter_finite_values(values) == [1.0, 2.0]
+
+
+def test_filter_finite_values_all_finite() -> None:
+    values = [0.1, 0.5, 1.0]
+    assert filter_finite_values(values) == [0.1, 0.5, 1.0]
+
+
+def test_filter_finite_values_empty_input() -> None:
+    assert filter_finite_values([]) == []
+
+
+def test_filter_finite_values_all_non_finite() -> None:
+    assert filter_finite_values([float("inf"), float("nan"), float("-inf")]) == []

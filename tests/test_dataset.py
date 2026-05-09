@@ -39,12 +39,11 @@ def test_finds_correct_pair_count(dataset_dir: Path) -> None:
 def test_source_and_target_are_matched(dataset_dir: Path) -> None:
     dataset = PairedHistologyDataset(dataset_dir)
     for source_path, target_path in dataset.pairs:
-        assert Path(source_path).stem.lower().endswith("_source")
-        assert Path(target_path).stem.lower().endswith("_target")
-        src_parts = Path(source_path).stem.split("_")
-        tgt_parts = Path(target_path).stem.split("_")
-        assert src_parts[0] == tgt_parts[0]
-        assert src_parts[1] == tgt_parts[1]
+        src_stem = Path(source_path).stem
+        tgt_stem = Path(target_path).stem
+        assert src_stem.lower().endswith("_source")
+        assert tgt_stem.lower().endswith("_target")
+        assert src_stem[: -len("_source")] == tgt_stem[: -len("_target")]
 
 
 def test_skips_mask_files(dataset_dir: Path) -> None:
@@ -55,9 +54,9 @@ def test_skips_mask_files(dataset_dir: Path) -> None:
 
 def test_skips_unmatched_files(dataset_dir: Path) -> None:
     dataset = PairedHistologyDataset(dataset_dir)
-    keys = {Path(src).stem.split("_")[1] for src, _ in dataset.pairs}
-    assert "00003" not in keys
-    assert "00004" not in keys
+    sample_ids = {Path(src).stem[: -len("_source")] for src, _ in dataset.pairs}
+    assert "00003_00003" not in sample_ids
+    assert "00004_00004" not in sample_ids
 
 
 def test_empty_directory(tmp_path: Path) -> None:
@@ -72,3 +71,39 @@ def test_getitem_returns_pil_images(dataset_dir: Path) -> None:
     assert isinstance(target, Image.Image)
     assert source.mode == "RGB"
     assert target.mode == "RGB"
+
+
+def test_multiunderscore_sample_id(tmp_path: Path) -> None:
+    _make_image(tmp_path / "slide_A_patch_001_source.png")
+    _make_image(tmp_path / "slide_A_patch_001_target.png")
+    dataset = PairedHistologyDataset(tmp_path)
+    assert len(dataset) == 1
+    src, tgt = dataset.pairs[0]
+    assert Path(src).stem == "slide_A_patch_001_source"
+    assert Path(tgt).stem == "slide_A_patch_001_target"
+
+
+def test_coordinate_sample_id(tmp_path: Path) -> None:
+    _make_image(tmp_path / "00512_09216_source.tif")
+    _make_image(tmp_path / "00512_09216_target.tif")
+    dataset = PairedHistologyDataset(tmp_path)
+    assert len(dataset) == 1
+    src, tgt = dataset.pairs[0]
+    assert Path(src).stem == "00512_09216_source"
+    assert Path(tgt).stem == "00512_09216_target"
+
+
+def test_duplicate_source_raises(tmp_path: Path) -> None:
+    _make_image(tmp_path / "sample_source.tif")
+    _make_image(tmp_path / "sample_source.png")
+    _make_image(tmp_path / "sample_target.png")
+    with pytest.raises(ValueError, match="Duplicate source"):
+        PairedHistologyDataset(tmp_path)
+
+
+def test_duplicate_target_raises(tmp_path: Path) -> None:
+    _make_image(tmp_path / "sample_source.png")
+    _make_image(tmp_path / "sample_target.tif")
+    _make_image(tmp_path / "sample_target.png")
+    with pytest.raises(ValueError, match="Duplicate target"):
+        PairedHistologyDataset(tmp_path)

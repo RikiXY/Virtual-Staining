@@ -80,6 +80,11 @@ def compute_pcc(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.corrcoef(a_flat, b_flat)[0, 1])
 
 
+def filter_finite_values(values: list[float]) -> list[float]:
+    """Returns only the finite elements from a list, dropping inf and nan."""
+    return [v for v in values if np.isfinite(v)]
+
+
 def rgb_to_gray_float(image: np.ndarray) -> np.ndarray:
     """Converts an RGB image to grayscale using standard luminance weights."""
     if image.ndim == 2:

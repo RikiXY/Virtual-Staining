@@ -394,9 +394,11 @@ def divide_image_with_grid(
     img : np.ndarray
         Input image.
     img_size : tuple[int, int]
-        Size of the region of interest (width, height).
+        Patch size as ``(width, height)``.  ``img_size[0]`` is the number of
+        columns extracted and ``img_size[1]`` is the number of rows, matching
+        the ``(width, height)`` convention used throughout the codebase.
     grid_movement : tuple[int, int]
-        Step size for moving the grid (x, y).
+        Step size for moving the grid ``(x_step, y_step)``.
     mask : np.ndarray, optional
         Image mask for filtering. Default is None.
     max_mask_percentage : float, optional
@@ -451,7 +453,7 @@ def divide_image_with_positions(
     img : np.ndarray
         Input image.
     img_size : tuple[int, int]
-        Size of the region of interest.
+        Patch size as ``(width, height)``.
     positions : list[tuple[int, int]]
         List of positions for the split images.
 
@@ -497,10 +499,13 @@ def split_items(items: list[T], ratios: Sequence[float]) -> list[list[T]]:
     shuffled = items.copy()
     random.shuffle(shuffled)
 
+    n = len(shuffled)
+    cumulative = 0.0
     output: list[list[T]] = []
     start = 0
-    for ratio in ratios:
-        end = start + int(len(shuffled) * ratio)
+    for i, ratio in enumerate(ratios):
+        cumulative += ratio
+        end = n if i == len(ratios) - 1 else round(cumulative * n)
         output.append(shuffled[start:end])
         start = end
     return output

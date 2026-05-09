@@ -11,6 +11,7 @@ from torchvision import transforms
 from torchvision.utils import save_image
 
 from virtual_staining.data.dataset import PairedHistologyDataset
+from virtual_staining.image_size import to_torchvision_hw
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.config import InferenceConfig, TrainingConfig
@@ -82,6 +83,20 @@ def build_parser():
     return parser
 
 
+def _check_generator_arch(checkpoint_arch: dict, generator) -> None:
+    """Raise ValueError if the checkpoint's generator architecture does not match."""
+    gen_arch = checkpoint_arch.get("generator", {})
+    for key in ("in_channels", "out_channels", "base_channels", "bilinear"):
+        ckpt_val = gen_arch.get(key)
+        curr_val = getattr(generator, key, None)
+        if ckpt_val != curr_val:
+            raise ValueError(
+                f"Architecture mismatch for generator.{key}: "
+                f"checkpoint has {ckpt_val!r}, inference model has {curr_val!r}. "
+                "Instantiate the generator with the same parameters used during training."
+            )
+
+
 def is_amp_enabled(device):
     # Mixed precision with `autocast` and `GradScaler` is mainly useful
     # on CUDA GPUs. On CPU we leave everything disabled to avoid unnecessary
@@ -111,7 +126,7 @@ def main(config: TrainingConfig) -> None:
 
     transform = transforms.Compose(
         [
-            transforms.Resize(config.image_size),
+            transforms.Resize(to_torchvision_hw(config.image_size)),
             transforms.ToTensor(),
             transforms.Normalize([0.5] * 3, [0.5] * 3),
         ]
@@ -170,6 +185,15 @@ def test_inference(checkpoint_path, test_folder, output_folder, image_size=(256,
                 "Set image_size in the run config or use a matching "
                 "checkpoint."
             )
+
+    checkpoint_arch = checkpoint.get("architecture")
+    if checkpoint_arch is None:
+        raise ValueError(
+            "Checkpoint has no architecture metadata. "
+            "Only checkpoints saved with the current version are supported."
+        )
+    _check_generator_arch(checkpoint_arch, G)
+
     G.load_state_dict(checkpoint["generator_state_dict"])
     G.eval()
 
@@ -177,7 +201,7 @@ def test_inference(checkpoint_path, test_folder, output_folder, image_size=(256,
     # otherwise the model would receive inputs with a different distribution.
     transform = transforms.Compose(
         [
-            transforms.Resize(image_size),
+            transforms.Resize(to_torchvision_hw(image_size)),
             transforms.ToTensor(),
             transforms.Normalize([0.5] * 3, [0.5] * 3),
         ]

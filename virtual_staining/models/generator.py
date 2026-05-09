@@ -111,6 +111,10 @@ class UNetGenerator(nn.Module):
             bilinear (bool): Whether to use bilinear upsampling or transposed convolution.
         """
         super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.base_channels = base_channels
+        self.bilinear = bilinear
         b = base_channels
         self.inc = DoubleConv(in_channels, b)
         self.down1 = Down(b, b * 2)

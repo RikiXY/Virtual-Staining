@@ -136,8 +136,10 @@ dataset_root: local_workspace/datasets/your_sample
 results_path: local_workspace/results
 run_name: your_run_name
 
-image_size: [256, 256]
+image_size: [256, 256]  # [width, height]
 ```
+
+Size values follow the `[width, height]` convention throughout the codebase — `image_size[0]` is width and `image_size[1]` is height.  Square defaults hide any ordering ambiguity, so non-square sizes such as `[320, 256]` (320 px wide, 256 px tall) rely on this convention being honoured.
 
 The Makefile intentionally accepts only `CONFIG` for experiment execution. Do not pass `DATASET`, `RUN_NAME`, `IMAGE_SIZE`, `EPOCHS`, `SEED`, `CHECKPOINT`, or similar run settings to `make`.
 

@@ -20,6 +20,55 @@ from virtual_staining.utils.cli import print_info, print_section, style
 from virtual_staining.utils.env import collect_environment
 
 # ---------------------------------------------------------------------------
+# Architecture metadata helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_arch_metadata(generator: nn.Module, discriminator: nn.Module) -> dict:
+    return {
+        "generator": {
+            "class": type(generator).__name__,
+            "in_channels": getattr(generator, "in_channels", None),
+            "out_channels": getattr(generator, "out_channels", None),
+            "base_channels": getattr(generator, "base_channels", None),
+            "bilinear": getattr(generator, "bilinear", None),
+        },
+        "discriminator": {
+            "class": type(discriminator).__name__,
+            "in_channels": getattr(discriminator, "in_channels", None),
+            "ndf": getattr(discriminator, "ndf", None),
+            "use_sigmoid": getattr(discriminator, "use_sigmoid", None),
+        },
+    }
+
+
+def _check_arch_match(
+    checkpoint_arch: dict, generator: nn.Module, discriminator: nn.Module
+) -> None:
+    """Raise ValueError if checkpoint architecture does not match the current models."""
+    gen_arch = checkpoint_arch.get("generator", {})
+    for key in ("in_channels", "out_channels", "base_channels", "bilinear"):
+        ckpt_val = gen_arch.get(key)
+        curr_val = getattr(generator, key, None)
+        if ckpt_val != curr_val:
+            raise ValueError(
+                f"Architecture mismatch for generator.{key}: "
+                f"checkpoint has {ckpt_val!r}, current model has {curr_val!r}. "
+                "Instantiate the model with the same parameters used during training."
+            )
+    disc_arch = checkpoint_arch.get("discriminator", {})
+    for key in ("in_channels", "ndf", "use_sigmoid"):
+        ckpt_val = disc_arch.get(key)
+        curr_val = getattr(discriminator, key, None)
+        if ckpt_val != curr_val:
+            raise ValueError(
+                f"Architecture mismatch for discriminator.{key}: "
+                f"checkpoint has {ckpt_val!r}, current model has {curr_val!r}. "
+                "Instantiate the model with the same parameters used during training."
+            )
+
+
+# ---------------------------------------------------------------------------
 # Module-level helpers (private to this module)
 # ---------------------------------------------------------------------------
 
@@ -408,6 +457,18 @@ class Trainer:
                 )
                 metrics_file.flush()
 
+        if start_epoch < self.config.epochs:
+            final_epoch = self.config.epochs - 1
+            if (final_epoch + 1) % self.config.checkpoint_rate != 0:
+                checkpoint_path = self._checkpoints_dir / f"ep{final_epoch:03d}.pth"
+                self.save_checkpoint(checkpoint_path, final_epoch)
+                training_status["last_checkpoint"] = checkpoint_path.name
+                _log_message(
+                    f"Final checkpoint saved to {checkpoint_path} (epoch {final_epoch})",
+                    log_file,
+                    use_stdout=False,
+                )
+
         _finish_console_progress()
         total_seconds = time.time() - start_time
         _log_message(
@@ -419,6 +480,7 @@ class Trainer:
     def save_checkpoint(self, checkpoint_path: Path, epoch: int) -> None:
         checkpoint = {
             "epoch": epoch,
+            "architecture": _make_arch_metadata(self.generator, self.discriminator),
             "generator_state_dict": self.generator.state_dict(),
             "discriminator_state_dict": self.discriminator.state_dict(),
             "optimizerG_state_dict": self._opt_G.state_dict(),
@@ -449,6 +511,14 @@ class Trainer:
                     f"Checkpoint image_size={checkpoint_image_size}, "
                     f"current image_size={tuple(self.config.image_size)}."
                 )
+
+        checkpoint_arch = checkpoint.get("architecture")
+        if checkpoint_arch is None:
+            raise ValueError(
+                f"Checkpoint '{checkpoint_path}' has no architecture metadata. "
+                "Only checkpoints saved with the current version are supported."
+            )
+        _check_arch_match(checkpoint_arch, self.generator, self.discriminator)
 
         self.generator.load_state_dict(checkpoint["generator_state_dict"])
         self.discriminator.load_state_dict(checkpoint["discriminator_state_dict"])
@@ -616,8 +686,8 @@ class Trainer:
             "checkpoints_dir": str(self._checkpoints_dir),
             "output_train_dir": str(self._output_train_dir),
             "output_val_dir": str(self._output_val_dir),
-            "train_dir": str(Path(self.config.dataset_root) / "dataset_train"),
-            "val_dir": str(Path(self.config.dataset_root) / "dataset_val"),
+            "train_dir": str(self.config.dataset_train_dir),
+            "val_dir": str(self.config.dataset_val_dir),
             "seed": seed,
             "device": str(self.device),
             "epochs": self.config.epochs,
