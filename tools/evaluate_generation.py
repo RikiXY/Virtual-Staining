@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import statistics
 from pathlib import Path
 from typing import Any
@@ -282,20 +283,38 @@ def resolve_output_dir(output_dir: str | None, generated_path: str | Path) -> Pa
 
 
 def build_summary_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
-    """Builds the aggregated rows for summary.csv."""
+    """Builds the aggregated rows for summary.csv.
+
+    Statistics are computed over finite values only. Non-finite counts are
+    preserved so callers know how many inf/nan values were encountered.
+    """
     summary_rows: list[dict[str, object]] = []
 
     for metric in METRIC_NAMES:
         values = [metric_value(row, metric) for row in rows]
+        finite = [v for v in values if math.isfinite(v)]
+        non_finite_count = len(values) - len(finite)
+
+        if finite:
+            mean: float = statistics.mean(finite)
+            median: float = statistics.median(finite)
+            std: float = statistics.stdev(finite) if len(finite) > 1 else 0.0
+            min_val: float = min(finite)
+            max_val: float = max(finite)
+        else:
+            mean = median = std = min_val = max_val = float("nan")
+
         summary_rows.append(
             {
                 "metric": metric,
                 "count": len(values),
-                "mean": statistics.mean(values),
-                "median": statistics.median(values),
-                "std": statistics.stdev(values) if len(values) > 1 else 0.0,
-                "min": min(values),
-                "max": max(values),
+                "finite_count": len(finite),
+                "non_finite_count": non_finite_count,
+                "mean": mean,
+                "median": median,
+                "std": std,
+                "min": min_val,
+                "max": max_val,
             }
         )
 
@@ -371,7 +390,17 @@ def write_summary_csv(
     num_skipped: int,
 ) -> None:
     """Writes the summary CSV with global counts and per-metric statistics."""
-    fieldnames = ["metric", "count", "mean", "median", "std", "min", "max"]
+    fieldnames = [
+        "metric",
+        "count",
+        "finite_count",
+        "non_finite_count",
+        "mean",
+        "median",
+        "std",
+        "min",
+        "max",
+    ]
 
     with Path(output_path).open("w", newline="", encoding="utf-8") as file:
         writer = csv.writer(file)
@@ -435,12 +464,15 @@ def print_dataset_summary(
         print_section("Metric summary")
         for metric in METRIC_NAMES:
             values = [metric_value(row, metric) for row in per_image_rows]
+            finite = [v for v in values if math.isfinite(v)]
+            if not finite:
+                continue
             print_info(
-                f"{metric.upper()} mean", color_metric(metric, float(statistics.mean(values)))
+                f"{metric.upper()} mean", color_metric(metric, float(statistics.mean(finite)))
             )
             print_info(
                 f"{metric.upper()} median",
-                color_metric(metric, float(statistics.median(values))),
+                color_metric(metric, float(statistics.median(finite))),
             )
 
     print_section("Saved files")

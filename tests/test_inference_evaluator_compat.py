@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -353,3 +354,41 @@ def test_inference_raises_on_architecture_mismatch(tmp_path: Path) -> None:
             image_size=_IMAGE_SIZE,
             device=_DEVICE,
         )
+
+
+# ---------------------------------------------------------------------------
+# Non-finite metric values: identical and constant images
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_pair_identical_images_returns_psnr_inf(tmp_path: Path) -> None:
+    """evaluate_pair on identical images must return PSNR=inf without crashing."""
+    arr = np.full((*_IMAGE_SIZE, 3), 128, dtype=np.uint8)
+    target_path = tmp_path / f"{_SAMPLE_ID}_target.png"
+    generated_path = tmp_path / f"{_SAMPLE_ID}_target_generated.png"
+    Image.fromarray(arr).save(target_path)
+    Image.fromarray(arr).save(generated_path)
+
+    metrics, _ = evaluate_pair(target_path, generated_path)
+
+    assert math.isinf(metrics["psnr"]), (
+        f"Expected PSNR=inf for identical images, got {metrics['psnr']}"
+    )
+
+
+def test_evaluate_pair_constant_target_returns_pcc_nan(tmp_path: Path) -> None:
+    """evaluate_pair with a constant-value target must return PCC=nan without crashing."""
+    target = np.zeros((*_IMAGE_SIZE, 3), dtype=np.uint8)
+    rng = np.random.default_rng(42)
+    generated = rng.integers(1, 256, (*_IMAGE_SIZE, 3), dtype=np.uint8)
+
+    target_path = tmp_path / f"{_SAMPLE_ID}_target.png"
+    generated_path = tmp_path / f"{_SAMPLE_ID}_target_generated.png"
+    Image.fromarray(target).save(target_path)
+    Image.fromarray(generated).save(generated_path)
+
+    metrics, _ = evaluate_pair(target_path, generated_path)
+
+    assert math.isnan(metrics["pcc_gray"]), (
+        f"Expected PCC=nan for constant target, got {metrics['pcc_gray']}"
+    )
