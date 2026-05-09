@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 
 import numpy as np
@@ -270,3 +271,89 @@ def test_trainer_checkpoint_round_trip(
 
     start_epoch = trainer_2.load_checkpoint(checkpoint_path)
     assert start_epoch == 1
+
+
+# ---------------------------------------------------------------------------
+# run_config.json metadata accuracy
+# ---------------------------------------------------------------------------
+
+
+def test_run_config_records_default_dirs(
+    smoke_trainer: tuple[Trainer, TrainingConfig],
+) -> None:
+    trainer, config = smoke_trainer
+
+    trainer.train(seed=42)
+
+    with (config.run_root / "run_config.json").open(encoding="utf-8") as f:
+        run_config = json.load(f)
+
+    assert run_config["train_dir"] == str(config.dataset_root / "dataset_train")
+    assert run_config["val_dir"] == str(config.dataset_root / "dataset_val")
+
+
+def test_run_config_records_custom_dirs(tmp_path: Path) -> None:
+    custom_train_dir = tmp_path / "custom_train"
+    custom_val_dir = tmp_path / "custom_val"
+    custom_train_dir.mkdir(parents=True)
+    custom_val_dir.mkdir(parents=True)
+
+    _write_rgb_pair(custom_train_dir)
+    _write_rgb_pair(custom_val_dir)
+
+    config = TrainingConfig(
+        dataset_root=tmp_path / "dataset",
+        results_path=tmp_path / "results",
+        run_name="custom_dirs_run",
+        image_size=(32, 32),
+        batch_size=1,
+        epochs=1,
+        lr_g=2e-4,
+        lr_d=2e-4,
+        beta1=0.5,
+        beta2=0.999,
+        l1_weight=25.0,
+        seed=42,
+        num_workers=0,
+        validate_rate=1,
+        checkpoint_rate=2,
+        log_rate=1,
+        train_dir=custom_train_dir,
+        val_dir=custom_val_dir,
+    )
+
+    transform = transforms.Compose(
+        [
+            transforms.Resize(config.image_size),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5] * 3, [0.5] * 3),
+        ]
+    )
+    device = torch.device("cpu")
+    train_loader = DataLoader(
+        PairedHistologyDataset(custom_train_dir, transform=transform),
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
+    )
+    val_loader = DataLoader(
+        PairedHistologyDataset(custom_val_dir, transform=transform),
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
+    )
+    trainer = Trainer(
+        config=config,
+        generator=UNetGenerator().to(device),
+        discriminator=PatchGANDiscriminator().to(device),
+        train_loader=train_loader,
+        val_loader=val_loader,
+        device=device,
+    )
+    trainer.train(seed=42)
+
+    with (config.run_root / "run_config.json").open(encoding="utf-8") as f:
+        run_config = json.load(f)
+
+    assert run_config["train_dir"] == str(custom_train_dir)
+    assert run_config["val_dir"] == str(custom_val_dir)
