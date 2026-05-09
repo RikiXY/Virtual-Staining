@@ -299,11 +299,33 @@ class DatasetBuilder:
             [self.config.train_ratio, self.config.val_ratio, self.config.test_ratio],
         )
 
-        for i, subset in enumerate(split):
-            subset_dir = root / ["dataset_train", "dataset_val", "dataset_test"][i]
+        split_names = ["train", "val", "test"]
+        manifest_rows: list[dict[str, Any]] = []
+        for split_name, subset in zip(split_names, split):
+            subset_dir = root / f"dataset_{split_name}"
             for src_pair, tgt_pair in subset:
                 cv2.imwrite(str(subset_dir / src_pair[1]), src_pair[0])
                 cv2.imwrite(str(subset_dir / tgt_pair[1]), tgt_pair[0])
+                parts = src_pair[1].split("_")
+                x, y = int(parts[0]), int(parts[1])
+                manifest_rows.append(
+                    {
+                        "sample_id": f"{x:05}_{y:05}",
+                        "split": split_name,
+                        "source_name": src_pair[1],
+                        "target_name": tgt_pair[1],
+                        "x": x,
+                        "y": y,
+                    }
+                )
+
+        with open(root / "split_manifest.csv", "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["sample_id", "split", "source_name", "target_name", "x", "y"],
+            )
+            writer.writeheader()
+            writer.writerows(manifest_rows)
 
         print(
             f"Saved: train={len(split[0])}, val={len(split[1])}, "
