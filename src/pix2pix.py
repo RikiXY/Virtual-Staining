@@ -1101,6 +1101,9 @@ def validate(
     Esegue un pass di validazione e calcola le loss medie
     di generatore e discriminatore.
     """
+    was_training_G = G.training
+    was_training_D = D.training
+
     G.eval()
     D.eval()
 
@@ -1164,7 +1167,13 @@ def validate(
         use_stdout=False
     )
 
+    if was_training_G:
+        G.train()
+    if was_training_D:
+        D.train()
+    
     return avg_loss_G, avg_loss_D
+
 
 def test_inference(
     checkpoint_path,
