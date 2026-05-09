@@ -292,3 +292,28 @@ def test_run_all_saves_alignment_metadata(builder_config: PreprocessingConfig) -
         "n_inliers",
         "warp_matrix",
     }
+
+
+# ---------------------------------------------------------------------------
+# Count invariant tests
+# ---------------------------------------------------------------------------
+
+
+def test_extract_patches_raises_on_count_mismatch(
+    builder_config: PreprocessingConfig,
+) -> None:
+    builder = DatasetBuilder(builder_config)
+    dummy = np.zeros((64, 64, 3), dtype=np.uint8)
+
+    with _patched_builder_dependencies():
+        builder.compute_masks()
+        builder.align()
+
+        with (
+            patch(
+                "virtual_staining.data.builder.divide_image_with_positions",
+                return_value=[dummy],
+            ),
+            pytest.raises(RuntimeError, match="mismatch"),
+        ):
+            builder.extract_patches()

@@ -164,6 +164,18 @@ class DatasetBuilder:
             self.config.image_size,
             positions,
         )
+        n_pos = len(positions)
+        n_src = len(source_images)
+        n_src_mask = len(source_masks)
+        n_tgt = len(target_images)
+        n_tgt_mask = len(target_masks)
+        if not (n_pos == n_src == n_src_mask == n_tgt == n_tgt_mask):
+            raise RuntimeError(
+                f"Patch count mismatch after extraction: "
+                f"positions={n_pos}, source_patches={n_src}, source_masks={n_src_mask}, "
+                f"target_patches={n_tgt}, target_masks={n_tgt_mask}"
+            )
+
         print(f"Extracted {len(source_images)} patch pairs")
         self._source_patches = source_images
         self._source_patch_masks = source_masks
