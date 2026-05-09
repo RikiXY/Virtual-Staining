@@ -18,6 +18,42 @@ from virtual_staining.training.config import TrainingConfig
 from virtual_staining.training.trainer import Trainer
 
 # ---------------------------------------------------------------------------
+# Internal helper: build a second Trainer that can load a checkpoint
+# ---------------------------------------------------------------------------
+
+
+def _make_resume_trainer(
+    config: TrainingConfig,
+    generator: UNetGenerator,
+    discriminator: PatchGANDiscriminator,
+) -> Trainer:
+    device = torch.device("cpu")
+    transform = transforms.Compose(
+        [
+            transforms.Resize(config.image_size),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5] * 3, [0.5] * 3),
+        ]
+    )
+    train_dir = config.dataset_root / "dataset_train"
+    val_dir = config.dataset_root / "dataset_val"
+    train_loader = DataLoader(
+        PairedHistologyDataset(train_dir, transform=transform), batch_size=1, num_workers=0
+    )
+    val_loader = DataLoader(
+        PairedHistologyDataset(val_dir, transform=transform), batch_size=1, num_workers=0
+    )
+    return Trainer(
+        config=config,
+        generator=generator.to(device),
+        discriminator=discriminator.to(device),
+        train_loader=train_loader,
+        val_loader=val_loader,
+        device=device,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
 
@@ -357,3 +393,79 @@ def test_run_config_records_custom_dirs(tmp_path: Path) -> None:
 
     assert run_config["train_dir"] == str(custom_train_dir)
     assert run_config["val_dir"] == str(custom_val_dir)
+
+
+# ---------------------------------------------------------------------------
+# Architecture metadata: presence and validation
+# ---------------------------------------------------------------------------
+
+
+def test_checkpoint_architecture_metadata_present(
+    checkpointing_trainer: tuple[Trainer, TrainingConfig],
+) -> None:
+    """Saved checkpoint must include an 'architecture' key with correct model params."""
+    trainer, config = checkpointing_trainer
+    trainer.train(seed=42)
+
+    checkpoint_path = next((config.run_root / "checkpoints").glob("*.pth"))
+    ck = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+    assert "architecture" in ck
+    gen = ck["architecture"]["generator"]
+    assert gen["class"] == "UNetGenerator"
+    assert gen["in_channels"] == 3
+    assert gen["out_channels"] == 3
+    assert gen["base_channels"] == 64
+    assert gen["bilinear"] is False
+    disc = ck["architecture"]["discriminator"]
+    assert disc["class"] == "PatchGANDiscriminator"
+    assert disc["in_channels"] == 6
+    assert disc["ndf"] == 64
+    assert disc["use_sigmoid"] is False
+
+
+def test_load_checkpoint_validates_matching_architecture(
+    checkpointing_trainer: tuple[Trainer, TrainingConfig],
+) -> None:
+    """load_checkpoint must succeed when architecture matches the checkpoint."""
+    trainer, config = checkpointing_trainer
+    trainer.train(seed=42)
+
+    checkpoint_path = next((config.run_root / "checkpoints").glob("*.pth"))
+    trainer_2 = _make_resume_trainer(config, UNetGenerator(), PatchGANDiscriminator())
+    start_epoch = trainer_2.load_checkpoint(checkpoint_path)
+    assert start_epoch == 1
+
+
+def test_load_checkpoint_raises_on_architecture_mismatch(
+    checkpointing_trainer: tuple[Trainer, TrainingConfig],
+) -> None:
+    """load_checkpoint must raise ValueError when generator architecture params don't match."""
+    trainer, config = checkpointing_trainer
+    trainer.train(seed=42)
+
+    checkpoint_path = next((config.run_root / "checkpoints").glob("*.pth"))
+    trainer_mismatch = _make_resume_trainer(
+        config, UNetGenerator(base_channels=32), PatchGANDiscriminator()
+    )
+    with pytest.raises(ValueError, match="base_channels"):
+        trainer_mismatch.load_checkpoint(checkpoint_path)
+
+
+def test_load_checkpoint_raises_on_missing_architecture(
+    checkpointing_trainer: tuple[Trainer, TrainingConfig],
+    tmp_path: Path,
+) -> None:
+    """load_checkpoint must raise ValueError for checkpoints without architecture metadata."""
+    trainer, config = checkpointing_trainer
+    trainer.train(seed=42)
+
+    checkpoint_path = next((config.run_root / "checkpoints").glob("*.pth"))
+    ck = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    ck.pop("architecture")
+    legacy_path = tmp_path / "no_arch.pth"
+    torch.save(ck, legacy_path)
+
+    trainer_2 = _make_resume_trainer(config, UNetGenerator(), PatchGANDiscriminator())
+    with pytest.raises(ValueError, match="architecture metadata"):
+        trainer_2.load_checkpoint(legacy_path)

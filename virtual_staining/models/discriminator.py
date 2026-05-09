@@ -18,6 +18,9 @@ class PatchGANDiscriminator(nn.Module):
             use_sigmoid (bool): Whether to apply a final sigmoid activation.
         """
         super().__init__()
+        self.in_channels = in_channels
+        self.ndf = ndf
+        self.use_sigmoid = use_sigmoid
 
         curr_dim = ndf
         next_dim = curr_dim * 2

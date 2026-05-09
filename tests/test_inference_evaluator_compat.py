@@ -14,6 +14,7 @@ from src.pix2pix import test_inference as run_inference
 from tools.evaluate_generation import collect_image_files, extract_single_sample_id
 from virtual_staining.evaluation.metrics import evaluate_pair
 from virtual_staining.image_size import to_torchvision_hw
+from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 
 # ---------------------------------------------------------------------------
@@ -38,8 +39,28 @@ def _write_pair(directory: Path, prefix: str = _SAMPLE_ID, ext: str = ".png") ->
 
 def _save_checkpoint(path: Path, image_size: tuple[int, int] = _IMAGE_SIZE) -> None:
     G = UNetGenerator()
+    D = PatchGANDiscriminator()
     torch.save(
-        {"generator_state_dict": G.state_dict(), "image_size": image_size, "epoch": 0},
+        {
+            "generator_state_dict": G.state_dict(),
+            "image_size": image_size,
+            "epoch": 0,
+            "architecture": {
+                "generator": {
+                    "class": "UNetGenerator",
+                    "in_channels": G.in_channels,
+                    "out_channels": G.out_channels,
+                    "base_channels": G.base_channels,
+                    "bilinear": G.bilinear,
+                },
+                "discriminator": {
+                    "class": "PatchGANDiscriminator",
+                    "in_channels": D.in_channels,
+                    "ndf": D.ndf,
+                    "use_sigmoid": D.use_sigmoid,
+                },
+            },
+        },
         path,
     )
 
@@ -258,3 +279,77 @@ def test_inference_non_square_produces_correct_output_shape(tmp_path: Path) -> N
     assert out_img.size == (width, height), (
         f"Expected output image size (width={width}, height={height}), got PIL size {out_img.size}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Architecture metadata: inference compatibility
+# ---------------------------------------------------------------------------
+
+
+def test_inference_raises_on_missing_architecture_metadata(tmp_path: Path) -> None:
+    """test_inference must raise ValueError when the checkpoint has no architecture metadata."""
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    checkpoint = tmp_path / "ep000.pth"
+
+    _write_pair(test_dir)
+    G = UNetGenerator()
+    torch.save(
+        {"generator_state_dict": G.state_dict(), "image_size": _IMAGE_SIZE, "epoch": 0},
+        checkpoint,
+    )
+
+    with pytest.raises(ValueError, match="architecture metadata"):
+        run_inference(
+            checkpoint_path=checkpoint,
+            test_folder=str(test_dir),
+            output_folder=str(output_dir),
+            image_size=_IMAGE_SIZE,
+            device=_DEVICE,
+        )
+
+
+def test_inference_raises_on_architecture_mismatch(tmp_path: Path) -> None:
+    """test_inference must raise ValueError when checkpoint generator arch doesn't match."""
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    checkpoint = tmp_path / "ep000.pth"
+
+    _write_pair(test_dir)
+
+    G = UNetGenerator(base_channels=32)
+    D = PatchGANDiscriminator()
+    torch.save(
+        {
+            "generator_state_dict": G.state_dict(),
+            "image_size": _IMAGE_SIZE,
+            "epoch": 0,
+            "architecture": {
+                "generator": {
+                    "class": "UNetGenerator",
+                    "in_channels": G.in_channels,
+                    "out_channels": G.out_channels,
+                    "base_channels": G.base_channels,
+                    "bilinear": G.bilinear,
+                },
+                "discriminator": {
+                    "class": "PatchGANDiscriminator",
+                    "in_channels": D.in_channels,
+                    "ndf": D.ndf,
+                    "use_sigmoid": D.use_sigmoid,
+                },
+            },
+        },
+        checkpoint,
+    )
+
+    with pytest.raises(ValueError, match="base_channels"):
+        run_inference(
+            checkpoint_path=checkpoint,
+            test_folder=str(test_dir),
+            output_folder=str(output_dir),
+            image_size=_IMAGE_SIZE,
+            device=_DEVICE,
+        )
