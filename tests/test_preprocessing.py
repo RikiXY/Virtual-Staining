@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 
-from virtual_staining.data.preprocessing import is_valid_patch_pair, split_items
+from virtual_staining.data.preprocessing import (
+    AlignmentMetadata,
+    align_images,
+    is_valid_patch_pair,
+    split_items,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -152,3 +158,56 @@ def test_debug_info_contains_required_keys() -> None:
         "reasons",
     }
     assert expected_keys.issubset(info.keys())
+
+
+# ---------------------------------------------------------------------------
+# align_images - failure paths
+# ---------------------------------------------------------------------------
+
+
+def _textured_image(seed: int = 0) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    return rng.integers(10, 200, (300, 300, 3), dtype=np.uint8)
+
+
+def test_align_images_raises_when_warp_matrix_is_none() -> None:
+    img = _textured_image()
+    with patch(
+        "virtual_staining.data.preprocessing.cv2.estimateAffinePartial2D",
+        return_value=(None, None),
+    ):
+        with pytest.raises(ValueError, match="Affine estimation failed"):
+            align_images(img, img)
+
+
+def test_align_images_raises_on_low_inlier_count() -> None:
+    img = _textured_image()
+    zero_inliers = np.zeros((50, 1), dtype=np.uint8)
+    with patch(
+        "virtual_staining.data.preprocessing.cv2.estimateAffinePartial2D",
+        return_value=(np.eye(2, 3, dtype=np.float64), zero_inliers),
+    ):
+        with pytest.raises(ValueError, match="inliers"):
+            align_images(img, img)
+
+
+# ---------------------------------------------------------------------------
+# AlignmentMetadata - structure
+# ---------------------------------------------------------------------------
+
+
+def test_alignment_metadata_has_expected_fields() -> None:
+    eye = np.eye(2, 3, dtype=np.float64)
+    meta = AlignmentMetadata(
+        n_keypoints_src=200,
+        n_keypoints_tgt=180,
+        n_matches=60,
+        n_inliers=50,
+        warp_matrix=eye.tolist(),
+    )
+    assert meta.n_keypoints_src == 200
+    assert meta.n_keypoints_tgt == 180
+    assert meta.n_matches == 60
+    assert meta.n_inliers == 50
+    assert len(meta.warp_matrix) == 2
+    assert len(meta.warp_matrix[0]) == 3

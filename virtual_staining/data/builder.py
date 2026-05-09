@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import dataclasses
+import json
 import random
 from typing import Any, cast
 
@@ -11,6 +13,7 @@ from virtual_staining.data.config import PreprocessingConfig
 from virtual_staining.utils.env import collect_environment
 from virtual_staining.data.preprocessing import (
     MASK_PARAMETER_GRID,
+    AlignmentMetadata,
     align_from_scaled,
     calculate_mask_with_multiple_parameters,
     divide_image_with_grid,
@@ -106,7 +109,7 @@ class DatasetBuilder:
             raise RuntimeError("compute_masks() must be called before align()")
 
         print("Aligning images...")
-        aligned_target, aligned_target_mask, _ = align_from_scaled(
+        aligned_target, aligned_target_mask, _, metadata = align_from_scaled(
             self._source_image,
             self._target_image,
             mask1=self._source_mask,
@@ -125,6 +128,8 @@ class DatasetBuilder:
             str(root / f"aligned_mask_{stem}{self._target_suffix}"),
             aligned_target_mask,
         )
+        with open(root / "alignment_metadata.json", "w", encoding="utf-8") as f:
+            json.dump(dataclasses.asdict(metadata), f, indent=2)
 
     def extract_patches(self) -> None:
         """Extract paired patches from the source and aligned target images."""
@@ -348,8 +353,6 @@ class DatasetBuilder:
         )
         random.seed(seed)
         print(f"Seed set to {seed}")
-
-        import json
 
         root = self.config.dataset_root
         self.config.to_yaml(root / "config.yaml")

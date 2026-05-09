@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import dataclasses
 import random
 import shutil
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, TypeVar
 
@@ -21,6 +23,19 @@ MASK_PARAMETER_GRID = [(2, 3), (4, 6), (6, 9), (8, 15)]
 
 ALLOWED_EXTENSIONS = {".tif", ".tiff", ".png"}
 T = TypeVar("T")
+
+MIN_INLIERS = 4
+
+
+@dataclass
+class AlignmentMetadata:
+    """Alignment statistics captured during image registration."""
+
+    n_keypoints_src: int
+    n_keypoints_tgt: int
+    n_matches: int
+    n_inliers: int
+    warp_matrix: list[list[float]]
 
 
 def pad_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
@@ -174,7 +189,7 @@ def align_images(
     mask2: Optional[np.ndarray] = None,
     nfeatures: int = 10000,
     ed_distance: int = 200,
-) -> tuple[np.ndarray, Optional[np.ndarray], np.ndarray]:
+) -> tuple[np.ndarray, Optional[np.ndarray], np.ndarray, AlignmentMetadata]:
     """
     Aligns a moving image to a reference image.
 
@@ -201,6 +216,8 @@ def align_images(
         The aligned mask for the second image.
     warp_matrix : np.ndarray
         The transformation matrix.
+    metadata : AlignmentMetadata
+        Keypoint, match, inlier counts and the warp matrix.
     """
     clahe = cv2.createCLAHE(clipLimit=18.0, tileGridSize=(8, 8))
     img1_clahe = img1
@@ -245,7 +262,27 @@ def align_images(
         dtype=np.float32,
     ).reshape(-1, 1, 2)
 
-    warp_matrix, mask = cv2.estimateAffinePartial2D(points_2, points_1)
+    warp_matrix, inlier_mask = cv2.estimateAffinePartial2D(points_2, points_1)
+
+    if warp_matrix is None:
+        raise ValueError(
+            "Affine estimation failed: cv2.estimateAffinePartial2D returned None"
+        )
+
+    n_inliers = int(inlier_mask.sum()) if inlier_mask is not None else 0
+    if n_inliers < MIN_INLIERS:
+        raise ValueError(
+            f"Alignment rejected: only {n_inliers} inliers found "
+            f"(minimum {MIN_INLIERS} required)"
+        )
+
+    metadata = AlignmentMetadata(
+        n_keypoints_src=len(keypoints_1),
+        n_keypoints_tgt=len(keypoints_2),
+        n_matches=len(filtered_matches),
+        n_inliers=n_inliers,
+        warp_matrix=warp_matrix.tolist(),
+    )
 
     img2_aligned = cv2.warpAffine(img2, warp_matrix, (img1.shape[1], img1.shape[0]))
     mask2_aligned = None
@@ -254,7 +291,7 @@ def align_images(
             mask2, warp_matrix, (img1.shape[1], img1.shape[0])
         )
 
-    return img2_aligned, mask2_aligned, warp_matrix
+    return img2_aligned, mask2_aligned, warp_matrix, metadata
 
 
 def align_from_scaled(
@@ -265,7 +302,7 @@ def align_from_scaled(
     mask2: Optional[np.ndarray] = None,
     nfeatures: int = 10000,
     ed_distance: int = 200,
-) -> tuple[np.ndarray, Optional[np.ndarray], np.ndarray]:
+) -> tuple[np.ndarray, Optional[np.ndarray], np.ndarray, AlignmentMetadata]:
     """
     Aligns two images by first scaling them, estimating the transformation on the scaled images, and then applying the transformation to the original images.
 
@@ -294,6 +331,8 @@ def align_from_scaled(
         The aligned mask for the second image, if provided.
     warp_matrix : np.ndarray
         The affine transformation matrix used for alignment.
+    metadata : AlignmentMetadata
+        Keypoint, match, inlier counts and the full-resolution warp matrix.
     """
     img1_scaled = cv2.resize(img1, None, fx=scale, fy=scale)
     img2_scaled = cv2.resize(img2, None, fx=scale, fy=scale)
@@ -304,7 +343,7 @@ def align_from_scaled(
         mask1_scaled = cv2.resize(mask1, None, fx=scale, fy=scale)
         mask2_scaled = cv2.resize(mask2, None, fx=scale, fy=scale)
 
-    _, _, warp_matrix = align_images(
+    _, _, warp_matrix, metadata = align_images(
         img1_scaled,
         img2_scaled,
         mask1_scaled if mask1 is not None else None,
@@ -315,6 +354,7 @@ def align_from_scaled(
 
     warp_matrix[0, 2] /= scale
     warp_matrix[1, 2] /= scale
+    metadata = dataclasses.replace(metadata, warp_matrix=warp_matrix.tolist())
 
     img2_aligned = cv2.warpAffine(img2, warp_matrix, (img1.shape[1], img1.shape[0]))
     mask2_aligned = None
@@ -323,7 +363,7 @@ def align_from_scaled(
             mask2, warp_matrix, (img1.shape[1], img1.shape[0])
         )
 
-    return img2_aligned, mask2_aligned, warp_matrix
+    return img2_aligned, mask2_aligned, warp_matrix, metadata
 
 
 def extract_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:

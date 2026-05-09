@@ -11,6 +11,7 @@ import pytest
 
 from virtual_staining.data.builder import DatasetBuilder
 from virtual_staining.data.config import PreprocessingConfig
+from virtual_staining.data.preprocessing import AlignmentMetadata
 
 
 # ---------------------------------------------------------------------------
@@ -36,14 +37,22 @@ def _identity_align(
     mask2: np.ndarray | None = None,
     scale: float = 0.5,
     **_kwargs,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, AlignmentMetadata]:
     """Return target unchanged - simulates a perfect identity alignment."""
     aligned_mask = (
         mask2.copy()
         if mask2 is not None
         else np.full(tgt.shape[:2], 255, dtype=np.uint8)
     )
-    return tgt.copy(), aligned_mask, np.eye(2, 3, dtype=np.float64)
+    eye = np.eye(2, 3, dtype=np.float64)
+    metadata = AlignmentMetadata(
+        n_keypoints_src=100,
+        n_keypoints_tgt=100,
+        n_matches=50,
+        n_inliers=45,
+        warp_matrix=eye.tolist(),
+    )
+    return tgt.copy(), aligned_mask, eye, metadata
 
 
 @contextmanager
@@ -262,3 +271,27 @@ def test_split_manifest_columns_and_coordinates(
         assert row["sample_id"] == f"{x:05}_{y:05}"
         assert row["source_name"].startswith(f"{x:05}_{y:05}_source")
         assert row["target_name"].startswith(f"{x:05}_{y:05}_target")
+
+
+# ---------------------------------------------------------------------------
+# alignment_metadata.json tests
+# ---------------------------------------------------------------------------
+
+
+def test_run_all_saves_alignment_metadata(builder_config: PreprocessingConfig) -> None:
+    import json
+
+    with _patched_builder_dependencies():
+        DatasetBuilder(builder_config).run_all()
+
+    metadata_file = builder_config.dataset_root / "alignment_metadata.json"
+    assert metadata_file.exists()
+
+    data = json.loads(metadata_file.read_text(encoding="utf-8"))
+    assert set(data.keys()) >= {
+        "n_keypoints_src",
+        "n_keypoints_tgt",
+        "n_matches",
+        "n_inliers",
+        "warp_matrix",
+    }
