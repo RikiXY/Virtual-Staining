@@ -457,6 +457,18 @@ class Trainer:
                 )
                 metrics_file.flush()
 
+        if start_epoch < self.config.epochs:
+            final_epoch = self.config.epochs - 1
+            if (final_epoch + 1) % self.config.checkpoint_rate != 0:
+                checkpoint_path = self._checkpoints_dir / f"ep{final_epoch:03d}.pth"
+                self.save_checkpoint(checkpoint_path, final_epoch)
+                training_status["last_checkpoint"] = checkpoint_path.name
+                _log_message(
+                    f"Final checkpoint saved to {checkpoint_path} (epoch {final_epoch})",
+                    log_file,
+                    use_stdout=False,
+                )
+
         _finish_console_progress()
         total_seconds = time.time() - start_time
         _log_message(

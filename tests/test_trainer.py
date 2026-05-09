@@ -452,6 +452,36 @@ def test_load_checkpoint_raises_on_architecture_mismatch(
         trainer_mismatch.load_checkpoint(checkpoint_path)
 
 
+# ---------------------------------------------------------------------------
+# Final checkpoint guarantee
+# ---------------------------------------------------------------------------
+
+
+def test_short_run_writes_final_checkpoint(tmp_path: Path) -> None:
+    """epochs=1, checkpoint_rate=10: a final ep000.pth must be written."""
+    trainer, config = _make_trainer(tmp_path, checkpoint_rate=10)
+    trainer.train(seed=42)
+
+    checkpoints = sorted((config.run_root / "checkpoints").glob("ep*.pth"))
+    assert len(checkpoints) == 1
+    assert checkpoints[0].name == "ep000.pth"
+
+
+def test_no_duplicate_final_checkpoint_when_already_checkpointed(tmp_path: Path) -> None:
+    """epochs=1, checkpoint_rate=1: exactly one checkpoint, no duplicate."""
+    trainer, config = _make_trainer(tmp_path, checkpoint_rate=1)
+    trainer.train(seed=42)
+
+    checkpoints = sorted((config.run_root / "checkpoints").glob("ep*.pth"))
+    assert len(checkpoints) == 1
+    assert checkpoints[0].name == "ep000.pth"
+
+
+# ---------------------------------------------------------------------------
+# Architecture metadata: presence and validation (continued)
+# ---------------------------------------------------------------------------
+
+
 def test_load_checkpoint_raises_on_missing_architecture(
     checkpointing_trainer: tuple[Trainer, TrainingConfig],
     tmp_path: Path,
