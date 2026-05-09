@@ -460,10 +460,10 @@ def split_items(items: list[T], ratios: Sequence[float]) -> list[list[T]]:
     """
     if len(ratios) < 2:
         raise ValueError("At least 2 ratios must be specified")
-    if sum(ratios) > 1:
-        raise ValueError("The sum of ratios must be <= 1")
     if any(ratio < 0 for ratio in ratios):
         raise ValueError("All ratios must be >= 0")
+    if abs(sum(ratios) - 1.0) > 1e-9:
+        raise ValueError("The sum of ratios must equal 1")
 
     shuffled = items.copy()
     random.shuffle(shuffled)

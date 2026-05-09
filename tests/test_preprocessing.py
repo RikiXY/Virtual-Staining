@@ -37,6 +37,11 @@ def test_split_items_raises_on_sum_exceeds_one() -> None:
         split_items([1, 2, 3], [0.6, 0.6])
 
 
+def test_split_items_raises_on_sum_below_one() -> None:
+    with pytest.raises(ValueError):
+        split_items([1, 2, 3], [0.5, 0.3])
+
+
 def test_split_items_raises_on_negative_ratio() -> None:
     with pytest.raises(ValueError):
         split_items([1, 2, 3], [0.8, -0.1, 0.3])
