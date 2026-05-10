@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import csv
 import dataclasses
+import datetime
 import json
 import random
+from pathlib import Path
 from typing import Any, cast
 
 import cv2
 import numpy as np
 
 from virtual_staining.data.config import PreprocessingConfig
+from virtual_staining.data.manifest import DatasetManifest, ManifestRecord, Split
 from virtual_staining.data.preprocessing import (
     MASK_PARAMETER_GRID,
     align_from_scaled,
@@ -60,6 +63,8 @@ class DatasetBuilder:
         self._discarded_source_images: list[tuple[np.ndarray, str]] | None = None
         self._discarded_target_images: list[tuple[np.ndarray, str]] | None = None
         self._discarded_log_rows: list[dict[str, Any]] | None = None
+        self._started_at: str | None = None
+        self._effective_seed: int | None = None
 
     # ------------------------------------------------------------------
     # Pipeline stages
@@ -266,11 +271,19 @@ class DatasetBuilder:
 
         root = self.config.dataset_root
         discarded_root = root / "discarded_patches"
+        manifests_dir = root / "manifests"
+        config_dir = root / "config"
+        metadata_dir = root / "metadata"
 
         for d in [
+            root / "processed",
+            root / "splits",
             root / "dataset_train",
             root / "dataset_val",
             root / "dataset_test",
+            manifests_dir,
+            config_dir,
+            metadata_dir,
             discarded_root / "source",
             discarded_root / "target",
         ]:
@@ -306,8 +319,9 @@ class DatasetBuilder:
             [self.config.train_ratio, self.config.val_ratio, self.config.test_ratio],
         )
 
-        split_names = ["train", "val", "test"]
+        split_names: tuple[Split, Split, Split] = ("train", "val", "test")
         manifest_rows: list[dict[str, Any]] = []
+        manifest_records: list[ManifestRecord] = []
         for split_name, subset in zip(split_names, split, strict=True):
             subset_dir = root / f"dataset_{split_name}"
             for src_pair, tgt_pair in subset:
@@ -315,15 +329,30 @@ class DatasetBuilder:
                 cv2.imwrite(str(subset_dir / tgt_pair[1]), tgt_pair[0])
                 parts = src_pair[1].split("_")
                 x, y = int(parts[0]), int(parts[1])
+                sample_id = f"{x:05}_{y:05}"
                 manifest_rows.append(
                     {
-                        "sample_id": f"{x:05}_{y:05}",
+                        "sample_id": sample_id,
                         "split": split_name,
                         "source_name": src_pair[1],
                         "target_name": tgt_pair[1],
                         "x": x,
                         "y": y,
                     }
+                )
+                manifest_records.append(
+                    ManifestRecord(
+                        sample_id=sample_id,
+                        split=split_name,
+                        input_path=Path(f"dataset_{split_name}/{src_pair[1]}"),
+                        target_path=Path(f"dataset_{split_name}/{tgt_pair[1]}"),
+                        input_modality="label_free",
+                        target_modality="stained",
+                        x=x,
+                        y=y,
+                        width=self.config.image_size[0],
+                        height=self.config.image_size[1],
+                    )
                 )
 
         with open(root / "split_manifest.csv", "w", newline="", encoding="utf-8") as f:
@@ -333,6 +362,59 @@ class DatasetBuilder:
             )
             writer.writeheader()
             writer.writerows(manifest_rows)
+
+        discarded_manifest_records: list[ManifestRecord] = []
+        for src_pair, tgt_pair in zip(
+            self._discarded_source_images,
+            self._discarded_target_images,
+            strict=True,
+        ):
+            parts = src_pair[1].split("_")
+            x, y = int(parts[0]), int(parts[1])
+            sample_id = f"{x:05}_{y:05}"
+            discarded_manifest_records.append(
+                ManifestRecord(
+                    sample_id=sample_id,
+                    split=cast(Any, "discarded"),
+                    input_path=Path(f"discarded_patches/source/{src_pair[1]}"),
+                    target_path=Path(f"discarded_patches/target/{tgt_pair[1]}"),
+                    input_modality="label_free",
+                    target_modality="stained",
+                    x=x,
+                    y=y,
+                    width=self.config.image_size[0],
+                    height=self.config.image_size[1],
+                )
+            )
+
+        manifest = DatasetManifest(records=tuple(manifest_records), dataset_root=root)
+        manifest.validate()
+        manifest.to_csv(manifests_dir / "manifest.csv")
+
+        discarded_manifest = DatasetManifest(
+            records=tuple(discarded_manifest_records),
+            dataset_root=root,
+        )
+        discarded_manifest.validate()
+        discarded_manifest.to_csv(manifests_dir / "discarded_manifest.csv")
+
+        self.config.to_yaml(config_dir / "resolved.yaml")
+
+        build_metadata = {
+            "dataset_name": root.name,
+            "status": "completed",
+            "started_at": self._started_at,
+            "completed_at": datetime.datetime.now(datetime.UTC).isoformat(),
+            "num_patches_total": len(manifest_records) + len(discarded_manifest_records),
+            "num_patches_valid": len(manifest_records),
+            "num_patches_discarded": len(discarded_manifest_records),
+            "num_train": len(split[0]),
+            "num_val": len(split[1]),
+            "num_test": len(split[2]),
+            "seed": self._effective_seed,
+        }
+        with open(metadata_dir / "dataset_build.json", "w", encoding="utf-8") as f:
+            json.dump(build_metadata, f, indent=2, default=str)
 
         print(
             f"Saved: train={len(split[0])}, val={len(split[1])}, "
@@ -348,7 +430,9 @@ class DatasetBuilder:
 
     def run_all(self) -> DatasetBuildResult:
         """Run all pipeline stages in sequence and return the build result."""
+        self._started_at = datetime.datetime.now(datetime.UTC).isoformat()
         seed = self.config.seed if self.config.seed is not None else random.randint(0, 2**32 - 1)
+        self._effective_seed = seed
         random.seed(seed)
         print(f"Seed set to {seed}")
 

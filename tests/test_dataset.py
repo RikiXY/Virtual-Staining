@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from virtual_staining.data.dataset import PairedHistologyDataset
+from virtual_staining.data.dataset import PairedHistologyDataset, PairedManifestDataset
+from virtual_staining.data.manifest import DatasetManifest, ManifestRecord
 
 
 def _make_image(path: Path) -> None:
@@ -107,3 +108,48 @@ def test_duplicate_target_raises(tmp_path: Path) -> None:
     _make_image(tmp_path / "sample_target.png")
     with pytest.raises(ValueError, match="Duplicate target"):
         PairedHistologyDataset(tmp_path)
+
+
+def test_paired_manifest_dataset_smoke(tmp_path: Path) -> None:
+    Image.new("RGB", (32, 32), color=(128, 64, 32)).save(tmp_path / "00000_source.tif")
+    Image.new("RGB", (32, 32), color=(128, 64, 32)).save(tmp_path / "00000_target.tif")
+    Image.new("RGB", (32, 32), color=(128, 64, 32)).save(tmp_path / "00001_source.tif")
+    Image.new("RGB", (32, 32), color=(128, 64, 32)).save(tmp_path / "00001_target.tif")
+
+    manifest = DatasetManifest(
+        records=(
+            ManifestRecord(
+                sample_id="00000",
+                split="train",
+                input_path=Path("00000_source.tif"),
+                target_path=Path("00000_target.tif"),
+                input_modality="label_free",
+                target_modality="stained",
+                x=0,
+                y=0,
+                width=32,
+                height=32,
+            ),
+            ManifestRecord(
+                sample_id="00001",
+                split="val",
+                input_path=Path("00001_source.tif"),
+                target_path=Path("00001_target.tif"),
+                input_modality="label_free",
+                target_modality="stained",
+                x=32,
+                y=32,
+                width=32,
+                height=32,
+            ),
+        ),
+        dataset_root=tmp_path,
+    )
+
+    dataset = PairedManifestDataset(manifest)
+    assert len(dataset) == 2
+
+    source, target = dataset[0]
+    assert isinstance(source, Image.Image)
+    assert isinstance(target, Image.Image)
+    assert dataset.sample_ids == ["00000", "00001"]

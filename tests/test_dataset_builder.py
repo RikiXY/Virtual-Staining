@@ -164,6 +164,85 @@ def test_run_all_saves_config_and_environment(
     assert loaded == builder_config
 
 
+def test_run_all_saves_manifest_layout_and_resolved_config(
+    builder_config: PreprocessingConfig,
+) -> None:
+    from virtual_staining.data.manifest import DatasetManifest
+
+    with _patched_builder_dependencies():
+        result = DatasetBuilder(builder_config).run_all()
+
+    root = builder_config.dataset_root
+    assert (root / "processed").exists()
+    assert (root / "splits").exists()
+    assert (root / "manifests" / "manifest.csv").exists()
+    assert (root / "manifests" / "discarded_manifest.csv").exists()
+    assert (root / "config" / "resolved.yaml").exists()
+    assert (root / "metadata" / "dataset_build.json").exists()
+
+    manifest = DatasetManifest.from_csv(root / "manifests" / "manifest.csv", root)
+    assert len(manifest) == result.train_count + result.val_count + result.test_count
+    assert len(manifest.filter_split("train")) == result.train_count
+
+
+def test_run_all_writes_manifest_columns_and_relative_paths(
+    builder_config: PreprocessingConfig,
+) -> None:
+    import csv as csv_module
+
+    with _patched_builder_dependencies():
+        DatasetBuilder(builder_config).run_all()
+
+    manifest = builder_config.dataset_root / "manifests" / "manifest.csv"
+    with manifest.open(encoding="utf-8", newline="") as f:
+        reader = csv_module.DictReader(f)
+        rows = list(reader)
+
+    assert reader.fieldnames == [
+        "sample_id",
+        "split",
+        "input_path",
+        "target_path",
+        "input_modality",
+        "target_modality",
+        "x",
+        "y",
+        "width",
+        "height",
+    ]
+    assert rows
+    for row in rows:
+        assert row["split"] in {"train", "val", "test"}
+        assert row["input_path"].startswith(f"dataset_{row['split']}/")
+        assert row["target_path"].startswith(f"dataset_{row['split']}/")
+        assert row["input_modality"] == "label_free"
+        assert row["target_modality"] == "stained"
+        assert int(row["width"]) == builder_config.image_size[0]
+        assert int(row["height"]) == builder_config.image_size[1]
+
+
+def test_run_all_writes_dataset_build_metadata(builder_config: PreprocessingConfig) -> None:
+    import json
+
+    with _patched_builder_dependencies():
+        result = DatasetBuilder(builder_config).run_all()
+
+    metadata_path = builder_config.dataset_root / "metadata" / "dataset_build.json"
+    data = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    assert data["dataset_name"] == builder_config.dataset_root.name
+    assert data["status"] == "completed"
+    assert data["started_at"]
+    assert data["completed_at"]
+    assert data["num_patches_valid"] == result.train_count + result.val_count + result.test_count
+    assert data["num_patches_discarded"] == result.skipped_count
+    assert data["num_patches_total"] == data["num_patches_valid"] + data["num_patches_discarded"]
+    assert data["num_train"] == result.train_count
+    assert data["num_val"] == result.val_count
+    assert data["num_test"] == result.test_count
+    assert data["seed"] == builder_config.seed
+
+
 def test_missing_dataset_root_raises(tmp_path: Path) -> None:
     config = PreprocessingConfig(
         dataset_root=tmp_path / "nonexistent",
