@@ -10,10 +10,10 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.utils import save_image
 
+from virtual_staining.common.dimensions import to_torchvision_hw
 from virtual_staining.data.dataset import PairedHistologyDataset
-from virtual_staining.image_size import to_torchvision_hw
-from virtual_staining.models.discriminator import PatchGANDiscriminator
-from virtual_staining.models.generator import UNetGenerator
+from virtual_staining.models.config import ModelConfig
+from virtual_staining.models.factory import build_discriminator, build_generator
 from virtual_staining.training.config import InferenceConfig, TrainingConfig
 from virtual_staining.training.trainer import Trainer
 
@@ -147,8 +147,9 @@ def main(config: TrainingConfig) -> None:
         pin_memory=(device.type == "cuda"),
     )
 
-    generator = UNetGenerator().to(device)
-    discriminator = PatchGANDiscriminator().to(device)
+    model_config = ModelConfig()
+    generator = build_generator(model_config.generator).to(device)
+    discriminator = build_discriminator(model_config.discriminator).to(device)
 
     Trainer(
         config=config,
@@ -169,7 +170,8 @@ def test_inference(checkpoint_path, test_folder, output_folder, image_size=(256,
 
     Path(output_folder).mkdir(parents=True, exist_ok=True)
 
-    G = UNetGenerator().to(device)
+    model_config = ModelConfig()
+    G = build_generator(model_config.generator).to(device)
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
     checkpoint_image_size = checkpoint.get("image_size")

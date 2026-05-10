@@ -13,8 +13,8 @@ from torchvision import transforms
 
 from src.pix2pix import test_inference as run_inference
 from tools.evaluate_generation import collect_image_files, extract_single_sample_id
+from virtual_staining.common.dimensions import to_torchvision_hw
 from virtual_staining.evaluation.metrics import evaluate_pair
-from virtual_staining.image_size import to_torchvision_hw
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 

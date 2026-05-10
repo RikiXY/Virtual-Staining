@@ -5,8 +5,11 @@ from dataclasses import dataclass
 from math import isclose
 from pathlib import Path
 
-from virtual_staining.image_size import parse_wh_size, parse_wh_size_from_aliases
-from virtual_staining.run_config import (
+from virtual_staining.common.dimensions import (
+    parse_wh_size,
+    parse_wh_size_from_aliases,
+)
+from virtual_staining.config import (
     _TOP_LEVEL_KEYS,
     load_yaml_mapping,
     parse_bool_strict,

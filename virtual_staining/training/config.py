@@ -1,16 +1,9 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from virtual_staining.image_size import parse_wh_size, parse_wh_size_from_aliases
-from virtual_staining.run_config import (
-    _TOP_LEVEL_KEYS,
-    load_yaml_mapping,
-    reject_unknown_keys,
-    section_with_shared_fields,
-)
+from virtual_staining.config.project import ProjectConfig
 
 _TRAINING_KEYS: frozenset[str] = frozenset(
     {
@@ -56,17 +49,16 @@ _INFERENCE_KEYS: frozenset[str] = frozenset(
 )
 
 
-def _validate_non_empty_string(field_name: str, value: object) -> None:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{field_name} must be a non-empty string")
+def _require_project(config_type: str, project: ProjectConfig | None) -> ProjectConfig:
+    if project is None:
+        raise ValueError(
+            f"{config_type} requires a ProjectConfig for project-derived paths. "
+            "Construct it via RunConfig.from_yaml() or pass project=ProjectConfig(...)."
+        )
+    return project
 
 
-def _validate_positive_pair(field_name: str, value: tuple[int, int]) -> None:
-    if len(value) != 2 or any(dimension <= 0 for dimension in value):
-        raise ValueError(f"{field_name} must contain two positive integers")
-
-
-def _resolve_checkpoint(data: dict[str, object], run_root: Path) -> Path:
+def _resolve_checkpoint(data: dict[str, object], project: ProjectConfig) -> Path:
     checkpoint = data.get("checkpoint")
     if checkpoint is not None:
         checkpoint_value = str(checkpoint)
@@ -75,10 +67,10 @@ def _resolve_checkpoint(data: dict[str, object], run_root: Path) -> Path:
         checkpoint_path = Path(checkpoint_value)
         if checkpoint_path.is_absolute():
             return checkpoint_path
-        return run_root / checkpoint_path
+        return project.run_root / checkpoint_path
 
     if data.get("checkpoint_policy") == "latest":
-        checkpoint_dir = run_root / "checkpoints"
+        checkpoint_dir = project.run_root / "checkpoints"
         checkpoints = sorted(checkpoint_dir.glob("ep*.pth"))
         if not checkpoints:
             raise FileNotFoundError(
@@ -86,18 +78,11 @@ def _resolve_checkpoint(data: dict[str, object], run_root: Path) -> Path:
             )
         return checkpoints[-1]
 
-    raise ValueError(
-        "Config field inference.checkpoint or inference.checkpoint_policy is "
-        "required for inference."
-    )
+    raise ValueError("Either inference.checkpoint or inference.checkpoint_policy must be set.")
 
 
 @dataclass(frozen=True)
 class TrainingConfig:
-    dataset_root: Path
-    results_path: Path
-    run_name: str
-    image_size: tuple[int, int]  # (width, height)
     batch_size: int
     epochs: int
     lr_g: float
@@ -113,26 +98,47 @@ class TrainingConfig:
     resume: str | None = None
     train_dir: Path | None = None
     val_dir: Path | None = None
+    project: ProjectConfig | None = None
+
+    @property
+    def dataset_root(self) -> Path:
+        return _require_project("TrainingConfig", self.project).dataset_root
+
+    @property
+    def results_path(self) -> Path:
+        return _require_project("TrainingConfig", self.project).results_path
+
+    @property
+    def run_name(self) -> str:
+        return _require_project("TrainingConfig", self.project).run_name
+
+    @property
+    def image_size(self) -> tuple[int, int]:
+        return _require_project("TrainingConfig", self.project).image_size
 
     @property
     def run_root(self) -> Path:
-        return self.results_path / self.run_name
+        return _require_project("TrainingConfig", self.project).run_root
 
     @property
     def dataset_train_dir(self) -> Path:
         if self.train_dir is not None:
             return self.train_dir
-        return self.dataset_root / "dataset_train"
+        return _require_project("TrainingConfig", self.project).dataset_train_dir
 
     @property
     def dataset_val_dir(self) -> Path:
         if self.val_dir is not None:
             return self.val_dir
-        return self.dataset_root / "dataset_val"
+        return _require_project("TrainingConfig", self.project).dataset_val_dir
 
     def validate(self) -> None:
-        _validate_non_empty_string("run_name", self.run_name)
-        _validate_positive_pair("image_size", self.image_size)
+        if self.project is not None:
+            if not self.project.run_name.strip():
+                raise ValueError("run_name must be a non-empty string")
+            width, height = self.project.image_size
+            if width <= 0 or height <= 0:
+                raise ValueError("image_size must contain two positive integers")
 
         for field_name, value in (
             ("batch_size", self.batch_size),
@@ -145,15 +151,15 @@ class TrainingConfig:
                 raise ValueError(f"{field_name} must be greater than 0")
 
         if self.num_workers < 0:
-            raise ValueError("num_workers must be greater than or equal to 0")
+            raise ValueError("num_workers must be >= 0")
 
         for field_name, value in (("lr_g", self.lr_g), ("lr_d", self.lr_d)):
             if value <= 0:
                 raise ValueError(f"{field_name} must be greater than 0")
 
         for field_name, value in (("beta1", self.beta1), ("beta2", self.beta2)):
-            if value < 0 or value >= 1:
-                raise ValueError(f"{field_name} must be greater than or equal to 0 and less than 1")
+            if not (0.0 <= value < 1.0):
+                raise ValueError(f"{field_name} must be in [0, 1)")
 
         if self.l1_weight < 0:
             raise ValueError("l1_weight must be greater than or equal to 0")
@@ -161,110 +167,66 @@ class TrainingConfig:
     def to_yaml(self, path: str | Path) -> None:
         import yaml
 
+        project = _require_project("TrainingConfig", self.project)
         data = {
-            "dataset_root": str(self.dataset_root),
-            "results_path": str(self.results_path),
-            "run_name": self.run_name,
-            "image_size": list(self.image_size),
-            "batch_size": self.batch_size,
-            "epochs": self.epochs,
-            "lr_g": self.lr_g,
-            "lr_d": self.lr_d,
-            "beta1": self.beta1,
-            "beta2": self.beta2,
-            "l1_weight": self.l1_weight,
-            "seed": self.seed,
-            "num_workers": self.num_workers,
-            "validate_rate": self.validate_rate,
-            "checkpoint_rate": self.checkpoint_rate,
-            "log_rate": self.log_rate,
-            "resume": self.resume,
+            "dataset_root": str(project.dataset_root),
+            "results_path": str(project.results_path),
+            "run_name": project.run_name,
+            "image_size": list(project.image_size),
+            "training": {
+                "batch_size": self.batch_size,
+                "epochs": self.epochs,
+                "lr_g": self.lr_g,
+                "lr_d": self.lr_d,
+                "beta1": self.beta1,
+                "beta2": self.beta2,
+                "l1_weight": self.l1_weight,
+                "seed": self.seed,
+                "num_workers": self.num_workers,
+                "validate_rate": self.validate_rate,
+                "checkpoint_rate": self.checkpoint_rate,
+                "log_rate": self.log_rate,
+                "resume": self.resume,
+                "train_dir": str(self.train_dir) if self.train_dir is not None else None,
+                "val_dir": str(self.val_dir) if self.val_dir is not None else None,
+            },
         }
-        with open(path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(data, f, default_flow_style=False)
-
-    @classmethod
-    def from_args(cls, args) -> TrainingConfig:
-        config = cls(
-            dataset_root=Path(args.dataset_root),
-            results_path=Path(getattr(args, "results_path", "local_workspace/results")),
-            run_name=args.run_name,
-            image_size=parse_wh_size(getattr(args, "image_size", (256, 256)), (256, 256)),
-            batch_size=getattr(args, "batch_size", 8),
-            epochs=args.epochs,
-            lr_g=getattr(args, "lr_g", 2e-4),
-            lr_d=getattr(args, "lr_d", 2e-4),
-            beta1=getattr(args, "beta1", 0.5),
-            beta2=getattr(args, "beta2", 0.999),
-            l1_weight=getattr(args, "l1_weight", 25.0),
-            seed=getattr(args, "seed", None),
-            num_workers=getattr(args, "num_workers", min(4, os.cpu_count() or 1)),
-            validate_rate=getattr(args, "validate_rate", 10),
-            checkpoint_rate=getattr(args, "checkpoint_rate", 10),
-            log_rate=getattr(args, "log_rate", 15),
-            resume=getattr(args, "resume", None),
-        )
-        config.validate()
-        return config
+        with open(path, "w", encoding="utf-8") as file_obj:
+            yaml.safe_dump(data, file_obj, default_flow_style=False, sort_keys=False)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> TrainingConfig:
-        raw_data = load_yaml_mapping(path)
-        if "training" in raw_data:
-            reject_unknown_keys(raw_data, _TOP_LEVEL_KEYS, "top level")
-        data = section_with_shared_fields(
-            raw_data,
-            "training",
-            {"dataset_root", "results_path", "run_name", "image_size"},
-        )
-        reject_unknown_keys(data, _TRAINING_KEYS, "training")
+        from virtual_staining.config.run import RunConfig
 
-        config = cls(
-            dataset_root=Path(data["dataset_root"]),
-            results_path=Path(data["results_path"]),
-            run_name=data["run_name"],
-            image_size=parse_wh_size_from_aliases(
-                data, ("model_image_size", "image_size"), (256, 256)
-            ),
-            batch_size=int(data.get("batch_size", 8)),
-            epochs=int(data["epochs"]),
-            lr_g=float(data.get("lr_g", 2e-4)),
-            lr_d=float(data.get("lr_d", 2e-4)),
-            beta1=float(data.get("beta1", 0.5)),
-            beta2=float(data.get("beta2", 0.999)),
-            l1_weight=float(data.get("l1_weight", 25.0)),
-            seed=data.get("seed"),
-            num_workers=int(data.get("num_workers", min(4, os.cpu_count() or 1))),
-            validate_rate=int(data.get("validate_rate", 10)),
-            checkpoint_rate=int(data.get("checkpoint_rate", 10)),
-            log_rate=int(data.get("log_rate", 15)),
-            resume=data.get("resume"),
-            train_dir=Path(data["train_dir"]) if data.get("train_dir") else None,
-            val_dir=Path(data["val_dir"]) if data.get("val_dir") else None,
-        )
-        config.validate()
-        return config
+        run_config = RunConfig.from_yaml(path)
+        if run_config.training is None:
+            raise ValueError(f"No 'training' section found in config: {path}")
+        return run_config.training
 
 
 @dataclass(frozen=True)
 class InferenceConfig:
-    dataset_root: Path
-    results_path: Path
-    run_name: str
-    checkpoint: Path
-    image_size: tuple[int, int]  # (width, height)
-    test_dir_override: Path | None = None
+    checkpoint_policy: str | None = None
+    checkpoint_path: Path | None = None
+    test_dir: Path | None = None
     output_dir: Path | None = None
+    project: ProjectConfig | None = None
+
+    @property
+    def image_size(self) -> tuple[int, int]:
+        return _require_project("InferenceConfig", self.project).image_size
 
     @property
     def run_root(self) -> Path:
-        return self.results_path / self.run_name
+        return _require_project("InferenceConfig", self.project).run_root
 
     @property
-    def test_dir(self) -> Path:
-        if self.test_dir_override is not None:
-            return self.test_dir_override
-        return self.dataset_root / "dataset_test"
+    def checkpoint(self) -> Path:
+        project = _require_project("InferenceConfig", self.project)
+        data: dict[str, object] = {"checkpoint_policy": self.checkpoint_policy}
+        if self.checkpoint_path is not None:
+            data["checkpoint"] = str(self.checkpoint_path)
+        return _resolve_checkpoint(data, project)
 
     @property
     def output_test_dir(self) -> Path:
@@ -273,44 +235,29 @@ class InferenceConfig:
         return self.run_root / "output_test"
 
     def validate(self) -> None:
-        _validate_non_empty_string("run_name", self.run_name)
-        _validate_positive_pair("image_size", self.image_size)
-        if str(self.checkpoint).strip() in {"", "."}:
+        if self.project is not None:
+            if not self.project.run_name.strip():
+                raise ValueError("run_name must be a non-empty string")
+            width, height = self.project.image_size
+            if width <= 0 or height <= 0:
+                raise ValueError("image_size must contain two positive integers")
+        if self.checkpoint_policy is None and self.checkpoint_path is None:
+            raise ValueError(
+                "Either inference.checkpoint or inference.checkpoint_policy must be set."
+            )
+        if self.checkpoint_policy is not None and self.checkpoint_policy != "latest":
+            raise ValueError(
+                f"Unknown checkpoint_policy: {self.checkpoint_policy!r}. "
+                "Only 'latest' is supported."
+            )
+        if self.checkpoint_path is not None and not str(self.checkpoint_path).strip():
             raise ValueError("checkpoint must be a non-empty path")
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> InferenceConfig:
-        raw_data = load_yaml_mapping(path)
-        if "inference" in raw_data:
-            reject_unknown_keys(raw_data, _TOP_LEVEL_KEYS, "top level")
-        data = section_with_shared_fields(
-            raw_data,
-            "inference",
-            {"dataset_root", "results_path", "run_name", "image_size"},
-        )
-        reject_unknown_keys(data, _INFERENCE_KEYS, "inference")
-        training_data = section_with_shared_fields(
-            raw_data,
-            "training",
-            {"dataset_root", "results_path", "run_name", "image_size"},
-        )
+        from virtual_staining.config.run import RunConfig
 
-        run_root = Path(data["results_path"]) / data["run_name"]
-
-        config = cls(
-            dataset_root=Path(data["dataset_root"]),
-            results_path=Path(data["results_path"]),
-            run_name=data["run_name"],
-            checkpoint=_resolve_checkpoint(data, run_root),
-            image_size=parse_wh_size_from_aliases(
-                data,
-                ("model_image_size", "image_size"),
-                parse_wh_size_from_aliases(
-                    training_data, ("model_image_size", "image_size"), (256, 256)
-                ),
-            ),
-            test_dir_override=Path(data["test_dir"]) if data.get("test_dir") else None,
-            output_dir=Path(data["output_dir"]) if data.get("output_dir") else None,
-        )
-        config.validate()
-        return config
+        run_config = RunConfig.from_yaml(path)
+        if run_config.inference is None:
+            raise ValueError(f"No 'inference' section found in config: {path}")
+        return run_config.inference
