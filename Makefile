@@ -12,7 +12,7 @@ help:
 	@printf "  %-24s %s\n" "dataset" "Build dataset_train/val/test from CONFIG"
 	@printf "  %-24s %s\n" "train" "Train Pix2Pix from CONFIG"
 	@printf "  %-24s %s\n" "infer" "Run inference via vs-infer CLI from CONFIG"
-	@printf "  %-24s %s\n" "evaluate" "Evaluate generated outputs from CONFIG"
+	@printf "  %-24s %s\n" "evaluate" "Evaluate outputs via vs-evaluate CLI from CONFIG"
 	@printf "  %-24s %s\n" "complete-run" "Run dataset, train, infer, evaluate from CONFIG"
 	@printf "  %-24s %s\n" "sync" "Sync uv dependencies from uv.lock"
 	@printf "  %-24s %s\n" "format" "Format Python files with ruff"
@@ -51,7 +51,7 @@ infer: require-config
 	$(PYTHON) -m virtual_staining.cli.infer --config $(CONFIG)
 
 evaluate: require-config
-	$(PYTHON) tools/evaluate_generation.py dataset --config $(CONFIG)
+	$(PYTHON) -m virtual_staining.cli.evaluate --config $(CONFIG)
 
 complete-run: require-config
 	$(MAKE) dataset CONFIG=$(CONFIG)
