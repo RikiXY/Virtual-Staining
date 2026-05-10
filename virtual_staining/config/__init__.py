@@ -1,5 +1,3 @@
-"""Compatibility shim - import from virtual_staining.config instead."""
-
 from virtual_staining.config.loader import load_yaml_mapping
 from virtual_staining.config.sections import section_with_shared_fields
 from virtual_staining.config.validation import (
