@@ -15,7 +15,9 @@ from torch.amp import GradScaler, autocast
 from torchvision.utils import save_image
 
 from virtual_staining.training.config import TrainingConfig
+from virtual_staining.training.losses import Pix2PixLoss
 from virtual_staining.training.results import EpochMetrics
+from virtual_staining.training.steps import Pix2PixTrainingStep
 from virtual_staining.utils.env import collect_environment
 
 logger = logging.getLogger(__name__)
@@ -274,8 +276,18 @@ class Trainer:
         )
         self._scaler_G = GradScaler(enabled=self._amp_enabled)
         self._scaler_D = GradScaler(enabled=self._amp_enabled)
-        self._bce_loss: nn.Module = nn.BCEWithLogitsLoss()
-        self._l1_loss: nn.Module = nn.L1Loss()
+        self._loss_fn = Pix2PixLoss(l1_weight=config.l1_weight)
+        self._step = Pix2PixTrainingStep(
+            generator=generator,
+            discriminator=discriminator,
+            opt_G=self._opt_G,
+            opt_D=self._opt_D,
+            scaler_G=self._scaler_G,
+            scaler_D=self._scaler_D,
+            loss_fn=self._loss_fn,
+            device=device,
+            amp_enabled=self._amp_enabled,
+        )
 
         self._logs_dir = config.run_root / "logs"
         self._checkpoints_dir = config.run_root / "checkpoints"
@@ -531,38 +543,9 @@ class Trainer:
 
         for i, (x, y) in enumerate(self.train_loader):
             x, y = x.to(self.device), y.to(self.device)
-
-            # --- Discriminator step ---
-            with autocast(device_type=self.device.type, enabled=self._amp_enabled):
-                # .detach() prevents gradients flowing back into G during D's update.
-                fake = self.generator(x).detach()
-                D_real = self.discriminator(x, y)
-                D_fake = self.discriminator(x, fake)
-                real_label = torch.ones_like(D_real, device=self.device)
-                fake_label = torch.zeros_like(D_fake, device=self.device)
-                loss_D = self._bce_loss(D_real, real_label) + self._bce_loss(D_fake, fake_label)
-
-            self._opt_D.zero_grad()
-            self._scaler_D.scale(loss_D).backward()
-            self._scaler_D.step(self._opt_D)
-            self._scaler_D.update()
-
-            # --- Generator step ---
-            with autocast(device_type=self.device.type, enabled=self._amp_enabled):
-                fake = self.generator(x)
-                D_fake = self.discriminator(x, fake)
-                loss_G = (
-                    self._bce_loss(D_fake, real_label)
-                    + self._l1_loss(fake, y) * self.config.l1_weight
-                )
-
-            self._opt_G.zero_grad()
-            self._scaler_G.scale(loss_G).backward()
-            self._scaler_G.step(self._opt_G)
-            self._scaler_G.update()
-
-            total_loss_G += loss_G.item()
-            total_loss_D += loss_D.item()
+            step_losses = self._step.step(x, y)
+            total_loss_G += step_losses.loss_G
+            total_loss_D += step_losses.loss_D
             num_batches += 1
 
             progress, elapsed, eta, end_time = progress_tracker.calculate_progress(epoch, i)
@@ -576,8 +559,8 @@ class Trainer:
                 f"ep {epoch + 1}/{progress_tracker.total_epochs} "
                 f"({epoch_progress:.0%}) | "
                 f"b {i + 1}/{progress_tracker.total_batches} | "
-                f"loss_G {loss_G.item():.4f} | "
-                f"loss_D {loss_D.item():.4f} | "
+                f"loss_G {step_losses.loss_G:.4f} | "
+                f"loss_D {step_losses.loss_D:.4f} | "
                 f"elapsed {elapsed_str} | "
                 f"ETA {eta_str} | "
                 f"ckpt {training_status['last_checkpoint']}"
@@ -597,8 +580,8 @@ class Trainer:
                     "%.2f%% | elapsed %s | ETA %s | end %s",
                     epoch,
                     i,
-                    loss_G.item(),
-                    loss_D.item(),
+                    step_losses.loss_G,
+                    step_losses.loss_D,
                     progress * 100,
                     elapsed_str,
                     eta_str,
@@ -627,13 +610,8 @@ class Trainer:
                     fake = self.generator(x)
                     D_real = self.discriminator(x, y)
                     D_fake = self.discriminator(x, fake)
-                    real_label = torch.ones_like(D_real, device=self.device)
-                    fake_label = torch.zeros_like(D_fake, device=self.device)
-                    loss_D = self._bce_loss(D_real, real_label) + self._bce_loss(D_fake, fake_label)
-                    loss_G = (
-                        self._bce_loss(D_fake, real_label)
-                        + self._l1_loss(fake, y) * self.config.l1_weight
-                    )
+                    loss_D = self._loss_fn.discriminator_loss(D_real, D_fake)
+                    loss_G = self._loss_fn.generator_loss(D_fake, fake, y)
 
                 total_loss_D += loss_D.item()
                 total_loss_G += loss_G.item()
