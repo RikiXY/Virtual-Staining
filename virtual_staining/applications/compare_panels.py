@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from virtual_staining.evaluation.panels import (
@@ -15,8 +16,6 @@ from virtual_staining.evaluation.panels import (
     write_metric_selection_summary,
 )
 from virtual_staining.evaluation.summaries import read_per_image_metrics_csv, read_summary_csv
-from virtual_staining.utils.console import print_info, print_section, style
-from virtual_staining.utils.metrics import color_for_metric
 
 
 def infer_run_dir_from_generated_path(generated_path: str | Path) -> Path:
@@ -71,45 +70,22 @@ def infer_case_diagnostics_dir(save_path: str | Path, generated_image: str | Pat
     return diagnostics_dir / sample_id
 
 
-def print_single_summary(saved_path: Path, diagnostic_paths: list[Path]) -> None:
-    """Prints the final summary of the single mode."""
-    print_section("Single comparison")
-    print_info("Saved comparison image", style(str(saved_path), "green"))
-
-    for diagnostic_path in diagnostic_paths:
-        print_info("Saved diagnostic plot", style(str(diagnostic_path), "magenta"))
+@dataclass
+class SinglePanelResult:
+    saved_path: Path
+    diagnostic_paths: list[Path] = field(default_factory=list)
 
 
-def print_metric_based_selection(
-    metric_name: str, representative_rows: dict[str, dict[str, str]]
-) -> None:
-    """Prints the representative samples chosen for a metric."""
-    print_section(f"Metric {metric_name.upper()}")
-
-    for kind, row in representative_rows.items():
-        metric_value = float(row[metric_name])
-        sample_id = row["sample_id"]
-        color = color_for_metric(metric_name, metric_value)
-        print_info(
-            f"{kind.upper()} sample",
-            style(f"{sample_id} | value={metric_value:.6f}", color),
-        )
+@dataclass
+class FromMetricsResult:
+    run_path: Path
+    available_metrics: list[str]
+    per_metric_representative_rows: dict[str, dict[str, dict[str, str]]]
+    saved_aggregated_paths: list[Path]
+    metrics_dir: Path
 
 
-def print_metric_run_header(run_path: Path, available_metrics: list[str]) -> None:
-    """Prints the general header for the from-metrics mode."""
-    print_section("Metric-based representative comparisons")
-    print_info("Run path", str(run_path))
-    print_info("Metrics found", ", ".join(available_metrics))
-
-
-def print_metric_saved_files(metrics_dir: Path) -> None:
-    """Prints the final summary of files saved in from-metrics mode."""
-    print_section("Saved files")
-    print_info("Metric-based comparisons", style(str(metrics_dir), "bold", "magenta"))
-
-
-def run_single(args: argparse.Namespace) -> None:
+def run_single(args: argparse.Namespace) -> SinglePanelResult:
     """Runs the complete flow for comparing a single pair."""
     if args.save_path is not None:
         save_path = args.save_path
@@ -137,10 +113,10 @@ def run_single(args: argparse.Namespace) -> None:
             save_dir=diagnostics_dir,
         )
 
-    print_single_summary(saved_path, diagnostic_paths)
+    return SinglePanelResult(saved_path=saved_path, diagnostic_paths=diagnostic_paths)
 
 
-def run_from_metrics(args: argparse.Namespace) -> None:
+def run_from_metrics(args: argparse.Namespace) -> FromMetricsResult:
     """Runs the complete flow for comparisons selected from the CSV files."""
     run_path = args.run_path.resolve()
     evaluation_dir = run_path / "evaluation"
@@ -160,7 +136,7 @@ def run_from_metrics(args: argparse.Namespace) -> None:
             f"Expected one of: {', '.join(METRIC_SELECTION_ORDER)}"
         )
 
-    print_metric_run_header(run_path, available_metrics)
+    per_metric_representative_rows: dict[str, dict[str, dict[str, str]]] = {}
 
     for metric_name in available_metrics:
         metric_summary = summary_rows[metric_name]
@@ -171,10 +147,9 @@ def run_from_metrics(args: argparse.Namespace) -> None:
             metric_summary,
             per_image_rows,
         )
+        per_metric_representative_rows[metric_name] = representative_rows
         metric_selection_rows: list[dict[str, object]] = []
         metric_diagnostic_entries: list[DiagnosticEntry] = []
-
-        print_metric_based_selection(metric_name, representative_rows)
 
         for kind, row in representative_rows.items():
             selection_row, diagnostic_entry = build_metric_case_artifacts(
@@ -198,13 +173,15 @@ def run_from_metrics(args: argparse.Namespace) -> None:
         )
         saved_aggregated_paths.extend(aggregated_paths)
 
-    if not args.hide_graphs_path:
-        print_section("Saved aggregated panels")
-        for aggregated_path in saved_aggregated_paths:
-            print_info("Saved aggregated panel", str(aggregated_path))
-
     write_metric_selection_summary(
         selection_summary_rows,
         metrics_dir / "metrics_selection_summary.csv",
     )
-    print_metric_saved_files(metrics_dir)
+
+    return FromMetricsResult(
+        run_path=run_path,
+        available_metrics=available_metrics,
+        per_metric_representative_rows=per_metric_representative_rows,
+        saved_aggregated_paths=saved_aggregated_paths,
+        metrics_dir=metrics_dir,
+    )

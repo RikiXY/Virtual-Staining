@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import math
-import statistics
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from virtual_staining.config.run import RunConfig
@@ -17,15 +16,8 @@ from virtual_staining.evaluation.reports import (
     write_single_case_csv,
     write_skipped_csv,
 )
-from virtual_staining.evaluation.summaries import metric_value, write_summary_csv
+from virtual_staining.evaluation.summaries import write_summary_csv
 from virtual_staining.experiment.run_paths import RunPaths
-from virtual_staining.utils.console import print_info, print_section, style
-from virtual_staining.utils.metrics import (
-    DEFAULT_METRICS,
-    color_metric,
-)
-
-METRIC_NAMES = list(DEFAULT_METRICS)
 
 
 def infer_default_output_dir(generated_path: str | Path) -> Path:
@@ -73,72 +65,34 @@ def resolve_output_dir(output_dir: str | None, generated_path: str | Path) -> Pa
     return infer_default_output_dir(generated_path)
 
 
-def print_single_result(
-    target_path: str | Path,
-    generated_path: str | Path,
-    metrics: dict[str, float],
-    shape: tuple[int, int, int],
-) -> None:
-    """Prints the summary of a single evaluation to the terminal."""
-    height, width, channels = shape
-
-    print_section("Single-pair evaluation")
-    print_info("Target", str(target_path))
-    print_info("Generated", str(generated_path))
-    print_info("Shape", f"{width}x{height}x{channels}")
-    print()
-    print_info("MAE", color_metric("mae", metrics["mae"]))
-    print_info("MSE", color_metric("mse", metrics["mse"]))
-    print_info("RMSE", color_metric("rmse", metrics["rmse"]))
-    print_info("PSNR", color_metric("psnr", metrics["psnr"]))
-    print_info("SSIM", color_metric("ssim", metrics["ssim"]))
-    print_info("PCC gray", color_metric("pcc_gray", metrics["pcc_gray"]))
-    print_info("PCC RGB mean", color_metric("pcc_rgb_mean", metrics["pcc_rgb_mean"]))
+@dataclass
+class SingleEvalResult:
+    target: str | Path
+    generated: str | Path
+    metrics: dict[str, float]
+    shape: tuple[int, int, int]
+    single_case_csv: Path
 
 
-def print_dataset_summary(
-    target_files: dict[str, Path],
-    generated_files: dict[str, Path],
-    per_image_rows: list[dict[str, object]],
-    skipped_rows: list[dict[str, str]],
-    output_dir: Path,
-) -> None:
-    """Prints a final summary of the dataset mode."""
-    print_section("Dataset evaluation")
-    print_info("Targets found", str(len(target_files)))
-    print_info("Generated found", str(len(generated_files)))
-
-    pairs_color = "green" if per_image_rows else "red"
-    skipped_color = "green" if not skipped_rows else "yellow"
-    print_info("Pairs evaluated", style(str(len(per_image_rows)), pairs_color))
-    print_info("Skipped", style(str(len(skipped_rows)), skipped_color))
-
-    if per_image_rows:
-        print_section("Metric summary")
-        for metric in METRIC_NAMES:
-            values = [metric_value(row, metric) for row in per_image_rows]
-            finite = [v for v in values if math.isfinite(v)]
-            if not finite:
-                continue
-            print_info(
-                f"{metric.upper()} mean", color_metric(metric, float(statistics.mean(finite)))
-            )
-            print_info(
-                f"{metric.upper()} median",
-                color_metric(metric, float(statistics.median(finite))),
-            )
-
-    print_section("Saved files")
-    print_info("Evaluation dir", style(str(output_dir), "bold", "magenta"))
+@dataclass
+class DatasetEvalResult:
+    target_files: dict[str, Path]
+    generated_files: dict[str, Path]
+    per_image_rows: list[dict[str, object]]
+    skipped_rows: list[dict[str, str]]
+    output_dir: Path
+    per_image_csv: Path
+    summary_csv: Path
+    skipped_csv: Path
+    plot_paths: list[Path] = field(default_factory=list)
 
 
-def run_single(args: argparse.Namespace) -> None:
+def run_single(args: argparse.Namespace) -> SingleEvalResult:
     """Runs the complete flow for the single mode."""
     from virtual_staining.evaluation.metrics import evaluate_pair
 
     sample_id = extract_single_sample_id(args.target, args.generated)
     metrics, shape = evaluate_pair(args.target, args.generated)
-    print_single_result(args.target, args.generated, metrics, shape)
 
     output_dir = resolve_output_dir(args.output_dir, args.generated)
     individual_cases_dir = output_dir / "individual_cases"
@@ -148,11 +102,16 @@ def run_single(args: argparse.Namespace) -> None:
     single_case_csv = individual_cases_dir / f"{sample_id}_evaluation.csv"
     write_single_case_csv(row, single_case_csv)
 
-    print_section("Saved files")
-    print_info("Single evaluation CSV", style(str(single_case_csv), "bold", "magenta"))
+    return SingleEvalResult(
+        target=args.target,
+        generated=args.generated,
+        metrics=metrics,
+        shape=shape,
+        single_case_csv=single_case_csv,
+    )
 
 
-def run_dataset(args: argparse.Namespace) -> None:
+def run_dataset(args: argparse.Namespace) -> DatasetEvalResult:
     """Runs the complete flow for the dataset mode."""
     config = RunConfig.from_yaml(Path(args.config).resolve())
     eval_cfg = config.evaluation
@@ -221,15 +180,18 @@ def run_dataset(args: argparse.Namespace) -> None:
     )
     write_skipped_csv(skipped_rows, skipped_csv)
 
-    print_section("Saved files")
-    print_info("Per-image metrics", str(per_image_csv))
-    print_info("Summary", str(summary_csv))
-    print_info("Skipped samples", str(skipped_csv))
-
+    plot_paths: list[Path] = []
     if save_graphs and per_image_rows:
         plot_paths = write_plots(per_image_rows, output_dir)
-        if not args.hide_graphs_path:
-            for plot_path in plot_paths:
-                print_info("Graph", str(plot_path))
 
-    print_dataset_summary(target_files, generated_files, per_image_rows, skipped_rows, output_dir)
+    return DatasetEvalResult(
+        target_files=target_files,
+        generated_files=generated_files,
+        per_image_rows=per_image_rows,
+        skipped_rows=skipped_rows,
+        output_dir=output_dir,
+        per_image_csv=per_image_csv,
+        summary_csv=summary_csv,
+        skipped_csv=skipped_csv,
+        plot_paths=plot_paths,
+    )
