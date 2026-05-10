@@ -300,7 +300,6 @@ class Trainer:
             d.mkdir(parents=True, exist_ok=True)
 
         env = collect_environment()
-        self.config.to_yaml(self._run_paths.root / "config.yaml")
         with open(self._run_paths.root / "environment.json", "w", encoding="utf-8") as f:
             json.dump(env, f, indent=2, default=str)
 

@@ -9,11 +9,16 @@ from virtual_staining.common.dimensions import parse_wh_size_from_aliases
 from virtual_staining.config.loader import load_yaml_mapping
 from virtual_staining.config.project import ProjectConfig
 from virtual_staining.config.sections import section_with_shared_fields
-from virtual_staining.config.validation import _TOP_LEVEL_KEYS, reject_unknown_keys
+from virtual_staining.config.validation import (
+    _TOP_LEVEL_KEYS,
+    parse_bool_strict,
+    reject_unknown_keys,
+)
 from virtual_staining.evaluation.config import EvaluationConfig
 from virtual_staining.models.config import DiscriminatorConfig, GeneratorConfig, ModelConfig
 
 if TYPE_CHECKING:
+    from virtual_staining.data.config import PreprocessingConfig
     from virtual_staining.training.config import InferenceConfig, TrainingConfig
 
 
@@ -23,7 +28,7 @@ class RunConfig:
     model: ModelConfig
     training: TrainingConfig | None
     inference: InferenceConfig | None
-    preprocessing: Any | None
+    preprocessing: PreprocessingConfig | None
     evaluation: EvaluationConfig | None
 
     @classmethod
@@ -36,12 +41,12 @@ class RunConfig:
 
         project = _parse_project(raw)
         model = _parse_model(raw.get("model", {}))
-        training = _parse_training(raw, project) if "training" in raw or "epochs" in raw else None
-        inference = _parse_inference(raw, project) if "inference" in raw else None
-        preprocessing = None
+        training = _parse_training(raw) if "training" in raw or "epochs" in raw else None
+        inference = _parse_inference(raw) if "inference" in raw else None
+        preprocessing = _parse_preprocessing(raw) if "preprocessing" in raw else None
         evaluation = _parse_evaluation(raw.get("evaluation", {})) if "evaluation" in raw else None
 
-        run_config = cls(
+        return cls(
             project=project,
             model=model,
             training=training,
@@ -49,16 +54,17 @@ class RunConfig:
             preprocessing=preprocessing,
             evaluation=evaluation,
         )
-        return run_config
 
 
 def _parse_project(raw: dict[str, Any]) -> ProjectConfig:
-    return ProjectConfig(
+    project = ProjectConfig(
         dataset_root=Path(raw["dataset_root"]),
         results_path=Path(raw["results_path"]),
         run_name=raw["run_name"],
         image_size=parse_wh_size_from_aliases(raw, ("model_image_size", "image_size"), (256, 256)),
     )
+    project.validate()
+    return project
 
 
 def _parse_model(model_raw: dict[str, Any]) -> ModelConfig:
@@ -81,14 +87,13 @@ def _parse_model(model_raw: dict[str, Any]) -> ModelConfig:
     )
 
 
-def _parse_training(raw: dict[str, Any], project: ProjectConfig) -> TrainingConfig:
+def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
     from virtual_staining.training.config import _TRAINING_KEYS, TrainingConfig
 
     data = section_with_shared_fields(
         raw, "training", {"dataset_root", "results_path", "run_name", "image_size"}
     )
     reject_unknown_keys(data, _TRAINING_KEYS, "training")
-    section_project = _parse_project(data)
 
     config = TrainingConfig(
         batch_size=int(data.get("batch_size", 8)),
@@ -106,35 +111,59 @@ def _parse_training(raw: dict[str, Any], project: ProjectConfig) -> TrainingConf
         resume=data.get("resume"),
         train_dir=Path(data["train_dir"]) if data.get("train_dir") else None,
         val_dir=Path(data["val_dir"]) if data.get("val_dir") else None,
-        project=section_project,
     )
     config.validate()
     return config
 
 
-def _parse_inference(raw: dict[str, Any], project: ProjectConfig) -> InferenceConfig:
+def _parse_inference(raw: dict[str, Any]) -> InferenceConfig:
     from virtual_staining.training.config import _INFERENCE_KEYS, InferenceConfig
 
     data = section_with_shared_fields(
         raw, "inference", {"dataset_root", "results_path", "run_name", "image_size"}
     )
     reject_unknown_keys(data, _INFERENCE_KEYS, "inference")
-    section_project = _parse_project(data)
 
     config = InferenceConfig(
         checkpoint_policy=data.get("checkpoint_policy"),
         checkpoint_path=Path(data["checkpoint"]) if data.get("checkpoint") else None,
         test_dir=Path(data["test_dir"]) if data.get("test_dir") else None,
         output_dir=Path(data["output_dir"]) if data.get("output_dir") else None,
-        project=section_project,
+    )
+    config.validate()
+    return config
+
+
+def _parse_preprocessing(raw: dict[str, Any]) -> PreprocessingConfig:
+    from virtual_staining.data.config import _PREPROCESSING_KEYS, PreprocessingConfig, _pair
+
+    data = section_with_shared_fields(raw, "preprocessing", {"dataset_root", "image_size"})
+    reject_unknown_keys(data, _PREPROCESSING_KEYS, "preprocessing")
+
+    config = PreprocessingConfig(
+        dataset_root=Path(data["dataset_root"]),
+        source_name=data["source_name"],
+        target_name=data["target_name"],
+        image_size=parse_wh_size_from_aliases(data, ("patch_size", "image_size"), (256, 256)),
+        grid_movement=_pair(data.get("grid_movement"), (256, 256)),
+        margin=int(data.get("margin", 200)),
+        seed=data.get("seed"),
+        save_masks=parse_bool_strict(data.get("save_masks", False), "save_masks"),
+        train_ratio=float(data.get("train_ratio", 0.8)),
+        val_ratio=float(data.get("val_ratio", 0.05)),
+        test_ratio=float(data.get("test_ratio", 0.15)),
+        min_foreground_ratio=float(data.get("min_foreground_ratio", 0.25)),
+        max_white_ratio=float(data.get("max_white_ratio", 0.7)),
+        white_threshold=int(data.get("white_threshold", 250)),
+        max_largest_white_component_ratio=float(
+            data.get("max_largest_white_component_ratio", 0.20)
+        ),
     )
     config.validate()
     return config
 
 
 def _parse_evaluation(eval_raw: dict[str, Any]) -> EvaluationConfig:
-    from virtual_staining.config.validation import parse_bool_strict
-
     return EvaluationConfig(
         save_graphs=parse_bool_strict(eval_raw.get("save_graphs", False), "save_graphs"),
         target_dir=Path(eval_raw["target_dir"]) if eval_raw.get("target_dir") else None,

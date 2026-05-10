@@ -30,3 +30,10 @@ class ProjectConfig:
     @property
     def manifest_path(self) -> Path:
         return self.dataset_root / "manifests" / "manifest.csv"
+
+    def validate(self) -> None:
+        if not self.run_name.strip():
+            raise ValueError("run_name must be a non-empty string")
+        width, height = self.image_size
+        if width <= 0 or height <= 0:
+            raise ValueError("image_size must contain two positive integers")

@@ -11,12 +11,16 @@ import torch
 from PIL import Image
 from torchvision import transforms
 
-from src.pix2pix import test_inference as run_inference
 from tools.evaluate_generation import collect_image_files, extract_single_sample_id
 from virtual_staining.common.dimensions import to_torchvision_hw
+from virtual_staining.config.project import ProjectConfig
+from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.metrics import evaluate_pair
+from virtual_staining.inference.runner import run_inference as _run_inference_impl
+from virtual_staining.models.config import DiscriminatorConfig, GeneratorConfig, ModelConfig
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
+from virtual_staining.training.config import InferenceConfig
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -24,7 +28,6 @@ from virtual_staining.models.generator import UNetGenerator
 
 _IMAGE_SIZE = (32, 32)
 _SAMPLE_ID = "00512_09216"
-_DEVICE = torch.device("cpu")
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +69,40 @@ def _save_checkpoint(path: Path, image_size: tuple[int, int] = _IMAGE_SIZE) -> N
     )
 
 
+def _run_inference(
+    checkpoint_path: Path,
+    test_folder: str,
+    output_folder: str,
+    image_size: tuple[int, int] = _IMAGE_SIZE,
+) -> None:
+    project = ProjectConfig(
+        dataset_root=Path(test_folder).parent,
+        results_path=Path(output_folder).parent,
+        run_name="test_run",
+        image_size=image_size,
+    )
+    config = RunConfig(
+        project=project,
+        model=ModelConfig(
+            generator=GeneratorConfig(
+                name="unet", in_channels=3, out_channels=3, base_channels=64, bilinear=False
+            ),
+            discriminator=DiscriminatorConfig(
+                name="patchgan", in_channels=6, ndf=64, use_sigmoid=False
+            ),
+        ),
+        training=None,
+        inference=InferenceConfig(
+            checkpoint_path=checkpoint_path,
+            test_dir=Path(test_folder),
+            output_dir=Path(output_folder),
+        ),
+        preprocessing=None,
+        evaluation=None,
+    )
+    _run_inference_impl(config, checkpoint_path)
+
+
 # ---------------------------------------------------------------------------
 # Naming tests: inference output filename conventions
 # ---------------------------------------------------------------------------
@@ -81,12 +118,11 @@ def test_output_filename_ends_with_target_generated_suffix(tmp_path: Path) -> No
     _write_pair(test_dir)
     _save_checkpoint(checkpoint)
 
-    run_inference(
+    _run_inference(
         checkpoint_path=checkpoint,
         test_folder=str(test_dir),
         output_folder=str(output_dir),
         image_size=_IMAGE_SIZE,
-        device=_DEVICE,
     )
 
     outputs = list(output_dir.iterdir())
@@ -109,12 +145,11 @@ def test_output_sample_id_matches_target(tmp_path: Path) -> None:
     _write_pair(test_dir, prefix=_SAMPLE_ID)
     _save_checkpoint(checkpoint)
 
-    run_inference(
+    _run_inference(
         checkpoint_path=checkpoint,
         test_folder=str(test_dir),
         output_folder=str(output_dir),
         image_size=_IMAGE_SIZE,
-        device=_DEVICE,
     )
 
     generated_path = next(output_dir.iterdir())
@@ -134,12 +169,11 @@ def test_collect_image_files_finds_inference_output(tmp_path: Path) -> None:
     _write_pair(test_dir, prefix=_SAMPLE_ID)
     _save_checkpoint(checkpoint)
 
-    run_inference(
+    _run_inference(
         checkpoint_path=checkpoint,
         test_folder=str(test_dir),
         output_folder=str(output_dir),
         image_size=_IMAGE_SIZE,
-        device=_DEVICE,
     )
 
     generated_files = collect_image_files(output_dir, "_target_generated", "Generated")
@@ -210,12 +244,11 @@ def test_inference_output_is_evaluable_end_to_end(tmp_path: Path) -> None:
     _write_pair(test_dir, prefix=_SAMPLE_ID)
     _save_checkpoint(checkpoint)
 
-    run_inference(
+    _run_inference(
         checkpoint_path=checkpoint,
         test_folder=str(test_dir),
         output_folder=str(output_dir),
         image_size=_IMAGE_SIZE,
-        device=_DEVICE,
     )
 
     target_path = test_dir / f"{_SAMPLE_ID}_target.png"
@@ -267,12 +300,11 @@ def test_inference_non_square_produces_correct_output_shape(tmp_path: Path) -> N
     Image.fromarray(arr).save(test_dir / f"{_SAMPLE_ID}_target.png")
     _save_checkpoint(checkpoint, image_size=image_size)
 
-    run_inference(
+    _run_inference(
         checkpoint_path=checkpoint,
         test_folder=str(test_dir),
         output_folder=str(output_dir),
         image_size=image_size,
-        device=_DEVICE,
     )
 
     generated = next(output_dir.iterdir())
@@ -302,12 +334,11 @@ def test_inference_raises_on_missing_architecture_metadata(tmp_path: Path) -> No
     )
 
     with pytest.raises(ValueError, match="architecture metadata"):
-        run_inference(
+        _run_inference(
             checkpoint_path=checkpoint,
             test_folder=str(test_dir),
             output_folder=str(output_dir),
             image_size=_IMAGE_SIZE,
-            device=_DEVICE,
         )
 
 
@@ -347,12 +378,11 @@ def test_inference_raises_on_architecture_mismatch(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="base_channels"):
-        run_inference(
+        _run_inference(
             checkpoint_path=checkpoint,
             test_folder=str(test_dir),
             output_folder=str(output_dir),
             image_size=_IMAGE_SIZE,
-            device=_DEVICE,
         )
 
 

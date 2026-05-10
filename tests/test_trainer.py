@@ -27,19 +27,20 @@ from virtual_staining.training.trainer import Trainer
 def _make_resume_trainer(
     config: TrainingConfig,
     run_paths: RunPaths,
+    project: ProjectConfig,
     generator: UNetGenerator,
     discriminator: PatchGANDiscriminator,
 ) -> Trainer:
     device = torch.device("cpu")
     transform = transforms.Compose(
         [
-            transforms.Resize(config.image_size),
+            transforms.Resize(project.image_size),
             transforms.ToTensor(),
             transforms.Normalize([0.5] * 3, [0.5] * 3),
         ]
     )
-    train_dir = config.dataset_root / "dataset_train"
-    val_dir = config.dataset_root / "dataset_val"
+    train_dir = project.dataset_root / "dataset_train"
+    val_dir = project.dataset_root / "dataset_val"
     train_loader = DataLoader(
         PairedHistologyDataset(train_dir, transform=transform), batch_size=1, num_workers=0
     )
@@ -54,7 +55,7 @@ def _make_resume_trainer(
         train_loader=train_loader,
         val_loader=val_loader,
         device=device,
-        image_size=config.image_size,
+        image_size=project.image_size,
         train_dir=train_dir,
         val_dir=val_dir,
     )
@@ -81,7 +82,9 @@ def _make_project(dataset_root: Path, results_path: Path, run_name: str) -> Proj
     )
 
 
-def _make_trainer(tmp_path: Path, checkpoint_rate: int) -> tuple[Trainer, TrainingConfig, RunPaths]:
+def _make_trainer(
+    tmp_path: Path, checkpoint_rate: int
+) -> tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig]:
     dataset_root = tmp_path / "dataset"
     train_dir = dataset_root / "dataset_train"
     val_dir = dataset_root / "dataset_val"
@@ -91,6 +94,7 @@ def _make_trainer(tmp_path: Path, checkpoint_rate: int) -> tuple[Trainer, Traini
     _write_rgb_pair(train_dir)
     _write_rgb_pair(val_dir)
 
+    project = _make_project(dataset_root, tmp_path / "results", "smoke_run")
     config = TrainingConfig(
         batch_size=1,
         epochs=1,
@@ -104,14 +108,13 @@ def _make_trainer(tmp_path: Path, checkpoint_rate: int) -> tuple[Trainer, Traini
         validate_rate=1,
         checkpoint_rate=checkpoint_rate,
         log_rate=1,
-        project=_make_project(dataset_root, tmp_path / "results", "smoke_run"),
     )
-    run_paths = RunPaths(config.run_root)
+    run_paths = RunPaths(project.run_root)
     run_paths.create_directories()
 
     transform = transforms.Compose(
         [
-            transforms.Resize(config.image_size),
+            transforms.Resize(project.image_size),
             transforms.ToTensor(),
             transforms.Normalize([0.5] * 3, [0.5] * 3),
         ]
@@ -139,23 +142,26 @@ def _make_trainer(tmp_path: Path, checkpoint_rate: int) -> tuple[Trainer, Traini
             train_loader=train_loader,
             val_loader=val_loader,
             device=device,
-            image_size=config.image_size,
+            image_size=project.image_size,
             train_dir=train_dir,
             val_dir=val_dir,
         ),
         config,
         run_paths,
+        project,
     )
 
 
 @pytest.fixture()
-def smoke_trainer(tmp_path: Path) -> tuple[Trainer, TrainingConfig, RunPaths]:
+def smoke_trainer(tmp_path: Path) -> tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig]:
     """Trainer that never saves a checkpoint (checkpoint_rate=2 > epochs=1)."""
     return _make_trainer(tmp_path, checkpoint_rate=2)
 
 
 @pytest.fixture()
-def checkpointing_trainer(tmp_path: Path) -> tuple[Trainer, TrainingConfig, RunPaths]:
+def checkpointing_trainer(
+    tmp_path: Path,
+) -> tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig]:
     """Trainer that saves a checkpoint every epoch, for round-trip tests."""
     return _make_trainer(tmp_path, checkpoint_rate=1)
 
@@ -166,28 +172,27 @@ def checkpointing_trainer(tmp_path: Path) -> tuple[Trainer, TrainingConfig, RunP
 
 
 def test_trainer_smoke_run_creates_expected_files(
-    smoke_trainer: tuple[Trainer, TrainingConfig, RunPaths],
+    smoke_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
 ) -> None:
-    trainer, config, _ = smoke_trainer
+    trainer, config, run_paths, _ = smoke_trainer
 
     trainer.train(seed=42)
 
-    run_root = config.run_root
+    run_root = run_paths.root
     assert (run_root / "run_config.json").exists()
-    assert (run_root / "config.yaml").exists()
     assert (run_root / "environment.json").exists()
     assert (run_root / "metrics.csv").exists()
     assert any((run_root / "logs").glob("*.txt"))
 
 
 def test_trainer_metrics_csv_structure(
-    smoke_trainer: tuple[Trainer, TrainingConfig, RunPaths],
+    smoke_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
 ) -> None:
-    trainer, config, _ = smoke_trainer
+    trainer, config, run_paths, _ = smoke_trainer
 
     trainer.train(seed=42)
 
-    metrics_path = config.run_root / "metrics.csv"
+    metrics_path = run_paths.root / "metrics.csv"
     with metrics_path.open(newline="", encoding="utf-8") as metrics_file:
         rows = list(csv.DictReader(metrics_file))
 
@@ -225,6 +230,7 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
     _write_rgb_pair(train_dir, prefix="00001_00001")
     _write_rgb_pair(val_dir)
 
+    project = _make_project(dataset_root, tmp_path / "results", "avg_run")
     config = TrainingConfig(
         batch_size=1,
         epochs=1,
@@ -238,12 +244,11 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
         validate_rate=1,
         checkpoint_rate=2,
         log_rate=1,
-        project=_make_project(dataset_root, tmp_path / "results", "avg_run"),
     )
 
     transform = transforms.Compose(
         [
-            transforms.Resize(config.image_size),
+            transforms.Resize(project.image_size),
             transforms.ToTensor(),
             transforms.Normalize([0.5] * 3, [0.5] * 3),
         ]
@@ -262,7 +267,7 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
         num_workers=0,
     )
 
-    run_paths = RunPaths(config.run_root)
+    run_paths = RunPaths(project.run_root)
     run_paths.create_directories()
     trainer = Trainer(
         config=config,
@@ -272,13 +277,13 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
         train_loader=train_loader,
         val_loader=val_loader,
         device=device,
-        image_size=config.image_size,
+        image_size=project.image_size,
         train_dir=train_dir,
         val_dir=val_dir,
     )
     trainer.train(seed=0)
 
-    metrics_path = config.run_root / "metrics.csv"
+    metrics_path = run_paths.root / "metrics.csv"
     with metrics_path.open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
 
@@ -293,20 +298,20 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
 
 
 def test_trainer_checkpoint_round_trip(
-    checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths],
+    checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
 ) -> None:
-    trainer, config, run_paths = checkpointing_trainer
+    trainer, config, run_paths, project = checkpointing_trainer
 
     trainer.train(seed=42)
 
-    checkpoint_path = next((config.run_root / "checkpoints").glob("*.pth"))
+    checkpoint_path = next(run_paths.checkpoints_dir.glob("*.pth"))
 
     device = torch.device("cpu")
-    train_dir = config.dataset_root / "dataset_train"
-    val_dir = config.dataset_root / "dataset_val"
+    train_dir = project.dataset_root / "dataset_train"
+    val_dir = project.dataset_root / "dataset_val"
     transform = transforms.Compose(
         [
-            transforms.Resize(config.image_size),
+            transforms.Resize(project.image_size),
             transforms.ToTensor(),
             transforms.Normalize([0.5] * 3, [0.5] * 3),
         ]
@@ -330,7 +335,7 @@ def test_trainer_checkpoint_round_trip(
         train_loader=train_loader,
         val_loader=val_loader,
         device=device,
-        image_size=config.image_size,
+        image_size=project.image_size,
         train_dir=train_dir,
         val_dir=val_dir,
     )
@@ -345,17 +350,17 @@ def test_trainer_checkpoint_round_trip(
 
 
 def test_run_config_records_default_dirs(
-    smoke_trainer: tuple[Trainer, TrainingConfig, RunPaths],
+    smoke_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
 ) -> None:
-    trainer, config, _ = smoke_trainer
+    trainer, config, run_paths, project = smoke_trainer
 
     trainer.train(seed=42)
 
-    with (config.run_root / "run_config.json").open(encoding="utf-8") as f:
+    with (run_paths.root / "run_config.json").open(encoding="utf-8") as f:
         run_config = json.load(f)
 
-    assert run_config["train_dir"] == str(config.dataset_root / "dataset_train")
-    assert run_config["val_dir"] == str(config.dataset_root / "dataset_val")
+    assert run_config["train_dir"] == str(project.dataset_root / "dataset_train")
+    assert run_config["val_dir"] == str(project.dataset_root / "dataset_val")
 
 
 def test_run_config_records_custom_dirs(tmp_path: Path) -> None:
@@ -367,6 +372,7 @@ def test_run_config_records_custom_dirs(tmp_path: Path) -> None:
     _write_rgb_pair(custom_train_dir)
     _write_rgb_pair(custom_val_dir)
 
+    project = _make_project(tmp_path / "dataset", tmp_path / "results", "custom_dirs_run")
     config = TrainingConfig(
         batch_size=1,
         epochs=1,
@@ -382,12 +388,11 @@ def test_run_config_records_custom_dirs(tmp_path: Path) -> None:
         log_rate=1,
         train_dir=custom_train_dir,
         val_dir=custom_val_dir,
-        project=_make_project(tmp_path / "dataset", tmp_path / "results", "custom_dirs_run"),
     )
 
     transform = transforms.Compose(
         [
-            transforms.Resize(config.image_size),
+            transforms.Resize(project.image_size),
             transforms.ToTensor(),
             transforms.Normalize([0.5] * 3, [0.5] * 3),
         ]
@@ -405,21 +410,23 @@ def test_run_config_records_custom_dirs(tmp_path: Path) -> None:
         shuffle=False,
         num_workers=0,
     )
+    run_paths = RunPaths(project.run_root)
+    run_paths.create_directories()
     trainer = Trainer(
         config=config,
-        run_paths=RunPaths(config.run_root),
+        run_paths=run_paths,
         generator=UNetGenerator().to(device),
         discriminator=PatchGANDiscriminator().to(device),
         train_loader=train_loader,
         val_loader=val_loader,
         device=device,
-        image_size=config.image_size,
+        image_size=project.image_size,
         train_dir=custom_train_dir,
         val_dir=custom_val_dir,
     )
     trainer.train(seed=42)
 
-    with (config.run_root / "run_config.json").open(encoding="utf-8") as f:
+    with (run_paths.root / "run_config.json").open(encoding="utf-8") as f:
         run_config = json.load(f)
 
     assert run_config["train_dir"] == str(custom_train_dir)
@@ -432,13 +439,13 @@ def test_run_config_records_custom_dirs(tmp_path: Path) -> None:
 
 
 def test_checkpoint_architecture_metadata_present(
-    checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths],
+    checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
 ) -> None:
     """Saved checkpoint must include an 'architecture' key with correct model params."""
-    trainer, config, _ = checkpointing_trainer
+    trainer, config, run_paths, _ = checkpointing_trainer
     trainer.train(seed=42)
 
-    checkpoint_path = next((config.run_root / "checkpoints").glob("*.pth"))
+    checkpoint_path = next(run_paths.checkpoints_dir.glob("*.pth"))
     ck = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
     assert "architecture" in ck
@@ -456,28 +463,30 @@ def test_checkpoint_architecture_metadata_present(
 
 
 def test_load_checkpoint_validates_matching_architecture(
-    checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths],
+    checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
 ) -> None:
     """CheckpointManager.load must succeed when architecture matches the checkpoint."""
-    trainer, config, run_paths = checkpointing_trainer
+    trainer, config, run_paths, project = checkpointing_trainer
     trainer.train(seed=42)
 
-    checkpoint_path = next((config.run_root / "checkpoints").glob("*.pth"))
-    trainer_2 = _make_resume_trainer(config, run_paths, UNetGenerator(), PatchGANDiscriminator())
+    checkpoint_path = next(run_paths.checkpoints_dir.glob("*.pth"))
+    trainer_2 = _make_resume_trainer(
+        config, run_paths, project, UNetGenerator(), PatchGANDiscriminator()
+    )
     start_epoch = trainer_2._checkpoint_manager.load(checkpoint_path)
     assert start_epoch == 1
 
 
 def test_load_checkpoint_raises_on_architecture_mismatch(
-    checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths],
+    checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
 ) -> None:
     """CheckpointManager.load must raise on mismatched generator architecture params."""
-    trainer, config, run_paths = checkpointing_trainer
+    trainer, config, run_paths, project = checkpointing_trainer
     trainer.train(seed=42)
 
-    checkpoint_path = next((config.run_root / "checkpoints").glob("*.pth"))
+    checkpoint_path = next(run_paths.checkpoints_dir.glob("*.pth"))
     trainer_mismatch = _make_resume_trainer(
-        config, run_paths, UNetGenerator(base_channels=32), PatchGANDiscriminator()
+        config, run_paths, project, UNetGenerator(base_channels=32), PatchGANDiscriminator()
     )
     with pytest.raises(ValueError, match="base_channels"):
         trainer_mismatch._checkpoint_manager.load(checkpoint_path)
@@ -490,20 +499,20 @@ def test_load_checkpoint_raises_on_architecture_mismatch(
 
 def test_short_run_writes_final_checkpoint(tmp_path: Path) -> None:
     """epochs=1, checkpoint_rate=10: a final ep000.pth must be written."""
-    trainer, config, _ = _make_trainer(tmp_path, checkpoint_rate=10)
+    trainer, config, run_paths, _ = _make_trainer(tmp_path, checkpoint_rate=10)
     trainer.train(seed=42)
 
-    checkpoints = sorted((config.run_root / "checkpoints").glob("ep*.pth"))
+    checkpoints = sorted(run_paths.checkpoints_dir.glob("ep*.pth"))
     assert len(checkpoints) == 1
     assert checkpoints[0].name == "ep000.pth"
 
 
 def test_no_duplicate_final_checkpoint_when_already_checkpointed(tmp_path: Path) -> None:
     """epochs=1, checkpoint_rate=1: exactly one checkpoint, no duplicate."""
-    trainer, config, _ = _make_trainer(tmp_path, checkpoint_rate=1)
+    trainer, config, run_paths, _ = _make_trainer(tmp_path, checkpoint_rate=1)
     trainer.train(seed=42)
 
-    checkpoints = sorted((config.run_root / "checkpoints").glob("ep*.pth"))
+    checkpoints = sorted(run_paths.checkpoints_dir.glob("ep*.pth"))
     assert len(checkpoints) == 1
     assert checkpoints[0].name == "ep000.pth"
 
@@ -514,19 +523,21 @@ def test_no_duplicate_final_checkpoint_when_already_checkpointed(tmp_path: Path)
 
 
 def test_load_checkpoint_raises_on_missing_architecture(
-    checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths],
+    checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
     tmp_path: Path,
 ) -> None:
     """CheckpointManager.load must raise for checkpoints without architecture metadata."""
-    trainer, config, run_paths = checkpointing_trainer
+    trainer, config, run_paths, project = checkpointing_trainer
     trainer.train(seed=42)
 
-    checkpoint_path = next((config.run_root / "checkpoints").glob("*.pth"))
+    checkpoint_path = next(run_paths.checkpoints_dir.glob("*.pth"))
     ck = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     ck.pop("architecture")
     legacy_path = tmp_path / "no_arch.pth"
     torch.save(ck, legacy_path)
 
-    trainer_2 = _make_resume_trainer(config, run_paths, UNetGenerator(), PatchGANDiscriminator())
+    trainer_2 = _make_resume_trainer(
+        config, run_paths, project, UNetGenerator(), PatchGANDiscriminator()
+    )
     with pytest.raises(ValueError, match="architecture metadata"):
         trainer_2._checkpoint_manager.load(legacy_path)
