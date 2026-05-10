@@ -19,7 +19,7 @@ from virtual_staining.evaluation.reports import (
 )
 from virtual_staining.evaluation.summaries import metric_value, write_summary_csv
 from virtual_staining.experiment.run_paths import RunPaths
-from virtual_staining.utils.cli import print_info, print_section, style
+from virtual_staining.utils.console import print_info, print_section, style
 from virtual_staining.utils.metrics import (
     DEFAULT_METRICS,
     color_metric,

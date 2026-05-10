@@ -7,7 +7,6 @@ from typing import cast
 import torch
 from torchvision import transforms
 
-from virtual_staining.common.dimensions import to_torchvision_hw
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.dataset import PairedHistologyDataset, PairedManifestDataset
 from virtual_staining.data.manifest import DatasetManifest
@@ -17,6 +16,7 @@ from virtual_staining.inference.predictor import Predictor
 from virtual_staining.inference.results import InferenceResult
 from virtual_staining.models.factory import build_generator
 from virtual_staining.training.checkpoints import _check_generator_arch
+from virtual_staining.utils.dimensions import to_torchvision_hw
 
 logger = logging.getLogger(__name__)
 

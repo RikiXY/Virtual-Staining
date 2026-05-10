@@ -10,7 +10,6 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
-from virtual_staining.common.dimensions import to_torchvision_hw
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.dataset import PairedHistologyDataset, PairedManifestDataset
 from virtual_staining.data.manifest import DatasetManifest
@@ -29,6 +28,7 @@ from virtual_staining.reporting.null import NullReporter
 from virtual_staining.training.checkpoints import CheckpointManager
 from virtual_staining.training.results import TrainingResult
 from virtual_staining.training.trainer import Trainer
+from virtual_staining.utils.dimensions import to_torchvision_hw
 
 logger = logging.getLogger(__name__)
 

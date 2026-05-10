@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from virtual_staining.utils.cli import style
+from virtual_staining.utils.console import style
 
 DEFAULT_METRICS = [
     "ssim",

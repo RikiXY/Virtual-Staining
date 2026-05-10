@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from virtual_staining.utils.cli import print_info, print_section, style
+from virtual_staining.utils.console import print_info, print_section, style
 
 if TYPE_CHECKING:
     from virtual_staining.experiment.run_context import RunContext

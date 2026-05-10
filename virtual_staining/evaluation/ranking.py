@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from virtual_staining.utils.cli import print_info, print_section, style
+from virtual_staining.utils.console import print_info, print_section, style
 from virtual_staining.utils.metrics import DEFAULT_METRICS, is_higher_better_metric
 
 IMAGE_COLUMNS = [

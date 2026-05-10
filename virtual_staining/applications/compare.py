@@ -33,7 +33,7 @@ from virtual_staining.evaluation.statistics import (
     resolve_plot_range,
     resolve_thresholds,
 )
-from virtual_staining.utils.cli import print_info, print_section, style
+from virtual_staining.utils.console import print_info, print_section, style
 from virtual_staining.utils.metrics import color_metric_value
 
 

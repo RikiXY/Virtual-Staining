@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from virtual_staining.common.dimensions import parse_wh_size_from_aliases
 from virtual_staining.config.loader import load_yaml_mapping
 from virtual_staining.config.project import ProjectConfig
 from virtual_staining.config.sections import section_with_shared_fields
@@ -16,6 +15,7 @@ from virtual_staining.config.validation import (
 )
 from virtual_staining.evaluation.config import _EVALUATION_KEYS, EvaluationConfig
 from virtual_staining.models.config import DiscriminatorConfig, GeneratorConfig, ModelConfig
+from virtual_staining.utils.dimensions import parse_wh_size_from_aliases
 
 _FLAT_EVALUATION_KEYS: frozenset[str] = frozenset(
     {

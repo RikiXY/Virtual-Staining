@@ -15,7 +15,7 @@ from virtual_staining.evaluation.panels import (
     write_metric_selection_summary,
 )
 from virtual_staining.evaluation.summaries import read_per_image_metrics_csv, read_summary_csv
-from virtual_staining.utils.cli import print_info, print_section, style
+from virtual_staining.utils.console import print_info, print_section, style
 from virtual_staining.utils.metrics import color_for_metric
 
 
