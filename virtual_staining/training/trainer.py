@@ -54,6 +54,8 @@ def _save_images(
 def _get_first_pair_size(dataset) -> dict | None:
     if len(dataset) == 0:
         return None
+    if not hasattr(dataset, "pairs"):
+        return None
     source_path, target_path = dataset.pairs[0]
     with Image.open(source_path) as src_img:
         source_size = src_img.size
@@ -300,9 +302,6 @@ class Trainer:
             d.mkdir(parents=True, exist_ok=True)
 
         env = collect_environment()
-        with open(self._run_paths.root / "environment.json", "w", encoding="utf-8") as f:
-            json.dump(env, f, indent=2, default=str)
-
         timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         log_file = self._logs_dir / f"Log-{timestamp_str}.txt"
         if log_file.exists():

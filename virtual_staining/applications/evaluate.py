@@ -7,6 +7,7 @@ from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.evaluator import evaluate_pairs
 from virtual_staining.evaluation.plotting import write_plots
 from virtual_staining.evaluation.summaries import write_summary_csv
+from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS
 
 logger = logging.getLogger(__name__)
@@ -22,13 +23,14 @@ def evaluate(config: RunConfig) -> None:
     """
     project = config.project
     run_root = project.results_path / project.run_name
+    paths = RunPaths(run_root)
     eval_cfg = config.evaluation
 
     target_dir = (
         eval_cfg.target_dir if eval_cfg and eval_cfg.target_dir else project.dataset_test_dir
     )
     generated_dir = (
-        eval_cfg.generated_dir if eval_cfg and eval_cfg.generated_dir else run_root / "output_test"
+        eval_cfg.generated_dir if eval_cfg and eval_cfg.generated_dir else paths.output_test_dir
     )
     output_dir = (
         eval_cfg.output_dir if eval_cfg and eval_cfg.output_dir else run_root / "evaluation"

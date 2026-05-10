@@ -180,7 +180,6 @@ def test_trainer_smoke_run_creates_expected_files(
 
     run_root = run_paths.root
     assert (run_root / "run_config.json").exists()
-    assert (run_root / "environment.json").exists()
     assert (run_root / "metrics.csv").exists()
     assert any((run_root / "logs").glob("*.txt"))
 

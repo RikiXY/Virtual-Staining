@@ -2,16 +2,8 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any
 
-import pandas as pd
-
-from virtual_staining.evaluation.ranking import (
-    organize_by_metrics,
-)
-from virtual_staining.evaluation.ranking import (
-    organize_metric as _organize_metric,
-)
+from virtual_staining.evaluation.ranking import organize_by_metrics
 from virtual_staining.utils.metrics import DEFAULT_METRICS
 
 
@@ -151,29 +143,6 @@ def resolve_output_dir(args: argparse.Namespace, metrics_csv: Path) -> Path:
         return inferred_run_path / "evaluation" / "sorted_by_metrics"
 
     raise ValueError("Could not infer output directory. Please provide --output-dir explicitly.")
-
-
-def organize_metric(
-    df: pd.DataFrame,
-    metric: str,
-    output_dir: Path,
-    image_columns: list[str],
-    top_k: int,
-    mode: str,
-    overwrite: bool,
-    include_all_ranked: bool,
-) -> dict[str, Any] | None:
-    """Compatibility wrapper re-exporting the package implementation."""
-    return _organize_metric(
-        df=df,
-        metric=metric,
-        output_dir=output_dir,
-        image_columns=image_columns,
-        top_k=top_k,
-        mode=mode,
-        overwrite=overwrite,
-        include_all_ranked=include_all_ranked,
-    )
 
 
 def main() -> None:

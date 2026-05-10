@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from tools.organize_by_metrics import organize_metric
+from virtual_staining.evaluation.ranking import organize_metric
 
 
 def _touch(path: Path) -> None:
