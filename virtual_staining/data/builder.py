@@ -375,7 +375,7 @@ class DatasetBuilder:
             discarded_manifest_records.append(
                 ManifestRecord(
                     sample_id=sample_id,
-                    split=cast(Any, "discarded"),
+                    split="discarded",
                     input_path=Path(f"discarded_patches/source/{src_pair[1]}"),
                     target_path=Path(f"discarded_patches/target/{tgt_pair[1]}"),
                     input_modality="label_free",

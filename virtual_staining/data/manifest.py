@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-Split = Literal["train", "val", "test"]
+Split = Literal["train", "val", "test", "discarded"]
 
 
 @dataclass(frozen=True)
