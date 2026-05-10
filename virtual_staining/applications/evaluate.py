@@ -5,10 +5,10 @@ from pathlib import Path
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.evaluator import evaluate_pairs
+from virtual_staining.evaluation.io import collect_image_files
 from virtual_staining.evaluation.plotting import write_plots
 from virtual_staining.evaluation.summaries import write_summary_csv
 from virtual_staining.experiment.run_paths import RunPaths
-from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +65,8 @@ def _build_pairs(
     Target files match `*_target.<ext>`; generated files match
     `*_target_generated.<ext>`. The sample_id is the prefix before `_target`.
     """
-    target_files = _collect_image_files(target_dir, "_target", "Target")
-    generated_files = _collect_image_files(generated_dir, "_target_generated", "Generated")
+    target_files = collect_image_files(target_dir, "_target", "Target")
+    generated_files = collect_image_files(generated_dir, "_target_generated", "Generated")
     all_sample_ids = sorted(set(target_files) | set(generated_files))
     pairs: list[tuple[Path, Path, str]] = []
 
@@ -88,39 +88,6 @@ def _build_pairs(
 
 
 def _count_unmatched_samples(target_dir: Path, generated_dir: Path) -> int:
-    target_files = _collect_image_files(target_dir, "_target", "Target")
-    generated_files = _collect_image_files(generated_dir, "_target_generated", "Generated")
+    target_files = collect_image_files(target_dir, "_target", "Target")
+    generated_files = collect_image_files(generated_dir, "_target_generated", "Generated")
     return len(set(target_files) ^ set(generated_files))
-
-
-def _collect_image_files(directory_path: str | Path, suffix: str, label: str) -> dict[str, Path]:
-    """Collect valid files from a directory, indexed by sample id."""
-    directory = Path(directory_path)
-
-    if not directory.is_dir():
-        raise NotADirectoryError(f"{label} directory not found: {directory}")
-
-    files: dict[str, Path] = {}
-
-    for path in sorted(directory.iterdir()):
-        if not path.is_file():
-            continue
-        if path.suffix.lower() not in VALID_IMAGE_EXTENSIONS:
-            continue
-        if not path.stem.endswith(suffix):
-            continue
-
-        sample_id = _extract_sample_id(path, suffix, label)
-        files[sample_id] = path
-
-    return files
-
-
-def _extract_sample_id(path: str | Path, suffix: str, label: str = "File") -> str:
-    """Extract the sample id by removing the expected suffix from the filename."""
-    name = Path(path).stem
-
-    if not name.endswith(suffix):
-        raise ValueError(f"{label} file does not end with '{suffix}': {path}")
-
-    return name[: -len(suffix)]

@@ -7,7 +7,7 @@ import pytest
 
 from virtual_staining.config import RunConfig
 from virtual_staining.config.project import ProjectConfig
-from virtual_staining.training.config import InferenceConfig, TrainingConfig
+from virtual_staining.training.config import TrainingConfig
 
 
 def _make_project(**overrides: object) -> ProjectConfig:
@@ -93,7 +93,7 @@ def test_run_config_from_yaml(tmp_path: Path) -> None:
     assert run_config.training.seed == 7
 
 
-def test_training_from_yaml_shim(tmp_path: Path) -> None:
+def test_training_from_run_yaml_defaults(tmp_path: Path) -> None:
     yaml_content = textwrap.dedent("""\
         dataset_root: /data
         results_path: /results
@@ -103,7 +103,9 @@ def test_training_from_yaml_shim(tmp_path: Path) -> None:
     yaml_file = tmp_path / "minimal.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
 
-    config = TrainingConfig.from_yaml(yaml_file)
+    run_config = RunConfig.from_yaml(yaml_file)
+    assert run_config.training is not None
+    config = run_config.training
     assert config.batch_size == 8
     assert config.lr_g == pytest.approx(2e-4)
     assert config.l1_weight == pytest.approx(25.0)
@@ -155,7 +157,9 @@ def test_inference_from_run_yaml_section(tmp_path: Path) -> None:
     yaml_file = tmp_path / "run.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
 
-    config = InferenceConfig.from_yaml(yaml_file)
+    run_config = RunConfig.from_yaml(yaml_file)
+    assert run_config.inference is not None
+    config = run_config.inference
     assert config.test_dir == Path("/custom/test")
     assert config.output_dir == Path("/results/section_run/custom_output")
     assert config.checkpoint_path == Path("checkpoints/ep030.pth")
@@ -175,7 +179,9 @@ def test_inference_latest_checkpoint_policy(tmp_path: Path) -> None:
     yaml_file = tmp_path / "run.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
 
-    config = InferenceConfig.from_yaml(yaml_file)
+    run_config = RunConfig.from_yaml(yaml_file)
+    assert run_config.inference is not None
+    config = run_config.inference
     assert config.checkpoint_policy == "latest"
     assert config.checkpoint_path is None
     assert config.output_dir is None
@@ -264,7 +270,7 @@ def test_training_from_yaml_unknown_section_key_raises(tmp_path: Path) -> None:
     yaml_file = tmp_path / "typo.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
     with pytest.raises(ValueError, match="bathc_size"):
-        TrainingConfig.from_yaml(yaml_file)
+        RunConfig.from_yaml(yaml_file)
 
 
 def test_training_from_yaml_unknown_top_level_key_raises(tmp_path: Path) -> None:
@@ -279,7 +285,7 @@ def test_training_from_yaml_unknown_top_level_key_raises(tmp_path: Path) -> None
     yaml_file = tmp_path / "typo_top.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
     with pytest.raises(ValueError, match="typo_field"):
-        TrainingConfig.from_yaml(yaml_file)
+        RunConfig.from_yaml(yaml_file)
 
 
 def test_training_from_yaml_unknown_flat_key_raises(tmp_path: Path) -> None:
@@ -293,7 +299,7 @@ def test_training_from_yaml_unknown_flat_key_raises(tmp_path: Path) -> None:
     yaml_file = tmp_path / "typo_flat.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
     with pytest.raises(ValueError, match="bathc_size"):
-        TrainingConfig.from_yaml(yaml_file)
+        RunConfig.from_yaml(yaml_file)
 
 
 def test_inference_from_yaml_unknown_section_key_raises(tmp_path: Path) -> None:
@@ -308,7 +314,7 @@ def test_inference_from_yaml_unknown_section_key_raises(tmp_path: Path) -> None:
     yaml_file = tmp_path / "typo_inf.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
     with pytest.raises(ValueError, match="checkpont_policy"):
-        InferenceConfig.from_yaml(yaml_file)
+        RunConfig.from_yaml(yaml_file)
 
 
 def test_training_from_yaml_invalid_image_size_raises_value_error(tmp_path: Path) -> None:
@@ -322,7 +328,7 @@ def test_training_from_yaml_invalid_image_size_raises_value_error(tmp_path: Path
     yaml_file = tmp_path / "bad_training.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
     with pytest.raises(ValueError, match="image_size"):
-        TrainingConfig.from_yaml(yaml_file)
+        RunConfig.from_yaml(yaml_file)
 
 
 @pytest.mark.parametrize(
@@ -346,4 +352,4 @@ def test_inference_from_yaml_invalid_values_raise_value_error(
     yaml_file = tmp_path / "bad_inference.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
     with pytest.raises(ValueError, match=field):
-        InferenceConfig.from_yaml(yaml_file)
+        RunConfig.from_yaml(yaml_file)

@@ -1,24 +1,23 @@
 from __future__ import annotations
 
 import argparse
-import csv
 from pathlib import Path
 from typing import Any
 
 from virtual_staining.evaluation.panels import (
     METRIC_SELECTION_ORDER,
     DiagnosticEntry,
-    build_selection_summary_row,
+    build_metric_case_artifacts,
     extract_generated_sample_id,
-    infer_source_path_from_row,
     save_comparison_panel,
     save_diagnostic_plots,
     save_metric_diagnostics_summary,
     select_representative_rows,
     write_metric_selection_summary,
 )
+from virtual_staining.evaluation.summaries import read_per_image_metrics_csv, read_summary_csv
 from virtual_staining.utils.cli import print_info, print_section, style
-from virtual_staining.utils.metrics import color_for_metric, is_higher_better_metric
+from virtual_staining.utils.metrics import color_for_metric
 
 # ==========================
 # Section dedicated to the parser
@@ -173,71 +172,6 @@ def infer_case_diagnostics_dir(save_path: str | Path, generated_image: str | Pat
 
 
 # ====================================
-# Section dedicated to CSV reading
-# ====================================
-
-
-def read_summary_csv(path: str | Path) -> dict[str, dict[str, float]]:
-    """Reads summary.csv and returns the aggregate statistics per metric."""
-    summary_path = Path(path)
-
-    if not summary_path.is_file():
-        raise FileNotFoundError(f"Summary CSV not found: {summary_path}")
-
-    rows: dict[str, dict[str, float]] = {}
-
-    with summary_path.open("r", newline="", encoding="utf-8") as file:
-        reader = csv.reader(file)
-        header_found = False
-
-        for row in reader:
-            if not row:
-                continue
-
-            if row[0] == "metric":
-                header_found = True
-                continue
-
-            if not header_found:
-                continue
-
-            metric_name = row[0].strip().lower()
-            rows[metric_name] = {
-                "count": float(row[1]),
-                "mean": float(row[2]),
-                "median": float(row[3]),
-                "std": float(row[4]),
-                "min": float(row[5]),
-                "max": float(row[6]),
-            }
-
-    return rows
-
-
-def read_per_image_metrics_csv(path: str | Path) -> list[dict[str, str]]:
-    """Reads per_image_metrics.csv and returns all rows as dictionaries."""
-    csv_path = Path(path)
-
-    if not csv_path.is_file():
-        raise FileNotFoundError(f"Per-image metrics CSV not found: {csv_path}")
-
-    with csv_path.open("r", newline="", encoding="utf-8") as file:
-        return list(csv.DictReader(file))
-
-
-# ==============================================
-# Section dedicated to sample selection
-# ==============================================
-
-
-def build_metric_kind_row_title(
-    metric_name: str, kind: str, sample_id: str, metric_value: float
-) -> str:
-    """Builds the row title for aggregated panels."""
-    return f"{metric_name.upper()} | {kind.upper()} | sample={sample_id} | value={metric_value:.6f}"
-
-
-# ====================================
 # Section dedicated to the text report
 # ====================================
 
@@ -314,77 +248,6 @@ def run_single(args: argparse.Namespace) -> None:
         )
 
     print_single_summary(saved_path, diagnostic_paths)
-
-
-def build_metric_case_artifacts(
-    metric_name: str,
-    kind: str,
-    row: dict[str, str],
-    metric_summary: dict[str, float],
-    metric_dir: Path,
-) -> tuple[dict[str, object], DiagnosticEntry]:
-    """Builds and saves the artefacts for a representative case."""
-    sample_id = row["sample_id"]
-    metric_value = float(row[metric_name])
-
-    if kind == "best":
-        summary_key = "max" if is_higher_better_metric(metric_name) else "min"
-    elif kind == "worst":
-        summary_key = "min" if is_higher_better_metric(metric_name) else "max"
-    elif kind == "median":
-        summary_key = "median"
-    else:
-        raise ValueError(f"Unsupported representative kind: {kind}")
-
-    target_value = float(metric_summary[summary_key])
-    source_path = infer_source_path_from_row(row)
-    generated_path = Path(row["generated_path"])
-    target_path = Path(row["target_path"])
-    comparison_path = metric_dir / f"{kind}_{sample_id}_comparison.png"
-    saved_path = save_comparison_panel(
-        source_path=source_path,
-        generated_path=generated_path,
-        target_path=target_path,
-        save_path=comparison_path,
-        suptitle=(
-            f"{metric_name.upper()} | {kind.upper()} | "
-            f"sample={sample_id} | value={metric_value:.6f}"
-        ),
-    )
-
-    diagnostics_case_dir = metric_dir / "diagnostics" / f"{kind}_{sample_id}"
-    diagnostic_paths = save_diagnostic_plots(
-        source_path=source_path,
-        generated_path=generated_path,
-        target_path=target_path,
-        save_dir=diagnostics_case_dir,
-    )
-    diagnostic_paths_by_name = {path.name: path for path in diagnostic_paths}
-    diagnostic_entry: DiagnosticEntry = {
-        "kind": kind,
-        "sample_id": sample_id,
-        "metric_value": metric_value,
-        "comparison_path": saved_path,
-        "error_histogram_path": diagnostic_paths_by_name[f"{sample_id}_error_histogram.png"],
-        "intensity_overlay_histogram_path": diagnostic_paths_by_name[
-            f"{sample_id}_intensity_overlay_histogram.png"
-        ],
-        "target_vs_generated_scatter_by_channel_path": diagnostic_paths_by_name[
-            f"{sample_id}_target_vs_generated_scatter_by_channel.png"
-        ],
-    }
-    selection_row = build_selection_summary_row(
-        metric_name=metric_name,
-        kind=kind,
-        sample_id=sample_id,
-        metric_value=metric_value,
-        target_value=target_value,
-        source_path=source_path,
-        target_path=target_path,
-        generated_path=generated_path,
-        comparison_path=saved_path,
-    )
-    return selection_row, diagnostic_entry
 
 
 def run_from_metrics(args: argparse.Namespace) -> None:

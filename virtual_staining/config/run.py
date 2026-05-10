@@ -14,12 +14,22 @@ from virtual_staining.config.validation import (
     parse_bool_strict,
     reject_unknown_keys,
 )
-from virtual_staining.evaluation.config import EvaluationConfig
+from virtual_staining.evaluation.config import _EVALUATION_KEYS, EvaluationConfig
 from virtual_staining.models.config import DiscriminatorConfig, GeneratorConfig, ModelConfig
+
+_FLAT_EVALUATION_KEYS: frozenset[str] = frozenset(
+    {
+        "save_graphs",
+        "target_dir",
+        "generated_dir",
+        "output_dir",
+    }
+)
 
 if TYPE_CHECKING:
     from virtual_staining.data.config import PreprocessingConfig
-    from virtual_staining.training.config import InferenceConfig, TrainingConfig
+    from virtual_staining.inference.config import InferenceConfig
+    from virtual_staining.training.config import TrainingConfig
 
 
 @dataclass(frozen=True)
@@ -43,8 +53,16 @@ class RunConfig:
         model = _parse_model(raw.get("model", {}))
         training = _parse_training(raw) if "training" in raw or "epochs" in raw else None
         inference = _parse_inference(raw) if "inference" in raw else None
-        preprocessing = _parse_preprocessing(raw) if "preprocessing" in raw else None
-        evaluation = _parse_evaluation(raw.get("evaluation", {})) if "evaluation" in raw else None
+        preprocessing = (
+            _parse_preprocessing(raw)
+            if "preprocessing" in raw or {"source_name", "target_name"} <= set(raw)
+            else None
+        )
+        evaluation = (
+            _parse_evaluation(raw)
+            if "evaluation" in raw or any(key in raw for key in _FLAT_EVALUATION_KEYS)
+            else None
+        )
 
         return cls(
             project=project,
@@ -117,7 +135,7 @@ def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
 
 
 def _parse_inference(raw: dict[str, Any]) -> InferenceConfig:
-    from virtual_staining.training.config import _INFERENCE_KEYS, InferenceConfig
+    from virtual_staining.inference.config import _INFERENCE_KEYS, InferenceConfig
 
     data = section_with_shared_fields(
         raw, "inference", {"dataset_root", "results_path", "run_name", "image_size"}
@@ -163,10 +181,17 @@ def _parse_preprocessing(raw: dict[str, Any]) -> PreprocessingConfig:
     return config
 
 
-def _parse_evaluation(eval_raw: dict[str, Any]) -> EvaluationConfig:
+def _parse_evaluation(raw: dict[str, Any]) -> EvaluationConfig:
+    data = section_with_shared_fields(
+        raw,
+        "evaluation",
+        {"dataset_root", "results_path", "run_name"},
+    )
+    reject_unknown_keys(data, _EVALUATION_KEYS, "evaluation")
+
     return EvaluationConfig(
-        save_graphs=parse_bool_strict(eval_raw.get("save_graphs", False), "save_graphs"),
-        target_dir=Path(eval_raw["target_dir"]) if eval_raw.get("target_dir") else None,
-        generated_dir=Path(eval_raw["generated_dir"]) if eval_raw.get("generated_dir") else None,
-        output_dir=Path(eval_raw["output_dir"]) if eval_raw.get("output_dir") else None,
+        save_graphs=parse_bool_strict(data.get("save_graphs", False), "save_graphs"),
+        target_dir=Path(data["target_dir"]) if data.get("target_dir") else None,
+        generated_dir=Path(data["generated_dir"]) if data.get("generated_dir") else None,
+        output_dir=Path(data["output_dir"]) if data.get("output_dir") else None,
     )

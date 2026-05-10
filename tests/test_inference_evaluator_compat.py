@@ -11,16 +11,16 @@ import torch
 from PIL import Image
 from torchvision import transforms
 
-from tools.evaluate_generation import collect_image_files, extract_single_sample_id
 from virtual_staining.common.dimensions import to_torchvision_hw
 from virtual_staining.config.project import ProjectConfig
 from virtual_staining.config.run import RunConfig
+from virtual_staining.evaluation.io import collect_image_files, extract_single_sample_id
 from virtual_staining.evaluation.metrics import evaluate_pair
+from virtual_staining.inference.config import InferenceConfig
 from virtual_staining.inference.runner import run_inference as _run_inference_impl
 from virtual_staining.models.config import DiscriminatorConfig, GeneratorConfig, ModelConfig
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
-from virtual_staining.training.config import InferenceConfig
 
 # ---------------------------------------------------------------------------
 # Constants

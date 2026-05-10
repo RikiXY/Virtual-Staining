@@ -101,3 +101,51 @@ def write_summary_csv(
             dict_writer.writerows(summary_rows)
 
     return path
+
+
+def read_summary_csv(path: str | Path) -> dict[str, dict[str, float]]:
+    """Read summary.csv and return aggregate statistics per metric."""
+    summary_path = Path(path)
+
+    if not summary_path.is_file():
+        raise FileNotFoundError(f"Summary CSV not found: {summary_path}")
+
+    rows: dict[str, dict[str, float]] = {}
+
+    with summary_path.open("r", newline="", encoding="utf-8") as file:
+        reader = csv.reader(file)
+        header_found = False
+
+        for row in reader:
+            if not row:
+                continue
+
+            if row[0] == "metric":
+                header_found = True
+                continue
+
+            if not header_found:
+                continue
+
+            metric_name = row[0].strip().lower()
+            rows[metric_name] = {
+                "count": float(row[1]),
+                "mean": float(row[2]),
+                "median": float(row[3]),
+                "std": float(row[4]),
+                "min": float(row[5]),
+                "max": float(row[6]),
+            }
+
+    return rows
+
+
+def read_per_image_metrics_csv(path: str | Path) -> list[dict[str, str]]:
+    """Read per_image_metrics.csv and return all rows as dictionaries."""
+    csv_path = Path(path)
+
+    if not csv_path.is_file():
+        raise FileNotFoundError(f"Per-image metrics CSV not found: {csv_path}")
+
+    with csv_path.open("r", newline="", encoding="utf-8") as file:
+        return list(csv.DictReader(file))

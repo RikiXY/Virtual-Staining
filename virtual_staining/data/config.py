@@ -161,32 +161,33 @@ class PreprocessingConfig:
         with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(data, f, default_flow_style=False)
 
-    @classmethod
-    def from_yaml(cls, path: str | Path) -> PreprocessingConfig:
-        raw_data = load_yaml_mapping(path)
-        if "preprocessing" in raw_data:
-            reject_unknown_keys(raw_data, _TOP_LEVEL_KEYS, "top level")
-        data = section_with_shared_fields(raw_data, "preprocessing", {"dataset_root", "image_size"})
-        reject_unknown_keys(data, _PREPROCESSING_KEYS, "preprocessing")
 
-        config = cls(
-            dataset_root=Path(data["dataset_root"]),
-            source_name=data["source_name"],
-            target_name=data["target_name"],
-            image_size=parse_wh_size_from_aliases(data, ("patch_size", "image_size"), (256, 256)),
-            grid_movement=_pair(data.get("grid_movement"), (256, 256)),
-            margin=int(data.get("margin", 200)),
-            seed=data.get("seed"),
-            save_masks=parse_bool_strict(data.get("save_masks", False), "save_masks"),
-            train_ratio=float(data.get("train_ratio", 0.8)),
-            val_ratio=float(data.get("val_ratio", 0.05)),
-            test_ratio=float(data.get("test_ratio", 0.15)),
-            min_foreground_ratio=float(data.get("min_foreground_ratio", 0.25)),
-            max_white_ratio=float(data.get("max_white_ratio", 0.7)),
-            white_threshold=int(data.get("white_threshold", 250)),
-            max_largest_white_component_ratio=float(
-                data.get("max_largest_white_component_ratio", 0.20)
-            ),
-        )
-        config.validate()
-        return config
+def load_preprocessing_config(path: str | Path) -> PreprocessingConfig:
+    """Load a standalone preprocessing config file."""
+    raw_data = load_yaml_mapping(path)
+    if "preprocessing" in raw_data:
+        reject_unknown_keys(raw_data, _TOP_LEVEL_KEYS, "top level")
+    data = section_with_shared_fields(raw_data, "preprocessing", {"dataset_root", "image_size"})
+    reject_unknown_keys(data, _PREPROCESSING_KEYS, "preprocessing")
+
+    config = PreprocessingConfig(
+        dataset_root=Path(data["dataset_root"]),
+        source_name=data["source_name"],
+        target_name=data["target_name"],
+        image_size=parse_wh_size_from_aliases(data, ("patch_size", "image_size"), (256, 256)),
+        grid_movement=_pair(data.get("grid_movement"), (256, 256)),
+        margin=int(data.get("margin", 200)),
+        seed=data.get("seed"),
+        save_masks=parse_bool_strict(data.get("save_masks", False), "save_masks"),
+        train_ratio=float(data.get("train_ratio", 0.8)),
+        val_ratio=float(data.get("val_ratio", 0.05)),
+        test_ratio=float(data.get("test_ratio", 0.15)),
+        min_foreground_ratio=float(data.get("min_foreground_ratio", 0.25)),
+        max_white_ratio=float(data.get("max_white_ratio", 0.7)),
+        white_threshold=int(data.get("white_threshold", 250)),
+        max_largest_white_component_ratio=float(
+            data.get("max_largest_white_component_ratio", 0.20)
+        ),
+    )
+    config.validate()
+    return config

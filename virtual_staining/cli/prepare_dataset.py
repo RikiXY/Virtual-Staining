@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 
+from virtual_staining.config.run import RunConfig
 from virtual_staining.data.builder import DatasetBuilder
-from virtual_staining.data.config import PreprocessingConfig
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -36,7 +37,11 @@ def main(argv: list[str] | None = None) -> None:
         stream=sys.stdout,
     )
 
-    config = PreprocessingConfig.from_yaml(args.config)
+    config_path = Path(args.config).resolve()
+    config_bundle = RunConfig.from_yaml(config_path)
+    if config_bundle.preprocessing is None:
+        raise SystemExit("Config has no 'preprocessing' section.")
+    config = config_bundle.preprocessing
     builder = DatasetBuilder(config)
     builder.run_all()
 

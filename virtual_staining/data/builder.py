@@ -25,7 +25,7 @@ from virtual_staining.data.preprocessing import (
     validate_image_filename,
 )
 from virtual_staining.data.results import DatasetBuildResult
-from virtual_staining.utils.env import collect_environment
+from virtual_staining.experiment.environment import collect_environment
 
 
 class DatasetBuilder:

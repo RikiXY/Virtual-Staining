@@ -179,7 +179,7 @@ def test_trainer_smoke_run_creates_expected_files(
     trainer.train(seed=42)
 
     run_root = run_paths.root
-    assert (run_root / "run_config.json").exists()
+    assert (run_root / "run_metadata.json").exists()
     assert (run_root / "metrics.csv").exists()
     assert any((run_root / "logs").glob("*.txt"))
 
@@ -344,25 +344,25 @@ def test_trainer_checkpoint_round_trip(
 
 
 # ---------------------------------------------------------------------------
-# run_config.json metadata accuracy
+# run_metadata.json accuracy
 # ---------------------------------------------------------------------------
 
 
-def test_run_config_records_default_dirs(
+def test_run_metadata_records_default_dirs(
     smoke_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
 ) -> None:
     trainer, config, run_paths, project = smoke_trainer
 
     trainer.train(seed=42)
 
-    with (run_paths.root / "run_config.json").open(encoding="utf-8") as f:
-        run_config = json.load(f)
+    with (run_paths.root / "run_metadata.json").open(encoding="utf-8") as f:
+        run_metadata = json.load(f)
 
-    assert run_config["train_dir"] == str(project.dataset_root / "dataset_train")
-    assert run_config["val_dir"] == str(project.dataset_root / "dataset_val")
+    assert run_metadata["train_dir"] == str(project.dataset_root / "dataset_train")
+    assert run_metadata["val_dir"] == str(project.dataset_root / "dataset_val")
 
 
-def test_run_config_records_custom_dirs(tmp_path: Path) -> None:
+def test_run_metadata_records_custom_dirs(tmp_path: Path) -> None:
     custom_train_dir = tmp_path / "custom_train"
     custom_val_dir = tmp_path / "custom_val"
     custom_train_dir.mkdir(parents=True)
@@ -425,11 +425,11 @@ def test_run_config_records_custom_dirs(tmp_path: Path) -> None:
     )
     trainer.train(seed=42)
 
-    with (run_paths.root / "run_config.json").open(encoding="utf-8") as f:
-        run_config = json.load(f)
+    with (run_paths.root / "run_metadata.json").open(encoding="utf-8") as f:
+        run_metadata = json.load(f)
 
-    assert run_config["train_dir"] == str(custom_train_dir)
-    assert run_config["val_dir"] == str(custom_val_dir)
+    assert run_metadata["train_dir"] == str(custom_train_dir)
+    assert run_metadata["val_dir"] == str(custom_val_dir)
 
 
 # ---------------------------------------------------------------------------

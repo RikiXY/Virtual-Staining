@@ -160,7 +160,9 @@ def test_run_all_saves_config_and_environment(
     assert (root / "config.yaml").exists()
     assert (root / "environment.json").exists()
 
-    loaded = PreprocessingConfig.from_yaml(root / "config.yaml")
+    from virtual_staining.data.config import load_preprocessing_config
+
+    loaded = load_preprocessing_config(root / "config.yaml")
     assert loaded == builder_config
 
 

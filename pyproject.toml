@@ -22,6 +22,7 @@ vs-prepare = "virtual_staining.cli.prepare_dataset:main"
 vs-train = "virtual_staining.cli.train:main"
 vs-infer = "virtual_staining.cli.infer:main"
 vs-evaluate = "virtual_staining.cli.evaluate:main"
+vs-compare = "virtual_staining.cli.compare:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -56,7 +57,7 @@ indent-style = "space"
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "basic"
-include = ["virtual_staining", "tests", "src", "tools"]
+include = ["virtual_staining", "tests", "tools"]
 exclude = [
     "**/.*",
     "**/__pycache__",

@@ -6,80 +6,27 @@ import statistics
 from pathlib import Path
 from typing import Any
 
-from virtual_staining.config import (
-    _TOP_LEVEL_KEYS,
-    load_yaml_mapping,
-    parse_bool_strict,
-    reject_unknown_keys,
-    section_with_shared_fields,
-)
+from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.evaluator import evaluate_pairs
+from virtual_staining.evaluation.io import (
+    collect_image_files,
+    extract_single_sample_id,
+)
 from virtual_staining.evaluation.plotting import write_plots
 from virtual_staining.evaluation.reports import (
     build_metric_row,
     write_single_case_csv,
     write_skipped_csv,
 )
-from virtual_staining.evaluation.summaries import (
-    build_summary_rows as _build_summary_rows,
-)
-from virtual_staining.evaluation.summaries import (
-    metric_value,
-)
-from virtual_staining.evaluation.summaries import (
-    write_summary_csv as _write_summary_csv,
-)
+from virtual_staining.evaluation.summaries import metric_value, write_summary_csv
+from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.utils.cli import print_info, print_section, style
 from virtual_staining.utils.metrics import (
     DEFAULT_METRICS,
     color_metric,
 )
 
-_EVALUATION_KEYS: frozenset[str] = frozenset(
-    {
-        # shared fields
-        "dataset_root",
-        "results_path",
-        "run_name",
-        # section-specific
-        "save_graphs",
-        "hide_graphs_path",
-        "target_dir",
-        "generated_dir",
-        "output_dir",
-    }
-)
-
 METRIC_NAMES = list(DEFAULT_METRICS)
-
-
-def _optional_path(data: dict[str, Any], key: str, default: Path) -> Path:
-    value = data.get(key)
-    if value is None:
-        return default
-    return Path(value)
-
-
-def apply_dataset_config(args: argparse.Namespace) -> argparse.Namespace:
-    raw_data = load_yaml_mapping(args.config)
-    if "evaluation" in raw_data:
-        reject_unknown_keys(raw_data, _TOP_LEVEL_KEYS, "top level")
-    data = section_with_shared_fields(
-        raw_data, "evaluation", {"dataset_root", "results_path", "run_name"}
-    )
-    reject_unknown_keys(data, _EVALUATION_KEYS, "evaluation")
-
-    dataset_root = Path(data["dataset_root"])
-    run_root = Path(data["results_path"]) / data["run_name"]
-    args.target_dir = str(_optional_path(data, "target_dir", dataset_root / "dataset_test"))
-    args.generated_dir = str(_optional_path(data, "generated_dir", run_root / "output_test"))
-    args.output_dir = str(_optional_path(data, "output_dir", run_root / "evaluation"))
-    args.save_graphs = parse_bool_strict(data.get("save_graphs", True), "save_graphs")
-    args.hide_graphs_path = parse_bool_strict(
-        data.get("hide_graphs_path", getattr(args, "hide_graphs_path", False)),
-        "hide_graphs_path",
-    )
-    return args
 
 
 # ==========================
@@ -176,55 +123,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def extract_sample_id(path: str | Path, suffix: str, label: str = "File") -> str:
-    """Extracts the sample id by removing the expected suffix from the filename."""
-    name = Path(path).stem
-
-    if not name.endswith(suffix):
-        raise ValueError(f"{label} file does not end with '{suffix}': {path}")
-
-    return name[: -len(suffix)]
-
-
-def extract_single_sample_id(target_path: str | Path, generated_path: str | Path) -> str:
-    """Checks that target and generated belong to the same sample."""
-    target_id = extract_sample_id(target_path, "_target", "Target")
-    generated_id = extract_sample_id(generated_path, "_target_generated", "Generated")
-
-    if target_id != generated_id:
-        raise ValueError(
-            "Target and generated files refer to different sample ids. "
-            f"Got '{target_id}' and '{generated_id}'."
-        )
-
-    return target_id
-
-
-def collect_image_files(directory_path: str | Path, suffix: str, label: str) -> dict[str, Path]:
-    """Collects valid files from a directory, indexed by sample id."""
-    from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS
-
-    directory = Path(directory_path)
-
-    if not directory.is_dir():
-        raise NotADirectoryError(f"{label} directory not found: {directory}")
-
-    files: dict[str, Path] = {}
-
-    for path in sorted(directory.iterdir()):
-        if not path.is_file():
-            continue
-        if path.suffix.lower() not in VALID_IMAGE_EXTENSIONS:
-            continue
-        if not path.stem.endswith(suffix):
-            continue
-
-        sample_id = extract_sample_id(path, suffix, label)
-        files[sample_id] = path
-
-    return files
-
-
 def infer_default_output_dir(generated_path: str | Path) -> Path:
     """Tries to derive results/NAME_RUN/evaluation from a path inside the run."""
     path = Path(generated_path).resolve()
@@ -268,30 +166,6 @@ def resolve_output_dir(output_dir: str | None, generated_path: str | Path) -> Pa
     if output_dir is not None:
         return Path(output_dir)
     return infer_default_output_dir(generated_path)
-
-
-def build_summary_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
-    """Builds the aggregated rows for summary.csv."""
-    return _build_summary_rows(rows)
-
-
-def write_summary_csv(
-    rows: list[dict[str, object]],
-    output_dir: Path,
-    num_targets_found: int,
-    num_generated_found: int,
-    num_pairs_evaluated: int,
-    num_skipped: int,
-) -> Path:
-    """Writes the summary CSV with global counts and per-metric statistics."""
-    return _write_summary_csv(
-        rows,
-        output_dir,
-        num_targets_found=num_targets_found,
-        num_generated_found=num_generated_found,
-        num_pairs_evaluated=num_pairs_evaluated,
-        num_skipped=num_skipped,
-    )
 
 
 # ====================================
@@ -385,11 +259,23 @@ def run_single(args: argparse.Namespace) -> None:
 
 def run_dataset(args: argparse.Namespace) -> None:
     """Runs the complete flow for the dataset mode."""
-    args = apply_dataset_config(args)
-    target_files = collect_image_files(args.target_dir, "_target", "Target")
-    generated_files = collect_image_files(args.generated_dir, "_target_generated", "Generated")
+    config = RunConfig.from_yaml(Path(args.config).resolve())
+    eval_cfg = config.evaluation
+    run_root = config.project.run_root
+    paths = RunPaths(run_root)
+    target_dir = (
+        eval_cfg.target_dir if eval_cfg and eval_cfg.target_dir else config.project.dataset_test_dir
+    )
+    generated_dir = (
+        eval_cfg.generated_dir if eval_cfg and eval_cfg.generated_dir else paths.output_test_dir
+    )
+    output_dir = (
+        eval_cfg.output_dir if eval_cfg and eval_cfg.output_dir else run_root / "evaluation"
+    )
+    save_graphs = eval_cfg.save_graphs if eval_cfg else False
 
-    output_dir = resolve_output_dir(args.output_dir, args.generated_dir)
+    target_files = collect_image_files(target_dir, "_target", "Target")
+    generated_files = collect_image_files(generated_dir, "_target_generated", "Generated")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     all_sample_ids = sorted(set(target_files) | set(generated_files))
@@ -445,7 +331,7 @@ def run_dataset(args: argparse.Namespace) -> None:
     print_info("Summary", str(summary_csv))
     print_info("Skipped samples", str(skipped_csv))
 
-    if args.save_graphs and per_image_rows:
+    if save_graphs and per_image_rows:
         plot_paths = write_plots(per_image_rows, output_dir)
         if not args.hide_graphs_path:
             for plot_path in plot_paths:

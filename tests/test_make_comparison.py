@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tools.make_comparison import select_representative_rows
+from virtual_staining.evaluation.panels import select_representative_rows
 
 
 def test_select_representative_rows_uses_higher_is_better_direction() -> None:

@@ -15,13 +15,13 @@ from PIL import Image
 from torch.amp import GradScaler, autocast
 from torchvision.utils import save_image
 
+from virtual_staining.experiment.environment import collect_environment
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.training.checkpoints import CheckpointManager
 from virtual_staining.training.config import TrainingConfig
 from virtual_staining.training.losses import Pix2PixLoss
 from virtual_staining.training.results import EpochMetrics, TrainingResult
 from virtual_staining.training.steps import Pix2PixTrainingStep
-from virtual_staining.utils.env import collect_environment
 
 if TYPE_CHECKING:
     from virtual_staining.reporting.base import TrainingReporter
@@ -69,18 +69,18 @@ def _get_first_pair_size(dataset) -> dict | None:
     }
 
 
-def _save_run_config(run_config: dict, run_root: Path) -> Path:
-    config_path = run_root / "run_config.json"
+def _save_run_metadata(metadata: dict, run_root: Path) -> Path:
+    config_path = run_root / "run_metadata.json"
     with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(run_config, f, indent=4, default=str)
+        json.dump(metadata, f, indent=4, default=str)
     return config_path
 
 
-def _log_run_header(run_config: dict) -> None:
+def _log_run_header(metadata: dict) -> None:
     logger.info("=" * 80)
     logger.info("RUN CONFIGURATION")
     logger.info("=" * 80)
-    for key, value in run_config.items():
+    for key, value in metadata.items():
         logger.info("%s: %s", key, value)
     logger.info("=" * 80)
 
@@ -320,9 +320,9 @@ class Trainer:
             logger.debug("Seed set to %s", seed)
             logger.info("Device: %s (%s)", self.device, device_name)
 
-            run_config = self._build_run_config(seed, timestamp_str, log_file, env)
-            config_path = _save_run_config(run_config, self._run_paths.root)
-            _log_run_header(run_config)
+            run_metadata = self._build_run_metadata(seed, timestamp_str, log_file, env)
+            config_path = _save_run_metadata(run_metadata, self._run_paths.root)
+            _log_run_header(run_metadata)
             logger.debug("Run config saved to %s", config_path)
 
             for f in self._output_train_dir.iterdir():
@@ -568,7 +568,7 @@ class Trainer:
 
         return EpochMetrics(loss_G=avg_loss_G, loss_D=avg_loss_D)
 
-    def _build_run_config(
+    def _build_run_metadata(
         self, seed: int, timestamp_str: str, log_file: Path, environment: dict
     ) -> dict:
         return {

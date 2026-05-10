@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from tools.evaluate_generation import build_summary_rows
 from virtual_staining.evaluation.plotting import METRIC_NAMES, save_dataset_plots
+from virtual_staining.evaluation.summaries import build_summary_rows
 
 
 def _row(value: float) -> dict[str, object]:

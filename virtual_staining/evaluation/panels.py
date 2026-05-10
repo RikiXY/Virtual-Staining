@@ -185,6 +185,77 @@ def write_metric_selection_summary(rows: list[dict[str, object]], save_path: str
         writer.writerows(rows)
 
 
+def build_metric_case_artifacts(
+    metric_name: str,
+    kind: str,
+    row: dict[str, str],
+    metric_summary: dict[str, float],
+    metric_dir: Path,
+) -> tuple[dict[str, object], DiagnosticEntry]:
+    """Build and save the artefacts for a representative case."""
+    sample_id = row["sample_id"]
+    metric_value = float(row[metric_name])
+
+    if kind == "best":
+        summary_key = "max" if is_higher_better_metric(metric_name) else "min"
+    elif kind == "worst":
+        summary_key = "min" if is_higher_better_metric(metric_name) else "max"
+    elif kind == "median":
+        summary_key = "median"
+    else:
+        raise ValueError(f"Unsupported representative kind: {kind}")
+
+    target_value = float(metric_summary[summary_key])
+    source_path = infer_source_path_from_row(row)
+    generated_path = Path(row["generated_path"])
+    target_path = Path(row["target_path"])
+    comparison_path = metric_dir / f"{kind}_{sample_id}_comparison.png"
+    saved_path = save_comparison_panel(
+        source_path=source_path,
+        generated_path=generated_path,
+        target_path=target_path,
+        save_path=comparison_path,
+        suptitle=(
+            f"{metric_name.upper()} | {kind.upper()} | "
+            f"sample={sample_id} | value={metric_value:.6f}"
+        ),
+    )
+
+    diagnostics_case_dir = metric_dir / "diagnostics" / f"{kind}_{sample_id}"
+    diagnostic_paths = save_diagnostic_plots(
+        source_path=source_path,
+        generated_path=generated_path,
+        target_path=target_path,
+        save_dir=diagnostics_case_dir,
+    )
+    diagnostic_paths_by_name = {path.name: path for path in diagnostic_paths}
+    diagnostic_entry: DiagnosticEntry = {
+        "kind": kind,
+        "sample_id": sample_id,
+        "metric_value": metric_value,
+        "comparison_path": saved_path,
+        "error_histogram_path": diagnostic_paths_by_name[f"{sample_id}_error_histogram.png"],
+        "intensity_overlay_histogram_path": diagnostic_paths_by_name[
+            f"{sample_id}_intensity_overlay_histogram.png"
+        ],
+        "target_vs_generated_scatter_by_channel_path": diagnostic_paths_by_name[
+            f"{sample_id}_target_vs_generated_scatter_by_channel.png"
+        ],
+    }
+    selection_row = build_selection_summary_row(
+        metric_name=metric_name,
+        kind=kind,
+        sample_id=sample_id,
+        metric_value=metric_value,
+        target_value=target_value,
+        source_path=source_path,
+        target_path=target_path,
+        generated_path=generated_path,
+        comparison_path=saved_path,
+    )
+    return selection_row, diagnostic_entry
+
+
 def save_comparison_panel(
     source_path: str | Path,
     generated_path: str | Path,

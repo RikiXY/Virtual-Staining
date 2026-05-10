@@ -30,22 +30,6 @@ _TRAINING_KEYS: frozenset[str] = frozenset(
     }
 )
 
-_INFERENCE_KEYS: frozenset[str] = frozenset(
-    {
-        # shared fields and size aliases (accepted after section_with_shared_fields injects them)
-        "dataset_root",
-        "results_path",
-        "run_name",
-        "image_size",
-        "model_image_size",
-        # section-specific
-        "checkpoint",
-        "checkpoint_policy",
-        "test_dir",
-        "output_dir",
-    }
-)
-
 
 @dataclass(frozen=True)
 class TrainingConfig:
@@ -85,44 +69,3 @@ class TrainingConfig:
                 raise ValueError(f"{field_name} must be in [0, 1)")
         if self.l1_weight < 0:
             raise ValueError("l1_weight must be greater than or equal to 0")
-
-    @classmethod
-    def from_yaml(cls, path: str | Path) -> TrainingConfig:
-        """Compatibility shim — prefer RunConfig.from_yaml()."""
-        from virtual_staining.config.run import RunConfig
-
-        run_config = RunConfig.from_yaml(path)
-        if run_config.training is None:
-            raise ValueError(f"No 'training' section found in config: {path}")
-        return run_config.training
-
-
-@dataclass(frozen=True)
-class InferenceConfig:
-    checkpoint_policy: str | None = None
-    checkpoint_path: Path | None = None
-    test_dir: Path | None = None
-    output_dir: Path | None = None
-
-    def validate(self) -> None:
-        if self.checkpoint_policy is None and self.checkpoint_path is None:
-            raise ValueError(
-                "Either inference.checkpoint or inference.checkpoint_policy must be set."
-            )
-        if self.checkpoint_policy is not None and self.checkpoint_policy != "latest":
-            raise ValueError(
-                f"Unknown checkpoint_policy: {self.checkpoint_policy!r}. "
-                "Only 'latest' is supported."
-            )
-        if self.checkpoint_path is not None and not str(self.checkpoint_path).strip():
-            raise ValueError("checkpoint must be a non-empty path")
-
-    @classmethod
-    def from_yaml(cls, path: str | Path) -> InferenceConfig:
-        """Compatibility shim — prefer RunConfig.from_yaml()."""
-        from virtual_staining.config.run import RunConfig
-
-        run_config = RunConfig.from_yaml(path)
-        if run_config.inference is None:
-            raise ValueError(f"No 'inference' section found in config: {path}")
-        return run_config.inference

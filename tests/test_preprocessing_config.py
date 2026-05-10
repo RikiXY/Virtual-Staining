@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from virtual_staining.common.dimensions import to_torchvision_hw
-from virtual_staining.data.config import PreprocessingConfig
+from virtual_staining.data.config import PreprocessingConfig, load_preprocessing_config
 
 
 def _make_namespace(**overrides: object) -> argparse.Namespace:
@@ -95,7 +95,7 @@ def test_from_yaml(tmp_path: Path) -> None:
     yaml_file = tmp_path / "preprocessing.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
 
-    config = PreprocessingConfig.from_yaml(yaml_file)
+    config = load_preprocessing_config(yaml_file)
     assert config.dataset_root == Path("/data/samples")
     assert config.source_name == "he.tif"
     assert config.target_name == "masson.tif"
@@ -145,7 +145,7 @@ def test_to_yaml_round_trip(tmp_path: Path) -> None:
     yaml_file = tmp_path / "config.yaml"
     config.to_yaml(yaml_file)
     assert yaml_file.exists()
-    loaded = PreprocessingConfig.from_yaml(yaml_file)
+    loaded = load_preprocessing_config(yaml_file)
     assert loaded == config
 
 
@@ -158,7 +158,7 @@ def test_from_yaml_defaults_for_optional_fields(tmp_path: Path) -> None:
     yaml_file = tmp_path / "minimal.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
 
-    config = PreprocessingConfig.from_yaml(yaml_file)
+    config = load_preprocessing_config(yaml_file)
     assert config.image_size == (256, 256)
     assert config.grid_movement == (256, 256)
     assert config.margin == 200
@@ -186,7 +186,7 @@ def test_from_run_yaml_section(tmp_path: Path) -> None:
     yaml_file = tmp_path / "run.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
 
-    config = PreprocessingConfig.from_yaml(yaml_file)
+    config = load_preprocessing_config(yaml_file)
     assert config.dataset_root == Path("/data/samples")
     assert config.source_name == "label_free.tif"
     assert config.target_name == "he.tif"
@@ -237,7 +237,7 @@ def test_non_square_image_size_from_yaml(tmp_path: Path) -> None:
     """)
     yaml_file = tmp_path / "ns.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
-    config = PreprocessingConfig.from_yaml(yaml_file)
+    config = load_preprocessing_config(yaml_file)
     assert config.image_size == (320, 256)
 
 
@@ -262,7 +262,7 @@ def test_from_yaml_invalid_margin_raises_value_error(tmp_path: Path) -> None:
     yaml_file.write_text(yaml_content, encoding="utf-8")
 
     with pytest.raises(ValueError, match="margin"):
-        PreprocessingConfig.from_yaml(yaml_file)
+        load_preprocessing_config(yaml_file)
 
 
 def test_from_yaml_unknown_flat_key_raises(tmp_path: Path) -> None:
@@ -275,7 +275,7 @@ def test_from_yaml_unknown_flat_key_raises(tmp_path: Path) -> None:
     yaml_file = tmp_path / "typo.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
     with pytest.raises(ValueError, match="sav_masks"):
-        PreprocessingConfig.from_yaml(yaml_file)
+        load_preprocessing_config(yaml_file)
 
 
 def test_from_yaml_unknown_section_key_raises(tmp_path: Path) -> None:
@@ -289,7 +289,7 @@ def test_from_yaml_unknown_section_key_raises(tmp_path: Path) -> None:
     yaml_file = tmp_path / "typo_section.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
     with pytest.raises(ValueError, match="sav_masks"):
-        PreprocessingConfig.from_yaml(yaml_file)
+        load_preprocessing_config(yaml_file)
 
 
 def test_from_yaml_unknown_top_level_key_raises(tmp_path: Path) -> None:
@@ -303,7 +303,7 @@ def test_from_yaml_unknown_top_level_key_raises(tmp_path: Path) -> None:
     yaml_file = tmp_path / "typo_top.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
     with pytest.raises(ValueError, match="typo_field"):
-        PreprocessingConfig.from_yaml(yaml_file)
+        load_preprocessing_config(yaml_file)
 
 
 def test_from_yaml_string_bool_save_masks_raises(tmp_path: Path) -> None:
@@ -316,4 +316,4 @@ def test_from_yaml_string_bool_save_masks_raises(tmp_path: Path) -> None:
     yaml_file = tmp_path / "str_bool.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
     with pytest.raises(TypeError, match="save_masks"):
-        PreprocessingConfig.from_yaml(yaml_file)
+        load_preprocessing_config(yaml_file)
