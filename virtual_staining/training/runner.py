@@ -204,6 +204,13 @@ def _resume_from_checkpoint(
         scaler_D=trainer._scaler_D,
         image_size=image_size,
         device=device,
+        l1_weight=trainer.config.l1_weight,
+        lr_g=trainer.config.lr_g,
+        lr_d=trainer.config.lr_d,
+        beta1=trainer.config.beta1,
+        beta2=trainer.config.beta2,
+        batch_size=trainer.config.batch_size,
+        num_workers=trainer.config.num_workers,
     )
 
     if resume == "latest":
