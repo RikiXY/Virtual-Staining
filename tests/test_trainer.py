@@ -11,6 +11,7 @@ from PIL import Image
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
+from virtual_staining.config.project import ProjectConfig
 from virtual_staining.data.dataset import PairedHistologyDataset
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
@@ -65,6 +66,15 @@ def _write_rgb_pair(directory: Path, prefix: str = "00000_00000") -> None:
     Image.fromarray(arr).save(directory / f"{prefix}_target.png")
 
 
+def _make_project(dataset_root: Path, results_path: Path, run_name: str) -> ProjectConfig:
+    return ProjectConfig(
+        dataset_root=dataset_root,
+        results_path=results_path,
+        run_name=run_name,
+        image_size=(32, 32),
+    )
+
+
 def _make_trainer(tmp_path: Path, checkpoint_rate: int) -> tuple[Trainer, TrainingConfig]:
     dataset_root = tmp_path / "dataset"
     train_dir = dataset_root / "dataset_train"
@@ -76,10 +86,6 @@ def _make_trainer(tmp_path: Path, checkpoint_rate: int) -> tuple[Trainer, Traini
     _write_rgb_pair(val_dir)
 
     config = TrainingConfig(
-        dataset_root=dataset_root,
-        results_path=tmp_path / "results",
-        run_name="smoke_run",
-        image_size=(32, 32),
         batch_size=1,
         epochs=1,
         lr_g=2e-4,
@@ -92,6 +98,7 @@ def _make_trainer(tmp_path: Path, checkpoint_rate: int) -> tuple[Trainer, Traini
         validate_rate=1,
         checkpoint_rate=checkpoint_rate,
         log_rate=1,
+        project=_make_project(dataset_root, tmp_path / "results", "smoke_run"),
     )
 
     transform = transforms.Compose(
@@ -203,10 +210,6 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
     _write_rgb_pair(val_dir)
 
     config = TrainingConfig(
-        dataset_root=dataset_root,
-        results_path=tmp_path / "results",
-        run_name="avg_run",
-        image_size=(32, 32),
         batch_size=1,
         epochs=1,
         lr_g=2e-4,
@@ -219,6 +222,7 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
         validate_rate=1,
         checkpoint_rate=2,
         log_rate=1,
+        project=_make_project(dataset_root, tmp_path / "results", "avg_run"),
     )
 
     transform = transforms.Compose(
@@ -338,10 +342,6 @@ def test_run_config_records_custom_dirs(tmp_path: Path) -> None:
     _write_rgb_pair(custom_val_dir)
 
     config = TrainingConfig(
-        dataset_root=tmp_path / "dataset",
-        results_path=tmp_path / "results",
-        run_name="custom_dirs_run",
-        image_size=(32, 32),
         batch_size=1,
         epochs=1,
         lr_g=2e-4,
@@ -356,6 +356,7 @@ def test_run_config_records_custom_dirs(tmp_path: Path) -> None:
         log_rate=1,
         train_dir=custom_train_dir,
         val_dir=custom_val_dir,
+        project=_make_project(tmp_path / "dataset", tmp_path / "results", "custom_dirs_run"),
     )
 
     transform = transforms.Compose(
