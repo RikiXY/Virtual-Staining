@@ -42,16 +42,16 @@ sync:
 	$(UV) sync --frozen
 
 dataset: require-config
-	$(PYTHON) src/prepare_dataset.py --config $(CONFIG)
+	$(UV) run vs-prepare --config $(CONFIG)
 
 train: require-config
-	$(PYTHON) src/pix2pix.py train --config $(CONFIG)
+	$(UV) run vs-train --config $(CONFIG)
 
 infer: require-config
-	$(PYTHON) -m virtual_staining.cli.infer --config $(CONFIG)
+	$(UV) run vs-infer --config $(CONFIG)
 
 evaluate: require-config
-	$(PYTHON) -m virtual_staining.cli.evaluate --config $(CONFIG)
+	$(UV) run vs-evaluate --config $(CONFIG)
 
 complete-run: require-config
 	$(MAKE) dataset CONFIG=$(CONFIG)

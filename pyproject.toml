@@ -17,6 +17,12 @@ dependencies = [
     "torchvision>=0.15",
 ]
 
+[project.scripts]
+vs-prepare = "virtual_staining.cli.prepare_dataset:main"
+vs-train = "virtual_staining.cli.train:main"
+vs-infer = "virtual_staining.cli.infer:main"
+vs-evaluate = "virtual_staining.cli.evaluate:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
