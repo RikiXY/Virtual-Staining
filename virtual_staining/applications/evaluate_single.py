@@ -4,7 +4,6 @@ import argparse
 import math
 import statistics
 from pathlib import Path
-from typing import Any
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.evaluator import evaluate_pairs
@@ -27,100 +26,6 @@ from virtual_staining.utils.metrics import (
 )
 
 METRIC_NAMES = list(DEFAULT_METRICS)
-
-
-# ==========================
-# Section dedicated to the parser
-# ==========================
-
-
-def add_single_subparser(subparsers: Any) -> None:
-    """Adds the subcommand for evaluating a single pair."""
-    single_parser = subparsers.add_parser(
-        "single",
-        help="Evaluate one target/generated image pair.",
-        description=(
-            "Compute MAE, MSE, RMSE, PSNR, SSIM and PCC for one target/generated pair. "
-            "Supported image extensions: .tif, .tiff, .png."
-        ),
-    )
-    single_parser.add_argument(
-        "--target-image",
-        dest="target",
-        type=str,
-        required=True,
-        help="Path to the target image.",
-    )
-    single_parser.add_argument(
-        "--generated-image",
-        dest="generated",
-        type=str,
-        required=True,
-        help="Path to the generated image.",
-    )
-    single_parser.add_argument(
-        "--output-dir",
-        dest="output_dir",
-        type=str,
-        default=None,
-        help=(
-            "Directory where evaluation outputs will be saved. If omitted, the script "
-            "tries to infer .../results/NAME_RUN/evaluation from the generated path."
-        ),
-    )
-    single_parser.set_defaults(func=run_single)
-
-
-def add_dataset_subparser(subparsers: Any) -> None:
-    """Adds the subcommand for evaluating an entire dataset."""
-    dataset_parser = subparsers.add_parser(
-        "dataset",
-        help="Evaluate all matching target/generated pairs in two folders.",
-        description=(
-            "Compute MAE, MSE, RMSE, PSNR, SSIM and PCC for all matching pairs in a dataset. "
-            "Supported image extensions: .tif, .tiff, .png."
-        ),
-    )
-    dataset_parser.add_argument(
-        "--config",
-        type=str,
-        default="config/runs/example.yaml",
-        help="path to the run config YAML (default: config/runs/example.yaml)",
-    )
-    dataset_parser.add_argument(
-        "--hide-graphs-path",
-        action="store_true",
-        help="Do not print the full list of saved graph paths.",
-    )
-    dataset_parser.set_defaults(func=run_dataset)
-
-
-def build_parser() -> argparse.ArgumentParser:
-    """Builds the main parser and registers the available subcommands."""
-    parser = argparse.ArgumentParser(
-        prog="python tools/evaluate_generation.py",
-        description=(
-            "Evaluate generated images against target images. "
-            "Supported image extensions: .tif, .tiff, .png."
-        ),
-        epilog=(
-            "Examples:\n"
-            "  python tools/evaluate_generation.py single\n"
-            "      --target-image local_workspace/datasets/your_run/dataset_test/00512_09216_target.tif\n"  # noqa: E501
-            "      --generated-image local_workspace/results/your_run/output_test/00512_09216_target_generated.tif\n"  # noqa: E501
-            "\n"
-            "  python tools/evaluate_generation.py dataset\n"
-            "      --config config/runs/example.yaml\n\n"
-            "Use 'python tools/evaluate_generation.py <command> --help' to see the options "
-            "for a specific command."
-        ),
-        formatter_class=argparse.RawTextHelpFormatter,
-        add_help=True,
-    )
-    subparsers = parser.add_subparsers(dest="mode")
-    add_single_subparser(subparsers)
-    add_dataset_subparser(subparsers)
-    return parser
 
 
 def infer_default_output_dir(generated_path: str | Path) -> Path:
@@ -166,11 +71,6 @@ def resolve_output_dir(output_dir: str | None, generated_path: str | Path) -> Pa
     if output_dir is not None:
         return Path(output_dir)
     return infer_default_output_dir(generated_path)
-
-
-# ====================================
-# Section dedicated to the text report
-# ====================================
 
 
 def print_single_result(
@@ -230,11 +130,6 @@ def print_dataset_summary(
 
     print_section("Saved files")
     print_info("Evaluation dir", style(str(output_dir), "bold", "magenta"))
-
-
-# =====================================
-# Section dedicated to the main flow
-# =====================================
 
 
 def run_single(args: argparse.Namespace) -> None:
@@ -338,18 +233,3 @@ def run_dataset(args: argparse.Namespace) -> None:
                 print_info("Graph", str(plot_path))
 
     print_dataset_summary(target_files, generated_files, per_image_rows, skipped_rows, output_dir)
-
-
-def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
-
-    if not hasattr(args, "func"):
-        parser.print_help()
-        return
-
-    args.func(args)
-
-
-if __name__ == "__main__":
-    main()

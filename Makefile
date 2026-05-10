@@ -59,6 +59,12 @@ complete-run: require-config
 	$(MAKE) infer CONFIG=$(CONFIG)
 	$(MAKE) evaluate CONFIG=$(CONFIG)
 
+compare-panels:
+	$(UV) run vs-compare-panels $(ARGS)
+
+organize:
+	$(UV) run vs-organize $(ARGS)
+
 format:
 	$(RUFF) format .
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any
 
 from virtual_staining.evaluation.panels import (
     METRIC_SELECTION_ORDER,
@@ -18,105 +17,6 @@ from virtual_staining.evaluation.panels import (
 from virtual_staining.evaluation.summaries import read_per_image_metrics_csv, read_summary_csv
 from virtual_staining.utils.cli import print_info, print_section, style
 from virtual_staining.utils.metrics import color_for_metric
-
-# ==========================
-# Section dedicated to the parser
-# ==========================
-
-
-def add_single_subparser(subparsers: Any) -> None:
-    """Adds the subcommand for comparing a single pair."""
-    single_parser = subparsers.add_parser(
-        "single",
-        help="Create one comparison panel from source/generated/target images.",
-        description="Create one comparison panel from source/generated/target images. "
-        "Supported image extensions: .tif, .tiff, .png.",
-    )
-    single_parser.add_argument(
-        "--source-image",
-        type=Path,
-        required=True,
-        help="Path to the real source image.",
-    )
-    single_parser.add_argument(
-        "--target-image",
-        type=Path,
-        required=True,
-        help="Path to the real target image.",
-    )
-    single_parser.add_argument(
-        "--generated-image",
-        type=Path,
-        required=True,
-        help="Path to the generated image.",
-    )
-    single_parser.add_argument(
-        "--save-path",
-        type=Path,
-        default=None,
-        help=(
-            "Path where the comparison panel will be saved. If omitted, the script "
-            "tries to infer .../results/NAME_RUN/comparisons from --generated-image."
-        ),
-    )
-    single_parser.add_argument(
-        "--with-diagnostics",
-        action="store_true",
-        help="Also save single-case diagnostic plots alongside the comparison panel.",
-    )
-    single_parser.set_defaults(func=run_single)
-
-
-def add_from_metrics_subparser(subparsers: Any) -> None:
-    """Adds the subcommand for representative panels from CSV files."""
-    metrics_parser = subparsers.add_parser(
-        "from-metrics",
-        help="Generate representative comparison panels from evaluation CSV files.",
-        description="Generate representative comparison panels from evaluation CSV files.",
-    )
-    metrics_parser.add_argument(
-        "--run-path",
-        type=Path,
-        required=True,
-        help="Path to a run directory like local_workspace/results/NAME_RUN.",
-    )
-    metrics_parser.add_argument(
-        "--hide-graphs-path",
-        action="store_true",
-        help="Do not print the full list of saved aggregated graph paths.",
-    )
-    metrics_parser.set_defaults(func=run_from_metrics)
-
-
-def build_parser() -> argparse.ArgumentParser:
-    """Builds the main parser and registers the available subcommands."""
-    parser = argparse.ArgumentParser(
-        prog="python tools/make_comparison.py",
-        description=(
-            "Create side-by-side comparison panels for paired histology images, "
-            "or generate representative panels from evaluation CSV files. "
-            "Supported image extensions: .tif, .tiff, .png."
-        ),
-        epilog=(
-            "Examples:\n"
-            "  python tools/make_comparison.py single\n"
-            "      --source-image local_workspace/datasets/your_run/dataset_test/00512_09216_source.tif\n"  # noqa: E501
-            "      --generated-image local_workspace/results/your_run/output_test/00512_09216_target_generated.tif\n"  # noqa: E501
-            "      --target-image local_workspace/datasets/your_run/dataset_test/00512_09216_target.tif\n"  # noqa: E501
-            "      --with-diagnostics\n"
-            "\n"
-            "  python tools/make_comparison.py from-metrics\n"
-            "      --run-path local_workspace/results/your_run\n\n"
-            "Use 'python tools/make_comparison.py <command> --help' to see the options "
-            "for a specific command."
-        ),
-        formatter_class=argparse.RawTextHelpFormatter,
-        add_help=True,
-    )
-    subparsers = parser.add_subparsers(dest="mode")
-    add_single_subparser(subparsers)
-    add_from_metrics_subparser(subparsers)
-    return parser
 
 
 def infer_run_dir_from_generated_path(generated_path: str | Path) -> Path:
@@ -171,11 +71,6 @@ def infer_case_diagnostics_dir(save_path: str | Path, generated_image: str | Pat
     return diagnostics_dir / sample_id
 
 
-# ====================================
-# Section dedicated to the text report
-# ====================================
-
-
 def print_single_summary(saved_path: Path, diagnostic_paths: list[Path]) -> None:
     """Prints the final summary of the single mode."""
     print_section("Single comparison")
@@ -212,11 +107,6 @@ def print_metric_saved_files(metrics_dir: Path) -> None:
     """Prints the final summary of files saved in from-metrics mode."""
     print_section("Saved files")
     print_info("Metric-based comparisons", style(str(metrics_dir), "bold", "magenta"))
-
-
-# =====================================
-# Section dedicated to the main flow
-# =====================================
 
 
 def run_single(args: argparse.Namespace) -> None:
@@ -318,18 +208,3 @@ def run_from_metrics(args: argparse.Namespace) -> None:
         metrics_dir / "metrics_selection_summary.csv",
     )
     print_metric_saved_files(metrics_dir)
-
-
-def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
-
-    if not hasattr(args, "func"):
-        parser.print_help()
-        return
-
-    args.func(args)
-
-
-if __name__ == "__main__":
-    main()
