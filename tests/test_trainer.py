@@ -309,7 +309,7 @@ def test_trainer_checkpoint_round_trip(
         device=device,
     )
 
-    start_epoch = trainer_2.load_checkpoint(checkpoint_path)
+    start_epoch = trainer_2._checkpoint_manager.load(checkpoint_path)
     assert start_epoch == 1
 
 
@@ -428,20 +428,20 @@ def test_checkpoint_architecture_metadata_present(
 def test_load_checkpoint_validates_matching_architecture(
     checkpointing_trainer: tuple[Trainer, TrainingConfig],
 ) -> None:
-    """load_checkpoint must succeed when architecture matches the checkpoint."""
+    """CheckpointManager.load must succeed when architecture matches the checkpoint."""
     trainer, config = checkpointing_trainer
     trainer.train(seed=42)
 
     checkpoint_path = next((config.run_root / "checkpoints").glob("*.pth"))
     trainer_2 = _make_resume_trainer(config, UNetGenerator(), PatchGANDiscriminator())
-    start_epoch = trainer_2.load_checkpoint(checkpoint_path)
+    start_epoch = trainer_2._checkpoint_manager.load(checkpoint_path)
     assert start_epoch == 1
 
 
 def test_load_checkpoint_raises_on_architecture_mismatch(
     checkpointing_trainer: tuple[Trainer, TrainingConfig],
 ) -> None:
-    """load_checkpoint must raise ValueError when generator architecture params don't match."""
+    """CheckpointManager.load must raise on mismatched generator architecture params."""
     trainer, config = checkpointing_trainer
     trainer.train(seed=42)
 
@@ -450,7 +450,7 @@ def test_load_checkpoint_raises_on_architecture_mismatch(
         config, UNetGenerator(base_channels=32), PatchGANDiscriminator()
     )
     with pytest.raises(ValueError, match="base_channels"):
-        trainer_mismatch.load_checkpoint(checkpoint_path)
+        trainer_mismatch._checkpoint_manager.load(checkpoint_path)
 
 
 # ---------------------------------------------------------------------------
@@ -487,7 +487,7 @@ def test_load_checkpoint_raises_on_missing_architecture(
     checkpointing_trainer: tuple[Trainer, TrainingConfig],
     tmp_path: Path,
 ) -> None:
-    """load_checkpoint must raise ValueError for checkpoints without architecture metadata."""
+    """CheckpointManager.load must raise for checkpoints without architecture metadata."""
     trainer, config = checkpointing_trainer
     trainer.train(seed=42)
 
@@ -499,4 +499,4 @@ def test_load_checkpoint_raises_on_missing_architecture(
 
     trainer_2 = _make_resume_trainer(config, UNetGenerator(), PatchGANDiscriminator())
     with pytest.raises(ValueError, match="architecture metadata"):
-        trainer_2.load_checkpoint(legacy_path)
+        trainer_2._checkpoint_manager.load(legacy_path)

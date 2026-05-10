@@ -14,6 +14,7 @@ from virtual_staining.common.dimensions import to_torchvision_hw
 from virtual_staining.data.dataset import PairedHistologyDataset
 from virtual_staining.models.config import ModelConfig
 from virtual_staining.models.factory import build_discriminator, build_generator
+from virtual_staining.training.checkpoints import _check_generator_arch
 from virtual_staining.training.config import InferenceConfig, TrainingConfig
 from virtual_staining.training.trainer import Trainer
 
@@ -81,20 +82,6 @@ def build_parser():
     )
 
     return parser
-
-
-def _check_generator_arch(checkpoint_arch: dict, generator) -> None:
-    """Raise ValueError if the checkpoint's generator architecture does not match."""
-    gen_arch = checkpoint_arch.get("generator", {})
-    for key in ("in_channels", "out_channels", "base_channels", "bilinear"):
-        ckpt_val = gen_arch.get(key)
-        curr_val = getattr(generator, key, None)
-        if ckpt_val != curr_val:
-            raise ValueError(
-                f"Architecture mismatch for generator.{key}: "
-                f"checkpoint has {ckpt_val!r}, inference model has {curr_val!r}. "
-                "Instantiate the generator with the same parameters used during training."
-            )
 
 
 def is_amp_enabled(device):
