@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import math
 import statistics
 from pathlib import Path
@@ -13,6 +12,22 @@ from virtual_staining.config import (
     parse_bool_strict,
     reject_unknown_keys,
     section_with_shared_fields,
+)
+from virtual_staining.evaluation.evaluator import evaluate_pairs
+from virtual_staining.evaluation.plotting import write_plots
+from virtual_staining.evaluation.reports import (
+    build_metric_row,
+    write_single_case_csv,
+    write_skipped_csv,
+)
+from virtual_staining.evaluation.summaries import (
+    build_summary_rows as _build_summary_rows,
+)
+from virtual_staining.evaluation.summaries import (
+    metric_value,
+)
+from virtual_staining.evaluation.summaries import (
+    write_summary_csv as _write_summary_csv,
 )
 from virtual_staining.utils.cli import print_info, print_section, style
 from virtual_staining.utils.metrics import (
@@ -36,25 +51,6 @@ _EVALUATION_KEYS: frozenset[str] = frozenset(
 )
 
 METRIC_NAMES = list(DEFAULT_METRICS)
-
-METRIC_FIELDNAMES = [
-    "sample_id",
-    "target_path",
-    "generated_path",
-    "width",
-    "height",
-    "channels",
-    "mae",
-    "mse",
-    "rmse",
-    "psnr",
-    "ssim",
-    "pcc_gray",
-    "pcc_r",
-    "pcc_g",
-    "pcc_b",
-    "pcc_rgb_mean",
-]
 
 
 def _optional_path(data: dict[str, Any], key: str, default: Path) -> Path:
@@ -84,14 +80,6 @@ def apply_dataset_config(args: argparse.Namespace) -> argparse.Namespace:
         "hide_graphs_path",
     )
     return args
-
-
-def metric_value(row: dict[str, object], metric: str) -> float:
-    """Returns a metric value from a CSV-style row as a float."""
-    value = row[metric]
-    if isinstance(value, str | int | float):
-        return float(value)
-    raise TypeError(f"Metric '{metric}' must be a scalar value, got {type(value).__name__}.")
 
 
 # ==========================
@@ -283,136 +271,27 @@ def resolve_output_dir(output_dir: str | None, generated_path: str | Path) -> Pa
 
 
 def build_summary_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
-    """Builds the aggregated rows for summary.csv.
-
-    Statistics are computed over finite values only. Non-finite counts are
-    preserved so callers know how many inf/nan values were encountered.
-    """
-    summary_rows: list[dict[str, object]] = []
-
-    for metric in METRIC_NAMES:
-        values = [metric_value(row, metric) for row in rows]
-        finite = [v for v in values if math.isfinite(v)]
-        non_finite_count = len(values) - len(finite)
-
-        if finite:
-            mean: float = statistics.mean(finite)
-            median: float = statistics.median(finite)
-            std: float = statistics.stdev(finite) if len(finite) > 1 else 0.0
-            min_val: float = min(finite)
-            max_val: float = max(finite)
-        else:
-            mean = median = std = min_val = max_val = float("nan")
-
-        summary_rows.append(
-            {
-                "metric": metric,
-                "count": len(values),
-                "finite_count": len(finite),
-                "non_finite_count": non_finite_count,
-                "mean": mean,
-                "median": median,
-                "std": std,
-                "min": min_val,
-                "max": max_val,
-            }
-        )
-
-    return summary_rows
-
-
-# =======================================
-# Section dedicated to CSV writing
-# =======================================
-
-
-def build_metric_row(
-    sample_id: str,
-    target_path: str | Path,
-    generated_path: str | Path,
-    shape: tuple[int, int, int],
-    metrics: dict[str, float],
-) -> dict[str, object]:
-    """Builds a standard row for per_image_metrics.csv."""
-    height, width, channels = shape
-    return {
-        "sample_id": sample_id,
-        "target_path": str(target_path),
-        "generated_path": str(generated_path),
-        "width": width,
-        "height": height,
-        "channels": channels,
-        "mae": metrics["mae"],
-        "mse": metrics["mse"],
-        "rmse": metrics["rmse"],
-        "psnr": metrics["psnr"],
-        "ssim": metrics["ssim"],
-        "pcc_gray": metrics["pcc_gray"],
-        "pcc_r": metrics["pcc_r"],
-        "pcc_g": metrics["pcc_g"],
-        "pcc_b": metrics["pcc_b"],
-        "pcc_rgb_mean": metrics["pcc_rgb_mean"],
-    }
-
-
-def write_per_image_metrics_csv(rows: list[dict[str, object]], output_path: str | Path) -> None:
-    """Writes the CSV with one row per evaluated pair."""
-    with Path(output_path).open("w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file, fieldnames=METRIC_FIELDNAMES)
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def write_skipped_csv(rows: list[dict[str, str]], output_path: str | Path) -> None:
-    """Writes the CSV of skipped samples with the corresponding reason."""
-    fieldnames = ["sample_id", "reason", "target_path", "generated_path"]
-
-    with Path(output_path).open("w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def write_single_case_csv(row: dict[str, object], output_path: str | Path) -> None:
-    """Writes the CSV produced by the single mode."""
-    with Path(output_path).open("w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file, fieldnames=METRIC_FIELDNAMES)
-        writer.writeheader()
-        writer.writerow(row)
+    """Builds the aggregated rows for summary.csv."""
+    return _build_summary_rows(rows)
 
 
 def write_summary_csv(
-    summary_rows: list[dict[str, object]],
-    output_path: str | Path,
+    rows: list[dict[str, object]],
+    output_dir: Path,
     num_targets_found: int,
     num_generated_found: int,
     num_pairs_evaluated: int,
     num_skipped: int,
-) -> None:
+) -> Path:
     """Writes the summary CSV with global counts and per-metric statistics."""
-    fieldnames = [
-        "metric",
-        "count",
-        "finite_count",
-        "non_finite_count",
-        "mean",
-        "median",
-        "std",
-        "min",
-        "max",
-    ]
-
-    with Path(output_path).open("w", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file)
-        writer.writerow(["num_targets_found", num_targets_found])
-        writer.writerow(["num_generated_found", num_generated_found])
-        writer.writerow(["num_pairs_evaluated", num_pairs_evaluated])
-        writer.writerow(["num_skipped", num_skipped])
-        writer.writerow([])
-        writer.writerow(fieldnames)
-
-        dict_writer = csv.DictWriter(file, fieldnames=fieldnames)
-        dict_writer.writerows(summary_rows)
+    return _write_summary_csv(
+        rows,
+        output_dir,
+        num_targets_found=num_targets_found,
+        num_generated_found=num_generated_found,
+        num_pairs_evaluated=num_pairs_evaluated,
+        num_skipped=num_skipped,
+    )
 
 
 # ====================================
@@ -506,9 +385,6 @@ def run_single(args: argparse.Namespace) -> None:
 
 def run_dataset(args: argparse.Namespace) -> None:
     """Runs the complete flow for the dataset mode."""
-    from virtual_staining.evaluation.metrics import evaluate_pair
-    from virtual_staining.evaluation.plotting import save_dataset_plots
-
     args = apply_dataset_config(args)
     target_files = collect_image_files(args.target_dir, "_target", "Target")
     generated_files = collect_image_files(args.generated_dir, "_target_generated", "Generated")
@@ -517,8 +393,8 @@ def run_dataset(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     all_sample_ids = sorted(set(target_files) | set(generated_files))
-    per_image_rows: list[dict[str, object]] = []
     skipped_rows: list[dict[str, str]] = []
+    paired_samples: list[tuple[Path, Path, str]] = []
 
     for sample_id in all_sample_ids:
         target_path = target_files.get(sample_id)
@@ -546,42 +422,23 @@ def run_dataset(args: argparse.Namespace) -> None:
             )
             continue
 
-        try:
-            metrics, shape = evaluate_pair(target_path, generated_path)
-        except Exception as exc:
-            skipped_rows.append(
-                {
-                    "sample_id": sample_id,
-                    "reason": str(exc),
-                    "target_path": str(target_path),
-                    "generated_path": str(generated_path),
-                }
-            )
-            continue
+        paired_samples.append((target_path, generated_path, sample_id))
 
-        per_image_rows.append(
-            build_metric_row(sample_id, target_path, generated_path, shape, metrics)
-        )
+    evaluation = evaluate_pairs(paired_samples, output_dir)
+    per_image_rows = evaluation.rows
+    skipped_rows.extend(evaluation.skipped_rows)
 
     per_image_csv = output_dir / "per_image_metrics.csv"
     skipped_csv = output_dir / "skipped.csv"
-    summary_csv = output_dir / "summary.csv"
-
-    write_per_image_metrics_csv(per_image_rows, per_image_csv)
-    write_skipped_csv(skipped_rows, skipped_csv)
-
-    summary_rows: list[dict[str, object]] = []
-    if per_image_rows:
-        summary_rows = build_summary_rows(per_image_rows)
-
-    write_summary_csv(
-        summary_rows=summary_rows,
-        output_path=summary_csv,
+    summary_csv = write_summary_csv(
+        per_image_rows,
+        output_dir,
         num_targets_found=len(target_files),
         num_generated_found=len(generated_files),
         num_pairs_evaluated=len(per_image_rows),
         num_skipped=len(skipped_rows),
     )
+    write_skipped_csv(skipped_rows, skipped_csv)
 
     print_section("Saved files")
     print_info("Per-image metrics", str(per_image_csv))
@@ -589,7 +446,7 @@ def run_dataset(args: argparse.Namespace) -> None:
     print_info("Skipped samples", str(skipped_csv))
 
     if args.save_graphs and per_image_rows:
-        plot_paths = save_dataset_plots(per_image_rows, output_dir)
+        plot_paths = write_plots(per_image_rows, output_dir)
         if not args.hide_graphs_path:
             for plot_path in plot_paths:
                 print_info("Graph", str(plot_path))
