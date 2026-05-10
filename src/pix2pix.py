@@ -1,21 +1,20 @@
 import argparse
-import random
 from pathlib import Path
 from typing import cast
 
-import numpy as np
 import torch
 from torch.amp import autocast
-from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.utils import save_image
 
 from virtual_staining.common.dimensions import to_torchvision_hw
+from virtual_staining.config.run import RunConfig
 from virtual_staining.data.dataset import PairedHistologyDataset
 from virtual_staining.models.config import ModelConfig
-from virtual_staining.models.factory import build_discriminator, build_generator
-from virtual_staining.training.config import InferenceConfig, TrainingConfig
-from virtual_staining.training.trainer import Trainer
+from virtual_staining.models.factory import build_generator
+from virtual_staining.training.checkpoints import _check_generator_arch
+from virtual_staining.training.config import InferenceConfig
+from virtual_staining.training.runner import run_training
 
 
 # --------------------- Working paths ---------------------
@@ -83,20 +82,6 @@ def build_parser():
     return parser
 
 
-def _check_generator_arch(checkpoint_arch: dict, generator) -> None:
-    """Raise ValueError if the checkpoint's generator architecture does not match."""
-    gen_arch = checkpoint_arch.get("generator", {})
-    for key in ("in_channels", "out_channels", "base_channels", "bilinear"):
-        ckpt_val = gen_arch.get(key)
-        curr_val = getattr(generator, key, None)
-        if ckpt_val != curr_val:
-            raise ValueError(
-                f"Architecture mismatch for generator.{key}: "
-                f"checkpoint has {ckpt_val!r}, inference model has {curr_val!r}. "
-                "Instantiate the generator with the same parameters used during training."
-            )
-
-
 def is_amp_enabled(device):
     # Mixed precision with `autocast` and `GradScaler` is mainly useful
     # on CUDA GPUs. On CPU we leave everything disabled to avoid unnecessary
@@ -104,61 +89,34 @@ def is_amp_enabled(device):
     return isinstance(device, torch.device) and device.type == "cuda"
 
 
-# --------------------- Determinism ---------------------
-def set_seed(seed):
-    # Fixing the seed greatly reduces variability and helps when comparing experiments.
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-
 # --------------------- Main ---------------------
-def main(config: TrainingConfig) -> None:
-    seed = config.seed if config.seed is not None else random.randint(0, 2**32 - 1)
-    set_seed(seed)
+def main(argv=None) -> None:
+    """Backward-compatible CLI entry point for src/pix2pix.py."""
+    parser = build_parser()
+    args = parser.parse_args(argv)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if args.mode == "train":
+        config_path = Path(args.config).resolve()
+        config = RunConfig.from_yaml(config_path)
+        run_training(config, config_path)
+        return
 
-    transform = transforms.Compose(
-        [
-            transforms.Resize(to_torchvision_hw(config.image_size)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5] * 3, [0.5] * 3),
-        ]
-    )
+    if args.mode == "test":
+        config = InferenceConfig.from_yaml(args.config)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    train_loader = DataLoader(
-        PairedHistologyDataset(config.dataset_train_dir, transform=transform),
-        batch_size=config.batch_size,
-        shuffle=True,
-        num_workers=config.num_workers,
-        pin_memory=(device.type == "cuda"),
-    )
-    val_loader = DataLoader(
-        PairedHistologyDataset(config.dataset_val_dir, transform=transform),
-        batch_size=config.batch_size,
-        shuffle=False,
-        num_workers=config.num_workers,
-        pin_memory=(device.type == "cuda"),
-    )
+        print(f"Starting test for run: {config.run_root}")
+        print(f"Using checkpoint: {config.checkpoint}")
+        test_inference(
+            checkpoint_path=config.checkpoint,
+            test_folder=str(config.test_dir),
+            output_folder=str(config.output_test_dir),
+            image_size=config.image_size,
+            device=device,
+        )
+        return
 
-    model_config = ModelConfig()
-    generator = build_generator(model_config.generator).to(device)
-    discriminator = build_discriminator(model_config.discriminator).to(device)
-
-    Trainer(
-        config=config,
-        generator=generator,
-        discriminator=discriminator,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        device=device,
-    ).train(seed=seed)
+    raise ValueError(f"Unknown mode: {args.mode}")
 
 
 def test_inference(checkpoint_path, test_folder, output_folder, image_size=(256, 256), device=None):
@@ -241,23 +199,4 @@ def test_inference(checkpoint_path, test_folder, output_folder, image_size=(256,
 
 
 if __name__ == "__main__":
-    parser = build_parser()
-    args = parser.parse_args()
-
-    if args.mode == "train":
-        config = TrainingConfig.from_yaml(args.config)
-        main(config)
-
-    elif args.mode == "test":
-        config = InferenceConfig.from_yaml(args.config)
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        print(f"Starting test for run: {config.run_root}")
-        print(f"Using checkpoint: {config.checkpoint}")
-        test_inference(
-            checkpoint_path=config.checkpoint,
-            test_folder=str(config.test_dir),
-            output_folder=str(config.output_test_dir),
-            image_size=config.image_size,
-            device=device,
-        )
+    main()

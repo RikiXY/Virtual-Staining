@@ -6,6 +6,7 @@ import json
 import logging
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -14,60 +15,18 @@ from PIL import Image
 from torch.amp import GradScaler, autocast
 from torchvision.utils import save_image
 
+from virtual_staining.experiment.run_paths import RunPaths
+from virtual_staining.training.checkpoints import CheckpointManager
 from virtual_staining.training.config import TrainingConfig
-from virtual_staining.training.results import EpochMetrics
+from virtual_staining.training.losses import Pix2PixLoss
+from virtual_staining.training.results import EpochMetrics, TrainingResult
+from virtual_staining.training.steps import Pix2PixTrainingStep
 from virtual_staining.utils.env import collect_environment
 
+if TYPE_CHECKING:
+    from virtual_staining.reporting.base import TrainingReporter
+
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Architecture metadata helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_arch_metadata(generator: nn.Module, discriminator: nn.Module) -> dict:
-    return {
-        "generator": {
-            "class": type(generator).__name__,
-            "in_channels": getattr(generator, "in_channels", None),
-            "out_channels": getattr(generator, "out_channels", None),
-            "base_channels": getattr(generator, "base_channels", None),
-            "bilinear": getattr(generator, "bilinear", None),
-        },
-        "discriminator": {
-            "class": type(discriminator).__name__,
-            "in_channels": getattr(discriminator, "in_channels", None),
-            "ndf": getattr(discriminator, "ndf", None),
-            "use_sigmoid": getattr(discriminator, "use_sigmoid", None),
-        },
-    }
-
-
-def _check_arch_match(
-    checkpoint_arch: dict, generator: nn.Module, discriminator: nn.Module
-) -> None:
-    """Raise ValueError if checkpoint architecture does not match the current models."""
-    gen_arch = checkpoint_arch.get("generator", {})
-    for key in ("in_channels", "out_channels", "base_channels", "bilinear"):
-        ckpt_val = gen_arch.get(key)
-        curr_val = getattr(generator, key, None)
-        if ckpt_val != curr_val:
-            raise ValueError(
-                f"Architecture mismatch for generator.{key}: "
-                f"checkpoint has {ckpt_val!r}, current model has {curr_val!r}. "
-                "Instantiate the model with the same parameters used during training."
-            )
-    disc_arch = checkpoint_arch.get("discriminator", {})
-    for key in ("in_channels", "ndf", "use_sigmoid"):
-        ckpt_val = disc_arch.get(key)
-        curr_val = getattr(discriminator, key, None)
-        if ckpt_val != curr_val:
-            raise ValueError(
-                f"Architecture mismatch for discriminator.{key}: "
-                f"checkpoint has {ckpt_val!r}, current model has {curr_val!r}. "
-                "Instantiate the model with the same parameters used during training."
-            )
-
 
 # ---------------------------------------------------------------------------
 # Module-level helpers (private to this module)
@@ -247,18 +206,27 @@ class Trainer:
     def __init__(
         self,
         config: TrainingConfig,
+        run_paths: RunPaths,
         generator: nn.Module,
         discriminator: nn.Module,
         train_loader: torch.utils.data.DataLoader,
         val_loader: torch.utils.data.DataLoader,
         device: torch.device,
+        *,
+        image_size: tuple[int, int],
+        train_dir: Path,
+        val_dir: Path,
     ) -> None:
         self.config = config
+        self._run_paths = run_paths
         self.generator = generator
         self.discriminator = discriminator
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
+        self._image_size = image_size
+        self._train_dir = train_dir
+        self._val_dir = val_dir
 
         self._amp_enabled = _is_amp_enabled(device)
 
@@ -274,19 +242,52 @@ class Trainer:
         )
         self._scaler_G = GradScaler(enabled=self._amp_enabled)
         self._scaler_D = GradScaler(enabled=self._amp_enabled)
-        self._bce_loss: nn.Module = nn.BCEWithLogitsLoss()
-        self._l1_loss: nn.Module = nn.L1Loss()
+        self._loss_fn = Pix2PixLoss(l1_weight=config.l1_weight)
+        self._step = Pix2PixTrainingStep(
+            generator=generator,
+            discriminator=discriminator,
+            opt_G=self._opt_G,
+            opt_D=self._opt_D,
+            scaler_G=self._scaler_G,
+            scaler_D=self._scaler_D,
+            loss_fn=self._loss_fn,
+            device=device,
+            amp_enabled=self._amp_enabled,
+        )
 
-        self._logs_dir = config.run_root / "logs"
-        self._checkpoints_dir = config.run_root / "checkpoints"
-        self._output_val_dir = config.run_root / "output_val"
-        self._output_train_dir = config.run_root / "output_train"
+        self._logs_dir = run_paths.logs_dir
+        self._checkpoints_dir = run_paths.checkpoints_dir
+        self._output_val_dir = run_paths.output_val_dir
+        self._output_train_dir = run_paths.output_train_dir
+        self._checkpoint_manager = CheckpointManager(
+            checkpoints_dir=self._checkpoints_dir,
+            generator=generator,
+            discriminator=discriminator,
+            opt_G=self._opt_G,
+            opt_D=self._opt_D,
+            scaler_G=self._scaler_G,
+            scaler_D=self._scaler_D,
+            image_size=image_size,
+            device=device,
+            l1_weight=config.l1_weight,
+            lr_g=config.lr_g,
+            lr_d=config.lr_d,
+            beta1=config.beta1,
+            beta2=config.beta2,
+            batch_size=config.batch_size,
+            num_workers=config.num_workers,
+        )
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def train(self, seed: int) -> None:
+    def train(
+        self,
+        seed: int,
+        start_epoch: int = 0,
+        reporter: TrainingReporter | None = None,
+    ) -> TrainingResult:
         """Run the full training loop."""
         start_time = time.time()
 
@@ -299,8 +300,8 @@ class Trainer:
             d.mkdir(parents=True, exist_ok=True)
 
         env = collect_environment()
-        self.config.to_yaml(self.config.run_root / "config.yaml")
-        with open(self.config.run_root / "environment.json", "w", encoding="utf-8") as f:
+        self.config.to_yaml(self._run_paths.root / "config.yaml")
+        with open(self._run_paths.root / "environment.json", "w", encoding="utf-8") as f:
             json.dump(env, f, indent=2, default=str)
 
         timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -322,7 +323,7 @@ class Trainer:
             logger.info("Device: %s (%s)", self.device, device_name)
 
             run_config = self._build_run_config(seed, timestamp_str, log_file, env)
-            config_path = _save_run_config(run_config, self.config.run_root)
+            config_path = _save_run_config(run_config, self._run_paths.root)
             _log_run_header(run_config)
             logger.debug("Run config saved to %s", config_path)
 
@@ -330,18 +331,15 @@ class Trainer:
                 if f.is_file():
                     f.unlink()
 
-            start_epoch = 0
-            if self.config.resume is not None:
-                if Path(self.config.resume).exists():
-                    start_epoch = self.load_checkpoint(Path(self.config.resume), log_file)
-                else:
-                    logger.warning("Checkpoint not found: %s", self.config.resume)
+            if start_epoch > 0:
+                logger.info("Training resumed from epoch %s", start_epoch)
             else:
                 logger.debug("Training started from scratch")
 
             logger.info("=== Pix2Pix training ===")
-            logger.info("Run root: %s", self.config.run_root)
-            logger.info("Dataset root: %s", self.config.dataset_root)
+            logger.info("Run root: %s", self._run_paths.root)
+            logger.info("Train dir: %s", self._train_dir)
+            logger.info("Validation dir: %s", self._val_dir)
             logger.info("Device: %s", self.device)
             logger.info("Epochs: %s", self.config.epochs)
             logger.info("Start epoch: %s", start_epoch)
@@ -375,7 +373,8 @@ class Trainer:
                 )
             }
 
-            metrics_path = self.config.run_root / "metrics.csv"
+            metrics_path = self._run_paths.root / "metrics.csv"
+            best_checkpoint_path: Path | None = None
             with open(metrics_path, "w", newline="", encoding="utf-8") as metrics_file:
                 metrics_writer = csv.DictWriter(
                     metrics_file,
@@ -399,10 +398,12 @@ class Trainer:
                     logger.debug("Finished epoch %s", epoch)
 
                     if (epoch + 1) % self.config.checkpoint_rate == 0:
-                        checkpoint_path = self._checkpoints_dir / f"ep{epoch:03d}.pth"
-                        self.save_checkpoint(checkpoint_path, epoch)
+                        checkpoint_path = self._checkpoint_manager.save(epoch)
+                        best_checkpoint_path = checkpoint_path
                         training_status["last_checkpoint"] = checkpoint_path.name
                         logger.info("Checkpoint saved to %s at epoch %s", checkpoint_path, epoch)
+                        if reporter is not None:
+                            reporter.on_checkpoint_saved(checkpoint_path, epoch)
                         if epoch == self.config.epochs - 1:
                             _update_console_progress(
                                 f"{_render_progress_bar(1.0)} "
@@ -430,86 +431,35 @@ class Trainer:
                         }
                     )
                     metrics_file.flush()
+                    if reporter is not None:
+                        reporter.on_epoch_completed(epoch_metrics)
 
             if start_epoch < self.config.epochs:
                 final_epoch = self.config.epochs - 1
                 if (final_epoch + 1) % self.config.checkpoint_rate != 0:
-                    checkpoint_path = self._checkpoints_dir / f"ep{final_epoch:03d}.pth"
-                    self.save_checkpoint(checkpoint_path, final_epoch)
+                    checkpoint_path = self._checkpoint_manager.save(final_epoch)
+                    best_checkpoint_path = checkpoint_path
                     training_status["last_checkpoint"] = checkpoint_path.name
                     logger.info(
                         "Final checkpoint saved to %s (epoch %s)",
                         checkpoint_path,
                         final_epoch,
                     )
+                    if reporter is not None:
+                        reporter.on_checkpoint_saved(checkpoint_path, final_epoch)
 
             _finish_console_progress()
             total_seconds = time.time() - start_time
             logger.info("Execution completed. Total time = %.2f seconds", total_seconds)
+            final_epoch = max(start_epoch, self.config.epochs) - 1
+            return TrainingResult(
+                final_epoch=final_epoch,
+                best_checkpoint_path=best_checkpoint_path,
+            )
         finally:
             logger.removeHandler(file_handler)
             file_handler.close()
             logger.setLevel(old_level)
-
-    def save_checkpoint(self, checkpoint_path: Path, epoch: int) -> None:
-        checkpoint = {
-            "epoch": epoch,
-            "architecture": _make_arch_metadata(self.generator, self.discriminator),
-            "generator_state_dict": self.generator.state_dict(),
-            "discriminator_state_dict": self.discriminator.state_dict(),
-            "optimizerG_state_dict": self._opt_G.state_dict(),
-            "optimizerD_state_dict": self._opt_D.state_dict(),
-            "scalerG_state_dict": self._scaler_G.state_dict(),
-            "scalerD_state_dict": self._scaler_D.state_dict(),
-            "l1_weight": self.config.l1_weight,
-            "lr_g": self.config.lr_g,
-            "lr_d": self.config.lr_d,
-            "beta1": self.config.beta1,
-            "beta2": self.config.beta2,
-            "image_size": self.config.image_size,
-            "batch_size": self.config.batch_size,
-            "num_workers": self.config.num_workers,
-            "dataset_root": str(self.config.dataset_root),
-        }
-        torch.save(checkpoint, checkpoint_path)
-
-    def load_checkpoint(self, checkpoint_path: Path, log_file: Path | None = None) -> int:
-        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
-
-        checkpoint_image_size = checkpoint.get("image_size")
-        if checkpoint_image_size is not None:
-            checkpoint_image_size = tuple(checkpoint_image_size)
-            if checkpoint_image_size != tuple(self.config.image_size):
-                raise ValueError(
-                    "Image size mismatch between checkpoint and resumed training. "
-                    f"Checkpoint image_size={checkpoint_image_size}, "
-                    f"current image_size={tuple(self.config.image_size)}."
-                )
-
-        checkpoint_arch = checkpoint.get("architecture")
-        if checkpoint_arch is None:
-            raise ValueError(
-                f"Checkpoint '{checkpoint_path}' has no architecture metadata. "
-                "Only checkpoints saved with the current version are supported."
-            )
-        _check_arch_match(checkpoint_arch, self.generator, self.discriminator)
-
-        self.generator.load_state_dict(checkpoint["generator_state_dict"])
-        self.discriminator.load_state_dict(checkpoint["discriminator_state_dict"])
-        self._opt_G.load_state_dict(checkpoint["optimizerG_state_dict"])
-        self._opt_D.load_state_dict(checkpoint["optimizerD_state_dict"])
-        self._scaler_G.load_state_dict(checkpoint["scalerG_state_dict"])
-        self._scaler_D.load_state_dict(checkpoint["scalerD_state_dict"])
-
-        # Resume from the next epoch to avoid repeating the completed one.
-        start_epoch: int = checkpoint["epoch"] + 1
-        if log_file is not None:
-            logger.info(
-                "Checkpoint loaded from %s, resuming at epoch %s",
-                checkpoint_path,
-                start_epoch,
-            )
-        return start_epoch
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -531,38 +481,9 @@ class Trainer:
 
         for i, (x, y) in enumerate(self.train_loader):
             x, y = x.to(self.device), y.to(self.device)
-
-            # --- Discriminator step ---
-            with autocast(device_type=self.device.type, enabled=self._amp_enabled):
-                # .detach() prevents gradients flowing back into G during D's update.
-                fake = self.generator(x).detach()
-                D_real = self.discriminator(x, y)
-                D_fake = self.discriminator(x, fake)
-                real_label = torch.ones_like(D_real, device=self.device)
-                fake_label = torch.zeros_like(D_fake, device=self.device)
-                loss_D = self._bce_loss(D_real, real_label) + self._bce_loss(D_fake, fake_label)
-
-            self._opt_D.zero_grad()
-            self._scaler_D.scale(loss_D).backward()
-            self._scaler_D.step(self._opt_D)
-            self._scaler_D.update()
-
-            # --- Generator step ---
-            with autocast(device_type=self.device.type, enabled=self._amp_enabled):
-                fake = self.generator(x)
-                D_fake = self.discriminator(x, fake)
-                loss_G = (
-                    self._bce_loss(D_fake, real_label)
-                    + self._l1_loss(fake, y) * self.config.l1_weight
-                )
-
-            self._opt_G.zero_grad()
-            self._scaler_G.scale(loss_G).backward()
-            self._scaler_G.step(self._opt_G)
-            self._scaler_G.update()
-
-            total_loss_G += loss_G.item()
-            total_loss_D += loss_D.item()
+            step_losses = self._step.step(x, y)
+            total_loss_G += step_losses.loss_G
+            total_loss_D += step_losses.loss_D
             num_batches += 1
 
             progress, elapsed, eta, end_time = progress_tracker.calculate_progress(epoch, i)
@@ -576,8 +497,8 @@ class Trainer:
                 f"ep {epoch + 1}/{progress_tracker.total_epochs} "
                 f"({epoch_progress:.0%}) | "
                 f"b {i + 1}/{progress_tracker.total_batches} | "
-                f"loss_G {loss_G.item():.4f} | "
-                f"loss_D {loss_D.item():.4f} | "
+                f"loss_G {step_losses.loss_G:.4f} | "
+                f"loss_D {step_losses.loss_D:.4f} | "
                 f"elapsed {elapsed_str} | "
                 f"ETA {eta_str} | "
                 f"ckpt {training_status['last_checkpoint']}"
@@ -597,8 +518,8 @@ class Trainer:
                     "%.2f%% | elapsed %s | ETA %s | end %s",
                     epoch,
                     i,
-                    loss_G.item(),
-                    loss_D.item(),
+                    step_losses.loss_G,
+                    step_losses.loss_D,
                     progress * 100,
                     elapsed_str,
                     eta_str,
@@ -627,13 +548,8 @@ class Trainer:
                     fake = self.generator(x)
                     D_real = self.discriminator(x, y)
                     D_fake = self.discriminator(x, fake)
-                    real_label = torch.ones_like(D_real, device=self.device)
-                    fake_label = torch.zeros_like(D_fake, device=self.device)
-                    loss_D = self._bce_loss(D_real, real_label) + self._bce_loss(D_fake, fake_label)
-                    loss_G = (
-                        self._bce_loss(D_fake, real_label)
-                        + self._l1_loss(fake, y) * self.config.l1_weight
-                    )
+                    loss_D = self._loss_fn.discriminator_loss(D_real, D_fake)
+                    loss_G = self._loss_fn.generator_loss(D_fake, fake, y)
 
                 total_loss_D += loss_D.item()
                 total_loss_G += loss_G.item()
@@ -659,20 +575,19 @@ class Trainer:
     ) -> dict:
         return {
             "timestamp": timestamp_str,
-            "dataset_root": str(self.config.dataset_root),
-            "run_root": str(self.config.run_root),
+            "run_root": str(self._run_paths.root),
             "logs_dir": str(self._logs_dir),
             "checkpoints_dir": str(self._checkpoints_dir),
             "output_train_dir": str(self._output_train_dir),
             "output_val_dir": str(self._output_val_dir),
-            "train_dir": str(self.config.dataset_train_dir),
-            "val_dir": str(self.config.dataset_val_dir),
+            "train_dir": str(self._train_dir),
+            "val_dir": str(self._val_dir),
             "seed": seed,
             "device": str(self.device),
             "epochs": self.config.epochs,
             "batch_size": self.config.batch_size,
             "num_workers": self.config.num_workers,
-            "image_size_resize": list(self.config.image_size),
+            "image_size_resize": list(self._image_size),
             "log_rate": self.config.log_rate,
             "checkpoint_rate": self.config.checkpoint_rate,
             "validate_rate": self.config.validate_rate,
