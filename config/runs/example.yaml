@@ -9,7 +9,7 @@ results_path: local_workspace/results
 run_name: example_run
 
 # One size drives both patch extraction and model resize for the standard workflow.
-# Convention: [width, height] — e.g. [320, 256] means 320 px wide, 256 px tall.
+# Convention: [width, height] - e.g. [320, 256] means 320 px wide, 256 px tall.
 image_size: [256, 256]
 
 preprocessing:

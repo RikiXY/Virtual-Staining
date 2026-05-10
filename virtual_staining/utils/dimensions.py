@@ -1,7 +1,7 @@
 """Image-size dimension-order helpers.
 
 Convention throughout this codebase: sizes are stored as ``(width, height)``
-tuples — the same order a human writes "640x480" or passes ``[W, H]`` in YAML.
+tuples - the same order a human writes "640x480" or passes ``[W, H]`` in YAML.
 
 torchvision ``transforms.Resize`` expects ``(height, width)``, so convert with
 ``to_torchvision_hw`` before passing any size to a transform.  Patch-extraction
@@ -20,7 +20,7 @@ def parse_wh_size(value: object, default: tuple[int, int]) -> tuple[int, int]:
     Parameters
     ----------
     value:
-        Raw config value — a two-element sequence of positive integers, or
+        Raw config value - a two-element sequence of positive integers, or
         ``None`` to accept the default.
     default:
         Fallback ``(width, height)`` returned when *value* is ``None``.
