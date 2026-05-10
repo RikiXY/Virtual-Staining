@@ -6,6 +6,7 @@ import json
 import logging
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -14,12 +15,16 @@ from PIL import Image
 from torch.amp import GradScaler, autocast
 from torchvision.utils import save_image
 
+from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.training.checkpoints import CheckpointManager
 from virtual_staining.training.config import TrainingConfig
 from virtual_staining.training.losses import Pix2PixLoss
-from virtual_staining.training.results import EpochMetrics
+from virtual_staining.training.results import EpochMetrics, TrainingResult
 from virtual_staining.training.steps import Pix2PixTrainingStep
 from virtual_staining.utils.env import collect_environment
+
+if TYPE_CHECKING:
+    from virtual_staining.reporting.base import TrainingReporter
 
 logger = logging.getLogger(__name__)
 
@@ -201,18 +206,27 @@ class Trainer:
     def __init__(
         self,
         config: TrainingConfig,
+        run_paths: RunPaths,
         generator: nn.Module,
         discriminator: nn.Module,
         train_loader: torch.utils.data.DataLoader,
         val_loader: torch.utils.data.DataLoader,
         device: torch.device,
+        *,
+        image_size: tuple[int, int],
+        train_dir: Path,
+        val_dir: Path,
     ) -> None:
         self.config = config
+        self._run_paths = run_paths
         self.generator = generator
         self.discriminator = discriminator
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
+        self._image_size = image_size
+        self._train_dir = train_dir
+        self._val_dir = val_dir
 
         self._amp_enabled = _is_amp_enabled(device)
 
@@ -241,10 +255,10 @@ class Trainer:
             amp_enabled=self._amp_enabled,
         )
 
-        self._logs_dir = config.run_root / "logs"
-        self._checkpoints_dir = config.run_root / "checkpoints"
-        self._output_val_dir = config.run_root / "output_val"
-        self._output_train_dir = config.run_root / "output_train"
+        self._logs_dir = run_paths.logs_dir
+        self._checkpoints_dir = run_paths.checkpoints_dir
+        self._output_val_dir = run_paths.output_val_dir
+        self._output_train_dir = run_paths.output_train_dir
         self._checkpoint_manager = CheckpointManager(
             checkpoints_dir=self._checkpoints_dir,
             generator=generator,
@@ -253,7 +267,7 @@ class Trainer:
             opt_D=self._opt_D,
             scaler_G=self._scaler_G,
             scaler_D=self._scaler_D,
-            image_size=config.image_size,
+            image_size=image_size,
             device=device,
             l1_weight=config.l1_weight,
             lr_g=config.lr_g,
@@ -262,14 +276,18 @@ class Trainer:
             beta2=config.beta2,
             batch_size=config.batch_size,
             num_workers=config.num_workers,
-            dataset_root=str(config.dataset_root),
         )
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def train(self, seed: int) -> None:
+    def train(
+        self,
+        seed: int,
+        start_epoch: int = 0,
+        reporter: TrainingReporter | None = None,
+    ) -> TrainingResult:
         """Run the full training loop."""
         start_time = time.time()
 
@@ -282,8 +300,8 @@ class Trainer:
             d.mkdir(parents=True, exist_ok=True)
 
         env = collect_environment()
-        self.config.to_yaml(self.config.run_root / "config.yaml")
-        with open(self.config.run_root / "environment.json", "w", encoding="utf-8") as f:
+        self.config.to_yaml(self._run_paths.root / "config.yaml")
+        with open(self._run_paths.root / "environment.json", "w", encoding="utf-8") as f:
             json.dump(env, f, indent=2, default=str)
 
         timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -305,7 +323,7 @@ class Trainer:
             logger.info("Device: %s (%s)", self.device, device_name)
 
             run_config = self._build_run_config(seed, timestamp_str, log_file, env)
-            config_path = _save_run_config(run_config, self.config.run_root)
+            config_path = _save_run_config(run_config, self._run_paths.root)
             _log_run_header(run_config)
             logger.debug("Run config saved to %s", config_path)
 
@@ -313,18 +331,15 @@ class Trainer:
                 if f.is_file():
                     f.unlink()
 
-            start_epoch = 0
-            if self.config.resume is not None:
-                if Path(self.config.resume).exists():
-                    start_epoch = self._checkpoint_manager.load(Path(self.config.resume))
-                else:
-                    logger.warning("Checkpoint not found: %s", self.config.resume)
+            if start_epoch > 0:
+                logger.info("Training resumed from epoch %s", start_epoch)
             else:
                 logger.debug("Training started from scratch")
 
             logger.info("=== Pix2Pix training ===")
-            logger.info("Run root: %s", self.config.run_root)
-            logger.info("Dataset root: %s", self.config.dataset_root)
+            logger.info("Run root: %s", self._run_paths.root)
+            logger.info("Train dir: %s", self._train_dir)
+            logger.info("Validation dir: %s", self._val_dir)
             logger.info("Device: %s", self.device)
             logger.info("Epochs: %s", self.config.epochs)
             logger.info("Start epoch: %s", start_epoch)
@@ -358,7 +373,8 @@ class Trainer:
                 )
             }
 
-            metrics_path = self.config.run_root / "metrics.csv"
+            metrics_path = self._run_paths.root / "metrics.csv"
+            best_checkpoint_path: Path | None = None
             with open(metrics_path, "w", newline="", encoding="utf-8") as metrics_file:
                 metrics_writer = csv.DictWriter(
                     metrics_file,
@@ -383,8 +399,11 @@ class Trainer:
 
                     if (epoch + 1) % self.config.checkpoint_rate == 0:
                         checkpoint_path = self._checkpoint_manager.save(epoch)
+                        best_checkpoint_path = checkpoint_path
                         training_status["last_checkpoint"] = checkpoint_path.name
                         logger.info("Checkpoint saved to %s at epoch %s", checkpoint_path, epoch)
+                        if reporter is not None:
+                            reporter.on_checkpoint_saved(checkpoint_path, epoch)
                         if epoch == self.config.epochs - 1:
                             _update_console_progress(
                                 f"{_render_progress_bar(1.0)} "
@@ -412,21 +431,31 @@ class Trainer:
                         }
                     )
                     metrics_file.flush()
+                    if reporter is not None:
+                        reporter.on_epoch_completed(epoch_metrics)
 
             if start_epoch < self.config.epochs:
                 final_epoch = self.config.epochs - 1
                 if (final_epoch + 1) % self.config.checkpoint_rate != 0:
                     checkpoint_path = self._checkpoint_manager.save(final_epoch)
+                    best_checkpoint_path = checkpoint_path
                     training_status["last_checkpoint"] = checkpoint_path.name
                     logger.info(
                         "Final checkpoint saved to %s (epoch %s)",
                         checkpoint_path,
                         final_epoch,
                     )
+                    if reporter is not None:
+                        reporter.on_checkpoint_saved(checkpoint_path, final_epoch)
 
             _finish_console_progress()
             total_seconds = time.time() - start_time
             logger.info("Execution completed. Total time = %.2f seconds", total_seconds)
+            final_epoch = max(start_epoch, self.config.epochs) - 1
+            return TrainingResult(
+                final_epoch=final_epoch,
+                best_checkpoint_path=best_checkpoint_path,
+            )
         finally:
             logger.removeHandler(file_handler)
             file_handler.close()
@@ -546,20 +575,19 @@ class Trainer:
     ) -> dict:
         return {
             "timestamp": timestamp_str,
-            "dataset_root": str(self.config.dataset_root),
-            "run_root": str(self.config.run_root),
+            "run_root": str(self._run_paths.root),
             "logs_dir": str(self._logs_dir),
             "checkpoints_dir": str(self._checkpoints_dir),
             "output_train_dir": str(self._output_train_dir),
             "output_val_dir": str(self._output_val_dir),
-            "train_dir": str(self.config.dataset_train_dir),
-            "val_dir": str(self.config.dataset_val_dir),
+            "train_dir": str(self._train_dir),
+            "val_dir": str(self._val_dir),
             "seed": seed,
             "device": str(self.device),
             "epochs": self.config.epochs,
             "batch_size": self.config.batch_size,
             "num_workers": self.config.num_workers,
-            "image_size_resize": list(self.config.image_size),
+            "image_size_resize": list(self._image_size),
             "log_rate": self.config.log_rate,
             "checkpoint_rate": self.config.checkpoint_rate,
             "validate_rate": self.config.validate_rate,

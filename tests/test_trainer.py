@@ -13,6 +13,7 @@ from torchvision import transforms
 
 from virtual_staining.config.project import ProjectConfig
 from virtual_staining.data.dataset import PairedHistologyDataset
+from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.config import TrainingConfig
@@ -25,6 +26,7 @@ from virtual_staining.training.trainer import Trainer
 
 def _make_resume_trainer(
     config: TrainingConfig,
+    run_paths: RunPaths,
     generator: UNetGenerator,
     discriminator: PatchGANDiscriminator,
 ) -> Trainer:
@@ -46,11 +48,15 @@ def _make_resume_trainer(
     )
     return Trainer(
         config=config,
+        run_paths=run_paths,
         generator=generator.to(device),
         discriminator=discriminator.to(device),
         train_loader=train_loader,
         val_loader=val_loader,
         device=device,
+        image_size=config.image_size,
+        train_dir=train_dir,
+        val_dir=val_dir,
     )
 
 
@@ -75,7 +81,7 @@ def _make_project(dataset_root: Path, results_path: Path, run_name: str) -> Proj
     )
 
 
-def _make_trainer(tmp_path: Path, checkpoint_rate: int) -> tuple[Trainer, TrainingConfig]:
+def _make_trainer(tmp_path: Path, checkpoint_rate: int) -> tuple[Trainer, TrainingConfig, RunPaths]:
     dataset_root = tmp_path / "dataset"
     train_dir = dataset_root / "dataset_train"
     val_dir = dataset_root / "dataset_val"
@@ -100,6 +106,8 @@ def _make_trainer(tmp_path: Path, checkpoint_rate: int) -> tuple[Trainer, Traini
         log_rate=1,
         project=_make_project(dataset_root, tmp_path / "results", "smoke_run"),
     )
+    run_paths = RunPaths(config.run_root)
+    run_paths.create_directories()
 
     transform = transforms.Compose(
         [
@@ -122,24 +130,32 @@ def _make_trainer(tmp_path: Path, checkpoint_rate: int) -> tuple[Trainer, Traini
     )
 
     device = torch.device("cpu")
-    return Trainer(
-        config=config,
-        generator=UNetGenerator().to(device),
-        discriminator=PatchGANDiscriminator().to(device),
-        train_loader=train_loader,
-        val_loader=val_loader,
-        device=device,
-    ), config
+    return (
+        Trainer(
+            config=config,
+            run_paths=run_paths,
+            generator=UNetGenerator().to(device),
+            discriminator=PatchGANDiscriminator().to(device),
+            train_loader=train_loader,
+            val_loader=val_loader,
+            device=device,
+            image_size=config.image_size,
+            train_dir=train_dir,
+            val_dir=val_dir,
+        ),
+        config,
+        run_paths,
+    )
 
 
 @pytest.fixture()
-def smoke_trainer(tmp_path: Path) -> tuple[Trainer, TrainingConfig]:
+def smoke_trainer(tmp_path: Path) -> tuple[Trainer, TrainingConfig, RunPaths]:
     """Trainer that never saves a checkpoint (checkpoint_rate=2 > epochs=1)."""
     return _make_trainer(tmp_path, checkpoint_rate=2)
 
 
 @pytest.fixture()
-def checkpointing_trainer(tmp_path: Path) -> tuple[Trainer, TrainingConfig]:
+def checkpointing_trainer(tmp_path: Path) -> tuple[Trainer, TrainingConfig, RunPaths]:
     """Trainer that saves a checkpoint every epoch, for round-trip tests."""
     return _make_trainer(tmp_path, checkpoint_rate=1)
 
@@ -150,9 +166,9 @@ def checkpointing_trainer(tmp_path: Path) -> tuple[Trainer, TrainingConfig]:
 
 
 def test_trainer_smoke_run_creates_expected_files(
-    smoke_trainer: tuple[Trainer, TrainingConfig],
+    smoke_trainer: tuple[Trainer, TrainingConfig, RunPaths],
 ) -> None:
-    trainer, config = smoke_trainer
+    trainer, config, _ = smoke_trainer
 
     trainer.train(seed=42)
 
@@ -165,9 +181,9 @@ def test_trainer_smoke_run_creates_expected_files(
 
 
 def test_trainer_metrics_csv_structure(
-    smoke_trainer: tuple[Trainer, TrainingConfig],
+    smoke_trainer: tuple[Trainer, TrainingConfig, RunPaths],
 ) -> None:
-    trainer, config = smoke_trainer
+    trainer, config, _ = smoke_trainer
 
     trainer.train(seed=42)
 
@@ -246,13 +262,19 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
         num_workers=0,
     )
 
+    run_paths = RunPaths(config.run_root)
+    run_paths.create_directories()
     trainer = Trainer(
         config=config,
+        run_paths=run_paths,
         generator=UNetGenerator().to(device),
         discriminator=PatchGANDiscriminator().to(device),
         train_loader=train_loader,
         val_loader=val_loader,
         device=device,
+        image_size=config.image_size,
+        train_dir=train_dir,
+        val_dir=val_dir,
     )
     trainer.train(seed=0)
 
@@ -271,9 +293,9 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
 
 
 def test_trainer_checkpoint_round_trip(
-    checkpointing_trainer: tuple[Trainer, TrainingConfig],
+    checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths],
 ) -> None:
-    trainer, config = checkpointing_trainer
+    trainer, config, run_paths = checkpointing_trainer
 
     trainer.train(seed=42)
 
@@ -302,11 +324,15 @@ def test_trainer_checkpoint_round_trip(
 
     trainer_2 = Trainer(
         config=config,
+        run_paths=run_paths,
         generator=UNetGenerator().to(device),
         discriminator=PatchGANDiscriminator().to(device),
         train_loader=train_loader,
         val_loader=val_loader,
         device=device,
+        image_size=config.image_size,
+        train_dir=train_dir,
+        val_dir=val_dir,
     )
 
     start_epoch = trainer_2._checkpoint_manager.load(checkpoint_path)
@@ -319,9 +345,9 @@ def test_trainer_checkpoint_round_trip(
 
 
 def test_run_config_records_default_dirs(
-    smoke_trainer: tuple[Trainer, TrainingConfig],
+    smoke_trainer: tuple[Trainer, TrainingConfig, RunPaths],
 ) -> None:
-    trainer, config = smoke_trainer
+    trainer, config, _ = smoke_trainer
 
     trainer.train(seed=42)
 
@@ -381,11 +407,15 @@ def test_run_config_records_custom_dirs(tmp_path: Path) -> None:
     )
     trainer = Trainer(
         config=config,
+        run_paths=RunPaths(config.run_root),
         generator=UNetGenerator().to(device),
         discriminator=PatchGANDiscriminator().to(device),
         train_loader=train_loader,
         val_loader=val_loader,
         device=device,
+        image_size=config.image_size,
+        train_dir=custom_train_dir,
+        val_dir=custom_val_dir,
     )
     trainer.train(seed=42)
 
@@ -402,10 +432,10 @@ def test_run_config_records_custom_dirs(tmp_path: Path) -> None:
 
 
 def test_checkpoint_architecture_metadata_present(
-    checkpointing_trainer: tuple[Trainer, TrainingConfig],
+    checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths],
 ) -> None:
     """Saved checkpoint must include an 'architecture' key with correct model params."""
-    trainer, config = checkpointing_trainer
+    trainer, config, _ = checkpointing_trainer
     trainer.train(seed=42)
 
     checkpoint_path = next((config.run_root / "checkpoints").glob("*.pth"))
@@ -426,28 +456,28 @@ def test_checkpoint_architecture_metadata_present(
 
 
 def test_load_checkpoint_validates_matching_architecture(
-    checkpointing_trainer: tuple[Trainer, TrainingConfig],
+    checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths],
 ) -> None:
     """CheckpointManager.load must succeed when architecture matches the checkpoint."""
-    trainer, config = checkpointing_trainer
+    trainer, config, run_paths = checkpointing_trainer
     trainer.train(seed=42)
 
     checkpoint_path = next((config.run_root / "checkpoints").glob("*.pth"))
-    trainer_2 = _make_resume_trainer(config, UNetGenerator(), PatchGANDiscriminator())
+    trainer_2 = _make_resume_trainer(config, run_paths, UNetGenerator(), PatchGANDiscriminator())
     start_epoch = trainer_2._checkpoint_manager.load(checkpoint_path)
     assert start_epoch == 1
 
 
 def test_load_checkpoint_raises_on_architecture_mismatch(
-    checkpointing_trainer: tuple[Trainer, TrainingConfig],
+    checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths],
 ) -> None:
     """CheckpointManager.load must raise on mismatched generator architecture params."""
-    trainer, config = checkpointing_trainer
+    trainer, config, run_paths = checkpointing_trainer
     trainer.train(seed=42)
 
     checkpoint_path = next((config.run_root / "checkpoints").glob("*.pth"))
     trainer_mismatch = _make_resume_trainer(
-        config, UNetGenerator(base_channels=32), PatchGANDiscriminator()
+        config, run_paths, UNetGenerator(base_channels=32), PatchGANDiscriminator()
     )
     with pytest.raises(ValueError, match="base_channels"):
         trainer_mismatch._checkpoint_manager.load(checkpoint_path)
@@ -460,7 +490,7 @@ def test_load_checkpoint_raises_on_architecture_mismatch(
 
 def test_short_run_writes_final_checkpoint(tmp_path: Path) -> None:
     """epochs=1, checkpoint_rate=10: a final ep000.pth must be written."""
-    trainer, config = _make_trainer(tmp_path, checkpoint_rate=10)
+    trainer, config, _ = _make_trainer(tmp_path, checkpoint_rate=10)
     trainer.train(seed=42)
 
     checkpoints = sorted((config.run_root / "checkpoints").glob("ep*.pth"))
@@ -470,7 +500,7 @@ def test_short_run_writes_final_checkpoint(tmp_path: Path) -> None:
 
 def test_no_duplicate_final_checkpoint_when_already_checkpointed(tmp_path: Path) -> None:
     """epochs=1, checkpoint_rate=1: exactly one checkpoint, no duplicate."""
-    trainer, config = _make_trainer(tmp_path, checkpoint_rate=1)
+    trainer, config, _ = _make_trainer(tmp_path, checkpoint_rate=1)
     trainer.train(seed=42)
 
     checkpoints = sorted((config.run_root / "checkpoints").glob("ep*.pth"))
@@ -484,11 +514,11 @@ def test_no_duplicate_final_checkpoint_when_already_checkpointed(tmp_path: Path)
 
 
 def test_load_checkpoint_raises_on_missing_architecture(
-    checkpointing_trainer: tuple[Trainer, TrainingConfig],
+    checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths],
     tmp_path: Path,
 ) -> None:
     """CheckpointManager.load must raise for checkpoints without architecture metadata."""
-    trainer, config = checkpointing_trainer
+    trainer, config, run_paths = checkpointing_trainer
     trainer.train(seed=42)
 
     checkpoint_path = next((config.run_root / "checkpoints").glob("*.pth"))
@@ -497,6 +527,6 @@ def test_load_checkpoint_raises_on_missing_architecture(
     legacy_path = tmp_path / "no_arch.pth"
     torch.save(ck, legacy_path)
 
-    trainer_2 = _make_resume_trainer(config, UNetGenerator(), PatchGANDiscriminator())
+    trainer_2 = _make_resume_trainer(config, run_paths, UNetGenerator(), PatchGANDiscriminator())
     with pytest.raises(ValueError, match="architecture metadata"):
         trainer_2._checkpoint_manager.load(legacy_path)
