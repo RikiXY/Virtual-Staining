@@ -1,18 +1,12 @@
 import argparse
 from pathlib import Path
-from typing import cast
 
 import torch
-from torch.amp import autocast
-from torchvision import transforms
-from torchvision.utils import save_image
 
-from virtual_staining.common.dimensions import to_torchvision_hw
+from virtual_staining.config.project import ProjectConfig
 from virtual_staining.config.run import RunConfig
-from virtual_staining.data.dataset import PairedHistologyDataset
+from virtual_staining.inference.runner import run_inference
 from virtual_staining.models.config import ModelConfig
-from virtual_staining.models.factory import build_generator
-from virtual_staining.training.checkpoints import _check_generator_arch
 from virtual_staining.training.config import InferenceConfig
 from virtual_staining.training.runner import run_training
 
@@ -82,13 +76,6 @@ def build_parser():
     return parser
 
 
-def is_amp_enabled(device):
-    # Mixed precision with `autocast` and `GradScaler` is mainly useful
-    # on CUDA GPUs. On CPU we leave everything disabled to avoid unnecessary
-    # complexity and keep behaviour as straightforward as possible.
-    return isinstance(device, torch.device) and device.type == "cuda"
-
-
 # --------------------- Main ---------------------
 def main(argv=None) -> None:
     """Backward-compatible CLI entry point for src/pix2pix.py."""
@@ -121,80 +108,32 @@ def main(argv=None) -> None:
 
 def test_inference(checkpoint_path, test_folder, output_folder, image_size=(256, 256), device=None):
     """
-    Runs inference on the test set and saves the generated images.
+    Backward-compatible shim. Delegates to virtual_staining.inference.runner.
     """
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    del device
 
-    Path(output_folder).mkdir(parents=True, exist_ok=True)
-
-    model_config = ModelConfig()
-    G = build_generator(model_config.generator).to(device)
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-
-    checkpoint_image_size = checkpoint.get("image_size")
-    if checkpoint_image_size is not None:
-        checkpoint_image_size = tuple(checkpoint_image_size)
-        requested_image_size = tuple(image_size)
-
-        if checkpoint_image_size != requested_image_size:
-            raise ValueError(
-                "Image size mismatch between checkpoint and inference. "
-                f"Checkpoint was trained with image_size={checkpoint_image_size}, "
-                f"but inference is using image_size={requested_image_size}. "
-                "Set image_size in the run config or use a matching "
-                "checkpoint."
-            )
-
-    checkpoint_arch = checkpoint.get("architecture")
-    if checkpoint_arch is None:
-        raise ValueError(
-            "Checkpoint has no architecture metadata. "
-            "Only checkpoints saved with the current version are supported."
-        )
-    _check_generator_arch(checkpoint_arch, G)
-
-    G.load_state_dict(checkpoint["generator_state_dict"])
-    G.eval()
-
-    # Preprocessing must stay consistent with training,
-    # otherwise the model would receive inputs with a different distribution.
-    transform = transforms.Compose(
-        [
-            transforms.Resize(to_torchvision_hw(image_size)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5] * 3, [0.5] * 3),
-        ]
+    output_path = Path(output_folder)
+    project = ProjectConfig(
+        dataset_root=Path(test_folder).parent,
+        results_path=output_path.parent,
+        run_name=output_path.name,
+        image_size=tuple(image_size),
     )
-
-    dataset = PairedHistologyDataset(test_folder, transform=transform)
-
-    if not dataset.pairs:
-        print(f"No test source files found in: {test_folder}")
-        return
-
-    amp_enabled = is_amp_enabled(device)
-
-    with torch.no_grad():
-        for idx in range(len(dataset)):
-            source_tensor, _ = dataset[idx]
-            source_tensor = cast(torch.Tensor, source_tensor)
-            source_path = dataset.pairs[idx][0]
-            prefix = source_path.stem[: -len("_source")]
-            out_filename = f"{prefix}_target_generated{source_path.suffix.lower()}"
-
-            img_tensor = source_tensor.unsqueeze(0).to(device)
-
-            with autocast(device_type=device.type, enabled=amp_enabled):
-                fake_target = G(img_tensor)
-
-            # Bring the output back to the range suitable for saving.
-            fake_target = (fake_target * 0.5) + 0.5
-            fake_target = fake_target.clamp(0, 1)
-
-            out_path = Path(output_folder) / out_filename
-            save_image(fake_target, out_path)
-
+    inference = InferenceConfig(
+        checkpoint_path=Path(checkpoint_path),
+        test_dir=Path(test_folder),
+        output_dir=output_path,
+        project=project,
+    )
+    config = RunConfig(
+        project=project,
+        model=ModelConfig(),
+        training=None,
+        inference=inference,
+        preprocessing=None,
+        evaluation=None,
+    )
+    run_inference(config, Path(checkpoint_path))
     print(f"Test completed. Images saved in {output_folder}")
 
 
