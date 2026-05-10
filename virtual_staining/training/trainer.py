@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import datetime
 import json
-import os
+import logging
 import time
 from pathlib import Path
 
@@ -16,8 +16,9 @@ from torchvision.utils import save_image
 
 from virtual_staining.training.config import TrainingConfig
 from virtual_staining.training.results import EpochMetrics
-from virtual_staining.utils.cli import print_info, print_section, style
 from virtual_staining.utils.env import collect_environment
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Architecture metadata helpers
@@ -77,21 +78,6 @@ def _is_amp_enabled(device: torch.device) -> bool:
     return isinstance(device, torch.device) and device.type == "cuda"
 
 
-def _log_message(
-    message: str,
-    log_file: Path,
-    show_time: bool = True,
-    use_stdout: bool = True,
-) -> None:
-    if show_time:
-        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        message = f"[{now_str}] {message}"
-    with open(log_file, "a+") as f:
-        f.write(message + "\n")
-    if use_stdout:
-        print(message)
-
-
 def _save_images(
     path: Path,
     source_tensor: torch.Tensor,
@@ -129,13 +115,13 @@ def _save_run_config(run_config: dict, run_root: Path) -> Path:
     return config_path
 
 
-def _log_run_header(log_file: Path, run_config: dict) -> None:
-    _log_message("=" * 80, log_file, show_time=False, use_stdout=False)
-    _log_message("RUN CONFIGURATION", log_file, show_time=False, use_stdout=False)
-    _log_message("=" * 80, log_file, show_time=False, use_stdout=False)
+def _log_run_header(run_config: dict) -> None:
+    logger.info("=" * 80)
+    logger.info("RUN CONFIGURATION")
+    logger.info("=" * 80)
     for key, value in run_config.items():
-        _log_message(f"{key}: {value}", log_file, show_time=False, use_stdout=False)
-    _log_message("=" * 80, log_file, show_time=False, use_stdout=False)
+        logger.info("%s: %s", key, value)
+    logger.info("=" * 80)
 
 
 def _format_duration(seconds: float | None) -> str:
@@ -155,14 +141,7 @@ def _format_duration(seconds: float | None) -> str:
 
 
 def _color_progress(progress: float) -> str:
-    text = f"{progress:.2%}"
-    if progress < 0.33:
-        return style(text, "yellow")
-    if progress < 0.66:
-        return style(text, "cyan")
-    if progress < 0.90:
-        return style(text, "blue")
-    return style(text, "green")
+    return f"{progress:.2%}"
 
 
 def _render_progress_bar(progress: float, width: int = 40) -> str:
@@ -174,20 +153,15 @@ def _render_progress_bar(progress: float, width: int = 40) -> str:
         filled = width
     empty = width - filled
     bar = "█" * filled + "-" * empty
-    return f"[{style(bar, 'green')}]"
+    return f"[{bar}]"
 
 
 def _update_console_progress(message: str) -> None:
-    try:
-        terminal_width = os.get_terminal_size().columns
-    except OSError:
-        terminal_width = 140
-    clean_message = message[: terminal_width - 1]
-    print("\r" + clean_message.ljust(terminal_width - 1), end="", flush=True)
+    logger.debug(message)
 
 
 def _finish_console_progress() -> None:
-    print()
+    logger.debug("Progress finished")
 
 
 # ---------------------------------------------------------------------------
@@ -334,148 +308,148 @@ class Trainer:
         if log_file.exists():
             log_file.unlink()
 
-        device_name = (
-            torch.cuda.get_device_name(self.device) if self.device.type == "cuda" else "CPU"
-        )
-        _log_message(f"Seed set to {seed}", log_file, use_stdout=False)
-        _log_message(f"Device: {self.device} ({device_name})", log_file)
-
-        run_config = self._build_run_config(seed, timestamp_str, log_file, env)
-        config_path = _save_run_config(run_config, self.config.run_root)
-        _log_run_header(log_file, run_config)
-        _log_message(f"Run config saved to {config_path}", log_file, use_stdout=False)
-
-        for f in self._output_train_dir.iterdir():
-            if f.is_file():
-                f.unlink()
-
-        start_epoch = 0
-        if self.config.resume is not None:
-            if Path(self.config.resume).exists():
-                start_epoch = self.load_checkpoint(Path(self.config.resume), log_file)
-            else:
-                _log_message(
-                    f"WARNING - Checkpoint not found: {self.config.resume}",
-                    log_file,
-                    use_stdout=False,
-                )
-        else:
-            _log_message("Training started from scratch", log_file, use_stdout=False)
-
-        print_section("Pix2Pix training")
-        print_info("Run root", str(self.config.run_root))
-        print_info("Dataset root", str(self.config.dataset_root))
-        print_info("Device", str(self.device))
-        print_info("Epochs", str(self.config.epochs))
-        print_info("Start epoch", str(start_epoch))
-        print_info("Train samples", str(len(self.train_loader.dataset)))  # type: ignore[arg-type]
-        print_info("Validation samples", str(len(self.val_loader.dataset)))  # type: ignore[arg-type]
-        print_info("Train batches/epoch", str(len(self.train_loader)))
-        print_info("Validation batches", str(len(self.val_loader)))
-        print_info("Detailed log", str(log_file))
-        print()
-        print(style("Training progress:", "bold", "cyan"))
-
-        progress_tracker = _ProgressTracker(
-            total_epochs=self.config.epochs,
-            total_batches=len(self.train_loader),
-            start_epoch=start_epoch,
-            warmup_batches=max(10, self.config.log_rate),
-        )
-        progress_tracker.start()
-
-        _log_message("Training started", log_file, use_stdout=False)
-        _log_message(
-            f"Hyperparameters | l1_weight={self.config.l1_weight} | "
-            f"lr_g={self.config.lr_g} | lr_d={self.config.lr_d} | "
-            f"beta1={self.config.beta1} | beta2={self.config.beta2}",
-            log_file,
-            use_stdout=False,
-        )
-
-        training_status = {
-            "last_checkpoint": (Path(self.config.resume).name if self.config.resume else "none ")
-        }
-
-        metrics_path = self.config.run_root / "metrics.csv"
-        with open(metrics_path, "w", newline="", encoding="utf-8") as metrics_file:
-            metrics_writer = csv.DictWriter(
-                metrics_file,
-                fieldnames=[
-                    "epoch",
-                    "loss_G_train",
-                    "loss_D_train",
-                    "loss_G_val",
-                    "loss_D_val",
-                ],
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        old_level = logger.level
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(file_handler)
+        try:
+            device_name = (
+                torch.cuda.get_device_name(self.device) if self.device.type == "cuda" else "CPU"
             )
-            metrics_writer.writeheader()
+            logger.debug("Seed set to %s", seed)
+            logger.info("Device: %s (%s)", self.device, device_name)
 
-            for epoch in range(start_epoch, self.config.epochs):
-                _log_message(f"Starting epoch {epoch}", log_file, use_stdout=False)
+            run_config = self._build_run_config(seed, timestamp_str, log_file, env)
+            config_path = _save_run_config(run_config, self.config.run_root)
+            _log_run_header(run_config)
+            logger.debug("Run config saved to %s", config_path)
 
-                epoch_metrics = self._train_epoch(
-                    epoch, log_file, progress_tracker, training_status
+            for f in self._output_train_dir.iterdir():
+                if f.is_file():
+                    f.unlink()
+
+            start_epoch = 0
+            if self.config.resume is not None:
+                if Path(self.config.resume).exists():
+                    start_epoch = self.load_checkpoint(Path(self.config.resume), log_file)
+                else:
+                    logger.warning("Checkpoint not found: %s", self.config.resume)
+            else:
+                logger.debug("Training started from scratch")
+
+            logger.info("=== Pix2Pix training ===")
+            logger.info("Run root: %s", self.config.run_root)
+            logger.info("Dataset root: %s", self.config.dataset_root)
+            logger.info("Device: %s", self.device)
+            logger.info("Epochs: %s", self.config.epochs)
+            logger.info("Start epoch: %s", start_epoch)
+            logger.info("Train samples: %s", len(self.train_loader.dataset))  # type: ignore[arg-type]
+            logger.info("Validation samples: %s", len(self.val_loader.dataset))  # type: ignore[arg-type]
+            logger.info("Train batches/epoch: %s", len(self.train_loader))
+            logger.info("Validation batches: %s", len(self.val_loader))
+            logger.info("Detailed log: %s", log_file)
+            logger.info("Training started")
+
+            progress_tracker = _ProgressTracker(
+                total_epochs=self.config.epochs,
+                total_batches=len(self.train_loader),
+                start_epoch=start_epoch,
+                warmup_batches=max(10, self.config.log_rate),
+            )
+            progress_tracker.start()
+
+            logger.info(
+                "Hyperparameters | l1_weight=%s | lr_g=%s | lr_d=%s | beta1=%s | beta2=%s",
+                self.config.l1_weight,
+                self.config.lr_g,
+                self.config.lr_d,
+                self.config.beta1,
+                self.config.beta2,
+            )
+
+            training_status = {
+                "last_checkpoint": (
+                    Path(self.config.resume).name if self.config.resume else "none "
                 )
+            }
 
-                _log_message(f"Finished epoch {epoch}", log_file, use_stdout=False)
+            metrics_path = self.config.run_root / "metrics.csv"
+            with open(metrics_path, "w", newline="", encoding="utf-8") as metrics_file:
+                metrics_writer = csv.DictWriter(
+                    metrics_file,
+                    fieldnames=[
+                        "epoch",
+                        "loss_G_train",
+                        "loss_D_train",
+                        "loss_G_val",
+                        "loss_D_val",
+                    ],
+                )
+                metrics_writer.writeheader()
 
-                if (epoch + 1) % self.config.checkpoint_rate == 0:
-                    checkpoint_path = self._checkpoints_dir / f"ep{epoch:03d}.pth"
-                    self.save_checkpoint(checkpoint_path, epoch)
-                    training_status["last_checkpoint"] = checkpoint_path.name
-                    _log_message(
-                        f"Checkpoint saved to {checkpoint_path} at epoch {epoch}",
-                        log_file,
-                        use_stdout=False,
+                for epoch in range(start_epoch, self.config.epochs):
+                    logger.debug("Starting epoch %s", epoch)
+
+                    epoch_metrics = self._train_epoch(
+                        epoch, log_file, progress_tracker, training_status
                     )
-                    if epoch == self.config.epochs - 1:
-                        _update_console_progress(
-                            f"{_render_progress_bar(1.0)} "
-                            f"global {_color_progress(1.0)} | "
-                            f"ep {epoch + 1}/{self.config.epochs} (100%) | "
-                            f"b {len(self.train_loader)}/{len(self.train_loader)} | "
-                            f"loss_G {epoch_metrics.loss_G:.4f} | "
-                            f"loss_D {epoch_metrics.loss_D:.4f} | "
-                            f"elapsed {_format_duration(time.time() - start_time)} | "
-                            f"ETA 0s | "
-                            f"ckpt {training_status['last_checkpoint']}"
-                        )
 
-                val_metrics = None
-                if (epoch + 1) % self.config.validate_rate == 0:
-                    val_metrics = self._validate(epoch, log_file)
+                    logger.debug("Finished epoch %s", epoch)
 
-                metrics_writer.writerow(
-                    {
-                        "epoch": epoch,
-                        "loss_G_train": f"{epoch_metrics.loss_G:.6f}",
-                        "loss_D_train": f"{epoch_metrics.loss_D:.6f}",
-                        "loss_G_val": f"{val_metrics.loss_G:.6f}" if val_metrics else "",
-                        "loss_D_val": f"{val_metrics.loss_D:.6f}" if val_metrics else "",
-                    }
-                )
-                metrics_file.flush()
+                    if (epoch + 1) % self.config.checkpoint_rate == 0:
+                        checkpoint_path = self._checkpoints_dir / f"ep{epoch:03d}.pth"
+                        self.save_checkpoint(checkpoint_path, epoch)
+                        training_status["last_checkpoint"] = checkpoint_path.name
+                        logger.info("Checkpoint saved to %s at epoch %s", checkpoint_path, epoch)
+                        if epoch == self.config.epochs - 1:
+                            _update_console_progress(
+                                f"{_render_progress_bar(1.0)} "
+                                f"global {_color_progress(1.0)} | "
+                                f"ep {epoch + 1}/{self.config.epochs} (100%) | "
+                                f"b {len(self.train_loader)}/{len(self.train_loader)} | "
+                                f"loss_G {epoch_metrics.loss_G:.4f} | "
+                                f"loss_D {epoch_metrics.loss_D:.4f} | "
+                                f"elapsed {_format_duration(time.time() - start_time)} | "
+                                f"ETA 0s | "
+                                f"ckpt {training_status['last_checkpoint']}"
+                            )
 
-        if start_epoch < self.config.epochs:
-            final_epoch = self.config.epochs - 1
-            if (final_epoch + 1) % self.config.checkpoint_rate != 0:
-                checkpoint_path = self._checkpoints_dir / f"ep{final_epoch:03d}.pth"
-                self.save_checkpoint(checkpoint_path, final_epoch)
-                training_status["last_checkpoint"] = checkpoint_path.name
-                _log_message(
-                    f"Final checkpoint saved to {checkpoint_path} (epoch {final_epoch})",
-                    log_file,
-                    use_stdout=False,
-                )
+                    val_metrics = None
+                    if (epoch + 1) % self.config.validate_rate == 0:
+                        val_metrics = self._validate(epoch, log_file)
 
-        _finish_console_progress()
-        total_seconds = time.time() - start_time
-        _log_message(
-            f"Execution completed. Total time = {total_seconds:.2f} seconds",
-            log_file,
-            use_stdout=False,
-        )
+                    metrics_writer.writerow(
+                        {
+                            "epoch": epoch,
+                            "loss_G_train": f"{epoch_metrics.loss_G:.6f}",
+                            "loss_D_train": f"{epoch_metrics.loss_D:.6f}",
+                            "loss_G_val": f"{val_metrics.loss_G:.6f}" if val_metrics else "",
+                            "loss_D_val": f"{val_metrics.loss_D:.6f}" if val_metrics else "",
+                        }
+                    )
+                    metrics_file.flush()
+
+            if start_epoch < self.config.epochs:
+                final_epoch = self.config.epochs - 1
+                if (final_epoch + 1) % self.config.checkpoint_rate != 0:
+                    checkpoint_path = self._checkpoints_dir / f"ep{final_epoch:03d}.pth"
+                    self.save_checkpoint(checkpoint_path, final_epoch)
+                    training_status["last_checkpoint"] = checkpoint_path.name
+                    logger.info(
+                        "Final checkpoint saved to %s (epoch %s)",
+                        checkpoint_path,
+                        final_epoch,
+                    )
+
+            _finish_console_progress()
+            total_seconds = time.time() - start_time
+            logger.info("Execution completed. Total time = %.2f seconds", total_seconds)
+        finally:
+            logger.removeHandler(file_handler)
+            file_handler.close()
+            logger.setLevel(old_level)
 
     def save_checkpoint(self, checkpoint_path: Path, epoch: int) -> None:
         checkpoint = {
@@ -530,10 +504,10 @@ class Trainer:
         # Resume from the next epoch to avoid repeating the completed one.
         start_epoch: int = checkpoint["epoch"] + 1
         if log_file is not None:
-            _log_message(
-                f"Checkpoint loaded from {checkpoint_path}, resuming at epoch {start_epoch}",
-                log_file,
-                use_stdout=False,
+            logger.info(
+                "Checkpoint loaded from %s, resuming at epoch %s",
+                checkpoint_path,
+                start_epoch,
             )
         return start_epoch
 
@@ -618,13 +592,17 @@ class Trainer:
                     if end_time is None
                     else datetime.datetime.fromtimestamp(end_time).strftime("%Y-%m-%d %H:%M:%S")
                 )
-                _log_message(
-                    f"[ep {epoch} | b {i}] loss_G: {loss_G.item():.4f} "
-                    f"loss_D: {loss_D.item():.4f} - "
-                    f"{progress:.2%} | elapsed {elapsed_str} | "
-                    f"ETA {eta_str} | end {end_time_str}",
-                    log_file,
-                    use_stdout=False,
+                logger.debug(
+                    "[ep %s | b %s] loss_G: %.4f loss_D: %.4f - "
+                    "%.2f%% | elapsed %s | ETA %s | end %s",
+                    epoch,
+                    i,
+                    loss_G.item(),
+                    loss_D.item(),
+                    progress * 100,
+                    elapsed_str,
+                    eta_str,
+                    end_time_str,
                 )
 
         if num_batches == 0:
@@ -667,10 +645,11 @@ class Trainer:
         avg_loss_G = total_loss_G / count if count > 0 else 0.0
         avg_loss_D = total_loss_D / count if count > 0 else 0.0
 
-        _log_message(
-            f"[Epoch {epoch}] Validation: loss_G={avg_loss_G:.4f} loss_D={avg_loss_D:.4f}",
-            log_file,
-            use_stdout=False,
+        logger.info(
+            "[Epoch %s] Validation: loss_G=%.4f loss_D=%.4f",
+            epoch,
+            avg_loss_G,
+            avg_loss_D,
         )
 
         return EpochMetrics(loss_G=avg_loss_G, loss_D=avg_loss_D)
