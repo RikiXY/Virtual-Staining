@@ -1,0 +1,59 @@
+from __future__ import annotations
+
+import pytest
+
+from virtual_staining.models.config import DiscriminatorConfig, GeneratorConfig, ModelConfig
+from virtual_staining.models.discriminator import PatchGANDiscriminator
+from virtual_staining.models.factory import build_discriminator, build_generator
+from virtual_staining.models.generator import UNetGenerator
+
+
+def test_model_config_defaults_match_previous_hardcoded_models() -> None:
+    config = ModelConfig()
+
+    generator = build_generator(config.generator)
+    discriminator = build_discriminator(config.discriminator)
+
+    assert isinstance(generator, UNetGenerator)
+    assert generator.in_channels == 3
+    assert generator.out_channels == 3
+    assert generator.base_channels == 64
+    assert generator.bilinear is False
+
+    assert isinstance(discriminator, PatchGANDiscriminator)
+    assert discriminator.in_channels == 6
+    assert discriminator.ndf == 64
+    assert discriminator.use_sigmoid is False
+
+
+def test_build_generator_uses_configured_parameters() -> None:
+    generator = build_generator(
+        GeneratorConfig(in_channels=1, out_channels=2, base_channels=32, bilinear=True)
+    )
+
+    assert isinstance(generator, UNetGenerator)
+    assert generator.in_channels == 1
+    assert generator.out_channels == 2
+    assert generator.base_channels == 32
+    assert generator.bilinear is True
+
+
+def test_build_discriminator_uses_configured_parameters() -> None:
+    discriminator = build_discriminator(
+        DiscriminatorConfig(in_channels=4, ndf=32, use_sigmoid=True)
+    )
+
+    assert isinstance(discriminator, PatchGANDiscriminator)
+    assert discriminator.in_channels == 4
+    assert discriminator.ndf == 32
+    assert discriminator.use_sigmoid is True
+
+
+def test_build_generator_raises_on_unknown_name() -> None:
+    with pytest.raises(ValueError, match="Unknown generator name"):
+        build_generator(GeneratorConfig(name="unknown"))  # type: ignore[arg-type]
+
+
+def test_build_discriminator_raises_on_unknown_name() -> None:
+    with pytest.raises(ValueError, match="Unknown discriminator name"):
+        build_discriminator(DiscriminatorConfig(name="unknown"))  # type: ignore[arg-type]
