@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from virtual_staining.common.dimensions import to_torchvision_hw
 from virtual_staining.data.config import PreprocessingConfig
-from virtual_staining.image_size import to_torchvision_hw
 
 
 def _make_namespace(**overrides: object) -> argparse.Namespace:

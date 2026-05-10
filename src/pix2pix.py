@@ -10,8 +10,8 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.utils import save_image
 
+from virtual_staining.common.dimensions import to_torchvision_hw
 from virtual_staining.data.dataset import PairedHistologyDataset
-from virtual_staining.image_size import to_torchvision_hw
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.config import InferenceConfig, TrainingConfig
