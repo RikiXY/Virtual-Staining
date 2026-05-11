@@ -4,18 +4,25 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from virtual_staining.applications.compare import compare_paired, compare_unpaired
+from virtual_staining.applications.compare import (
+    CompareRequest,
+    compare,
+)
 from virtual_staining.evaluation.statistics import (
     PairedSummary,
     UnpairedComparison,
     UnpairedGroupStats,
+    resolve_comparison_inputs,
+    resolve_comparison_output_dir,
     resolve_metric_direction,
+    resolve_plot_range,
+    resolve_thresholds,
 )
 from virtual_staining.utils.console import print_info, print_section, style
 from virtual_staining.utils.metrics import color_metric_value
 
 
-def color_distance(value: float, good: float, warn: float) -> str:
+def _color_distance(value: float, good: float, warn: float) -> str:
     if value <= good:
         return style(f"{value:.6f}", "green")
     if value <= warn:
@@ -25,7 +32,7 @@ def color_distance(value: float, good: float, warn: float) -> str:
     return style(f"{value:.6f}", "red")
 
 
-def color_pvalue(value: float) -> str:
+def _color_pvalue(value: float) -> str:
     if value < 0.001:
         return style(f"{value:.6g}", "green")
     if value < 0.01:
@@ -35,7 +42,7 @@ def color_pvalue(value: float) -> str:
     return style(f"{value:.6g}", "red")
 
 
-def color_share(value: float) -> str:
+def _color_share(value: float) -> str:
     if value >= 0.70:
         return style(f"{value:.6f}", "green")
     if value >= 0.40:
@@ -45,7 +52,7 @@ def color_share(value: float) -> str:
     return style(f"{value:.6f}", "red")
 
 
-def color_signed_delta(value: float) -> str:
+def _color_signed_delta(value: float) -> str:
     if value > 0:
         return style(f"{value:.6f}", "green")
     if value < 0:
@@ -53,33 +60,33 @@ def color_signed_delta(value: float) -> str:
     return style(f"{value:.6f}", "yellow")
 
 
-def print_unpaired_group_summary(group: UnpairedGroupStats, metric_name: str) -> None:
+def _print_unpaired_group_summary(group: UnpairedGroupStats, metric_name: str) -> None:
     print_section(f"Group {group.label}")
     print_info("Samples", str(group.n))
     print_info("Mean", color_metric_value(metric_name, group.mean))
     print_info("Median", color_metric_value(metric_name, group.median))
-    print_info("IQR", color_distance(group.iqr, 0.05, 0.10))
+    print_info("IQR", _color_distance(group.iqr, 0.05, 0.10))
     for key, value in group.threshold_shares.items():
-        print_info(key, color_share(value))
+        print_info(key, _color_share(value))
 
 
-def print_unpaired_cli_summary(
+def _print_unpaired_cli_summary(
     group_a: UnpairedGroupStats,
     group_b: UnpairedGroupStats,
     comparison: UnpairedComparison,
-    args: argparse.Namespace,
+    request: CompareRequest,
     output_dir: Path,
 ) -> None:
     print_section("Input")
-    print_info("Metric", args.column)
+    print_info("Metric", request.column)
     print_info(
         "Direction",
-        "higher is better" if args.resolved_higher_is_better else "lower is better",
+        "higher is better" if request.higher_is_better else "lower is better",
     )
     print_info("Output dir", str(output_dir))
 
-    print_unpaired_group_summary(group_a, args.column)
-    print_unpaired_group_summary(group_b, args.column)
+    _print_unpaired_group_summary(group_a, request.column)
+    _print_unpaired_group_summary(group_b, request.column)
 
     print_section("Distribution comparison")
     comparison_color = "green" if comparison.better_label != "tie" else "yellow"
@@ -103,12 +110,12 @@ def print_unpaired_cli_summary(
     )
     print_info(
         "Wasserstein between groups",
-        color_distance(comparison.wasserstein_between_groups, 0.03, 0.08),
+        _color_distance(comparison.wasserstein_between_groups, 0.03, 0.08),
     )
-    print_info("KS statistic", color_distance(comparison.ks_statistic, 0.08, 0.18))
-    print_info("KS p-value", color_pvalue(comparison.ks_pvalue))
+    print_info("KS statistic", _color_distance(comparison.ks_statistic, 0.08, 0.18))
+    print_info("KS p-value", _color_pvalue(comparison.ks_pvalue))
     print_info("Mann-Whitney U", f"{comparison.mannwhitney_u:.6f}")
-    print_info("Mann-Whitney p-value", color_pvalue(comparison.mannwhitney_pvalue))
+    print_info("Mann-Whitney p-value", _color_pvalue(comparison.mannwhitney_pvalue))
 
     print_section("Conclusion")
     print(
@@ -121,27 +128,27 @@ def print_unpaired_cli_summary(
     print(style(f"Saved outputs to: {output_dir}", "bold", "magenta"))
 
 
-def print_paired_cli_summary(
-    summary: PairedSummary, args: argparse.Namespace, output_dir: Path
+def _print_paired_cli_summary(
+    summary: PairedSummary, request: CompareRequest, output_dir: Path
 ) -> None:
     print_section("Input")
-    print_info("Metric", args.column)
+    print_info("Metric", request.column)
     print_info(
         "Direction",
-        "higher is better" if args.resolved_higher_is_better else "lower is better",
+        "higher is better" if request.higher_is_better else "lower is better",
     )
     print_info("Output dir", str(output_dir))
 
     print_section("Paired comparison")
     print_info("Paired samples", str(summary.n_pairs))
     print_info("Tolerance", f"{summary.tolerance:.6f}")
-    print_info("Mean signed delta", color_signed_delta(summary.mean_signed_delta))
-    print_info("Median signed delta", color_signed_delta(summary.median_signed_delta))
-    print_info(f"Share {summary.label_b} better", color_share(summary.share_b_better))
-    print_info(f"Share {summary.label_a} better", color_share(summary.share_a_better))
-    print_info("Share equal", color_share(summary.share_equal))
+    print_info("Mean signed delta", _color_signed_delta(summary.mean_signed_delta))
+    print_info("Median signed delta", _color_signed_delta(summary.median_signed_delta))
+    print_info(f"Share {summary.label_b} better", _color_share(summary.share_b_better))
+    print_info(f"Share {summary.label_a} better", _color_share(summary.share_a_better))
+    print_info("Share equal", _color_share(summary.share_equal))
     print_info("Wilcoxon statistic", f"{summary.wilcoxon_statistic:.6f}")
-    print_info("Wilcoxon p-value", color_pvalue(summary.wilcoxon_pvalue))
+    print_info("Wilcoxon p-value", _color_pvalue(summary.wilcoxon_pvalue))
 
     conclusion_color = "green" if summary.better_label != "tie" else "yellow"
     print_section("Conclusion")
@@ -155,7 +162,7 @@ def print_paired_cli_summary(
     print(style(f"Saved outputs to: {output_dir}", "bold", "magenta"))
 
 
-def add_direction_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_direction_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--higher-is-better",
         action="store_true",
@@ -168,7 +175,7 @@ def add_direction_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def add_common_comparison_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_common_comparison_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--run-a",
         type=Path,
@@ -226,10 +233,10 @@ def add_common_comparison_arguments(parser: argparse.ArgumentParser) -> None:
             "results/comparisons/RUN_A_vs_RUN_B/MODE_METRIC/."
         ),
     )
-    add_direction_arguments(parser)
+    _add_direction_arguments(parser)
 
 
-def add_unpaired_subparser(subparsers: Any) -> None:
+def _add_unpaired_subparser(subparsers: Any) -> None:
     parser = subparsers.add_parser(
         "unpaired",
         help="Compare two independent metric distributions.",
@@ -238,7 +245,7 @@ def add_unpaired_subparser(subparsers: Any) -> None:
             "Useful when the two runs do not share exactly the same samples."
         ),
     )
-    add_common_comparison_arguments(parser)
+    _add_common_comparison_arguments(parser)
     parser.add_argument(
         "--min-value",
         type=float,
@@ -276,7 +283,7 @@ def add_unpaired_subparser(subparsers: Any) -> None:
     parser.set_defaults(mode="unpaired")
 
 
-def add_paired_subparser(subparsers: Any) -> None:
+def _add_paired_subparser(subparsers: Any) -> None:
     parser = subparsers.add_parser(
         "paired",
         help="Compare two paired metric distributions on the same samples.",
@@ -285,7 +292,7 @@ def add_paired_subparser(subparsers: Any) -> None:
             "Useful when the two runs share the same test samples."
         ),
     )
-    add_common_comparison_arguments(parser)
+    _add_common_comparison_arguments(parser)
     parser.add_argument(
         "--sample-id-column",
         default="sample_id",
@@ -324,7 +331,7 @@ def add_paired_subparser(subparsers: Any) -> None:
     parser.set_defaults(mode="paired")
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vs-compare",
         description=(
@@ -355,13 +362,36 @@ def build_parser() -> argparse.ArgumentParser:
         add_help=True,
     )
     subparsers = parser.add_subparsers(dest="mode")
-    add_unpaired_subparser(subparsers)
-    add_paired_subparser(subparsers)
+    _add_unpaired_subparser(subparsers)
+    _add_paired_subparser(subparsers)
     return parser
 
 
+def _build_request(args: argparse.Namespace) -> CompareRequest:
+    resolve_comparison_inputs(args)
+    output_dir = resolve_comparison_output_dir(args)
+    min_value, max_value = resolve_plot_range(args)
+    thresholds = tuple(resolve_thresholds(args))
+    return CompareRequest(
+        mode=args.mode,
+        csv_a=args.resolved_csv_a,
+        csv_b=args.resolved_csv_b,
+        label_a=args.resolved_label_a,
+        label_b=args.resolved_label_b,
+        column=args.column,
+        output_dir=output_dir,
+        higher_is_better=args.resolved_higher_is_better,
+        bins=args.bins,
+        min_value=min_value,
+        max_value=max_value,
+        thresholds=thresholds,
+        tolerance=getattr(args, "tolerance", 0.0),
+        sample_id_column=getattr(args, "sample_id_column", "sample_id"),
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
-    parser = build_parser()
+    parser = _build_parser()
     args = parser.parse_args(argv)
 
     if args.mode is None:
@@ -373,11 +403,22 @@ def main(argv: list[str] | None = None) -> None:
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
-    if args.mode == "unpaired":
-        group_a, group_b, comparison, output_dir = compare_unpaired(args)
-        print_unpaired_cli_summary(group_a, group_b, comparison, args, output_dir)
-    elif args.mode == "paired":
-        summary, output_dir = compare_paired(args)
-        print_paired_cli_summary(summary, args, output_dir)
+    request = _build_request(args)
+    result = compare(request)
+
+    if result.mode == "unpaired":
+        assert result.group_a is not None
+        assert result.group_b is not None
+        assert result.unpaired_comparison is not None
+        _print_unpaired_cli_summary(
+            result.group_a,
+            result.group_b,
+            result.unpaired_comparison,
+            request,
+            result.output_dir,
+        )
+    elif result.mode == "paired":
+        assert result.paired_summary is not None
+        _print_paired_cli_summary(result.paired_summary, request, result.output_dir)
     else:
-        raise SystemExit(f"Unsupported comparison mode: {args.mode}")
+        raise SystemExit(f"Unsupported comparison mode: {result.mode}")

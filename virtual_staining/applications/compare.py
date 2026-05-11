@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import argparse
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 
@@ -28,132 +29,185 @@ from virtual_staining.evaluation.statistics import (
     compute_unpaired_comparison,
     compute_unpaired_group_stats,
     load_metric_values,
-    resolve_comparison_inputs,
-    resolve_comparison_output_dir,
-    resolve_plot_range,
-    resolve_thresholds,
 )
 
 
-def compare_unpaired(
-    args: argparse.Namespace,
-) -> tuple[UnpairedGroupStats, UnpairedGroupStats, UnpairedComparison, Path]:
-    """Run the complete flow for the comparison between unpaired distributions."""
-    resolve_comparison_inputs(args)
-    output_dir = resolve_comparison_output_dir(args)
-    output_dir.mkdir(parents=True, exist_ok=True)
+@dataclass(frozen=True)
+class CompareRequest:
+    mode: Literal["paired", "unpaired"]
+    csv_a: Path
+    csv_b: Path
+    label_a: str
+    label_b: str
+    column: str
+    output_dir: Path
+    higher_is_better: bool
+    bins: int
+    min_value: float
+    max_value: float
+    thresholds: tuple[float, ...]
+    tolerance: float
+    sample_id_column: str
 
-    values_a = load_metric_values(args.resolved_csv_a, args.column)
-    values_b = load_metric_values(args.resolved_csv_b, args.column)
-    thresholds = resolve_thresholds(args)
-    higher_is_better = args.resolved_higher_is_better
+
+@dataclass
+class CompareResult:
+    mode: Literal["paired", "unpaired"]
+    output_dir: Path
+    group_a: UnpairedGroupStats | None = None
+    group_b: UnpairedGroupStats | None = None
+    unpaired_comparison: UnpairedComparison | None = None
+    paired_summary: PairedSummary | None = None
+
+
+def compare(request: CompareRequest) -> CompareResult:
+    """Run the full comparison pipeline for paired or unpaired metric distributions."""
+    request.output_dir.mkdir(parents=True, exist_ok=True)
+    if request.mode == "unpaired":
+        return _compare_unpaired(request)
+    if request.mode == "paired":
+        return _compare_paired(request)
+    raise ValueError(f"Unsupported comparison mode: {request.mode}")
+
+
+def _compare_unpaired(request: CompareRequest) -> CompareResult:
+    values_a = load_metric_values(request.csv_a, request.column)
+    values_b = load_metric_values(request.csv_b, request.column)
+    thresholds = list(request.thresholds)
 
     group_a = compute_unpaired_group_stats(
         values=values_a,
-        label=args.resolved_label_a,
+        label=request.label_a,
         thresholds=thresholds,
-        higher_is_better=higher_is_better,
+        higher_is_better=request.higher_is_better,
     )
     group_b = compute_unpaired_group_stats(
         values=values_b,
-        label=args.resolved_label_b,
+        label=request.label_b,
         thresholds=thresholds,
-        higher_is_better=higher_is_better,
+        higher_is_better=request.higher_is_better,
     )
     comparison = compute_unpaired_comparison(
         a=values_a,
         b=values_b,
         group_a=group_a,
         group_b=group_b,
-        higher_is_better=higher_is_better,
+        higher_is_better=request.higher_is_better,
     )
 
-    save_unpaired_group_statistics(group_a, group_b, output_dir)
-    save_unpaired_comparison_summary(group_a, group_b, comparison, args, output_dir)
-    save_unpaired_summary_json(group_a, group_b, comparison, output_dir)
-    save_unpaired_report_txt(group_a, group_b, comparison, args, output_dir)
+    save_unpaired_group_statistics(group_a, group_b, request.output_dir)
+    save_unpaired_comparison_summary(
+        group_a,
+        group_b,
+        comparison,
+        request.column,
+        request.higher_is_better,
+        request.output_dir,
+    )
+    save_unpaired_summary_json(group_a, group_b, comparison, request.output_dir)
+    save_unpaired_report_txt(
+        group_a,
+        group_b,
+        comparison,
+        request.column,
+        request.higher_is_better,
+        request.output_dir,
+    )
 
-    min_value, max_value = resolve_plot_range(args)
-    edges = np.linspace(min_value, max_value, args.bins + 1)
+    edges = np.linspace(request.min_value, request.max_value, request.bins + 1)
     plot_distribution_histogram(
         values_a,
         values_b,
         edges,
-        args.resolved_label_a,
-        args.resolved_label_b,
-        args.column,
-        output_dir,
+        request.label_a,
+        request.label_b,
+        request.column,
+        request.output_dir,
     )
     plot_distribution_ecdf(
         values_a,
         values_b,
-        args.resolved_label_a,
-        args.resolved_label_b,
-        args.column,
-        output_dir,
+        request.label_a,
+        request.label_b,
+        request.column,
+        request.output_dir,
     )
 
-    return group_a, group_b, comparison, output_dir
+    return CompareResult(
+        mode="unpaired",
+        output_dir=request.output_dir,
+        group_a=group_a,
+        group_b=group_b,
+        unpaired_comparison=comparison,
+    )
 
 
-def compare_paired(args: argparse.Namespace) -> tuple[PairedSummary, Path]:
-    """Run the complete flow for the paired comparison on the same samples."""
-    resolve_comparison_inputs(args)
-    output_dir = resolve_comparison_output_dir(args)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    higher_is_better = args.resolved_higher_is_better
-
+def _compare_paired(request: CompareRequest) -> CompareResult:
     merged = align_paired_frames(
-        csv_a=args.resolved_csv_a,
-        csv_b=args.resolved_csv_b,
-        sample_id_column=args.sample_id_column,
-        metric_column=args.column,
+        csv_a=request.csv_a,
+        csv_b=request.csv_b,
+        sample_id_column=request.sample_id_column,
+        metric_column=request.column,
     )
     summary = compute_paired_summary(
         merged=merged,
-        label_a=args.resolved_label_a,
-        label_b=args.resolved_label_b,
-        tolerance=args.tolerance,
-        higher_is_better=higher_is_better,
+        label_a=request.label_a,
+        label_b=request.label_b,
+        tolerance=request.tolerance,
+        higher_is_better=request.higher_is_better,
     )
 
-    save_paired_comparison_summary(summary, args, output_dir)
-    save_paired_sample_deltas(merged, args, output_dir)
-    save_paired_summary_json(summary, output_dir)
-    save_paired_report_txt(summary, args, output_dir)
+    save_paired_comparison_summary(
+        summary,
+        request.column,
+        request.higher_is_better,
+        request.output_dir,
+    )
+    save_paired_sample_deltas(
+        merged,
+        request.higher_is_better,
+        request.tolerance,
+        request.label_a,
+        request.label_b,
+        request.output_dir,
+    )
+    save_paired_summary_json(summary, request.output_dir)
+    save_paired_report_txt(summary, request.column, request.higher_is_better, request.output_dir)
 
     raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(dtype=float)
-    signed_delta = raw_delta if higher_is_better else -raw_delta
+    signed_delta = raw_delta if request.higher_is_better else -raw_delta
     values_a = merged["value_a"].to_numpy(dtype=float)
     values_b = merged["value_b"].to_numpy(dtype=float)
 
-    min_value, max_value = resolve_plot_range(args)
-    edges = np.linspace(min_value, max_value, args.bins + 1)
-
+    edges = np.linspace(request.min_value, request.max_value, request.bins + 1)
     plot_distribution_histogram(
         values_a,
         values_b,
         edges,
-        args.resolved_label_a,
-        args.resolved_label_b,
-        args.column,
-        output_dir,
+        request.label_a,
+        request.label_b,
+        request.column,
+        request.output_dir,
     )
     plot_distribution_ecdf(
         values_a,
         values_b,
-        args.resolved_label_a,
-        args.resolved_label_b,
-        args.column,
-        output_dir,
+        request.label_a,
+        request.label_b,
+        request.column,
+        request.output_dir,
     )
-    plot_paired_delta_histogram(signed_delta, args.column, output_dir)
+    plot_paired_delta_histogram(signed_delta, request.column, request.output_dir)
     plot_paired_scatter(
         merged,
-        args.resolved_label_a,
-        args.resolved_label_b,
-        args.column,
-        output_dir,
+        request.label_a,
+        request.label_b,
+        request.column,
+        request.output_dir,
     )
 
-    return summary, output_dir
+    return CompareResult(
+        mode="paired",
+        output_dir=request.output_dir,
+        paired_summary=summary,
+    )

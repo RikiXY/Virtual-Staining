@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import argparse
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from virtual_staining.evaluation.panels import (
     METRIC_SELECTION_ORDER,
@@ -18,8 +18,42 @@ from virtual_staining.evaluation.panels import (
 from virtual_staining.evaluation.summaries import read_per_image_metrics_csv, read_summary_csv
 
 
-def infer_run_dir_from_generated_path(generated_path: str | Path) -> Path:
-    """Tries to derive the run directory from a generated path inside results/."""
+@dataclass(frozen=True)
+class ComparePanelsRequest:
+    mode: Literal["single", "from_metrics"]
+    source_image: Path | None = None
+    generated_image: Path | None = None
+    target_image: Path | None = None
+    save_path: Path | None = None
+    with_diagnostics: bool = False
+    run_path: Path | None = None
+
+
+@dataclass
+class SinglePanelResult:
+    saved_path: Path
+    diagnostic_paths: list[Path] = field(default_factory=list)
+
+
+@dataclass
+class FromMetricsResult:
+    run_path: Path
+    available_metrics: list[str]
+    per_metric_representative_rows: dict[str, dict[str, dict[str, str]]]
+    saved_aggregated_paths: list[Path]
+    metrics_dir: Path
+
+
+def compare_panels(request: ComparePanelsRequest) -> SinglePanelResult | FromMetricsResult:
+    """Run a single-pair panel comparison or metric-based representative comparisons."""
+    if request.mode == "single":
+        return _run_single(request)
+    if request.mode == "from_metrics":
+        return _run_from_metrics(request)
+    raise ValueError(f"Unsupported compare_panels mode: {request.mode}")
+
+
+def _infer_run_dir_from_generated_path(generated_path: str | Path) -> Path:
     path = Path(generated_path).resolve()
     base = path.parent if path.is_file() else path
     parts = base.parts
@@ -49,76 +83,58 @@ def infer_run_dir_from_generated_path(generated_path: str | Path) -> Path:
     return run_dir
 
 
-def infer_default_save_path(generated_image: str | Path) -> Path:
-    """Builds the default save path for a single comparison."""
+def _infer_default_save_path(generated_image: str | Path) -> Path:
     generated_path = Path(generated_image)
     sample_id = extract_generated_sample_id(generated_path)
-    run_dir = infer_run_dir_from_generated_path(generated_path)
+    run_dir = _infer_run_dir_from_generated_path(generated_path)
     return run_dir / "comparisons" / f"{sample_id}_comparison.png"
 
 
-def infer_diagnostics_dir(save_path: str | Path) -> Path:
-    """Derives the diagnostics directory from the panel save path."""
-    save_path = Path(save_path)
-    return save_path.parent / "diagnostics"
+def _infer_diagnostics_dir(save_path: str | Path) -> Path:
+    return Path(save_path).parent / "diagnostics"
 
 
-def infer_case_diagnostics_dir(save_path: str | Path, generated_image: str | Path) -> Path:
-    """Derives the diagnostics directory for the individual sample."""
-    diagnostics_dir = infer_diagnostics_dir(save_path)
+def _infer_case_diagnostics_dir(save_path: str | Path, generated_image: str | Path) -> Path:
+    diagnostics_dir = _infer_diagnostics_dir(save_path)
     sample_id = extract_generated_sample_id(generated_image)
     return diagnostics_dir / sample_id
 
 
-@dataclass
-class SinglePanelResult:
-    saved_path: Path
-    diagnostic_paths: list[Path] = field(default_factory=list)
+def _run_single(request: ComparePanelsRequest) -> SinglePanelResult:
+    assert request.source_image is not None
+    assert request.generated_image is not None
+    assert request.target_image is not None
 
-
-@dataclass
-class FromMetricsResult:
-    run_path: Path
-    available_metrics: list[str]
-    per_metric_representative_rows: dict[str, dict[str, dict[str, str]]]
-    saved_aggregated_paths: list[Path]
-    metrics_dir: Path
-
-
-def run_single(args: argparse.Namespace) -> SinglePanelResult:
-    """Runs the complete flow for comparing a single pair."""
-    if args.save_path is not None:
-        save_path = args.save_path
-    else:
-        save_path = infer_default_save_path(args.generated_image)
+    save_path = (
+        request.save_path
+        if request.save_path is not None
+        else _infer_default_save_path(request.generated_image)
+    )
 
     saved_path = save_comparison_panel(
-        source_path=args.source_image,
-        generated_path=args.generated_image,
-        target_path=args.target_image,
+        source_path=request.source_image,
+        generated_path=request.generated_image,
+        target_path=request.target_image,
         save_path=save_path,
     )
 
     diagnostic_paths: list[Path] = []
 
-    if args.with_diagnostics:
-        diagnostics_dir = infer_case_diagnostics_dir(
-            save_path=saved_path,
-            generated_image=args.generated_image,
-        )
+    if request.with_diagnostics:
+        diagnostics_dir = _infer_case_diagnostics_dir(saved_path, request.generated_image)
         diagnostic_paths = save_diagnostic_plots(
-            source_path=args.source_image,
-            generated_path=args.generated_image,
-            target_path=args.target_image,
+            source_path=request.source_image,
+            generated_path=request.generated_image,
+            target_path=request.target_image,
             save_dir=diagnostics_dir,
         )
 
     return SinglePanelResult(saved_path=saved_path, diagnostic_paths=diagnostic_paths)
 
 
-def run_from_metrics(args: argparse.Namespace) -> FromMetricsResult:
-    """Runs the complete flow for comparisons selected from the CSV files."""
-    run_path = args.run_path.resolve()
+def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
+    assert request.run_path is not None
+    run_path = request.run_path.resolve()
     evaluation_dir = run_path / "evaluation"
     summary_csv = evaluation_dir / "summary.csv"
     per_image_csv = evaluation_dir / "per_image_metrics.csv"

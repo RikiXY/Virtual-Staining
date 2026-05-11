@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.evaluator import evaluate_pairs
-from virtual_staining.evaluation.io import collect_image_files
+from virtual_staining.evaluation.io import build_evaluation_pairs
 from virtual_staining.evaluation.plotting import save_dataset_plots
 from virtual_staining.evaluation.summaries import write_summary_csv
 from virtual_staining.experiment.run_paths import RunPaths
@@ -37,7 +36,7 @@ def evaluate(config: RunConfig) -> None:
     )
     save_graphs = eval_cfg.save_graphs if eval_cfg else False
 
-    pairs = _build_pairs(target_dir, generated_dir)
+    pairs, skipped_ids = build_evaluation_pairs(target_dir, generated_dir)
     result = evaluate_pairs(pairs, output_dir)
 
     if result.rows:
@@ -46,48 +45,10 @@ def evaluate(config: RunConfig) -> None:
     if save_graphs and result.rows:
         save_dataset_plots(result.rows, output_dir)
 
-    total_skipped = result.num_skipped + _count_unmatched_samples(target_dir, generated_dir)
+    total_skipped = result.num_skipped + len(skipped_ids)
     logger.info(
         "Evaluation complete: %s evaluated, %s skipped -> %s",
         result.num_evaluated,
         total_skipped,
         output_dir,
     )
-
-
-def _build_pairs(
-    target_dir: Path,
-    generated_dir: Path,
-) -> list[tuple[Path, Path, str]]:
-    """
-    Pair target images with generated images by sample ID.
-
-    Target files match `*_target.<ext>`; generated files match
-    `*_target_generated.<ext>`. The sample_id is the prefix before `_target`.
-    """
-    target_files = collect_image_files(target_dir, "_target", "Target")
-    generated_files = collect_image_files(generated_dir, "_target_generated", "Generated")
-    all_sample_ids = sorted(set(target_files) | set(generated_files))
-    pairs: list[tuple[Path, Path, str]] = []
-
-    for sample_id in all_sample_ids:
-        target_path = target_files.get(sample_id)
-        generated_path = generated_files.get(sample_id)
-
-        if target_path is None:
-            logger.warning("Missing target for sample %s in %s", sample_id, target_dir)
-            continue
-
-        if generated_path is None:
-            logger.warning("Missing generated image for sample %s in %s", sample_id, generated_dir)
-            continue
-
-        pairs.append((target_path, generated_path, sample_id))
-
-    return pairs
-
-
-def _count_unmatched_samples(target_dir: Path, generated_dir: Path) -> int:
-    target_files = collect_image_files(target_dir, "_target", "Target")
-    generated_files = collect_image_files(generated_dir, "_target_generated", "Generated")
-    return len(set(target_files) ^ set(generated_files))

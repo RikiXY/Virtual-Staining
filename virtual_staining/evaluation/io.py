@@ -50,3 +50,28 @@ def collect_image_files(directory_path: str | Path, suffix: str, label: str) -> 
         files[sample_id] = path
 
     return files
+
+
+def build_evaluation_pairs(
+    target_dir: Path,
+    generated_dir: Path,
+) -> tuple[list[tuple[Path, Path, str]], list[str]]:
+    """Pair target images with generated images by sample ID.
+
+    Returns (matched_pairs, skipped_sample_ids) where matched_pairs contains
+    (target_path, generated_path, sample_id) tuples and skipped_sample_ids
+    lists IDs that could not be paired due to a missing file on either side.
+    """
+    target_files = collect_image_files(target_dir, "_target", "Target")
+    generated_files = collect_image_files(generated_dir, "_target_generated", "Generated")
+    all_sample_ids = sorted(set(target_files) | set(generated_files))
+    pairs: list[tuple[Path, Path, str]] = []
+    skipped: list[str] = []
+
+    for sample_id in all_sample_ids:
+        if sample_id in target_files and sample_id in generated_files:
+            pairs.append((target_files[sample_id], generated_files[sample_id], sample_id))
+        else:
+            skipped.append(sample_id)
+
+    return pairs, skipped

@@ -3,11 +3,73 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from virtual_staining.applications.organize import run_organize
+from virtual_staining.applications.organize import OrganizeRequest, organize
 from virtual_staining.utils.metrics import DEFAULT_METRICS
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _resolve_run_path(run_path: str | Path) -> Path:
+    path = Path(run_path).resolve()
+    if not path.is_dir():
+        raise NotADirectoryError(f"Run directory not found: {path}")
+    return path
+
+
+def _infer_run_path_from_metrics_csv(metrics_csv: str | Path) -> Path | None:
+    path = Path(metrics_csv).resolve()
+    if path.name == "per_image_metrics.csv" and path.parent.name == "evaluation":
+        return path.parent.parent
+    return None
+
+
+def _resolve_metrics_csv(args: argparse.Namespace) -> Path:
+    if args.metrics_csv is not None:
+        metrics_csv = args.metrics_csv.resolve()
+        if not metrics_csv.is_file():
+            raise FileNotFoundError(f"CSV not found: {metrics_csv}")
+        return metrics_csv
+
+    if args.run_path is None:
+        raise ValueError("You must provide either --run-path or --metrics-csv.")
+
+    run_path = _resolve_run_path(args.run_path)
+    metrics_csv = run_path / "evaluation" / "per_image_metrics.csv"
+
+    if not metrics_csv.is_file():
+        raise FileNotFoundError(f"Could not find per_image_metrics.csv. Expected: {metrics_csv}")
+
+    return metrics_csv
+
+
+def _resolve_output_dir(args: argparse.Namespace, metrics_csv: Path) -> Path:
+    if args.output_dir is not None:
+        return args.output_dir.resolve()
+
+    if args.run_path is not None:
+        return _resolve_run_path(args.run_path) / "evaluation" / "sorted_by_metrics"
+
+    inferred_run_path = _infer_run_path_from_metrics_csv(metrics_csv)
+
+    if inferred_run_path is not None:
+        return inferred_run_path / "evaluation" / "sorted_by_metrics"
+
+    raise ValueError("Could not infer output directory. Please provide --output-dir explicitly.")
+
+
+def _build_request(args: argparse.Namespace) -> OrganizeRequest:
+    metrics_csv = _resolve_metrics_csv(args)
+    output_dir = _resolve_output_dir(args, metrics_csv)
+    return OrganizeRequest(
+        metrics_csv=metrics_csv,
+        output_dir=output_dir,
+        top_k=args.top_k,
+        metrics=tuple(args.metrics),
+        mode=args.mode,
+        overwrite=args.overwrite,
+        include_all_ranked=args.include_all_ranked,
+    )
+
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vs-organize",
         description=(
@@ -87,6 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = build_parser()
+    parser = _build_parser()
     args = parser.parse_args(argv)
-    run_organize(args)
+    request = _build_request(args)
+    organize(request)

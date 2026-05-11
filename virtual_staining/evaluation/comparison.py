@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import json
 from dataclasses import asdict
 from pathlib import Path
@@ -34,14 +33,15 @@ def save_unpaired_comparison_summary(
     group_a: UnpairedGroupStats,
     group_b: UnpairedGroupStats,
     comparison: UnpairedComparison,
-    args: argparse.Namespace,
+    column: str,
+    higher_is_better: bool,
     output_dir: Path,
 ) -> None:
     """Save comparison_summary.csv for the unpaired comparison."""
     row = {
         "mode": "unpaired",
-        "metric": args.column,
-        "direction": ("higher_is_better" if args.resolved_higher_is_better else "lower_is_better"),
+        "metric": column,
+        "direction": ("higher_is_better" if higher_is_better else "lower_is_better"),
         "label_a": group_a.label,
         "label_b": group_b.label,
         "n_a": group_a.n,
@@ -89,14 +89,15 @@ def save_paired_summary_json(summary: PairedSummary, output_dir: Path) -> None:
 
 def save_paired_comparison_summary(
     summary: PairedSummary,
-    args: argparse.Namespace,
+    column: str,
+    higher_is_better: bool,
     output_dir: Path,
 ) -> None:
     """Save comparison_summary.csv for the paired comparison."""
     row = {
         "mode": "paired",
-        "metric": args.column,
-        "direction": ("higher_is_better" if args.resolved_higher_is_better else "lower_is_better"),
+        "metric": column,
+        "direction": ("higher_is_better" if higher_is_better else "lower_is_better"),
         "label_a": summary.label_a,
         "label_b": summary.label_b,
         "n_pairs": summary.n_pairs,
@@ -115,21 +116,24 @@ def save_paired_comparison_summary(
 
 def save_paired_sample_deltas(
     merged: pd.DataFrame,
-    args: argparse.Namespace,
+    higher_is_better: bool,
+    tolerance: float,
+    label_a: str,
+    label_b: str,
     output_dir: Path,
 ) -> None:
     """Save a sample-by-sample paired comparison CSV."""
     raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(dtype=float)
-    signed_delta = raw_delta if args.resolved_higher_is_better else -raw_delta
+    signed_delta = raw_delta if higher_is_better else -raw_delta
     result = merged.copy()
     result["raw_delta_b_minus_a"] = raw_delta
     result["signed_delta"] = signed_delta
     result["winner"] = np.where(
-        signed_delta > args.tolerance,
-        args.resolved_label_b,
+        signed_delta > tolerance,
+        label_b,
         np.where(
-            signed_delta < -args.tolerance,
-            args.resolved_label_a,
+            signed_delta < -tolerance,
+            label_a,
             "equal",
         ),
     )
@@ -140,13 +144,14 @@ def save_unpaired_report_txt(
     group_a: UnpairedGroupStats,
     group_b: UnpairedGroupStats,
     comparison: UnpairedComparison,
-    args: argparse.Namespace,
+    column: str,
+    higher_is_better: bool,
     output_dir: Path,
 ) -> None:
     """Save report.txt for the unpaired comparison."""
     lines = [
-        f"Metric: {args.column}",
-        f"Direction: {'higher is better' if args.resolved_higher_is_better else 'lower is better'}",
+        f"Metric: {column}",
+        f"Direction: {'higher is better' if higher_is_better else 'lower is better'}",
         "",
         (
             f"{group_a.label}: n={group_a.n}, mean={group_a.mean:.6f}, "
@@ -172,12 +177,15 @@ def save_unpaired_report_txt(
 
 
 def save_paired_report_txt(
-    summary: PairedSummary, args: argparse.Namespace, output_dir: Path
+    summary: PairedSummary,
+    column: str,
+    higher_is_better: bool,
+    output_dir: Path,
 ) -> None:
     """Save report.txt for the paired comparison."""
     lines = [
-        f"Metric: {args.column}",
-        f"Direction: {'higher is better' if args.resolved_higher_is_better else 'lower is better'}",
+        f"Metric: {column}",
+        f"Direction: {'higher is better' if higher_is_better else 'lower is better'}",
         f"Paired samples: {summary.n_pairs}",
         f"Tolerance: {summary.tolerance:.6f}",
         "",
