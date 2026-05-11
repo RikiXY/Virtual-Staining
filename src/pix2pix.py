@@ -1415,6 +1415,19 @@ def main(
     beta2=0.999
 ):
     start_time = time.time()
+    
+    if resume_checkpoint is not None:
+        resume_checkpoint = Path(resume_checkpoint)
+
+        if resume_checkpoint.suffix != ".pth":
+            raise ValueError(
+                f"--resume must point to a .pth checkpoint file: {resume_checkpoint}"
+            )
+
+        if not resume_checkpoint.is_file():
+            raise FileNotFoundError(
+                f"--resume was provided, but checkpoint file does not exist: {resume_checkpoint}"
+            )
 
     os.makedirs(logs_dir, exist_ok=True)
     os.makedirs(checkpoints_dir, exist_ok=True)
@@ -1541,25 +1554,34 @@ def main(
             os.remove(file_path)
 
     start_epoch = 0
+
     if resume_checkpoint is not None:
-        if os.path.exists(resume_checkpoint):
-            start_epoch = load_checkpoint(
-                resume_checkpoint,
-                generator,
-                discriminator,
-                opt_G,
-                opt_D,
-                scaler_G,
-                scaler_D,
-                device,
-                image_size=image_size
+        start_epoch = load_checkpoint(
+            resume_checkpoint,
+            generator,
+            discriminator,
+            opt_G,
+            opt_D,
+            scaler_G,
+            scaler_D,
+            device,
+            image_size=image_size
+        )
+
+        if start_epoch >= n_epochs:
+            raise ValueError(
+                f"Checkpoint resumes from epoch {start_epoch}, "
+                f"but requested --epochs is {n_epochs}."
             )
-            log_message(f"Checkpoint loaded from {resume_checkpoint}, epoch {start_epoch}", log_file, use_stdout=False)
-        else:
-            log_message(f"WARNING - Checkpoint not found: {resume_checkpoint}", log_file, use_stdout=False)
+
+        log_message(
+            f"Checkpoint loaded from {resume_checkpoint}, starting from epoch {start_epoch}",
+            log_file,
+            use_stdout=False
+        )
     else:
         log_message("Training started from scratch", log_file, use_stdout=False)
-
+        
     print_section("Pix2Pix training")
     print_info("Run root", str(run_root))
     print_info("Dataset root", str(dataset_root))
@@ -1593,7 +1615,7 @@ def main(
     )
 
     training_status = {
-        "last_checkpoint": Path(resume_checkpoint).name if resume_checkpoint else "none "
+        "last_checkpoint": Path(resume_checkpoint).name if resume_checkpoint else "none"
     }
 
     for epoch in range(start_epoch, n_epochs):
@@ -1685,8 +1707,7 @@ def main(
     finish_console_progress()
     total_seconds = time.time() - start_time
     log_message(f"Execution completed. Total time = {total_seconds:.2f} seconds", log_file, use_stdout=False)
-    
-              
+
 
 if __name__ == "__main__":
     parser = build_parser()
