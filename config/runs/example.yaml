@@ -38,12 +38,6 @@ preprocessing:
   seed: 42
 
 training:
-  # Optional shared-field overrides. Defaults:
-  # dataset_root: local_workspace/datasets/your_sample
-  # results_path: local_workspace/results
-  # run_name: example_run
-  # model_image_size: [256, 256]  # [width, height] override for training only
-
   # Optional dataset split overrides. Defaults:
   # train_dir: local_workspace/datasets/your_sample/dataset_train
   # val_dir: local_workspace/datasets/your_sample/dataset_val
@@ -66,17 +60,11 @@ training:
   resume: null
 
 inference:
-  # Optional shared-field overrides. Defaults:
-  # dataset_root: local_workspace/datasets/your_sample
-  # results_path: local_workspace/results
-  # run_name: example_run
-  # model_image_size: [256, 256]  # [width, height] override for inference only
-
   # Uses the newest ep*.pth file in results_path/run_name/checkpoints.
   checkpoint_policy: latest
   # Or choose a checkpoint explicitly. Relative paths are resolved from
-  # results_path/run_name.
-  # checkpoint: checkpoints/ep099.pth
+  # the run root (results_path/run_name/).
+  # checkpoint_path: checkpoints/ep099.pth
 
   # Optional inference directory overrides. Defaults:
   # test_dir: local_workspace/datasets/your_sample/dataset_test

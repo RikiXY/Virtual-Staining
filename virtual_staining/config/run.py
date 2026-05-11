@@ -17,6 +17,14 @@ from virtual_staining.evaluation.config import _EVALUATION_KEYS, EvaluationConfi
 from virtual_staining.models.config import DiscriminatorConfig, GeneratorConfig, ModelConfig
 from virtual_staining.utils.dimensions import parse_wh_size_from_aliases
 
+_MODEL_KEYS: frozenset[str] = frozenset({"generator", "discriminator"})
+
+_GENERATOR_KEYS: frozenset[str] = frozenset(
+    {"name", "in_channels", "out_channels", "base_channels", "bilinear"}
+)
+
+_DISCRIMINATOR_KEYS: frozenset[str] = frozenset({"name", "in_channels", "ndf", "use_sigmoid"})
+
 _FLAT_EVALUATION_KEYS: frozenset[str] = frozenset(
     {
         "save_graphs",
@@ -51,7 +59,7 @@ class RunConfig:
 
         project = _parse_project(raw)
         model = _parse_model(raw.get("model", {}))
-        training = _parse_training(raw) if "training" in raw or "epochs" in raw else None
+        training = _parse_training(raw) if "training" in raw else None
         inference = _parse_inference(raw) if "inference" in raw else None
         preprocessing = (
             _parse_preprocessing(raw)
@@ -86,8 +94,11 @@ def _parse_project(raw: dict[str, Any]) -> ProjectConfig:
 
 
 def _parse_model(model_raw: dict[str, Any]) -> ModelConfig:
+    reject_unknown_keys(model_raw, _MODEL_KEYS, "model")
     gen_raw = model_raw.get("generator", {})
+    reject_unknown_keys(gen_raw, _GENERATOR_KEYS, "model.generator")
     disc_raw = model_raw.get("discriminator", {})
+    reject_unknown_keys(disc_raw, _DISCRIMINATOR_KEYS, "model.discriminator")
     return ModelConfig(
         generator=GeneratorConfig(
             name=gen_raw.get("name", "unet"),
@@ -108,9 +119,7 @@ def _parse_model(model_raw: dict[str, Any]) -> ModelConfig:
 def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
     from virtual_staining.training.config import _TRAINING_KEYS, TrainingConfig
 
-    data = section_with_shared_fields(
-        raw, "training", {"dataset_root", "results_path", "run_name", "image_size"}
-    )
+    data = section_with_shared_fields(raw, "training", set())
     reject_unknown_keys(data, _TRAINING_KEYS, "training")
 
     config = TrainingConfig(
@@ -137,15 +146,12 @@ def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
 def _parse_inference(raw: dict[str, Any]) -> InferenceConfig:
     from virtual_staining.inference.config import _INFERENCE_KEYS, InferenceConfig
 
-    data = section_with_shared_fields(
-        raw, "inference", {"dataset_root", "results_path", "run_name", "image_size"}
-    )
+    data = section_with_shared_fields(raw, "inference", set())
     reject_unknown_keys(data, _INFERENCE_KEYS, "inference")
 
     config = InferenceConfig(
         checkpoint_policy=data.get("checkpoint_policy"),
-        # YAML key "checkpoint" maps to Python field checkpoint_path
-        checkpoint_path=Path(data["checkpoint"]) if data.get("checkpoint") else None,
+        checkpoint_path=Path(data["checkpoint_path"]) if data.get("checkpoint_path") else None,
         test_dir=Path(data["test_dir"]) if data.get("test_dir") else None,
         output_dir=Path(data["output_dir"]) if data.get("output_dir") else None,
     )

@@ -90,7 +90,7 @@ training:
   seed: 42
 
 inference:
-  checkpoint_policy: latest   # or: checkpoint: checkpoints/ep099.pth
+  checkpoint_policy: latest   # or: checkpoint_path: checkpoints/ep099.pth
 
 evaluation:
   save_graphs: true

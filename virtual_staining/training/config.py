@@ -5,13 +5,6 @@ from pathlib import Path
 
 _TRAINING_KEYS: frozenset[str] = frozenset(
     {
-        # shared fields and size aliases (accepted after section_with_shared_fields injects them)
-        "dataset_root",
-        "results_path",
-        "run_name",
-        "image_size",
-        "model_image_size",
-        # section-specific
         "batch_size",
         "epochs",
         "lr_g",

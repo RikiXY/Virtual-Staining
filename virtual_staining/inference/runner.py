@@ -33,7 +33,7 @@ def _resolve_checkpoint(config: RunConfig, paths: RunPaths) -> Path:
     if config.inference.checkpoint_path is not None:
         checkpoint_path = config.inference.checkpoint_path
         if not checkpoint_path.is_absolute():
-            checkpoint_path = paths.checkpoints_dir / checkpoint_path
+            checkpoint_path = paths.root / checkpoint_path
         return checkpoint_path
 
     if config.inference.checkpoint_policy == "latest":
