@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
 from typing import Any
+
+from tqdm import tqdm
 
 from common.cli_style import print_info, print_section, style
 from evaluate_generation_lib.core import (
@@ -110,6 +115,20 @@ def add_dataset_subparser(subparsers: Any) -> None:
         action="store_true",
         help="Do not print the full list of saved graph paths.",
     )
+    dataset_parser.add_argument(
+        "--workers",
+        type=int,
+        default=get_default_workers(),
+        help=(
+            "Number of parallel workers used to evaluate image pairs. "
+            "Use 1 to disable parallel evaluation."
+        ),
+    )
+    dataset_parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable the progress bar during dataset evaluation.",
+    )
     dataset_parser.set_defaults(func=run_dataset)
 
 
@@ -162,17 +181,74 @@ def run_single(args: argparse.Namespace) -> None:
     print_info("Single evaluation CSV", style(str(single_case_csv), "bold", "magenta"))
 
 
+def get_default_workers() -> int:
+    """Restituisce un numero prudente di worker paralleli."""
+    cpu_count = os.cpu_count() or 1
+
+    if cpu_count <= 2:
+        return 1
+
+    return max(1, min(cpu_count - 1, 8))
+
+
+def evaluate_pair_task(task: tuple[str, str, str]) -> dict[str, object]:
+    """
+    Valuta una singola coppia target/generated.
+
+    La funzione è definita a livello globale per essere compatibile
+    con ProcessPoolExecutor anche su Windows.
+    """
+    sample_id, target_path_str, generated_path_str = task
+
+    target_path = Path(target_path_str)
+    generated_path = Path(generated_path_str)
+
+    try:
+        metrics, shape = evaluate_pair(target_path, generated_path)
+
+        return {
+            "ok": True,
+            "row": build_metric_row(
+                sample_id=sample_id,
+                target_path=target_path,
+                generated_path=generated_path,
+                shape=shape,
+                metrics=metrics,
+            ),
+        }
+
+    except Exception as exc:
+        return {
+            "ok": False,
+            "row": {
+                "sample_id": sample_id,
+                "reason": str(exc),
+                "target_path": str(target_path),
+                "generated_path": str(generated_path),
+            },
+        }
+
+
 def run_dataset(args: argparse.Namespace) -> None:
     """Esegue il flusso completo per la modalità dataset."""
+    print_section("Dataset evaluation")
+    print_info("Status", "Preparing image pairs...")
+
     target_files = collect_image_files(args.target_dir, "_target", "Target")
-    generated_files = collect_image_files(args.generated_dir, "_target_generated", "Generated")
+    generated_files = collect_image_files(
+        args.generated_dir,
+        "_target_generated",
+        "Generated",
+    )
 
     output_dir = resolve_output_dir(args.output_dir, args.generated_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     all_sample_ids = sorted(set(target_files) | set(generated_files))
+
     per_image_rows: list[dict[str, object]] = []
     skipped_rows: list[dict[str, str]] = []
+    evaluation_tasks: list[tuple[str, str, str]] = []
 
     for sample_id in all_sample_ids:
         target_path = target_files.get(sample_id)
@@ -200,22 +276,82 @@ def run_dataset(args: argparse.Namespace) -> None:
             )
             continue
 
-        try:
-            metrics, shape = evaluate_pair(target_path, generated_path)
-        except Exception as exc:
-            skipped_rows.append(
-                {
-                    "sample_id": sample_id,
-                    "reason": str(exc),
-                    "target_path": str(target_path),
-                    "generated_path": str(generated_path),
-                }
+        evaluation_tasks.append(
+            (
+                sample_id,
+                str(target_path),
+                str(generated_path),
             )
-            continue
-
-        per_image_rows.append(
-            build_metric_row(sample_id, target_path, generated_path, shape, metrics)
         )
+
+    requested_workers = max(1, int(args.workers))
+    max_workers = min(requested_workers, len(evaluation_tasks)) if evaluation_tasks else 1
+
+    print_info("Targets found", str(len(target_files)))
+    print_info("Generated found", str(len(generated_files)))
+    print_info("Pairs to evaluate", str(len(evaluation_tasks)))
+    print_info("Initial skipped", str(len(skipped_rows)))
+    print_info(
+        "Status",
+        f"Evaluating image pairs using {max_workers} worker(s). This may take a while...",
+    )
+
+    if evaluation_tasks:
+        if max_workers == 1:
+            iterator = evaluation_tasks
+
+            if not args.no_progress:
+                iterator = tqdm(
+                    evaluation_tasks,
+                    desc="Evaluating pairs",
+                    unit="pair",
+                )
+
+            for task in iterator:
+                result = evaluate_pair_task(task)
+                if result["ok"]:
+                    per_image_rows.append(result["row"])
+                else:
+                    skipped_rows.append(result["row"])
+
+        else:
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                futures = [
+                    executor.submit(evaluate_pair_task, task)
+                    for task in evaluation_tasks
+                ]
+
+                iterator = as_completed(futures)
+
+                if not args.no_progress:
+                    iterator = tqdm(
+                        iterator,
+                        total=len(futures),
+                        desc="Evaluating pairs",
+                        unit="pair",
+                    )
+
+                for future in iterator:
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        skipped_rows.append(
+                            {
+                                "sample_id": "unknown",
+                                "reason": f"worker_error: {exc}",
+                                "target_path": "",
+                                "generated_path": "",
+                            }
+                        )
+                        continue
+
+                    if result["ok"]:
+                        per_image_rows.append(result["row"])
+                    else:
+                        skipped_rows.append(result["row"])
+
+    per_image_rows.sort(key=lambda row: str(row["sample_id"]))
+    skipped_rows.sort(key=lambda row: str(row["sample_id"]))
 
     per_image_csv = output_dir / "per_image_metrics.csv"
     skipped_csv = output_dir / "skipped.csv"
@@ -225,6 +361,7 @@ def run_dataset(args: argparse.Namespace) -> None:
     write_skipped_csv(skipped_rows, skipped_csv)
 
     summary_rows: list[dict[str, object]] = []
+
     if per_image_rows:
         summary_rows = build_summary_rows(per_image_rows)
 
@@ -251,6 +388,8 @@ def run_dataset(args: argparse.Namespace) -> None:
     print_info("Skipped samples", str(skipped_csv))
 
     if args.save_graphs and per_image_rows:
+        print_info("Status", "Saving aggregate plots...")
+
         plot_paths = save_dataset_plots(per_image_rows, output_dir)
 
         if not args.hide_graphs_path:
