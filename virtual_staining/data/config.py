@@ -6,12 +6,12 @@ from math import isclose
 from pathlib import Path
 
 from virtual_staining.config import (
-    _TOP_LEVEL_KEYS,
     load_yaml_mapping,
     parse_bool_strict,
     reject_unknown_keys,
     section_with_shared_fields,
 )
+from virtual_staining.config.validation import _TOP_LEVEL_KEYS
 from virtual_staining.utils.dimensions import (
     parse_wh_size,
     parse_wh_size_from_aliases,

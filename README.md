@@ -178,10 +178,12 @@ To inspect the available commands and flags:
 
 ```bash
 make help
-uv run python src/prepare_dataset.py --help
-uv run python src/pix2pix.py --help
-uv run python tools/evaluate_generation.py --help
-uv run python tools/make_comparison.py --help
+uv run vs-prepare --help
+uv run vs-train --help
+uv run vs-infer --help
+uv run vs-evaluate --help
+uv run vs-compare --help
+uv run vs-compare-panels --help
 ```
 
 ## Common Commands
@@ -270,7 +272,7 @@ From H&E staining to label free.
 
 ### 1. Dataset preparation
 
-`src/prepare_dataset.py` builds the paired dataset from full-size images.
+`vs-prepare` (or `make dataset`) builds the paired dataset from full-size images.
 
 It:
 
@@ -281,23 +283,20 @@ It:
 
 ### 2. Training and test inference
 
-`src/pix2pix.py` provides two CLI modes:
+`vs-train` and `vs-infer` (or `make train` / `make infer`) provide the training and inference entry points.
 
-- `train`
-- `test`
-
-Training creates a run directory with logs, checkpoints, validation outputs, and metadata. Test inference loads a checkpoint and generates predictions for the test split.
+Training creates a run directory with logs, checkpoints, validation outputs, and metadata. Inference loads a checkpoint and generates predictions for the test split.
 
 ### 3. Evaluation and visual comparison
 
-`tools/evaluate_generation.py` evaluates generated images against target images and can save:
+`vs-evaluate` (or `make evaluate`) evaluates generated images against target images and can save:
 
 - per-image metrics
 - summary CSV files
 - skipped samples
 - optional plots
 
-`tools/make_comparison.py` creates:
+`vs-compare-panels` creates:
 
 - source / generated / target comparison panels
 - MAE difference maps
@@ -318,16 +317,11 @@ Virtual-Staining/
 ├── local_workspace/
 │   ├── datasets/           # input paired samples (gitignored)
 │   └── results/            # run outputs (gitignored)
-├── src/
-│   ├── prepare_dataset.py  # dataset preparation entry point
-│   └── pix2pix.py          # training and inference entry point
 ├── tests/                  # pytest test suite
-├── tools/
-│   ├── compare_distributions.py
-│   ├── evaluate_generation.py
-│   ├── make_comparison.py
-│   └── organize_by_metrics.py
-├── virtual_staining/       # shared library package
+├── virtual_staining/       # package — CLI entry points and library
+│   ├── applications/       # business logic (train, infer, evaluate, compare …)
+│   ├── cli/                # argparse wrappers delegating to applications/
+│   ├── config/
 │   ├── data/
 │   ├── evaluation/
 │   ├── models/
@@ -342,47 +336,43 @@ Virtual-Staining/
 
 ## Advanced CLI Examples
 
-These are the direct Python equivalents of the Makefile experiment targets.
+These are the direct CLI equivalents of the Makefile experiment targets.
 
 ### Prepare the dataset
 
 ```bash
-uv run python src/prepare_dataset.py \
-  --config config/runs/my_run.yaml
+uv run vs-prepare --config config/runs/my_run.yaml
 ```
 
 ### Train the model
 
 ```bash
-uv run python src/pix2pix.py train \
-  --config config/runs/my_run.yaml
+uv run vs-train --config config/runs/my_run.yaml
 ```
 
 ### Run test inference
 
 ```bash
-uv run python src/pix2pix.py test \
-  --config config/runs/my_run.yaml
+uv run vs-infer --config config/runs/my_run.yaml
 ```
 
 ### Evaluate generated results
 
 ```bash
-uv run python tools/evaluate_generation.py dataset \
-  --config config/runs/my_run.yaml
+uv run vs-evaluate --config config/runs/my_run.yaml
 ```
 
 ### Create representative comparison panels
 
 ```bash
-uv run python tools/make_comparison.py from-metrics \
+uv run vs-compare-panels from-metrics \
   --run-path local_workspace/results/your_run
 ```
 
 ### Create a single comparison panel
 
 ```bash
-uv run python tools/make_comparison.py single \
+uv run vs-compare-panels single \
   --source-image local_workspace/datasets/your_sample/dataset_test/00512_09216_source.tif \
   --generated-image local_workspace/results/your_run/output_test/00512_09216_target_generated.tif \
   --target-image local_workspace/datasets/your_sample/dataset_test/00512_09216_target.tif \
@@ -391,10 +381,11 @@ uv run python tools/make_comparison.py single \
 
 ## Notes
 
-- `src/prepare_dataset.py` is the preprocessing entry point
-- `src/pix2pix.py` handles training, validation, checkpoints, and test inference
-- `tools/evaluate_generation.py` handles metric evaluation
-- `tools/make_comparison.py` handles visual comparison and diagnostics
+- `vs-prepare` / `make dataset` is the preprocessing entry point
+- `vs-train` / `make train` handles training, validation, checkpoints, and metadata
+- `vs-infer` / `make infer` loads a checkpoint and generates predictions
+- `vs-evaluate` / `make evaluate` handles metric evaluation
+- `vs-compare-panels` handles visual comparison and diagnostics
 - [`config/runs/example.yaml`](config/runs/example.yaml) documents the run
   schema used by `dataset`, `train`, `infer`, and `evaluate`
 

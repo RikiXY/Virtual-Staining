@@ -144,6 +144,7 @@ def _parse_inference(raw: dict[str, Any]) -> InferenceConfig:
 
     config = InferenceConfig(
         checkpoint_policy=data.get("checkpoint_policy"),
+        # YAML key "checkpoint" maps to Python field checkpoint_path
         checkpoint_path=Path(data["checkpoint"]) if data.get("checkpoint") else None,
         test_dir=Path(data["test_dir"]) if data.get("test_dir") else None,
         output_dir=Path(data["output_dir"]) if data.get("output_dir") else None,

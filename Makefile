@@ -14,6 +14,9 @@ help:
 	@printf "  %-24s %s\n" "infer" "Run inference via vs-infer CLI from CONFIG"
 	@printf "  %-24s %s\n" "evaluate" "Evaluate outputs via vs-evaluate CLI from CONFIG"
 	@printf "  %-24s %s\n" "complete-run" "Run dataset, train, infer, evaluate from CONFIG"
+	@printf "  %-24s %s\n" "compare" "Compare metric distributions via vs-compare"
+	@printf "  %-24s %s\n" "compare-panels" "Build comparison panels via vs-compare-panels"
+	@printf "  %-24s %s\n" "evaluate-single" "Evaluate a single image pair via vs-evaluate-single"
 	@printf "  %-24s %s\n" "sync" "Sync uv dependencies from uv.lock"
 	@printf "  %-24s %s\n" "format" "Format Python files with ruff"
 	@printf "  %-24s %s\n" "lint" "Check Python files with ruff"
@@ -59,8 +62,14 @@ complete-run: require-config
 	$(MAKE) infer CONFIG=$(CONFIG)
 	$(MAKE) evaluate CONFIG=$(CONFIG)
 
+compare:
+	$(UV) run vs-compare $(ARGS)
+
 compare-panels:
 	$(UV) run vs-compare-panels $(ARGS)
+
+evaluate-single:
+	$(UV) run vs-evaluate-single $(ARGS)
 
 organize:
 	$(UV) run vs-organize $(ARGS)
