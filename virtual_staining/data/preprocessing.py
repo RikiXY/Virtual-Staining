@@ -17,7 +17,7 @@ N_TOP_COMPONENTS = 10
 MIN_STD_DEV = 10
 
 # Each (divisor, grid) pair controls one mask pass: the image is divided into a grid of
-# (grid × grid) tiles, each of size (H/divisor × W/divisor). Using multiple passes at
+# (grid x grid) tiles, each of size (H/divisor x W/divisor). Using multiple passes at
 # different scales makes the mask robust to both fine and coarse background regions.
 MASK_PARAMETER_GRID = [(2, 3), (4, 6), (6, 9), (8, 15)]
 

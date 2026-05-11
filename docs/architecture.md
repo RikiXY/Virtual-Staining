@@ -2,7 +2,7 @@
 
 ## Layer Model
 
-The package is organised in three layers. Dependencies flow downward only —
+The package is organised in three layers. Dependencies flow downward only -
 upper layers may import from lower layers, never the reverse.
 
 | Layer | Description | Examples |
@@ -24,18 +24,18 @@ upper layers may import from lower layers, never the reverse.
 | `training/` | `Trainer`, training runner, per-step logic, adversarial and L1 losses, checkpoint I/O |
 | `inference/` | `Predictor`, inference runner, output writers |
 | `evaluation/` | Per-image metrics, `Evaluator`, summary statistics, comparison panels, ranking utilities |
-| `applications/` | Use-case orchestrators (`train.py`, `infer.py`, `evaluate.py`, …) — no `argparse` |
-| `cli/` | `argparse` entrypoints (`vs-prepare`, `vs-train`, `vs-infer`, `vs-evaluate`, …) — thin adapters over `applications/` |
+| `applications/` | Use-case orchestrators (`train.py`, `infer.py`, `evaluate.py`, ...) - no `argparse` |
+| `cli/` | `argparse` entrypoints (`vs-prepare`, `vs-train`, `vs-infer`, `vs-evaluate`, ...) - thin adapters over `applications/` |
 
 ## Architectural Rules
 
 These constraints are enforced by convention and checked in code review:
 
-- **No `argparse` outside `cli/`** — application and core modules accept typed
+- **No `argparse` outside `cli/`** - application and core modules accept typed
   dataclasses, not raw CLI strings.
-- **No `print()` outside `cli/` and `reporting/`** — structured progress output
+- **No `print()` outside `cli/` and `reporting/`** - structured progress output
   goes through the `Reporter` protocol; all other modules use `logging`.
-- **No `sys.exit()` outside `cli/`** — applications raise exceptions; the CLI
+- **No `sys.exit()` outside `cli/`** - applications raise exceptions; the CLI
   layer converts them to exit codes.
 - **Core and application modules use `logging`**, never `print`, so callers can
   suppress or redirect output.

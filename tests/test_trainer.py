@@ -224,7 +224,7 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
     train_dir.mkdir(parents=True)
     val_dir.mkdir(parents=True)
 
-    # Two training samples → two batches with batch_size=1.
+    # Two training samples -> two batches with batch_size=1.
     _write_rgb_pair(train_dir, prefix="00000_00000")
     _write_rgb_pair(train_dir, prefix="00001_00001")
     _write_rgb_pair(val_dir)

@@ -37,7 +37,7 @@ local_workspace/results/<run_name>/
 ### `config/input.yaml`
 
 Verbatim copy of the YAML file passed to `--config`. Preserved for full
-reproducibility — re-running with this file reproduces the same experiment.
+reproducibility - re-running with this file reproduces the same experiment.
 
 ### `config/resolved.yaml`
 

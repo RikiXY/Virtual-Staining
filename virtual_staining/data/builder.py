@@ -36,8 +36,8 @@ class DatasetBuilder:
     Low-level image operations are delegated to pure functions in preprocessing.py.
 
     Call run_all() to execute the complete pipeline, or call individual stage
-    methods in order (compute_masks → align → extract_patches → filter_patches
-    → split_and_save) to run incrementally.
+    methods in order (compute_masks -> align -> extract_patches -> filter_patches
+    -> split_and_save) to run incrementally.
     """
 
     def __init__(self, config: PreprocessingConfig) -> None:

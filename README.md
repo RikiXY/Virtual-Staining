@@ -70,7 +70,7 @@ dataset_root: local_workspace/datasets/your_sample
 results_path: local_workspace/results
 run_name: your_run_name
 
-# [width, height] — e.g. [320, 256] means 320 px wide, 256 px tall
+# [width, height] - e.g. [320, 256] means 320 px wide, 256 px tall
 image_size: [256, 256]
 
 preprocessing:
@@ -98,7 +98,7 @@ evaluation:
 
 The `CONFIG` variable is the only Make argument accepted for experiment targets.
 Put dataset paths, run names, image sizes, epochs, seeds, and checkpoint selection
-in the YAML — not in Make variables.
+in the YAML - not in Make variables.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full config schema and
 [`docs/run_format.md`](docs/run_format.md) for run output layout.
@@ -115,17 +115,17 @@ From H&E staining to label-free:
 
 ## Package Structure
 
-- `utils/` — shared primitives: dimensions, image I/O, metrics helpers
-- `config/` — YAML loading, validation, typed config sections
-- `experiment/` — run concept: RunPaths, RunContext, RunMetadata, environment snapshots
-- `reporting/` — Reporter protocol with Null, Logging, and Console implementations
-- `models/` — UNetGenerator, PatchGANDiscriminator, factory, model config
-- `data/` — dataset, manifest, builder, preprocessing pipeline
-- `training/` — Trainer, runner, steps, losses, checkpoint management
-- `inference/` — Predictor, runner, output writers
-- `evaluation/` — metrics, evaluator, summaries, panels, ranking
-- `applications/` — use-case orchestrators (no argparse)
-- `cli/` — thin argparse entrypoints delegating to `applications/`
+- `utils/` - shared primitives: dimensions, image I/O, metrics helpers
+- `config/` - YAML loading, validation, typed config sections
+- `experiment/` - run concept: RunPaths, RunContext, RunMetadata, environment snapshots
+- `reporting/` - Reporter protocol with Null, Logging, and Console implementations
+- `models/` - UNetGenerator, PatchGANDiscriminator, factory, model config
+- `data/` - dataset, manifest, builder, preprocessing pipeline
+- `training/` - Trainer, runner, steps, losses, checkpoint management
+- `inference/` - Predictor, runner, output writers
+- `evaluation/` - metrics, evaluator, summaries, panels, ranking
+- `applications/` - use-case orchestrators (no argparse)
+- `cli/` - thin argparse entrypoints delegating to `applications/`
 
 See [`docs/architecture.md`](docs/architecture.md) for the full description and layer boundaries.
 
@@ -190,16 +190,16 @@ uv lock           # re-resolve dependencies
 The default split is **patch-level**: train, validation, and test patches are all drawn
 from the same slide. Metrics on `dataset_test/` measure same-slide internal validation,
 not independent generalization. For generalizability evidence, use a slide-level,
-patient-level, or spatial-block split strategy — the current pipeline does not implement
+patient-level, or spatial-block split strategy - the current pipeline does not implement
 these.
 
 ## Method
 
-- **Preprocessing** — tissue masking, feature-based affine alignment of target to source,
+- **Preprocessing** - tissue masking, feature-based affine alignment of target to source,
   patch extraction with foreground and white-area quality filters.
-- **Model** — Pix2Pix conditional GAN: U-Net generator with skip connections and
+- **Model** - Pix2Pix conditional GAN: U-Net generator with skip connections and
   PatchGAN discriminator, trained with adversarial loss + L1 reconstruction loss.
-- **Evaluation** — per-image MAE, RMSE, PSNR, SSIM; summary statistics; optional
+- **Evaluation** - per-image MAE, RMSE, PSNR, SSIM; summary statistics; optional
   comparison panels with difference maps.
 
 ## License

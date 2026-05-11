@@ -40,7 +40,7 @@ class PatchGANDiscriminator(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
         ]
 
-        # stride=1 keeps the receptive field at ~70×70 (standard PatchGAN)
+        # stride=1 keeps the receptive field at ~70x70 (standard PatchGAN)
         curr_dim = next_dim
         next_dim = curr_dim * 2
         layers += [
