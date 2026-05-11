@@ -75,8 +75,3 @@ def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) ->
 
     saved_paths.append(boxplot_path)
     return saved_paths
-
-
-def write_plots(rows: list[dict[str, object]], output_dir: str | Path) -> list[Path]:
-    """Backward-compatible alias for dataset plot generation."""
-    return save_dataset_plots(rows, output_dir)

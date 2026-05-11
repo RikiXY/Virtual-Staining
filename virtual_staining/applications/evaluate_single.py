@@ -10,7 +10,7 @@ from virtual_staining.evaluation.io import (
     collect_image_files,
     extract_single_sample_id,
 )
-from virtual_staining.evaluation.plotting import write_plots
+from virtual_staining.evaluation.plotting import save_dataset_plots
 from virtual_staining.evaluation.reports import (
     build_metric_row,
     write_single_case_csv,
@@ -182,7 +182,7 @@ def run_dataset(args: argparse.Namespace) -> DatasetEvalResult:
 
     plot_paths: list[Path] = []
     if save_graphs and per_image_rows:
-        plot_paths = write_plots(per_image_rows, output_dir)
+        plot_paths = save_dataset_plots(per_image_rows, output_dir)
 
     return DatasetEvalResult(
         target_files=target_files,

@@ -6,7 +6,7 @@ from pathlib import Path
 from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.evaluator import evaluate_pairs
 from virtual_staining.evaluation.io import collect_image_files
-from virtual_staining.evaluation.plotting import write_plots
+from virtual_staining.evaluation.plotting import save_dataset_plots
 from virtual_staining.evaluation.summaries import write_summary_csv
 from virtual_staining.experiment.run_paths import RunPaths
 
@@ -44,7 +44,7 @@ def evaluate(config: RunConfig) -> None:
         result.summary_csv = write_summary_csv(result.rows, output_dir)
 
     if save_graphs and result.rows:
-        write_plots(result.rows, output_dir)
+        save_dataset_plots(result.rows, output_dir)
 
     total_skipped = result.num_skipped + _count_unmatched_samples(target_dir, generated_dir)
     logger.info(
