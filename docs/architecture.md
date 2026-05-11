@@ -7,7 +7,7 @@ upper layers may import from lower layers, never the reverse.
 
 | Layer | Description | Examples |
 |---|---|---|
-| **Core / domain** | Pure logic with no I/O side-effects | `common/`, `config/`, `experiment/`, `reporting/`, `models/`, `data/`, `training/`, `inference/`, `evaluation/` |
+| **Core / domain** | Pure logic with no I/O side-effects | `utils/`, `config/`, `experiment/`, `reporting/`, `models/`, `data/`, `training/`, `inference/`, `evaluation/` |
 | **Application** | Use-case orchestrators that wire core modules together | `applications/` |
 | **Adapter** | Entry points that translate CLI arguments into application calls | `cli/` |
 
@@ -15,7 +15,7 @@ upper layers may import from lower layers, never the reverse.
 
 | Package | Responsibility |
 |---|---|
-| `common/` | Shared primitives: image dimensions, image I/O helpers, pixel-level metric utilities |
+| `utils/` | Shared primitives: image dimensions, image I/O helpers, pixel-level metric utilities |
 | `config/` | YAML loading and validation, typed config dataclasses, per-section accessors |
 | `experiment/` | Run concept: `RunPaths` (directory layout), `RunContext`, `RunMetadata` (status/timing/git), environment snapshots |
 | `reporting/` | `Reporter` protocol with `NullReporter`, `LoggingReporter`, and `ConsoleReporter` implementations |

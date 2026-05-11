@@ -115,7 +115,7 @@ From H&E staining to label-free:
 
 ## Package Structure
 
-- `common/` — shared primitives: dimensions, image I/O, metrics helpers
+- `utils/` — shared primitives: dimensions, image I/O, metrics helpers
 - `config/` — YAML loading, validation, typed config sections
 - `experiment/` — run concept: RunPaths, RunContext, RunMetadata, environment snapshots
 - `reporting/` — Reporter protocol with Null, Logging, and Console implementations
@@ -128,6 +128,39 @@ From H&E staining to label-free:
 - `cli/` — thin argparse entrypoints delegating to `applications/`
 
 See [`docs/architecture.md`](docs/architecture.md) for the full description and layer boundaries.
+
+## Repository Structure
+
+```text
+Virtual-Staining/
+├── config/
+│   └── runs/                   # run YAML files (example.yaml template)
+├── docs/
+│   ├── assets/                 # qualitative result images
+│   ├── notebooks/
+│   └── reports/
+├── examples/                   # example input images
+├── local_workspace/
+│   ├── datasets/               # input paired samples (gitignored)
+│   └── results/                # run outputs (gitignored)
+├── tests/                      # pytest test suite
+├── virtual_staining/           # installable package
+│   ├── applications/           # use-case orchestrators
+│   ├── cli/                    # argparse entry points
+│   ├── config/
+│   ├── data/
+│   ├── evaluation/
+│   ├── experiment/
+│   ├── inference/
+│   ├── models/
+│   ├── reporting/
+│   ├── training/
+│   └── utils/
+├── Makefile
+├── flake.nix
+├── pyproject.toml
+└── uv.lock
+```
 
 ## Development
 
