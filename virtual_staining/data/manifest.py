@@ -3,9 +3,17 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 Split = Literal["train", "val", "test", "discarded"]
+
+_VALID_SPLITS: frozenset[str] = frozenset({"train", "val", "test", "discarded"})
+
+
+def _parse_split(value: str) -> Split:
+    if value not in _VALID_SPLITS:
+        raise ValueError(f"Invalid split {value!r}; expected one of {sorted(_VALID_SPLITS)}")
+    return cast(Split, value)
 
 
 @dataclass(frozen=True)
@@ -113,7 +121,7 @@ class DatasetManifest:
             records = tuple(
                 ManifestRecord(
                     sample_id=row["sample_id"],
-                    split=row["split"],  # type: ignore[arg-type]
+                    split=_parse_split(row["split"]),
                     input_path=Path(row["input_path"]),
                     target_path=Path(row["target_path"]),
                     input_modality=row["input_modality"],

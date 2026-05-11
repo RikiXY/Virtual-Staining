@@ -9,7 +9,7 @@ class PatchGANDiscriminator(nn.Module):
     Produces an NxN map of real/fake predictions, one per patch.
     """
 
-    def __init__(self, in_channels=6, ndf=64, use_sigmoid=False):
+    def __init__(self, in_channels: int = 6, ndf: int = 64, use_sigmoid: bool = False) -> None:
         """
         Args:
             in_channels (int): Number of input channels. In pix2pix,
@@ -55,7 +55,7 @@ class PatchGANDiscriminator(nn.Module):
 
         self.model = nn.Sequential(*layers)
 
-    def forward(self, x, y):
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         """
         Args:
             x (Tensor): Input image.

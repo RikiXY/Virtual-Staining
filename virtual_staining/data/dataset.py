@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from PIL import Image
 from torch.utils.data import Dataset
@@ -12,14 +14,16 @@ from virtual_staining.data.manifest import DatasetManifest
 class PairedHistologyDataset(Dataset):
     VALID_IMAGE_EXTENSIONS = {".tif", ".tiff", ".png"}
 
-    def __init__(self, folder_path, transform=None):
+    def __init__(
+        self, folder_path: Path | str, transform: Callable[..., Any] | None = None
+    ) -> None:
         self.folder_path = folder_path
         self.transform = transform
         # Pairs are built only once at the start, so during training
         # and validation we do not need to scan the directory every time.
         self.pairs = self._discover_pairs()
 
-    def _discover_pairs(self):
+    def _discover_pairs(self) -> list[tuple[Path, Path]]:
         sources: dict[str, Path] = {}
         targets: dict[str, Path] = {}
 
@@ -60,7 +64,7 @@ class PairedHistologyDataset(Dataset):
     def __len__(self):
         return len(self.pairs)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> tuple[Any, Any]:
         source_path, target_path = self.pairs[idx]
 
         source_image = Image.open(source_path).convert("RGB")
@@ -80,7 +84,7 @@ class PairedManifestDataset(Dataset):
     def __init__(
         self,
         manifest: DatasetManifest,
-        transform=None,
+        transform: Callable[..., Any] | None = None,
     ) -> None:
         self.manifest = manifest
         self.transform = transform
@@ -88,7 +92,7 @@ class PairedManifestDataset(Dataset):
     def __len__(self) -> int:
         return len(self.manifest)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> tuple[Any, Any]:
         record = self.manifest.records[idx]
         input_path = self.manifest.dataset_root / record.input_path
         target_path = self.manifest.dataset_root / record.target_path

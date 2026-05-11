@@ -51,12 +51,18 @@ def _save_images(
     save_image((target * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_target.tif")
 
 
-def _get_first_pair_size(dataset) -> dict | None:
-    if len(dataset) == 0:
+def _dataset_len(loader: torch.utils.data.DataLoader) -> int:
+    assert loader.dataset is not None
+    return len(loader.dataset)  # type: ignore[arg-type]  -- Dataset.__len__ exists at runtime but is absent from torch stubs
+
+
+def _get_first_pair_size(dataset: torch.utils.data.Dataset | None) -> dict | None:
+    if dataset is None or len(dataset) == 0:  # type: ignore[arg-type]
         return None
-    if not hasattr(dataset, "pairs"):
+    pairs = getattr(dataset, "pairs", None)
+    if pairs is None:
         return None
-    source_path, target_path = dataset.pairs[0]
+    source_path, target_path = pairs[0]
     with Image.open(source_path) as src_img:
         source_size = src_img.size
     with Image.open(target_path) as tgt_img:
@@ -169,7 +175,8 @@ class _ProgressTracker:
         completed_since_start = current_step - self.start_step
         remaining_steps = max(self.total_steps - current_step, 0)
 
-        step_duration = now - self.last_step_time  # type: ignore[operator]
+        assert self.last_step_time is not None, "call start() before calculate_progress()"
+        step_duration = now - self.last_step_time
         self.last_step_time = now
 
         if completed_since_start > self.warmup_batches:
@@ -177,7 +184,8 @@ class _ProgressTracker:
             if len(self.step_durations) > self.max_history:
                 self.step_durations.pop(0)
 
-        total_elapsed_time = now - self.start_time  # type: ignore[operator]
+        assert self.start_time is not None, "call start() before calculate_progress()"
+        total_elapsed_time = now - self.start_time
         progress = current_step / self.total_steps if self.total_steps > 0 else 1.0
 
         if len(self.step_durations) < self.min_eta_batches:
@@ -341,8 +349,8 @@ class Trainer:
             logger.info("Device: %s", self.device)
             logger.info("Epochs: %s", self.config.epochs)
             logger.info("Start epoch: %s", start_epoch)
-            logger.info("Train samples: %s", len(self.train_loader.dataset))  # type: ignore[arg-type]
-            logger.info("Validation samples: %s", len(self.val_loader.dataset))  # type: ignore[arg-type]
+            logger.info("Train samples: %s", _dataset_len(self.train_loader))
+            logger.info("Validation samples: %s", _dataset_len(self.val_loader))
             logger.info("Train batches/epoch: %s", len(self.train_loader))
             logger.info("Validation batches: %s", len(self.val_loader))
             logger.info("Detailed log: %s", log_file)
@@ -595,8 +603,8 @@ class Trainer:
             "lr_d": self.config.lr_d,
             "beta1": self.config.beta1,
             "beta2": self.config.beta2,
-            "train_samples": len(self.train_loader.dataset),  # type: ignore[arg-type]
-            "val_samples": len(self.val_loader.dataset),  # type: ignore[arg-type]
+            "train_samples": _dataset_len(self.train_loader),
+            "val_samples": _dataset_len(self.val_loader),
             "train_batches": len(self.train_loader),
             "val_batches": len(self.val_loader),
             "first_train_pair_info": _get_first_pair_size(self.train_loader.dataset),

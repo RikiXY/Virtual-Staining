@@ -384,7 +384,7 @@ def divide_image_with_grid(
     img_size: tuple[int, int],
     grid_movement: tuple[int, int],
     mask: np.ndarray | None = None,
-    max_mask_percentage=0.4,
+    max_mask_percentage: float = 0.4,
 ) -> tuple[list[np.ndarray], list[np.ndarray] | None, list[tuple[int, int]]]:
     """
     Divides the input image into a grid of sub-images of size `img_size`.

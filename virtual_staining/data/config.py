@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isclose
@@ -115,7 +116,7 @@ class PreprocessingConfig:
             raise ValueError("white_threshold must be between 0 and 255")
 
     @classmethod
-    def from_args(cls, args) -> PreprocessingConfig:
+    def from_args(cls, args: argparse.Namespace) -> PreprocessingConfig:
         config = cls(
             dataset_root=Path(args.path),
             source_name=args.source_name,
