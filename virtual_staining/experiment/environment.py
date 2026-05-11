@@ -15,12 +15,10 @@ def collect_environment() -> dict:
     return {
         "git_commit": _git_commit(),
         "python": sys.version.split()[0],
+        "platform": platform.platform(),
         "torch": _pkg_version("torch"),
         "numpy": _pkg_version("numpy"),
         "opencv": _pkg_version("cv2"),
-        "python_version": sys.version.split()[0],
-        "platform": platform.platform(),
-        "torch_version": _pkg_version("torch"),
         "cuda_available": cuda_available,
         "cuda_version": cuda_version,
         "gpu_name": gpu_name,
