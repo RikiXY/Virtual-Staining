@@ -153,3 +153,45 @@ def test_paired_manifest_dataset_smoke(tmp_path: Path) -> None:
     assert isinstance(source, Image.Image)
     assert isinstance(target, Image.Image)
     assert dataset.sample_ids == ["00000", "00001"]
+
+
+def test_paired_manifest_dataset_getitem_image_size(tmp_path: Path) -> None:
+    (tmp_path / "splits" / "train").mkdir(parents=True)
+    Image.new("RGB", (64, 48)).save(tmp_path / "splits" / "train" / "a_source.tif")
+    Image.new("RGB", (64, 48)).save(tmp_path / "splits" / "train" / "a_target.tif")
+    record = ManifestRecord(
+        sample_id="a",
+        split="train",
+        input_path=Path("splits/train/a_source.tif"),
+        target_path=Path("splits/train/a_target.tif"),
+        input_modality="label_free",
+        target_modality="stained",
+        x=0,
+        y=0,
+        width=64,
+        height=48,
+    )
+    manifest = DatasetManifest(records=(record,), dataset_root=tmp_path)
+    inp, tgt = PairedManifestDataset(manifest)[0]
+    assert inp.size == (64, 48)
+    assert tgt.size == (64, 48)
+
+
+def test_paired_manifest_dataset_sample_ids_ordered(tmp_path: Path) -> None:
+    records = tuple(
+        ManifestRecord(
+            sample_id=sid,
+            split="train",
+            input_path=Path(f"{sid}_source.tif"),
+            target_path=Path(f"{sid}_target.tif"),
+            input_modality="label_free",
+            target_modality="stained",
+            x=0,
+            y=0,
+            width=32,
+            height=32,
+        )
+        for sid in ["c", "a", "b"]
+    )
+    manifest = DatasetManifest(records=records, dataset_root=tmp_path)
+    assert PairedManifestDataset(manifest).sample_ids == ["c", "a", "b"]

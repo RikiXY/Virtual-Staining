@@ -516,6 +516,74 @@ def test_no_duplicate_final_checkpoint_when_already_checkpointed(tmp_path: Path)
     assert checkpoints[0].name == "ep000.pth"
 
 
+def test_checkpoint_rate_creates_multiple_files(tmp_path: Path) -> None:
+    """epochs=2, checkpoint_rate=1: ep000.pth and ep001.pth must both exist."""
+    dataset_root = tmp_path / "dataset"
+    train_dir = dataset_root / "dataset_train"
+    val_dir = dataset_root / "dataset_val"
+    train_dir.mkdir(parents=True)
+    val_dir.mkdir(parents=True)
+    _write_rgb_pair(train_dir)
+    _write_rgb_pair(val_dir)
+
+    project = _make_project(dataset_root, tmp_path / "results", "multi_epoch_run")
+    config = TrainingConfig(
+        batch_size=1,
+        epochs=2,
+        lr_g=2e-4,
+        lr_d=2e-4,
+        beta1=0.5,
+        beta2=0.999,
+        l1_weight=25.0,
+        seed=42,
+        num_workers=0,
+        validate_rate=1,
+        checkpoint_rate=1,
+        log_rate=1,
+    )
+    run_paths = RunPaths(project.run_root)
+    run_paths.create_directories()
+
+    transform = transforms.Compose(
+        [
+            transforms.Resize(project.image_size),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5] * 3, [0.5] * 3),
+        ]
+    )
+    device = torch.device("cpu")
+    train_loader = DataLoader(
+        PairedHistologyDataset(train_dir, transform=transform),
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
+    )
+    val_loader = DataLoader(
+        PairedHistologyDataset(val_dir, transform=transform),
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
+    )
+    trainer = Trainer(
+        config=config,
+        run_paths=run_paths,
+        generator=UNetGenerator().to(device),
+        discriminator=PatchGANDiscriminator().to(device),
+        train_loader=train_loader,
+        val_loader=val_loader,
+        device=device,
+        image_size=project.image_size,
+        train_dir=train_dir,
+        val_dir=val_dir,
+    )
+    trainer.train(seed=42)
+
+    checkpoints = sorted(run_paths.checkpoints_dir.glob("ep*.pth"))
+    assert len(checkpoints) == 2
+    assert checkpoints[0].name == "ep000.pth"
+    assert checkpoints[1].name == "ep001.pth"
+
+
 # ---------------------------------------------------------------------------
 # Architecture metadata: presence and validation (continued)
 # ---------------------------------------------------------------------------
