@@ -1,185 +1,165 @@
 # Virtual-Staining
 
-Paired virtual staining pipeline for histopathology images.
+Paired virtual staining pipeline for histopathological image experiments.
 
-This repository implements a paired virtual staining workflow that combines classical image processing and deep learning. Starting from paired full-size histology images, the pipeline builds an aligned patch dataset, trains a Pix2Pix-style conditional GAN, runs test inference, and provides integrated evaluation and comparison tools.
+This repository prepares aligned source/target patch datasets, trains a Pix2Pix-style model, runs test inference, evaluates generated images, and produces qualitative and run-to-run comparison outputs. The learning pipeline currently uses a U-Net generator with a PatchGAN discriminator.
 
-The learning stage currently uses a **U-Net generator** and a **PatchGAN discriminator**, trained with **adversarial loss + L1 reconstruction loss**.
+The current dataset split is patch-level as implemented in `src/prepare_dataset.py`; it is not a slide-level or patient-level split.
 
-## Overview
-
-The project follows this workflow:
-
-1. load a paired full-size sample (`source` / `target`);
-2. generate tissue masks;
-3. align the target image to the source reference;
-4. extract aligned paired patches;
-5. build `dataset_train`, `dataset_val`, and `dataset_test`;
-6. train the model;
-7. run test inference on held-out patches;
-8. evaluate generated results with integrated metrics and comparison panels.
-
-In addition to preprocessing and training, the repository also includes:
-
-- a metric evaluation tool for **MAE, RMSE, PSNR and SSIM**
-- a comparison tool to generate **visual panels and diagnostic plots**
-
-## Qualitative Results
-
-The figures below show example qualitative outputs included for documentation.
-
-Each panel compares:
-
-- source patch
-- generated target
-- real target
-
+<!-- Future documentation image placeholders:
+- docs/assets/pipeline_overview.png
+- docs/assets/example_comparison.png
+-->
 From Label free to H&E staining.
 ![Qualitative results](docs/assets/LabelFree-to-Stained_qualitative_result_2.png)
 
 From H&E staining to Label free.
 ![Qualitative results](docs/assets/Stained-to-LabelFree_qualitative_result_2.png)
 
-## Main Pipeline
+## Workflow
 
-### 1. Dataset preparation
+1. Prepare a paired patch dataset from full-size source and target images.
+2. Train Pix2Pix on `dataset_train/` and validate on `dataset_val/`.
+3. Run inference on `dataset_test/`.
+4. Evaluate generated images against real targets.
+5. Generate comparison panels or compare metric distributions across runs.
 
-`src/prepare_dataset.py` builds the paired dataset from full-size images.
-
-It:
-
-- computes tissue masks;
-- aligns the target image to the source image;
-- extracts paired patches;
-- creates `dataset_train/`, `dataset_val/`, and `dataset_test/`
-
-### 2. Training and test inference
-
-`src/pix2pix.py` provides two CLI modes:
-
-- `train`
-- `test`
-
-Training creates a run directory with logs, checkpoints, validation outputs and metadata.  
-Test inference loads a checkpoint and generates predictions for the test split.
-
-### 3. Evaluation and visual comparison
-
-`tools/evaluate_generation.py` evaluates generated images against target images and can save:
-
-- per-image metrics
-- summary CSV files
-- skipped samples
-- optional plots
-
-`tools/make_comparison.py` creates:
-
-- source / generated / target comparison panels
-- MAE difference maps
-- optional diagnostic plots
-- representative comparisons selected from evaluation results
-
-## Repository Structure
+## Repository Layout
 
 ```text
 Virtual-Staining/
-├── archive/
-├── docs/
-├── examples/
-├── local_workspace/
 ├── src/
-│   ├── json/
 │   ├── prepare_dataset.py
 │   └── pix2pix.py
 ├── tools/
 │   ├── evaluate_generation.py
-│   └── make_comparison.py
-├── requirements.txt
-├── README.md
-└── TASKS.md
+│   ├── make_comparison.py
+│   ├── compare_distributions.py
+│   └── organize_by_metrics.py
+├── docs/
+├── examples/
+├── local_workspace/
+│   ├── datasets/
+│   └── results/
+└── requirements.txt
 ```
 
-## Example Workflow
+`archive/` contains historical material and is not part of the current workflow.
 
-The commands below show a typical end-to-end usage example.
-
-### Prepare the dataset
+## Installation
 
 ```bash
-python src/prepare_dataset.py \
-  --path local_workspace/datasets/your_sample \
-  --source-name source.tif \
-  --target-name target.tif \
-  --image-size 512 512 \
-  --grid-movement 512 512 \
-  --margin 200 \
-  --seed 42 \
-  --lang en
+python -m venv .venv
+.\.venv\Scripts\activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
-### Train the model
+Use a CUDA-enabled PyTorch build for GPU training.
+
+## Expected Data Layout
+
+Input dataset directory:
+
+```text
+local_workspace/datasets/YOUR_DATASET/
+├── source.tif
+└── target.tif
+```
+
+Prepared dataset:
+
+```text
+local_workspace/datasets/YOUR_DATASET/
+├── dataset_train/
+├── dataset_val/
+├── dataset_test/
+└── discarded_patches/
+```
+
+Run directory:
+
+```text
+local_workspace/results/YOUR_RUN/
+├── run_config.json
+├── logs/
+├── checkpoints/
+├── output_val/
+├── output_test/
+├── evaluation/
+└── comparisons/
+```
+
+Patch naming conventions:
+
+```text
+<sample_id>_source.tif
+<sample_id>_target.tif
+<sample_id>_target_generated.tif
+```
+
+## Quick Start
+
+Prepare the dataset:
 
 ```bash
-python src/pix2pix.py train \
-  --dataset-root local_workspace/datasets/your_sample \
-  --run-name your_run \
-  --results-path local_workspace/results \
-  --epochs 100 \
-  --batch-size 8 \
-  --l1-lambda 25 \
-  --seed 42
+python src/prepare_dataset.py --path local_workspace/datasets/your_dataset --source-name source.tif --target-name target.tif
 ```
 
-### Run test inference
+Train:
 
 ```bash
-python src/pix2pix.py test \
-  --dataset-root local_workspace/datasets/your_sample \
-  --run-path local_workspace/results/your_run \
-  --checkpoint local_workspace/results/your_run/checkpoints/ep099.pth
+python src/pix2pix.py train --dataset-root local_workspace/datasets/your_dataset --run-name your_run --epochs 100
 ```
 
-### Evaluate generated results
+Run test inference:
 
 ```bash
-python tools/evaluate_generation.py dataset \
-  --target-dir local_workspace/datasets/your_sample/dataset_test \
-  --generated-dir local_workspace/results/your_run/output_test \
-  --save-graphs
+python src/pix2pix.py test --dataset-root local_workspace/datasets/your_dataset --run-path local_workspace/results/your_run --checkpoint local_workspace/results/your_run/checkpoints/ep099.pth
 ```
 
-### Create representative comparison panels
+Evaluate:
 
 ```bash
-python tools/make_comparison.py \
-  --from-metrics \
-  --run-path local_workspace/results/your_run
+python tools/evaluate_generation.py dataset --target-dir local_workspace/datasets/your_dataset/dataset_test --generated-dir local_workspace/results/your_run/output_test
 ```
 
-### Create a single comparison panel
+Create representative comparison panels:
 
 ```bash
-python tools/make_comparison.py \
-  --source-image local_workspace/datasets/your_sample/dataset_test/source.tif \
-  --generated-image local_workspace/results/your_run/output_test/generated.tif \
-  --target-image local_workspace/datasets/your_sample/dataset_test/target.tif \
-  --with-diagnostics
+python tools/make_comparison.py from-metrics --run-path local_workspace/results/your_run
 ```
 
-## Notes
+See [workflow examples](workflow_examples.md) for longer command recipes and optional arguments.
 
-- `prepare_dataset.py` is the preprocessing entry point
-- `pix2pix.py` handles training, validation, checkpoints and test inference
-- `evaluate_generation.py` handles metric evaluation
-- `make_comparison.py` handles visual comparison and diagnostics
+## Tools
 
-For detailed options, use:
+- `src/prepare_dataset.py`: masks, registration, patch extraction, patch-level train/val/test split.
+- `src/pix2pix.py`: Pix2Pix training and test inference.
+- `tools/evaluate_generation.py`: per-image metrics, summary statistics, skipped sample report, optional plots.
+- `tools/make_comparison.py`: single-case and metric-selected comparison panels.
+- `tools/compare_distributions.py`: paired or unpaired comparison of metric CSVs across runs.
+- `tools/organize_by_metrics.py`: best/worst folders ranked by metric values.
+
+Evaluation metrics include `mae`, `mse`, `rmse`, `psnr`, `ssim`, `pcc_gray`, and `pcc_rgb_mean`.
+
+## Reproducibility Notes
+
+- Use `--seed` for dataset preparation and training.
+- Training stores key run metadata in `run_config.json`.
+- For rigorous comparisons, keep the dataset, checkpoint, code version, CLI arguments, and evaluation CSVs together.
+- CUDA, PyTorch, OpenCV, and multiprocessing behavior may still vary across environments.
+
+## CLI Help
+
+Use `-h` or `--help` for complete options:
 
 ```bash
 python src/prepare_dataset.py --help
-python src/pix2pix.py --help
 python src/pix2pix.py train --help
 python src/pix2pix.py test --help
 python tools/evaluate_generation.py --help
 python tools/make_comparison.py --help
+python tools/compare_distributions.py --help
+python tools/organize_by_metrics.py --help
 ```
