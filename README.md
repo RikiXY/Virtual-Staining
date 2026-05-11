@@ -1,162 +1,57 @@
-# Virtual-Staining
+# Virtual Staining
 
-Paired virtual staining pipeline for histopathology images.
+Research portfolio project for virtual staining of histopathology images using a Pix2Pix conditional GAN.
 
-This repository implements a paired virtual staining workflow that combines classical image processing and deep learning. Starting from paired full-size histology images, the pipeline builds an aligned patch dataset, trains a Pix2Pix-style conditional GAN, runs test inference, and provides integrated evaluation and comparison tools.
+The pipeline trains a paired image-to-image translation model on aligned histology patch pairs, enabling
+generation of virtually stained images from label-free microscopy inputs (and vice versa).
 
-The learning stage currently uses a **U-Net generator** and a **PatchGAN discriminator**, trained with **adversarial loss + L1 reconstruction loss**.
+## CLI Commands
 
-## Overview
-
-The project follows this workflow:
-
-1. load a paired full-size sample (`source.tif` / `target.tif`)
-2. generate tissue masks
-3. align the target image to the source reference
-4. extract aligned paired patches
-5. build `dataset_train`, `dataset_val`, and `dataset_test`
-6. train the model
-7. run test inference on held-out patches
-8. evaluate generated results with integrated metrics and comparison panels
-
-In addition to preprocessing and training, the repository also includes:
-
-- a metric evaluation tool for **MAE, RMSE, PSNR, and SSIM**
-- a comparison tool to generate **visual panels and diagnostic plots**
-
-## Features
-
-- paired preprocessing pipeline for full-size histology images
-- tissue mask generation for source and target images
-- feature-based alignment of target images to source references
-- patch extraction from aligned tissue regions
-- automatic train/validation/test split generation
-- Pix2Pix-style conditional GAN training and inference
-- Nix-based development environment with `uv`
-- simple `Makefile` commands for common workflows
-
-## Requirements
-
-- **Python 3.11**
-
-Main runtime dependencies:
-
-- OpenCV
-- NumPy
-- Pillow
-- PyTorch
-- torchvision
-- Matplotlib
-
-Dependencies are declared in `pyproject.toml` and the development shell is defined in `flake.nix`.
-
-### Dependency pinning
-
-`pyproject.toml` declares minimum compatibility bounds (e.g. `torch>=2.0`). The exact versions used in development are pinned in `uv.lock`, which records every package and its hash. To reproduce the exact environment:
-
-```bash
-make sync
-```
-
-`uv lock` re-resolves against the bounds in `pyproject.toml` and updates `uv.lock`. Run it when you intentionally want to upgrade dependencies.
-
-## Development Environment
-
-Recommended setup:
-
-```bash
-nix develop
-make sync
-```
-
-The Nix shell provides the base tools:
-
-- Python 3.11
-- `uv`
-- `make`
-
-Project, test, lint, and type-check dependencies are managed by `uv` from
-`pyproject.toml` and pinned in `uv.lock`.
-
-Useful development commands:
-
-```bash
-make format
-make test
-make qa
-make clean
-uv lock
-```
+| Command | Purpose |
+|---|---|
+| `vs-prepare` | Build the patch dataset from full-size image pairs |
+| `vs-train` | Train the Pix2Pix model |
+| `vs-infer` | Run inference on the test split |
+| `vs-evaluate` | Evaluate generated images with MAE, RMSE, PSNR, SSIM |
+| `vs-compare` | Compare metric distributions across runs |
+| `vs-compare-panels` | Build source / generated / target comparison panels |
+| `vs-evaluate-single` | Evaluate a single image pair |
+| `vs-organize` | Organise run outputs |
 
 ## Quick Start
 
-The `Makefile` is the recommended entry point for the standard workflow.
-
-### 1. Prepare the input folder
-
-Create a dataset folder inside `local_workspace/datasets/` containing one paired full-size sample:
-
-```text
-local_workspace/
-├── datasets/
-│   └── your_sample/
-│       ├── source.tif
-│       └── target.tif
-└── results/
-```
-
-### 2. Enter the development environment
-
 ```bash
+# 1. Enter the Nix environment
 nix develop
-make sync
-```
 
-The README examples below assume you are already inside the Nix shell so that `uv` is available.
+# 2. Install dependencies
+uv sync --frozen
 
-### 3. Create a run YAML
-
-Use [`config/runs/example.yaml`](config/runs/example.yaml) as the starting point
-for a complete run configuration:
-
-```bash
+# 3. Copy and edit the example run config
 cp config/runs/example.yaml config/runs/my_run.yaml
+
+# 4. Prepare dataset
+vs-prepare --config config/runs/my_run.yaml
+
+# 5. Train
+vs-train --config config/runs/my_run.yaml
+
+# 6. Run inference
+vs-infer --config config/runs/my_run.yaml
+
+# 7. Evaluate
+vs-evaluate --config config/runs/my_run.yaml
 ```
 
-Edit the YAML and put every experiment value there: dataset path, source/target
-image names, shared image size, preprocessing settings, split ratios, filtering
-thresholds, run name, training hyperparameters, checkpoint selection, and
-evaluation options. Paths under the dataset and run directory are derived by
-default, so the dataset and run name do not need to be repeated.
-The example also shows commented optional overrides for training split dirs,
-inference dirs, and evaluation dirs.
-
-```yaml
-dataset_root: local_workspace/datasets/your_sample
-results_path: local_workspace/results
-run_name: your_run_name
-
-image_size: [256, 256]  # [width, height]
-```
-
-Size values follow the `[width, height]` convention throughout the codebase — `image_size[0]` is width and `image_size[1]` is height.  Square defaults hide any ordering ambiguity, so non-square sizes such as `[320, 256]` (320 px wide, 256 px tall) rely on this convention being honoured.
-
-The Makefile intentionally accepts only `CONFIG` for experiment execution. Do not pass `DATASET`, `RUN_NAME`, `IMAGE_SIZE`, `EPOCHS`, `SEED`, `CHECKPOINT`, or similar run settings to `make`.
-
-### 4. Run the pipeline
-
-Build the paired patch dataset:
+### Makefile shortcuts
 
 ```bash
-make dataset CONFIG=config/runs/my_run.yaml
-```
-
-Train the model, run test inference, and evaluate the outputs:
-
-```bash
-make train CONFIG=config/runs/my_run.yaml
-make infer CONFIG=config/runs/my_run.yaml
-make evaluate CONFIG=config/runs/my_run.yaml
+make dataset        CONFIG=config/runs/my_run.yaml
+make train          CONFIG=config/runs/my_run.yaml
+make infer          CONFIG=config/runs/my_run.yaml
+make evaluate       CONFIG=config/runs/my_run.yaml
+make compare        ARGS="--run-path local_workspace/results/my_run"
+make compare-panels ARGS="from-metrics --run-path local_workspace/results/my_run"
 ```
 
 Or run the full sequence in one command:
@@ -165,326 +60,148 @@ Or run the full sequence in one command:
 make complete-run CONFIG=config/runs/my_run.yaml
 ```
 
-Set `inference.checkpoint` or `inference.checkpoint_policy` in the YAML before
-running inference. The example uses `checkpoint_policy: latest`.
+## Configuration
 
-The main outputs for a run are written under:
+All experiment parameters live in a single YAML file. Copy
+[`config/runs/example.yaml`](config/runs/example.yaml) and edit it:
 
-```text
-local_workspace/results/<run_name>/
+```yaml
+dataset_root: local_workspace/datasets/your_sample
+results_path: local_workspace/results
+run_name: your_run_name
+
+# [width, height] — e.g. [320, 256] means 320 px wide, 256 px tall
+image_size: [256, 256]
+
+preprocessing:
+  source_name: label_free.tif
+  target_name: stained.tif
+  train_ratio: 0.80
+  val_ratio: 0.05
+  test_ratio: 0.15
+  min_foreground_ratio: 0.25
+  seed: 42
+
+training:
+  batch_size: 8
+  epochs: 100
+  lr_g: 0.0002
+  l1_weight: 25.0
+  seed: 42
+
+inference:
+  checkpoint_policy: latest   # or: checkpoint: checkpoints/ep099.pth
+
+evaluation:
+  save_graphs: true
 ```
 
-To inspect the available commands and flags:
+The `CONFIG` variable is the only Make argument accepted for experiment targets.
+Put dataset paths, run names, image sizes, epochs, seeds, and checkpoint selection
+in the YAML — not in Make variables.
 
-```bash
-make help
-uv run vs-prepare --help
-uv run vs-train --help
-uv run vs-infer --help
-uv run vs-evaluate --help
-uv run vs-compare --help
-uv run vs-compare-panels --help
-```
-
-## Common Commands
-
-Use `make` for the standard workflow. Experiment parameters belong in the run YAML, not in Make variables.
-
-### `make dataset`
-
-Builds `dataset_train/`, `dataset_val/`, and `dataset_test/` from one full-size paired sample.
-
-Inputs:
-
-- `CONFIG`, pointing to a run YAML with `dataset_root` and a `preprocessing:` section
-
-Example:
-
-```bash
-make dataset CONFIG=config/runs/my_run.yaml
-```
-
-### `make train`
-
-Starts a training run and writes logs, checkpoints, validation outputs, and metadata into `results_path/run_name`.
-
-Inputs:
-
-- `CONFIG`, pointing to a run YAML with `dataset_root`, `results_path`, `run_name`, and a `training:` section
-
-Example:
-
-```bash
-make train CONFIG=config/runs/my_run.yaml
-```
-
-### `make infer`
-
-Runs inference on `dataset_test/` using a trained checkpoint and writes generated outputs to `output_test/`.
-
-Inputs:
-
-- `CONFIG`, pointing to a run YAML with `inference.checkpoint` or `inference.checkpoint_policy`
-
-Example:
-
-```bash
-make infer CONFIG=config/runs/my_run.yaml
-```
-
-### `make evaluate`
-
-Computes MAE, RMSE, PSNR, and SSIM by comparing `dataset_test/` against `output_test/`. The evaluation tool can also save summary CSV files and aggregate plots.
-
-Example:
-
-```bash
-make evaluate CONFIG=config/runs/my_run.yaml
-```
-
-### `make complete-run`
-
-Runs `dataset`, `train`, `infer`, and `evaluate` sequentially using the same run YAML.
-
-Example:
-
-```bash
-make complete-run CONFIG=config/runs/my_run.yaml
-```
+See [`docs/architecture.md`](docs/architecture.md) for the full config schema and
+[`docs/run_format.md`](docs/run_format.md) for run output layout.
 
 ## Qualitative Results
 
-The figures below show example qualitative outputs included for documentation.
+Each panel compares source patch, generated target, and real target.
 
-Each panel compares:
-
-- source patch
-- generated target
-- real target
-
-From label free to H&E staining.
+From label-free to H&E staining:
 ![Qualitative results](docs/assets/LabelFree-to-Stained_qualitative_result_2.png)
 
-From H&E staining to label free.
+From H&E staining to label-free:
 ![Qualitative results](docs/assets/Stained-to-LabelFree_qualitative_result_2.png)
 
-## Main Pipeline
+## Package Structure
 
-### 1. Dataset preparation
+- `utils/` — shared primitives: dimensions, image I/O, metrics helpers
+- `config/` — YAML loading, validation, typed config sections
+- `experiment/` — run concept: RunPaths, RunContext, RunMetadata, environment snapshots
+- `reporting/` — Reporter protocol with Null, Logging, and Console implementations
+- `models/` — UNetGenerator, PatchGANDiscriminator, factory, model config
+- `data/` — dataset, manifest, builder, preprocessing pipeline
+- `training/` — Trainer, runner, steps, losses, checkpoint management
+- `inference/` — Predictor, runner, output writers
+- `evaluation/` — metrics, evaluator, summaries, panels, ranking
+- `applications/` — use-case orchestrators (no argparse)
+- `cli/` — thin argparse entrypoints delegating to `applications/`
 
-`vs-prepare` (or `make dataset`) builds the paired dataset from full-size images.
-
-It:
-
-- computes tissue masks
-- aligns the target image to the source image
-- extracts paired patches
-- creates `dataset_train/`, `dataset_val/`, and `dataset_test/`
-
-### 2. Training and test inference
-
-`vs-train` and `vs-infer` (or `make train` / `make infer`) provide the training and inference entry points.
-
-Training creates a run directory with logs, checkpoints, validation outputs, and metadata. Inference loads a checkpoint and generates predictions for the test split.
-
-### 3. Evaluation and visual comparison
-
-`vs-evaluate` (or `make evaluate`) evaluates generated images against target images and can save:
-
-- per-image metrics
-- summary CSV files
-- skipped samples
-- optional plots
-
-`vs-compare-panels` creates:
-
-- source / generated / target comparison panels
-- MAE difference maps
-- optional diagnostic plots
-- representative comparisons selected from evaluation results
+See [`docs/architecture.md`](docs/architecture.md) for the full description and layer boundaries.
 
 ## Repository Structure
 
 ```text
 Virtual-Staining/
 ├── config/
-│   └── runs/               # run YAML files (example.yaml template)
+│   └── runs/                   # run YAML files (example.yaml template)
 ├── docs/
-│   ├── assets/             # qualitative result images
+│   ├── assets/                 # qualitative result images
 │   ├── notebooks/
 │   └── reports/
-├── examples/               # example input images
+├── examples/                   # example input images
 ├── local_workspace/
-│   ├── datasets/           # input paired samples (gitignored)
-│   └── results/            # run outputs (gitignored)
-├── tests/                  # pytest test suite
-├── virtual_staining/       # package — CLI entry points and library
-│   ├── applications/       # business logic (train, infer, evaluate, compare …)
-│   ├── cli/                # argparse wrappers delegating to applications/
+│   ├── datasets/               # input paired samples (gitignored)
+│   └── results/                # run outputs (gitignored)
+├── tests/                      # pytest test suite
+├── virtual_staining/           # installable package
+│   ├── applications/           # use-case orchestrators
+│   ├── cli/                    # argparse entry points
 │   ├── config/
 │   ├── data/
 │   ├── evaluation/
+│   ├── experiment/
+│   ├── inference/
 │   ├── models/
+│   ├── reporting/
 │   ├── training/
 │   └── utils/
 ├── Makefile
 ├── flake.nix
 ├── pyproject.toml
-├── uv.lock
-└── README.md
+└── uv.lock
 ```
 
-## Advanced CLI Examples
-
-These are the direct CLI equivalents of the Makefile experiment targets.
-
-### Prepare the dataset
+## Development
 
 ```bash
-uv run vs-prepare --config config/runs/my_run.yaml
+# Inside nix develop shell:
+make qa
+# Equivalent to:
+uv run ruff check .
+uv run ruff format --check .
+uv run pyright
+uv run --group dev pytest
 ```
 
-### Train the model
+Other useful commands:
 
 ```bash
-uv run vs-train --config config/runs/my_run.yaml
+make format       # apply ruff formatting
+make lint         # ruff lint check
+make check-types  # pyright only
+make test         # pytest only
+make sync         # reinstall from uv.lock
+uv lock           # re-resolve dependencies
 ```
 
-### Run test inference
+## Data Split Caveat
 
-```bash
-uv run vs-infer --config config/runs/my_run.yaml
-```
-
-### Evaluate generated results
-
-```bash
-uv run vs-evaluate --config config/runs/my_run.yaml
-```
-
-### Create representative comparison panels
-
-```bash
-uv run vs-compare-panels from-metrics \
-  --run-path local_workspace/results/your_run
-```
-
-### Create a single comparison panel
-
-```bash
-uv run vs-compare-panels single \
-  --source-image local_workspace/datasets/your_sample/dataset_test/00512_09216_source.tif \
-  --generated-image local_workspace/results/your_run/output_test/00512_09216_target_generated.tif \
-  --target-image local_workspace/datasets/your_sample/dataset_test/00512_09216_target.tif \
-  --with-diagnostics
-```
-
-## Notes
-
-- `vs-prepare` / `make dataset` is the preprocessing entry point
-- `vs-train` / `make train` handles training, validation, checkpoints, and metadata
-- `vs-infer` / `make infer` loads a checkpoint and generates predictions
-- `vs-evaluate` / `make evaluate` handles metric evaluation
-- `vs-compare-panels` handles visual comparison and diagnostics
-- [`config/runs/example.yaml`](config/runs/example.yaml) documents the run
-  schema used by `dataset`, `train`, `infer`, and `evaluate`
-
-## Input and Output Conventions
-
-### Preprocessing input
-
-Expected full-size input files:
-
-- `source.tif`
-- `target.tif`
-
-### Training and test patch pairs
-
-Expected paired patch naming:
-
-- `00000_00000_source.tif`
-- `00000_00000_target.tif`
-
-Only prefix-matched pairs are used by the dataset loader.
-
-### Typical generated artifacts
-
-- tissue masks for both input images
-- aligned target image artifacts
-- extracted paired patches in `subimages/`
-- dataset splits in `dataset_train/`, `dataset_val/`, and `dataset_test/`
-- validation predictions
-- saved checkpoints
-- test predictions
+The default split is **patch-level**: train, validation, and test patches are all drawn
+from the same slide. Metrics on `dataset_test/` measure same-slide internal validation,
+not independent generalization. For generalizability evidence, use a slide-level,
+patient-level, or spatial-block split strategy — the current pipeline does not implement
+these.
 
 ## Method
 
-The pipeline combines deterministic image processing with paired supervised deep learning.
-
-### Preprocessing
-
-- mask generation isolates tissue regions and reduces background-heavy areas
-- alignment registers the target image to the source reference using feature-based matching and affine transformation
-- patch extraction divides aligned images into fixed-size patches while filtering mostly background regions
-
-### Learning model
-
-- Pix2Pix-style conditional GAN trained on paired histology patches
-- U-Net-like generator with skip connections
-- PatchGAN discriminator operating on conditional image pairs
-- adversarial supervision combined with reconstruction loss
-
-This setup is suitable for paired image-to-image translation, where the generated target image should remain structurally consistent with the input source image.
-
-## Limitations
-
-The project is usable, but still experimental in several respects.
-
-- The workflow is CLI-driven and uses a run YAML for standard experiment settings.
-- The repository includes historical material alongside the current workflow.
-- Dependency management is present, but still relatively lightweight.
-
-### Data split and generalization
-
-The default train/validation/test split is **patch-level**: all splits are drawn
-from patches of the same slide. Metrics reported on `dataset_test/` therefore
-measure same-slide internal validation, not independent generalization. A model
-that performs well under this setting may still fail on slides or patients it
-has never seen, because nearby patches from the same tissue share texture,
-staining conditions, and artifacts.
-
-Interpreting same-slide patch metrics as evidence of generalization is
-discouraged. Stronger evidence of generalization requires one of the following:
-
-- **slide-level split** — hold out entire slides for the test set
-- **patient-level split** — hold out all slides from certain donors or cases
-- **spatial-block split** — partition each slide into non-overlapping spatial
-  blocks and assign whole blocks to each split
-
-The current pipeline does not implement these strategies. If your evaluation
-goal is generalizability to new tissue samples or new patients, the split
-strategy must be adapted before drawing conclusions from the reported metrics.
-
-## Future Improvements
-
-Possible directions for improvement:
-
-- centralized configuration for paths and hyperparameters
-- stronger reproducibility and dataset bookkeeping
-- clearer separation between preprocessing, training, and evaluation modules
-- expanded evaluation and visualization utilities
-- more consistent CLI design across scripts
-
-## Academic Context
-
-This project was developed in a university and research-oriented setting focused on:
-
-- virtual staining
-- computational histopathology
-- paired image-to-image translation
-
-It reflects both the methodological importance of aligned supervision and the practical engineering work required to turn full-size microscopy images into training-ready paired datasets.
+- **Preprocessing** — tissue masking, feature-based affine alignment of target to source,
+  patch extraction with foreground and white-area quality filters.
+- **Model** — Pix2Pix conditional GAN: U-Net generator with skip connections and
+  PatchGAN discriminator, trained with adversarial loss + L1 reconstruction loss.
+- **Evaluation** — per-image MAE, RMSE, PSNR, SSIM; summary statistics; optional
+  comparison panels with difference maps.
 
 ## License
 
-This project is released under the **MIT License**. See [`LICENSE`](./LICENSE) for details.
+Released under the **MIT License**. See [`LICENSE`](./LICENSE) for details.
