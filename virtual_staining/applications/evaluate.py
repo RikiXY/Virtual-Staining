@@ -32,11 +32,11 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
     save_stage_config_snapshots(
         config,
         config_path,
-        input_dest=paths.input_config,
-        resolved_dest=paths.resolved_config,
-        hash_dest=paths.config_hash,
+        input_dest=paths.config_dir / "evaluation.input.yaml",
+        resolved_dest=paths.config_dir / "evaluation.resolved.yaml",
+        hash_dest=paths.metadata_dir / "evaluation_config_hash.txt",
     )
-    save_environment_snapshot(paths.environment_metadata)
+    save_environment_snapshot(paths.metadata_dir / "evaluation_environment.json")
     eval_cfg = config.evaluation
 
     target_dir = (

@@ -124,7 +124,7 @@ def test_output_filename_ends_with_target_generated_suffix(tmp_path: Path) -> No
     )
 
 
-def test_inference_writes_canonical_snapshot_files(tmp_path: Path) -> None:
+def test_inference_writes_stage_scoped_snapshot_files(tmp_path: Path) -> None:
     test_dir = tmp_path / "test"
     test_dir.mkdir()
     output_dir = tmp_path / "output"
@@ -141,10 +141,43 @@ def test_inference_writes_canonical_snapshot_files(tmp_path: Path) -> None:
     )
 
     run_root = config.project.run_root
-    assert (run_root / "config" / "input.yaml").exists()
-    assert (run_root / "config" / "resolved.yaml").exists()
-    assert (run_root / "metadata" / "config_hash.txt").exists()
-    assert (run_root / "metadata" / "environment.json").exists()
+    assert (run_root / "config" / "inference.input.yaml").exists()
+    assert (run_root / "config" / "inference.resolved.yaml").exists()
+    assert (run_root / "metadata" / "inference_config_hash.txt").exists()
+    assert (run_root / "metadata" / "inference_environment.json").exists()
+    assert not (run_root / "config" / "input.yaml").exists()
+    assert not (run_root / "config" / "resolved.yaml").exists()
+    assert not (run_root / "metadata" / "config_hash.txt").exists()
+
+
+def test_inference_preserves_existing_training_snapshot_files(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    checkpoint = tmp_path / "ep000.pth"
+
+    _write_pair(test_dir)
+    _save_checkpoint(checkpoint)
+
+    run_root = tmp_path / "test_run"
+    config_dir = run_root / "config"
+    metadata_dir = run_root / "metadata"
+    config_dir.mkdir(parents=True)
+    metadata_dir.mkdir(parents=True)
+    (config_dir / "input.yaml").write_text("train input\n", encoding="utf-8")
+    (config_dir / "resolved.yaml").write_text("train resolved\n", encoding="utf-8")
+    (metadata_dir / "config_hash.txt").write_text("sha256:train\n", encoding="utf-8")
+
+    _run_inference(
+        checkpoint_path=checkpoint,
+        test_folder=str(test_dir),
+        output_folder=str(output_dir),
+        image_size=_IMAGE_SIZE,
+    )
+
+    assert (config_dir / "input.yaml").read_text(encoding="utf-8") == "train input\n"
+    assert (config_dir / "resolved.yaml").read_text(encoding="utf-8") == "train resolved\n"
+    assert (metadata_dir / "config_hash.txt").read_text(encoding="utf-8") == "sha256:train\n"
 
 
 def test_output_sample_id_matches_target(tmp_path: Path) -> None:

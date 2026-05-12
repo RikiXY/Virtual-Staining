@@ -66,11 +66,11 @@ def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
     save_stage_config_snapshots(
         config,
         config_path,
-        input_dest=paths.input_config,
-        resolved_dest=paths.resolved_config,
-        hash_dest=paths.config_hash,
+        input_dest=paths.config_dir / "inference.input.yaml",
+        resolved_dest=paths.config_dir / "inference.resolved.yaml",
+        hash_dest=paths.metadata_dir / "inference_config_hash.txt",
     )
-    save_environment_snapshot(paths.environment_metadata)
+    save_environment_snapshot(paths.metadata_dir / "inference_environment.json")
     checkpoint_path = _resolve_checkpoint(config, paths)
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 

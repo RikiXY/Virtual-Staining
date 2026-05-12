@@ -10,8 +10,13 @@ from virtual_staining.applications.compare_panels import FromMetricsResult
 from virtual_staining.applications.evaluate_single import DatasetEvalResult
 from virtual_staining.cli import compare as compare_cli
 from virtual_staining.cli import compare_panels as compare_panels_cli
+from virtual_staining.cli import evaluate as evaluate_cli
 from virtual_staining.cli import evaluate_single as evaluate_single_cli
+from virtual_staining.cli import infer as infer_cli
 from virtual_staining.cli import organize as organize_cli
+from virtual_staining.cli import prepare_dataset as prepare_cli
+from virtual_staining.cli import train as train_cli
+from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.statistics import PairedSummary
 
 
@@ -226,3 +231,100 @@ def test_organize_main_with_config_invokes_organize(
     assert request.top_k == 5  # type: ignore[attr-defined]
     assert request.mode == "copy"  # type: ignore[attr-defined]
     assert request.include_all_ranked is True  # type: ignore[attr-defined]
+
+
+def test_train_main_passes_full_run_config_and_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """\
+        training:
+          epochs: 1
+        """,
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_train(config: RunConfig, incoming_path: Path) -> None:
+        captured["config"] = config
+        captured["config_path"] = incoming_path
+
+    monkeypatch.setattr(train_cli, "train", _fake_train)
+
+    train_cli.main(["--config", str(config_path)])
+
+    assert isinstance(captured["config"], RunConfig)
+    assert captured["config_path"] == config_path.resolve()
+
+
+def test_infer_main_passes_full_run_config_and_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """\
+        inference:
+          checkpoint_path: /tmp/ep000.pth
+        """,
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_infer(config: RunConfig, incoming_path: Path) -> None:
+        captured["config"] = config
+        captured["config_path"] = incoming_path
+
+    monkeypatch.setattr(infer_cli, "infer", _fake_infer)
+
+    infer_cli.main(["--config", str(config_path)])
+
+    assert isinstance(captured["config"], RunConfig)
+    assert captured["config_path"] == config_path.resolve()
+
+
+def test_evaluate_main_passes_full_run_config_and_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """\
+        evaluation:
+          save_graphs: false
+        """,
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_evaluate(config: RunConfig, incoming_path: Path) -> None:
+        captured["config"] = config
+        captured["config_path"] = incoming_path
+
+    monkeypatch.setattr(evaluate_cli, "evaluate", _fake_evaluate)
+
+    evaluate_cli.main(["--config", str(config_path)])
+
+    assert isinstance(captured["config"], RunConfig)
+    assert captured["config_path"] == config_path.resolve()
+
+
+def test_prepare_main_passes_full_run_config_and_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """\
+        preprocessing:
+          source_name: source.png
+          target_name: target.png
+        """,
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_prepare(config: RunConfig, incoming_path: Path) -> None:
+        captured["config"] = config
+        captured["config_path"] = incoming_path
+
+    monkeypatch.setattr(prepare_cli, "prepare", _fake_prepare)
+
+    prepare_cli.main(["--config", str(config_path)])
+
+    assert isinstance(captured["config"], RunConfig)
+    assert captured["config_path"] == config_path.resolve()
