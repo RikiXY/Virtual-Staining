@@ -99,6 +99,9 @@ def _run_inference(
         ),
         preprocessing=None,
         evaluation=None,
+        compare=None,
+        compare_panels=None,
+        organize=None,
     )
     _run_inference_impl(config, checkpoint_path)
 

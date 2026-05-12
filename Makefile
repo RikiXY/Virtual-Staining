@@ -12,9 +12,10 @@ help:
 	@printf "  %-24s %s\n" "infer" "Run inference via vs-infer CLI from CONFIG"
 	@printf "  %-24s %s\n" "evaluate" "Evaluate outputs via vs-evaluate CLI from CONFIG"
 	@printf "  %-24s %s\n" "complete-run" "Run dataset, train, infer, evaluate from CONFIG"
-	@printf "  %-24s %s\n" "compare" "Compare metric distributions via vs-compare"
-	@printf "  %-24s %s\n" "compare-panels" "Build comparison panels via vs-compare-panels"
-	@printf "  %-24s %s\n" "evaluate-single" "Evaluate a single image pair via vs-evaluate-single"
+	@printf "  %-24s %s\n" "compare" "Compare metric distributions from CONFIG"
+	@printf "  %-24s %s\n" "compare-panels" "Build comparison panels from CONFIG"
+	@printf "  %-24s %s\n" "evaluate-single" "Evaluate dataset image pairs from CONFIG"
+	@printf "  %-24s %s\n" "organize" "Sort run outputs by metrics from CONFIG"
 	@printf "  %-24s %s\n" "sync" "Sync uv dependencies from uv.lock"
 	@printf "  %-24s %s\n" "format" "Format Python files with ruff"
 	@printf "  %-24s %s\n" "lint" "Check Python files with ruff"
@@ -24,7 +25,7 @@ help:
 	@printf "  %-24s %s\n" "qa" "Run checks and tests"
 	@printf "  %-24s %s\n" "clean" "Remove local caches"
 	@printf "\nExperiment configuration policy:\n"
-	@printf "  %-24s %s\n" "CONFIG" "Required for dataset/train/infer/evaluate/complete-run"
+	@printf "  %-24s %s\n" "CONFIG" "Required for experiment and utility targets"
 	@printf "  Put dataset paths, run names, image sizes, epochs, seeds,"
 	@printf " checkpoints, and evaluation paths in YAML.\n"
 	@printf "\nExamples:\n"
@@ -60,17 +61,17 @@ complete-run: require-config
 	$(MAKE) infer CONFIG=$(CONFIG)
 	$(MAKE) evaluate CONFIG=$(CONFIG)
 
-compare:
-	$(UV) run vs-compare $(ARGS)
+compare: require-config
+	$(UV) run vs-compare --config $(CONFIG)
 
-compare-panels:
-	$(UV) run vs-compare-panels $(ARGS)
+compare-panels: require-config
+	$(UV) run vs-compare-panels --config $(CONFIG)
 
-evaluate-single:
-	$(UV) run vs-evaluate-single $(ARGS)
+evaluate-single: require-config
+	$(UV) run vs-evaluate-single --config $(CONFIG)
 
-organize:
-	$(UV) run vs-organize $(ARGS)
+organize: require-config
+	$(UV) run vs-organize --config $(CONFIG)
 
 format:
 	$(RUFF) format .

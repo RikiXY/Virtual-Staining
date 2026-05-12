@@ -82,3 +82,22 @@ evaluation:
   # output_dir: local_workspace/results/example_run/evaluation
   save_graphs: true
   # hide_graphs_path: false
+
+# Optional utility targets driven by `make compare`, `make compare-panels`,
+# `make evaluate-single`, and `make organize`.
+#
+# compare:
+#   mode: paired
+#   # Defaults run_a to results_path/run_name when omitted.
+#   run_b: local_workspace/results/baseline_run
+#   column: ssim
+#
+# compare_panels:
+#   mode: from_metrics
+#   # Defaults run_path to results_path/run_name when omitted.
+#   hide_graphs_path: false
+#
+# organize:
+#   # Defaults run_path to results_path/run_name when omitted.
+#   top_k: 20
+#   mode: hardlink

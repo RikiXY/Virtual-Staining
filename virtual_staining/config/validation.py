@@ -13,6 +13,9 @@ _TOP_LEVEL_KEYS: frozenset[str] = frozenset(
         "training",
         "inference",
         "evaluation",
+        "compare",
+        "compare_panels",
+        "organize",
         "model",
     }
 )

@@ -8,6 +8,7 @@ from virtual_staining.applications.compare import (
     CompareRequest,
     compare,
 )
+from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.statistics import (
     PairedSummary,
     UnpairedComparison,
@@ -361,6 +362,12 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
         add_help=True,
     )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Path to run config YAML. Uses the config's compare section.",
+    )
     subparsers = parser.add_subparsers(dest="mode")
     _add_unpaired_subparser(subparsers)
     _add_paired_subparser(subparsers)
@@ -390,22 +397,42 @@ def _build_request(args: argparse.Namespace) -> CompareRequest:
     )
 
 
-def main(argv: list[str] | None = None) -> None:
-    parser = _build_parser()
-    args = parser.parse_args(argv)
+def _build_request_from_config(config_path: Path) -> CompareRequest:
+    config = RunConfig.from_yaml(config_path.resolve())
+    compare_cfg = config.compare
+    if compare_cfg is None:
+        raise SystemExit("Config has no 'compare' section.")
 
-    if args.mode is None:
-        parser.print_help()
-        return
+    args = argparse.Namespace(
+        mode=compare_cfg.mode,
+        run_a=(
+            compare_cfg.run_a
+            if compare_cfg.run_a is not None
+            else config.project.run_root
+            if compare_cfg.csv_a is None
+            else None
+        ),
+        run_b=compare_cfg.run_b,
+        csv_a=compare_cfg.csv_a,
+        csv_b=compare_cfg.csv_b,
+        label_a=compare_cfg.label_a,
+        label_b=compare_cfg.label_b,
+        column=compare_cfg.column,
+        output_dir=compare_cfg.output_dir,
+        higher_is_better=compare_cfg.higher_is_better is True,
+        lower_is_better=compare_cfg.lower_is_better is True,
+        bins=compare_cfg.bins,
+        min_value=compare_cfg.min_value,
+        max_value=compare_cfg.max_value,
+        thresholds=list(compare_cfg.thresholds) if compare_cfg.thresholds is not None else None,
+        tolerance=compare_cfg.tolerance,
+        sample_id_column=compare_cfg.sample_id_column,
+    )
+    args.resolved_higher_is_better = resolve_metric_direction(args)
+    return _build_request(args)
 
-    try:
-        args.resolved_higher_is_better = resolve_metric_direction(args)
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
 
-    request = _build_request(args)
-    result = compare(request)
-
+def _print_result(result: Any, request: CompareRequest) -> None:
     if result.mode == "unpaired":
         assert result.group_a is not None
         assert result.group_b is not None
@@ -422,3 +449,26 @@ def main(argv: list[str] | None = None) -> None:
         _print_paired_cli_summary(result.paired_summary, request, result.output_dir)
     else:
         raise SystemExit(f"Unsupported comparison mode: {result.mode}")
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    if args.config is not None:
+        request = _build_request_from_config(args.config)
+        result = compare(request)
+        _print_result(result, request)
+        return
+
+    if args.mode is None:
+        parser.error("either --config or a comparison mode is required")
+
+    try:
+        args.resolved_higher_is_better = resolve_metric_direction(args)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    request = _build_request(args)
+    result = compare(request)
+    _print_result(result, request)

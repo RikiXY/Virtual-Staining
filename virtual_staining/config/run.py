@@ -3,11 +3,19 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from virtual_staining.config.loader import load_yaml_mapping
 from virtual_staining.config.project import ProjectConfig
 from virtual_staining.config.sections import section_with_shared_fields
+from virtual_staining.config.utilities import (
+    _COMPARE_KEYS,
+    _COMPARE_PANELS_KEYS,
+    _ORGANIZE_KEYS,
+    CompareConfig,
+    ComparePanelsConfig,
+    OrganizeConfig,
+)
 from virtual_staining.config.validation import (
     _TOP_LEVEL_KEYS,
     parse_bool_strict,
@@ -48,12 +56,25 @@ class RunConfig:
     inference: InferenceConfig | None
     preprocessing: PreprocessingConfig | None
     evaluation: EvaluationConfig | None
+    compare: CompareConfig | None
+    compare_panels: ComparePanelsConfig | None
+    organize: OrganizeConfig | None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> RunConfig:
         raw = load_yaml_mapping(path)
         if any(
-            key in raw for key in ("training", "inference", "model", "evaluation", "preprocessing")
+            key in raw
+            for key in (
+                "training",
+                "inference",
+                "model",
+                "evaluation",
+                "preprocessing",
+                "compare",
+                "compare_panels",
+                "organize",
+            )
         ):
             reject_unknown_keys(raw, _TOP_LEVEL_KEYS, "top level")
 
@@ -71,6 +92,9 @@ class RunConfig:
             if "evaluation" in raw or any(key in raw for key in _FLAT_EVALUATION_KEYS)
             else None
         )
+        compare = _parse_compare(raw) if "compare" in raw else None
+        compare_panels = _parse_compare_panels(raw) if "compare_panels" in raw else None
+        organize = _parse_organize(raw) if "organize" in raw else None
 
         return cls(
             project=project,
@@ -79,6 +103,9 @@ class RunConfig:
             inference=inference,
             preprocessing=preprocessing,
             evaluation=evaluation,
+            compare=compare,
+            compare_panels=compare_panels,
+            organize=organize,
         )
 
 
@@ -201,4 +228,94 @@ def _parse_evaluation(raw: dict[str, Any]) -> EvaluationConfig:
         target_dir=Path(data["target_dir"]) if data.get("target_dir") else None,
         generated_dir=Path(data["generated_dir"]) if data.get("generated_dir") else None,
         output_dir=Path(data["output_dir"]) if data.get("output_dir") else None,
+    )
+
+
+def _parse_compare(raw: dict[str, Any]) -> CompareConfig:
+    data = section_with_shared_fields(raw, "compare", set())
+    reject_unknown_keys(data, _COMPARE_KEYS, "compare")
+    raw_mode = str(data.get("mode", "paired"))
+    if raw_mode not in {"paired", "unpaired"}:
+        raise ValueError("compare.mode must be 'paired' or 'unpaired'")
+    mode = cast(Literal["paired", "unpaired"], raw_mode)
+    thresholds = data.get("thresholds")
+    return CompareConfig(
+        mode=mode,
+        run_a=Path(data["run_a"]) if data.get("run_a") else None,
+        run_b=Path(data["run_b"]) if data.get("run_b") else None,
+        csv_a=Path(data["csv_a"]) if data.get("csv_a") else None,
+        csv_b=Path(data["csv_b"]) if data.get("csv_b") else None,
+        label_a=data.get("label_a"),
+        label_b=data.get("label_b"),
+        column=str(data.get("column", "ssim")),
+        output_dir=Path(data["output_dir"]) if data.get("output_dir") else None,
+        higher_is_better=(
+            parse_bool_strict(data["higher_is_better"], "higher_is_better")
+            if "higher_is_better" in data
+            else None
+        ),
+        lower_is_better=(
+            parse_bool_strict(data["lower_is_better"], "lower_is_better")
+            if "lower_is_better" in data
+            else None
+        ),
+        bins=int(data.get("bins", 30)),
+        min_value=float(data["min_value"]) if data.get("min_value") is not None else None,
+        max_value=float(data["max_value"]) if data.get("max_value") is not None else None,
+        thresholds=tuple(float(value) for value in thresholds) if thresholds is not None else None,
+        tolerance=float(data.get("tolerance", 0.0)),
+        sample_id_column=str(data.get("sample_id_column", "sample_id")),
+    )
+
+
+def _parse_compare_panels(raw: dict[str, Any]) -> ComparePanelsConfig:
+    data = section_with_shared_fields(raw, "compare_panels", set())
+    reject_unknown_keys(data, _COMPARE_PANELS_KEYS, "compare_panels")
+    raw_mode = str(data.get("mode", "from_metrics"))
+    if raw_mode not in {"single", "from_metrics"}:
+        raise ValueError("compare_panels.mode must be 'single' or 'from_metrics'")
+    mode = cast(Literal["single", "from_metrics"], raw_mode)
+    return ComparePanelsConfig(
+        mode=mode,
+        run_path=Path(data["run_path"]) if data.get("run_path") else None,
+        hide_graphs_path=(
+            parse_bool_strict(data["hide_graphs_path"], "hide_graphs_path")
+            if "hide_graphs_path" in data
+            else False
+        ),
+        source_image=Path(data["source_image"]) if data.get("source_image") else None,
+        generated_image=Path(data["generated_image"]) if data.get("generated_image") else None,
+        target_image=Path(data["target_image"]) if data.get("target_image") else None,
+        save_path=Path(data["save_path"]) if data.get("save_path") else None,
+        with_diagnostics=(
+            parse_bool_strict(data["with_diagnostics"], "with_diagnostics")
+            if "with_diagnostics" in data
+            else False
+        ),
+    )
+
+
+def _parse_organize(raw: dict[str, Any]) -> OrganizeConfig:
+    data = section_with_shared_fields(raw, "organize", set())
+    reject_unknown_keys(data, _ORGANIZE_KEYS, "organize")
+    raw_mode = str(data.get("mode", "hardlink"))
+    if raw_mode not in {"hardlink", "symlink", "copy"}:
+        raise ValueError("organize.mode must be one of: hardlink, symlink, copy")
+    mode = cast(Literal["hardlink", "symlink", "copy"], raw_mode)
+    metrics = data.get("metrics")
+    return OrganizeConfig(
+        run_path=Path(data["run_path"]) if data.get("run_path") else None,
+        metrics_csv=Path(data["metrics_csv"]) if data.get("metrics_csv") else None,
+        output_dir=Path(data["output_dir"]) if data.get("output_dir") else None,
+        metrics=tuple(str(metric) for metric in metrics) if metrics is not None else None,
+        top_k=int(data.get("top_k", 20)),
+        mode=mode,
+        include_all_ranked=(
+            parse_bool_strict(data["include_all_ranked"], "include_all_ranked")
+            if "include_all_ranked" in data
+            else False
+        ),
+        overwrite=(
+            parse_bool_strict(data["overwrite"], "overwrite") if "overwrite" in data else False
+        ),
     )

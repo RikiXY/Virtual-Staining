@@ -176,8 +176,8 @@ def _add_dataset_subparser(subparsers: Any) -> None:
     dataset_parser.add_argument(
         "--config",
         type=str,
-        default="config/runs/example.yaml",
-        help="path to the run config YAML (default: config/runs/example.yaml)",
+        required=True,
+        help="Path to the run config YAML.",
     )
     dataset_parser.add_argument(
         "--hide-graphs-path",
@@ -208,6 +208,17 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
         add_help=True,
     )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to the run config YAML. Runs the dataset evaluation mode.",
+    )
+    parser.add_argument(
+        "--hide-graphs-path",
+        action="store_true",
+        help="Do not print the full list of saved graph paths for config-driven dataset mode.",
+    )
     subparsers = parser.add_subparsers(dest="mode")
     _add_single_subparser(subparsers)
     _add_dataset_subparser(subparsers)
@@ -217,7 +228,12 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    if not hasattr(args, "func"):
-        parser.print_help()
+    if args.mode == "single":
+        args.func(args)
         return
+    if args.config is not None:
+        _cmd_dataset(args)
+        return
+    if not hasattr(args, "func"):
+        parser.error("either --config or an evaluate-single mode is required")
     args.func(args)
