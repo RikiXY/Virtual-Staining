@@ -11,7 +11,8 @@
 !/local_workspace/results/.gitkeep
 
 # Local run configs (personal copies; the example.yaml is tracked)
-config/runs/local/
+!config/runs/local/
+config/runs/local/*
 !config/runs/local/.gitkeep
 
 # Python
