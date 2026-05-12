@@ -157,7 +157,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Examples:\n"
             "  vs-compare-panels single\n"
             "      --source-image local_workspace/datasets/your_run/dataset_test/00512_09216_source.tif\n"  # noqa: E501
-            "      --generated-image local_workspace/results/your_run/output_test/00512_09216_target_generated.tif\n"  # noqa: E501
+            "      --generated-image local_workspace/results/your_run/artifacts/output_test/00512_09216_target_generated.tif\n"  # noqa: E501
             "      --target-image local_workspace/datasets/your_run/dataset_test/00512_09216_target.tif\n"  # noqa: E501
             "      --with-diagnostics\n"
             "\n"

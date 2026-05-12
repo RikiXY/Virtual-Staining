@@ -116,6 +116,12 @@ def test_compare_panels_help_includes_config() -> None:
     assert "--config" in compare_panels_cli._build_parser().format_help()
 
 
+def test_compare_panels_help_uses_artifacts_output_test_path() -> None:
+    help_text = compare_panels_cli._build_parser().format_help()
+    assert "artifacts/output_test" in help_text
+    assert "results/your_run/output_test" not in help_text
+
+
 def test_compare_panels_main_with_config_invokes_compare_panels(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -157,6 +163,12 @@ def test_compare_panels_main_with_config_invokes_compare_panels(
 
 def test_evaluate_single_help_includes_config() -> None:
     assert "--config" in evaluate_single_cli._build_parser().format_help()
+
+
+def test_evaluate_single_help_uses_artifacts_output_test_path() -> None:
+    help_text = evaluate_single_cli._build_parser().format_help()
+    assert "artifacts/output_test" in help_text
+    assert "results/your_run/output_test" not in help_text
 
 
 def test_evaluate_single_main_with_config_invokes_dataset_mode(

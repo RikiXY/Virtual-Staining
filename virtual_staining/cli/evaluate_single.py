@@ -198,7 +198,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Examples:\n"
             "  vs-evaluate-single single\n"
             "      --target-image local_workspace/datasets/your_run/dataset_test/00512_09216_target.tif\n"  # noqa: E501
-            "      --generated-image local_workspace/results/your_run/output_test/00512_09216_target_generated.tif\n"  # noqa: E501
+            "      --generated-image local_workspace/results/your_run/artifacts/output_test/00512_09216_target_generated.tif\n"  # noqa: E501
             "\n"
             "  vs-evaluate-single dataset\n"
             "      --config config/runs/example.yaml\n\n"

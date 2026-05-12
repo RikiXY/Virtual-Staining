@@ -68,7 +68,7 @@ inference:
 
   # Optional inference directory overrides. Defaults:
   # test_dir: local_workspace/datasets/your_sample/dataset_test
-  # output_dir: local_workspace/results/example_run/output_test
+  # output_dir: local_workspace/results/example_run/artifacts/output_test
 
 evaluation:
   # Optional shared-field overrides. Defaults:
@@ -78,7 +78,7 @@ evaluation:
 
   # Optional evaluation directory overrides. Defaults:
   # target_dir: local_workspace/datasets/your_sample/dataset_test
-  # generated_dir: local_workspace/results/example_run/output_test
+  # generated_dir: local_workspace/results/example_run/artifacts/output_test
   # output_dir: local_workspace/results/example_run/evaluation
   save_graphs: true
   # hide_graphs_path: false
