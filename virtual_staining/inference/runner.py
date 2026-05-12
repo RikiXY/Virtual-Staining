@@ -12,6 +12,7 @@ from virtual_staining.data.dataset import PairedHistologyDataset, PairedManifest
 from virtual_staining.data.manifest import DatasetManifest
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
+    resolve_run_snapshot_paths,
     save_environment_snapshot,
     save_stage_config_snapshots,
 )
@@ -63,14 +64,15 @@ def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
 
     paths = RunPaths(config.project.run_root)
     paths.create_directories()
+    snapshot_paths = resolve_run_snapshot_paths(stage="inference", run_paths=paths)
     save_stage_config_snapshots(
         config,
         config_path,
-        input_dest=paths.config_dir / "inference.input.yaml",
-        resolved_dest=paths.config_dir / "inference.resolved.yaml",
-        hash_dest=paths.metadata_dir / "inference_config_hash.txt",
+        input_dest=snapshot_paths.input_config,
+        resolved_dest=snapshot_paths.resolved_config,
+        hash_dest=snapshot_paths.config_hash,
     )
-    save_environment_snapshot(paths.metadata_dir / "inference_environment.json")
+    save_environment_snapshot(snapshot_paths.environment)
     checkpoint_path = _resolve_checkpoint(config, paths)
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 

@@ -3,12 +3,63 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import yaml
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.environment import collect_environment
+from virtual_staining.experiment.run_paths import RunPaths
+
+
+@dataclass(frozen=True)
+class SnapshotPaths:
+    input_config: Path
+    resolved_config: Path
+    config_hash: Path
+    environment: Path
+
+
+def resolve_run_snapshot_paths(
+    *,
+    stage: Literal["training", "inference", "evaluation"],
+    run_paths: RunPaths,
+) -> SnapshotPaths:
+    """Return canonical snapshot destinations for a run-scoped stage."""
+    if stage == "training":
+        return SnapshotPaths(
+            input_config=run_paths.input_config,
+            resolved_config=run_paths.resolved_config,
+            config_hash=run_paths.config_hash,
+            environment=run_paths.environment_metadata,
+        )
+    if stage == "inference":
+        return SnapshotPaths(
+            input_config=run_paths.config_dir / "inference.input.yaml",
+            resolved_config=run_paths.config_dir / "inference.resolved.yaml",
+            config_hash=run_paths.metadata_dir / "inference_config_hash.txt",
+            environment=run_paths.metadata_dir / "inference_environment.json",
+        )
+    if stage == "evaluation":
+        return SnapshotPaths(
+            input_config=run_paths.config_dir / "evaluation.input.yaml",
+            resolved_config=run_paths.config_dir / "evaluation.resolved.yaml",
+            config_hash=run_paths.metadata_dir / "evaluation_config_hash.txt",
+            environment=run_paths.metadata_dir / "evaluation_environment.json",
+        )
+    raise ValueError(f"Unsupported run snapshot stage: {stage}")
+
+
+def resolve_prepare_snapshot_paths(dataset_root: Path) -> SnapshotPaths:
+    """Return canonical snapshot destinations for prepare-stage artifacts."""
+    return SnapshotPaths(
+        input_config=dataset_root / "config" / "input.yaml",
+        resolved_config=dataset_root / "config" / "resolved.yaml",
+        config_hash=dataset_root / "metadata" / "config_hash.txt",
+        environment=dataset_root / "metadata" / "environment.json",
+    )
 
 
 def save_input_config(src_yaml: Path, dest: Path) -> None:

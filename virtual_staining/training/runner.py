@@ -16,6 +16,7 @@ from virtual_staining.experiment.metadata import RunMetadata
 from virtual_staining.experiment.run_context import RunContext
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
+    resolve_run_snapshot_paths,
     save_environment_snapshot,
     save_stage_config_snapshots,
 )
@@ -60,13 +61,14 @@ def run_training(
     run_root = config.project.results_path / config.project.run_name
     paths = RunPaths(run_root)
     paths.create_directories()
+    snapshot_paths = resolve_run_snapshot_paths(stage="training", run_paths=paths)
 
     config_hash = save_stage_config_snapshots(
         config,
         config_path,
-        input_dest=paths.input_config,
-        resolved_dest=paths.resolved_config,
-        hash_dest=paths.config_hash,
+        input_dest=snapshot_paths.input_config,
+        resolved_dest=snapshot_paths.resolved_config,
+        hash_dest=snapshot_paths.config_hash,
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -82,7 +84,7 @@ def run_training(
     )
     metadata.save(paths.run_metadata)
 
-    save_environment_snapshot(paths.environment_metadata)
+    save_environment_snapshot(snapshot_paths.environment)
 
     context = RunContext(
         name=config.project.run_name,

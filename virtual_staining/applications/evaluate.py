@@ -10,6 +10,7 @@ from virtual_staining.evaluation.plotting import save_dataset_plots
 from virtual_staining.evaluation.summaries import write_summary_csv
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
+    resolve_run_snapshot_paths,
     save_environment_snapshot,
     save_stage_config_snapshots,
 )
@@ -29,14 +30,15 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
     run_root = project.results_path / project.run_name
     paths = RunPaths(run_root)
     paths.create_directories()
+    snapshot_paths = resolve_run_snapshot_paths(stage="evaluation", run_paths=paths)
     save_stage_config_snapshots(
         config,
         config_path,
-        input_dest=paths.config_dir / "evaluation.input.yaml",
-        resolved_dest=paths.config_dir / "evaluation.resolved.yaml",
-        hash_dest=paths.metadata_dir / "evaluation_config_hash.txt",
+        input_dest=snapshot_paths.input_config,
+        resolved_dest=snapshot_paths.resolved_config,
+        hash_dest=snapshot_paths.config_hash,
     )
-    save_environment_snapshot(paths.metadata_dir / "evaluation_environment.json")
+    save_environment_snapshot(snapshot_paths.environment)
     eval_cfg = config.evaluation
 
     target_dir = (

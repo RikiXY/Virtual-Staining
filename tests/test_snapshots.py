@@ -7,7 +7,10 @@ from pathlib import Path
 import yaml
 
 from virtual_staining.config.run import RunConfig
+from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
+    resolve_prepare_snapshot_paths,
+    resolve_run_snapshot_paths,
     save_environment_snapshot,
     save_stage_config_snapshots,
 )
@@ -91,3 +94,43 @@ def test_save_environment_snapshot_writes_json(tmp_path: Path, monkeypatch) -> N
         "python_version": "3.11.0",
         "cuda_available": False,
     }
+
+
+def test_resolve_run_snapshot_paths_training_uses_canonical_run_paths(tmp_path: Path) -> None:
+    run_paths = RunPaths(tmp_path / "results" / "demo")
+
+    resolved = resolve_run_snapshot_paths(stage="training", run_paths=run_paths)
+
+    assert resolved.input_config == run_paths.input_config
+    assert resolved.resolved_config == run_paths.resolved_config
+    assert resolved.config_hash == run_paths.config_hash
+    assert resolved.environment == run_paths.environment_metadata
+
+
+def test_resolve_run_snapshot_paths_stage_scoped_names_do_not_collide(tmp_path: Path) -> None:
+    run_paths = RunPaths(tmp_path / "results" / "demo")
+
+    training = resolve_run_snapshot_paths(stage="training", run_paths=run_paths)
+    inference = resolve_run_snapshot_paths(stage="inference", run_paths=run_paths)
+    evaluation = resolve_run_snapshot_paths(stage="evaluation", run_paths=run_paths)
+
+    assert inference != training
+    assert evaluation != training
+    assert inference != evaluation
+    assert inference.input_config.name == "inference.input.yaml"
+    assert inference.resolved_config.name == "inference.resolved.yaml"
+    assert inference.config_hash.name == "inference_config_hash.txt"
+    assert evaluation.input_config.name == "evaluation.input.yaml"
+    assert evaluation.resolved_config.name == "evaluation.resolved.yaml"
+    assert evaluation.config_hash.name == "evaluation_config_hash.txt"
+
+
+def test_resolve_prepare_snapshot_paths_uses_dataset_root_canonical_layout(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "dataset"
+
+    resolved = resolve_prepare_snapshot_paths(dataset_root)
+
+    assert resolved.input_config == dataset_root / "config" / "input.yaml"
+    assert resolved.resolved_config == dataset_root / "config" / "resolved.yaml"
+    assert resolved.config_hash == dataset_root / "metadata" / "config_hash.txt"
+    assert resolved.environment == dataset_root / "metadata" / "environment.json"
