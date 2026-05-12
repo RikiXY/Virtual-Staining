@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.evaluator import evaluate_pairs
@@ -8,11 +9,15 @@ from virtual_staining.evaluation.io import build_evaluation_pairs
 from virtual_staining.evaluation.plotting import save_dataset_plots
 from virtual_staining.evaluation.summaries import write_summary_csv
 from virtual_staining.experiment.run_paths import RunPaths
+from virtual_staining.experiment.snapshots import (
+    save_environment_snapshot,
+    save_stage_config_snapshots,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def evaluate(config: RunConfig) -> None:
+def evaluate(config: RunConfig, config_path: Path) -> None:
     """
     Evaluate generated images against ground-truth targets.
 
@@ -23,6 +28,15 @@ def evaluate(config: RunConfig) -> None:
     project = config.project
     run_root = project.results_path / project.run_name
     paths = RunPaths(run_root)
+    paths.create_directories()
+    save_stage_config_snapshots(
+        config,
+        config_path,
+        input_dest=paths.input_config,
+        resolved_dest=paths.resolved_config,
+        hash_dest=paths.config_hash,
+    )
+    save_environment_snapshot(paths.environment_metadata)
     eval_cfg = config.evaluation
 
     target_dir = (

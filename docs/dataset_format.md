@@ -21,9 +21,12 @@ local_workspace/datasets/<name>/
 │   ├── manifest.csv            # all accepted patches with split assignment
 │   └── discarded_manifest.csv  # discarded patches (split = "discarded")
 ├── config/
-│   └── resolved.yaml           # effective preprocessing config snapshot
+│   ├── input.yaml              # exact copy of the user-supplied run YAML
+│   └── resolved.yaml           # fully expanded effective run config
 └── metadata/
-    └── dataset_build.json      # build statistics and provenance
+    ├── config_hash.txt         # sha256 of config/resolved.yaml
+    ├── dataset_build.json      # build statistics and provenance
+    └── environment.json        # runtime environment snapshot
 ```
 
 ## manifest.csv Columns
@@ -72,9 +75,14 @@ ratio, and failure reasons) are written to `discarded_patches/discarded_log.csv`
 | `num_test` | int | Patches assigned to the test split |
 | `seed` | int | Random seed used for the train/val/test split |
 
-## Preprocessing Config Snapshot
+## Config Snapshots
 
-`config/resolved.yaml` contains the fully expanded preprocessing configuration
-that was active when `vs-prepare` ran. It is written verbatim so that the
-dataset can be exactly reproduced by passing the same config file to `vs-prepare`
-again.
+`config/input.yaml` preserves the exact YAML passed to `vs-prepare`.
+
+`config/resolved.yaml` contains the fully expanded effective run configuration
+for the prepare stage, including the resolved preprocessing section that drove
+dataset creation.
+
+`metadata/config_hash.txt` stores the SHA-256 hash of `config/resolved.yaml`,
+and `metadata/environment.json` records the runtime environment captured at
+prepare start.

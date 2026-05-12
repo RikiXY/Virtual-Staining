@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import random
 from pathlib import Path
@@ -13,15 +12,12 @@ from torchvision import transforms
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.dataset import PairedHistologyDataset, PairedManifestDataset
 from virtual_staining.data.manifest import DatasetManifest
-from virtual_staining.experiment.environment import collect_environment
 from virtual_staining.experiment.metadata import RunMetadata
 from virtual_staining.experiment.run_context import RunContext
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
-    compute_config_hash,
-    save_config_hash,
-    save_input_config,
-    save_resolved_config,
+    save_environment_snapshot,
+    save_stage_config_snapshots,
 )
 from virtual_staining.models.factory import build_discriminator, build_generator
 from virtual_staining.reporting.base import TrainingReporter
@@ -65,10 +61,13 @@ def run_training(
     paths = RunPaths(run_root)
     paths.create_directories()
 
-    save_input_config(config_path, paths.input_config)
-    save_resolved_config(config.to_yaml_dict(), paths.resolved_config)
-    config_hash = compute_config_hash(paths.resolved_config)
-    save_config_hash(config_hash, paths.config_hash)
+    config_hash = save_stage_config_snapshots(
+        config,
+        config_path,
+        input_dest=paths.input_config,
+        resolved_dest=paths.resolved_config,
+        hash_dest=paths.config_hash,
+    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Device: %s", device)
@@ -83,9 +82,7 @@ def run_training(
     )
     metadata.save(paths.run_metadata)
 
-    env = collect_environment()
-    with paths.environment_metadata.open("w", encoding="utf-8") as handle:
-        json.dump(env, handle, indent=2, default=str)
+    save_environment_snapshot(paths.environment_metadata)
 
     context = RunContext(
         name=config.project.run_name,

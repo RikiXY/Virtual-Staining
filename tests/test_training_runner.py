@@ -49,11 +49,16 @@ training:
     run_training(config, config_path)
 
     run_root = tmp_path / "results" / "smoke_run"
+    input_path = run_root / "config" / "input.yaml"
     resolved_path = run_root / "config" / "resolved.yaml"
     hash_path = run_root / "metadata" / "config_hash.txt"
+    environment_path = run_root / "metadata" / "environment.json"
 
+    assert input_path.exists()
     assert resolved_path.exists()
     assert hash_path.exists()
+    assert environment_path.exists()
+    assert input_path.read_text(encoding="utf-8") == config_path.read_text(encoding="utf-8")
     assert yaml.safe_load(resolved_path.read_text(encoding="utf-8")) == config.to_yaml_dict()
 
     expected = f"sha256:{hashlib.sha256(resolved_path.read_bytes()).hexdigest()}"

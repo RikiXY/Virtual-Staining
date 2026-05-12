@@ -11,13 +11,10 @@ import torch
 from PIL import Image
 from torchvision import transforms
 
-from virtual_staining.config.project import ProjectConfig
 from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.io import collect_image_files, extract_single_sample_id
 from virtual_staining.evaluation.metrics import evaluate_pair
-from virtual_staining.inference.config import InferenceConfig
 from virtual_staining.inference.runner import run_inference as _run_inference_impl
-from virtual_staining.models.config import DiscriminatorConfig, GeneratorConfig, ModelConfig
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.utils.dimensions import to_torchvision_hw
@@ -74,36 +71,25 @@ def _run_inference(
     test_folder: str,
     output_folder: str,
     image_size: tuple[int, int] = _IMAGE_SIZE,
-) -> None:
-    project = ProjectConfig(
-        dataset_root=Path(test_folder).parent,
-        results_path=Path(output_folder).parent,
-        run_name="test_run",
-        image_size=image_size,
+) -> RunConfig:
+    config_path = Path(output_folder).parent / "infer.yaml"
+    config_path.write_text(
+        f"""
+dataset_root: {Path(test_folder).parent}
+results_path: {Path(output_folder).parent}
+run_name: test_run
+image_size: [{image_size[0]}, {image_size[1]}]
+inference:
+  checkpoint_path: {checkpoint_path}
+  test_dir: {Path(test_folder)}
+  output_dir: {Path(output_folder)}
+""".strip()
+        + "\n",
+        encoding="utf-8",
     )
-    config = RunConfig(
-        project=project,
-        model=ModelConfig(
-            generator=GeneratorConfig(
-                name="unet", in_channels=3, out_channels=3, base_channels=64, bilinear=False
-            ),
-            discriminator=DiscriminatorConfig(
-                name="patchgan", in_channels=6, ndf=64, use_sigmoid=False
-            ),
-        ),
-        training=None,
-        inference=InferenceConfig(
-            checkpoint_path=checkpoint_path,
-            test_dir=Path(test_folder),
-            output_dir=Path(output_folder),
-        ),
-        preprocessing=None,
-        evaluation=None,
-        compare=None,
-        compare_panels=None,
-        organize=None,
-    )
-    _run_inference_impl(config, checkpoint_path)
+    config = RunConfig.from_yaml(config_path)
+    _run_inference_impl(config, config_path)
+    return config
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +122,29 @@ def test_output_filename_ends_with_target_generated_suffix(tmp_path: Path) -> No
         f"Output stem '{stem}' does not end with '_target_generated'; "
         "the evaluator will not discover this file."
     )
+
+
+def test_inference_writes_canonical_snapshot_files(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    checkpoint = tmp_path / "ep000.pth"
+
+    _write_pair(test_dir)
+    _save_checkpoint(checkpoint)
+
+    config = _run_inference(
+        checkpoint_path=checkpoint,
+        test_folder=str(test_dir),
+        output_folder=str(output_dir),
+        image_size=_IMAGE_SIZE,
+    )
+
+    run_root = config.project.run_root
+    assert (run_root / "config" / "input.yaml").exists()
+    assert (run_root / "config" / "resolved.yaml").exists()
+    assert (run_root / "metadata" / "config_hash.txt").exists()
+    assert (run_root / "metadata" / "environment.json").exists()
 
 
 def test_output_sample_id_matches_target(tmp_path: Path) -> None:

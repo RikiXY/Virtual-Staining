@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> None:
 
     config_path = Path(args.config).resolve()
     config = RunConfig.from_yaml(config_path)
-    evaluate(config)
+    evaluate(config, config_path)
 
 
 if __name__ == "__main__":

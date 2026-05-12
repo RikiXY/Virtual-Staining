@@ -9,6 +9,8 @@ import cv2
 import numpy as np
 import pytest
 
+from virtual_staining.applications.prepare import prepare
+from virtual_staining.config.run import RunConfig
 from virtual_staining.data.builder import DatasetBuilder
 from virtual_staining.data.config import PreprocessingConfig
 from virtual_staining.data.preprocessing import AlignmentMetadata
@@ -150,20 +152,88 @@ def test_run_all_discarded_log_is_written(builder_config: PreprocessingConfig) -
     assert len(lines) == result.skipped_count + 1
 
 
-def test_run_all_saves_config_and_environment(
+def test_run_all_does_not_create_canonical_snapshot_files(
     builder_config: PreprocessingConfig,
 ) -> None:
     with _patched_builder_dependencies():
         DatasetBuilder(builder_config).run_all()
 
     root = builder_config.dataset_root
+    assert not (root / "config" / "input.yaml").exists()
+    assert not (root / "config" / "resolved.yaml").exists()
+    assert not (root / "metadata" / "config_hash.txt").exists()
+    assert not (root / "metadata" / "environment.json").exists()
+    assert not (root / "config.yaml").exists()
+    assert not (root / "environment.json").exists()
+
+
+def test_run_all_preserves_bootstrapped_snapshot_files(
+    builder_config: PreprocessingConfig,
+) -> None:
+    root = builder_config.dataset_root
+    (root / "config").mkdir()
+    (root / "metadata").mkdir()
+    input_path = root / "config" / "input.yaml"
+    resolved_path = root / "config" / "resolved.yaml"
+    hash_path = root / "metadata" / "config_hash.txt"
+    environment_path = root / "metadata" / "environment.json"
+    input_path.write_text("input\n", encoding="utf-8")
+    resolved_path.write_text("resolved\n", encoding="utf-8")
+    hash_path.write_text("sha256:test\n", encoding="utf-8")
+    environment_path.write_text('{"python":"3"}\n', encoding="utf-8")
+
+    with _patched_builder_dependencies():
+        DatasetBuilder(builder_config).run_all()
+
+    assert input_path.read_text(encoding="utf-8") == "input\n"
+    assert resolved_path.read_text(encoding="utf-8") == "resolved\n"
+    assert hash_path.read_text(encoding="utf-8") == "sha256:test\n"
+    assert environment_path.read_text(encoding="utf-8") == '{"python":"3"}\n'
+
+
+def test_prepare_writes_canonical_snapshot_files(
+    builder_config: PreprocessingConfig,
+) -> None:
+    config_path = builder_config.dataset_root.parent / "prepare.yaml"
+    config_path.write_text(
+        f"""
+dataset_root: {builder_config.dataset_root}
+results_path: {builder_config.dataset_root.parent / "results"}
+run_name: prepare_run
+image_size: [{builder_config.image_size[0]}, {builder_config.image_size[1]}]
+preprocessing:
+  source_name: {builder_config.source_name}
+  target_name: {builder_config.target_name}
+  grid_movement: [{builder_config.grid_movement[0]}, {builder_config.grid_movement[1]}]
+  margin: {builder_config.margin}
+  seed: {builder_config.seed}
+  save_masks: false
+  train_ratio: {builder_config.train_ratio}
+  val_ratio: {builder_config.val_ratio}
+  test_ratio: {builder_config.test_ratio}
+  min_foreground_ratio: {builder_config.min_foreground_ratio}
+  max_white_ratio: {builder_config.max_white_ratio}
+  white_threshold: {builder_config.white_threshold}
+  max_largest_white_component_ratio: {builder_config.max_largest_white_component_ratio}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    run_config = RunConfig.from_yaml(config_path)
+
+    with _patched_builder_dependencies():
+        prepare(run_config, config_path)
+
+    root = builder_config.dataset_root
+    assert (root / "config" / "input.yaml").exists()
     assert (root / "config" / "resolved.yaml").exists()
+    assert (root / "metadata" / "config_hash.txt").exists()
     assert (root / "metadata" / "environment.json").exists()
+    assert not (root / "config.yaml").exists()
+    assert not (root / "environment.json").exists()
 
-    from virtual_staining.data.config import load_preprocessing_config
-
-    loaded = load_preprocessing_config(root / "config" / "resolved.yaml")
-    assert loaded == builder_config
+    loaded = RunConfig.from_yaml(root / "config" / "resolved.yaml")
+    assert loaded == run_config
 
 
 def test_run_all_saves_manifest_layout_and_resolved_config(
@@ -179,7 +249,6 @@ def test_run_all_saves_manifest_layout_and_resolved_config(
     assert (root / "splits").exists()
     assert (root / "manifests" / "manifest.csv").exists()
     assert (root / "manifests" / "discarded_manifest.csv").exists()
-    assert (root / "config" / "resolved.yaml").exists()
     assert (root / "metadata" / "dataset_build.json").exists()
 
     manifest = DatasetManifest.from_csv(root / "manifests" / "manifest.csv", root)
