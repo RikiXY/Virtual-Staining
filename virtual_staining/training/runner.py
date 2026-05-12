@@ -21,6 +21,7 @@ from virtual_staining.experiment.snapshots import (
     compute_config_hash,
     save_config_hash,
     save_input_config,
+    save_resolved_config,
 )
 from virtual_staining.models.factory import build_discriminator, build_generator
 from virtual_staining.reporting.base import TrainingReporter
@@ -65,7 +66,8 @@ def run_training(
     paths.create_directories()
 
     save_input_config(config_path, paths.input_config)
-    config_hash = compute_config_hash(config_path)
+    save_resolved_config(config.to_yaml_dict(), paths.resolved_config)
+    config_hash = compute_config_hash(paths.resolved_config)
     save_config_hash(config_hash, paths.config_hash)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

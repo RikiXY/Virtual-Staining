@@ -108,6 +108,169 @@ class RunConfig:
             organize=organize,
         )
 
+    def to_yaml_dict(self) -> dict[str, Any]:
+        """Return a plain dict representation of the resolved config."""
+        data: dict[str, Any] = {
+            "dataset_root": str(self.project.dataset_root),
+            "results_path": str(self.project.results_path),
+            "run_name": self.project.run_name,
+            "image_size": list(self.project.image_size),
+            "model": {
+                "generator": {
+                    "name": self.model.generator.name,
+                    "in_channels": self.model.generator.in_channels,
+                    "out_channels": self.model.generator.out_channels,
+                    "base_channels": self.model.generator.base_channels,
+                    "bilinear": self.model.generator.bilinear,
+                },
+                "discriminator": {
+                    "name": self.model.discriminator.name,
+                    "in_channels": self.model.discriminator.in_channels,
+                    "ndf": self.model.discriminator.ndf,
+                    "use_sigmoid": self.model.discriminator.use_sigmoid,
+                },
+            },
+        }
+
+        if self.training is not None:
+            data["training"] = {
+                "batch_size": self.training.batch_size,
+                "epochs": self.training.epochs,
+                "lr_g": self.training.lr_g,
+                "lr_d": self.training.lr_d,
+                "beta1": self.training.beta1,
+                "beta2": self.training.beta2,
+                "l1_weight": self.training.l1_weight,
+                "seed": self.training.seed,
+                "num_workers": self.training.num_workers,
+                "validate_rate": self.training.validate_rate,
+                "checkpoint_rate": self.training.checkpoint_rate,
+                "log_rate": self.training.log_rate,
+                "resume": self.training.resume,
+                "train_dir": str(self.training.train_dir) if self.training.train_dir else None,
+                "val_dir": str(self.training.val_dir) if self.training.val_dir else None,
+            }
+
+        if self.inference is not None:
+            data["inference"] = {
+                "checkpoint_policy": self.inference.checkpoint_policy,
+                "checkpoint_path": (
+                    str(self.inference.checkpoint_path) if self.inference.checkpoint_path else None
+                ),
+                "test_dir": str(self.inference.test_dir) if self.inference.test_dir else None,
+                "output_dir": (
+                    str(self.inference.output_dir) if self.inference.output_dir else None
+                ),
+            }
+
+        if self.preprocessing is not None:
+            data["preprocessing"] = {
+                "dataset_root": str(self.preprocessing.dataset_root),
+                "source_name": self.preprocessing.source_name,
+                "target_name": self.preprocessing.target_name,
+                "image_size": list(self.preprocessing.image_size),
+                "grid_movement": list(self.preprocessing.grid_movement),
+                "margin": self.preprocessing.margin,
+                "seed": self.preprocessing.seed,
+                "save_masks": self.preprocessing.save_masks,
+                "train_ratio": self.preprocessing.train_ratio,
+                "val_ratio": self.preprocessing.val_ratio,
+                "test_ratio": self.preprocessing.test_ratio,
+                "min_foreground_ratio": self.preprocessing.min_foreground_ratio,
+                "max_white_ratio": self.preprocessing.max_white_ratio,
+                "white_threshold": self.preprocessing.white_threshold,
+                "max_largest_white_component_ratio": (
+                    self.preprocessing.max_largest_white_component_ratio
+                ),
+            }
+
+        if self.evaluation is not None:
+            data["evaluation"] = {
+                "save_graphs": self.evaluation.save_graphs,
+                "target_dir": (
+                    str(self.evaluation.target_dir) if self.evaluation.target_dir else None
+                ),
+                "generated_dir": (
+                    str(self.evaluation.generated_dir) if self.evaluation.generated_dir else None
+                ),
+                "output_dir": (
+                    str(self.evaluation.output_dir) if self.evaluation.output_dir else None
+                ),
+            }
+
+        if self.compare is not None:
+            data["compare"] = {
+                "mode": self.compare.mode,
+                "run_a": str(self.compare.run_a) if self.compare.run_a else None,
+                "run_b": str(self.compare.run_b) if self.compare.run_b else None,
+                "csv_a": str(self.compare.csv_a) if self.compare.csv_a else None,
+                "csv_b": str(self.compare.csv_b) if self.compare.csv_b else None,
+                "label_a": self.compare.label_a,
+                "label_b": self.compare.label_b,
+                "column": self.compare.column,
+                "output_dir": str(self.compare.output_dir) if self.compare.output_dir else None,
+                "higher_is_better": self.compare.higher_is_better,
+                "lower_is_better": self.compare.lower_is_better,
+                "bins": self.compare.bins,
+                "min_value": self.compare.min_value,
+                "max_value": self.compare.max_value,
+                "thresholds": list(self.compare.thresholds) if self.compare.thresholds else None,
+                "tolerance": self.compare.tolerance,
+                "sample_id_column": self.compare.sample_id_column,
+            }
+
+        if self.compare_panels is not None:
+            data["compare_panels"] = {
+                "mode": self.compare_panels.mode,
+                "run_path": (
+                    str(self.compare_panels.run_path) if self.compare_panels.run_path else None
+                ),
+                "hide_graphs_path": self.compare_panels.hide_graphs_path,
+                "source_image": (
+                    str(self.compare_panels.source_image)
+                    if self.compare_panels.source_image
+                    else None
+                ),
+                "generated_image": (
+                    str(self.compare_panels.generated_image)
+                    if self.compare_panels.generated_image
+                    else None
+                ),
+                "target_image": (
+                    str(self.compare_panels.target_image)
+                    if self.compare_panels.target_image
+                    else None
+                ),
+                "save_path": (
+                    str(self.compare_panels.save_path) if self.compare_panels.save_path else None
+                ),
+                "with_diagnostics": self.compare_panels.with_diagnostics,
+            }
+
+        if self.organize is not None:
+            data["organize"] = {
+                "run_path": str(self.organize.run_path) if self.organize.run_path else None,
+                "metrics_csv": (
+                    str(self.organize.metrics_csv) if self.organize.metrics_csv else None
+                ),
+                "output_dir": str(self.organize.output_dir) if self.organize.output_dir else None,
+                "metrics": list(self.organize.metrics) if self.organize.metrics else None,
+                "top_k": self.organize.top_k,
+                "mode": self.organize.mode,
+                "include_all_ranked": self.organize.include_all_ranked,
+                "overwrite": self.organize.overwrite,
+            }
+
+        return _drop_nones(data)
+
+
+def _drop_nones(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _drop_nones(item) for key, item in value.items() if item is not None}
+    if isinstance(value, list):
+        return [_drop_nones(item) for item in value]
+    return value
+
 
 def _parse_project(raw: dict[str, Any]) -> ProjectConfig:
     project = ProjectConfig(

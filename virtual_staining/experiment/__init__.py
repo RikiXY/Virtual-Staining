@@ -6,6 +6,7 @@ from virtual_staining.experiment.snapshots import (
     compute_config_hash,
     save_config_hash,
     save_input_config,
+    save_resolved_config,
 )
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "compute_config_hash",
     "save_config_hash",
     "save_input_config",
+    "save_resolved_config",
     "collect_environment",
 ]
