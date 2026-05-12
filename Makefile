@@ -3,8 +3,6 @@ PYTHON  ?= $(UV) run python
 RUFF    ?= $(UV) run --group dev ruff
 PYRIGHT ?= $(UV) run --group dev pyright
 
-CONFIG ?= config/runs/example.yaml
-
 .DEFAULT_GOAL := help
 
 help:
@@ -26,15 +24,15 @@ help:
 	@printf "  %-24s %s\n" "qa" "Run checks and tests"
 	@printf "  %-24s %s\n" "clean" "Remove local caches"
 	@printf "\nExperiment configuration policy:\n"
-	@printf "  %-24s %s\n" "CONFIG" "$(CONFIG)"
+	@printf "  %-24s %s\n" "CONFIG" "Required for dataset/train/infer/evaluate/complete-run"
 	@printf "  Put dataset paths, run names, image sizes, epochs, seeds,"
 	@printf " checkpoints, and evaluation paths in YAML.\n"
 	@printf "\nExamples:\n"
-	@printf "  make dataset CONFIG=config/runs/example.yaml\n"
-	@printf "  make train CONFIG=config/runs/example.yaml\n"
-	@printf "  make infer CONFIG=config/runs/example.yaml\n"
-	@printf "  make evaluate CONFIG=config/runs/example.yaml\n"
-	@printf "  make complete-run CONFIG=config/runs/example.yaml\n"
+	@printf "  make dataset CONFIG=config/runs/local/my_run.yaml\n"
+	@printf "  make train CONFIG=config/runs/local/my_run.yaml\n"
+	@printf "  make infer CONFIG=config/runs/local/my_run.yaml\n"
+	@printf "  make evaluate CONFIG=config/runs/local/my_run.yaml\n"
+	@printf "  make complete-run CONFIG=config/runs/local/my_run.yaml\n"
 	@printf "\n"
 
 require-config:
