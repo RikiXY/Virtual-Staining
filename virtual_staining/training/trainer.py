@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import datetime
-import json
 import logging
 import time
 from pathlib import Path
@@ -15,7 +14,6 @@ from PIL import Image
 from torch.amp import GradScaler, autocast
 from torchvision.utils import save_image
 
-from virtual_staining.experiment.environment import collect_environment
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.training.checkpoints import CheckpointManager
 from virtual_staining.training.config import TrainingConfig
@@ -73,22 +71,6 @@ def _get_first_pair_size(dataset: torch.utils.data.Dataset | None) -> dict | Non
         "source_path": str(source_path),
         "target_path": str(target_path),
     }
-
-
-def _save_run_metadata(metadata: dict, run_root: Path) -> Path:
-    config_path = run_root / "run_metadata.json"
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=4, default=str)
-    return config_path
-
-
-def _log_run_header(metadata: dict) -> None:
-    logger.info("=" * 80)
-    logger.info("RUN CONFIGURATION")
-    logger.info("=" * 80)
-    for key, value in metadata.items():
-        logger.info("%s: %s", key, value)
-    logger.info("=" * 80)
 
 
 def _format_duration(seconds: float | None) -> str:
@@ -309,13 +291,8 @@ class Trainer:
         ]:
             d.mkdir(parents=True, exist_ok=True)
 
-        env = collect_environment()
-        timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        log_file = self._logs_dir / f"Log-{timestamp_str}.txt"
-        if log_file.exists():
-            log_file.unlink()
-
-        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        log_file = self._logs_dir / "training.log"
+        file_handler = logging.FileHandler(log_file, mode="w", encoding="utf-8")
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
         old_level = logger.level
@@ -327,11 +304,6 @@ class Trainer:
             )
             logger.debug("Seed set to %s", seed)
             logger.info("Device: %s (%s)", self.device, device_name)
-
-            run_metadata = self._build_run_metadata(seed, timestamp_str, log_file, env)
-            config_path = _save_run_metadata(run_metadata, self._run_paths.root)
-            _log_run_header(run_metadata)
-            logger.debug("Run config saved to %s", config_path)
 
             for f in self._output_train_dir.iterdir():
                 if f.is_file():
@@ -575,40 +547,3 @@ class Trainer:
         )
 
         return EpochMetrics(loss_G=avg_loss_G, loss_D=avg_loss_D)
-
-    def _build_run_metadata(
-        self, seed: int, timestamp_str: str, log_file: Path, environment: dict
-    ) -> dict:
-        return {
-            "timestamp": timestamp_str,
-            "run_root": str(self._run_paths.root),
-            "logs_dir": str(self._logs_dir),
-            "checkpoints_dir": str(self._checkpoints_dir),
-            "output_train_dir": str(self._output_train_dir),
-            "output_val_dir": str(self._output_val_dir),
-            "train_dir": str(self._train_dir),
-            "val_dir": str(self._val_dir),
-            "seed": seed,
-            "device": str(self.device),
-            "epochs": self.config.epochs,
-            "batch_size": self.config.batch_size,
-            "num_workers": self.config.num_workers,
-            "image_size_resize": list(self._image_size),
-            "log_rate": self.config.log_rate,
-            "checkpoint_rate": self.config.checkpoint_rate,
-            "validate_rate": self.config.validate_rate,
-            "resume_checkpoint": str(self.config.resume) if self.config.resume else None,
-            "l1_weight": self.config.l1_weight,
-            "lr_g": self.config.lr_g,
-            "lr_d": self.config.lr_d,
-            "beta1": self.config.beta1,
-            "beta2": self.config.beta2,
-            "train_samples": _dataset_len(self.train_loader),
-            "val_samples": _dataset_len(self.val_loader),
-            "train_batches": len(self.train_loader),
-            "val_batches": len(self.val_loader),
-            "first_train_pair_info": _get_first_pair_size(self.train_loader.dataset),
-            "first_val_pair_info": _get_first_pair_size(self.val_loader.dataset),
-            "detailed_log": str(log_file),
-            "environment": environment,
-        }

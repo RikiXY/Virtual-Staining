@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import json
 from pathlib import Path
 
 import numpy as np
@@ -174,14 +173,14 @@ def checkpointing_trainer(
 def test_trainer_smoke_run_creates_expected_files(
     smoke_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
 ) -> None:
-    trainer, config, run_paths, _ = smoke_trainer
+    trainer, _config, run_paths, _ = smoke_trainer
 
     trainer.train(seed=42)
 
     run_root = run_paths.root
-    assert (run_root / "run_metadata.json").exists()
     assert (run_root / "metrics.csv").exists()
-    assert any((run_root / "logs").glob("*.txt"))
+    assert (run_paths.logs_dir / "training.log").exists()
+    assert not (run_root / "run_metadata.json").exists()
 
 
 def test_trainer_metrics_csv_structure(
@@ -341,95 +340,6 @@ def test_trainer_checkpoint_round_trip(
 
     start_epoch = trainer_2._checkpoint_manager.load(checkpoint_path)
     assert start_epoch == 1
-
-
-# ---------------------------------------------------------------------------
-# run_metadata.json accuracy
-# ---------------------------------------------------------------------------
-
-
-def test_run_metadata_records_default_dirs(
-    smoke_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
-) -> None:
-    trainer, config, run_paths, project = smoke_trainer
-
-    trainer.train(seed=42)
-
-    with (run_paths.root / "run_metadata.json").open(encoding="utf-8") as f:
-        run_metadata = json.load(f)
-
-    assert run_metadata["train_dir"] == str(project.dataset_root / "dataset_train")
-    assert run_metadata["val_dir"] == str(project.dataset_root / "dataset_val")
-
-
-def test_run_metadata_records_custom_dirs(tmp_path: Path) -> None:
-    custom_train_dir = tmp_path / "custom_train"
-    custom_val_dir = tmp_path / "custom_val"
-    custom_train_dir.mkdir(parents=True)
-    custom_val_dir.mkdir(parents=True)
-
-    _write_rgb_pair(custom_train_dir)
-    _write_rgb_pair(custom_val_dir)
-
-    project = _make_project(tmp_path / "dataset", tmp_path / "results", "custom_dirs_run")
-    config = TrainingConfig(
-        batch_size=1,
-        epochs=1,
-        lr_g=2e-4,
-        lr_d=2e-4,
-        beta1=0.5,
-        beta2=0.999,
-        l1_weight=25.0,
-        seed=42,
-        num_workers=0,
-        validate_rate=1,
-        checkpoint_rate=2,
-        log_rate=1,
-        train_dir=custom_train_dir,
-        val_dir=custom_val_dir,
-    )
-
-    transform = transforms.Compose(
-        [
-            transforms.Resize(project.image_size),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5] * 3, [0.5] * 3),
-        ]
-    )
-    device = torch.device("cpu")
-    train_loader = DataLoader(
-        PairedHistologyDataset(custom_train_dir, transform=transform),
-        batch_size=1,
-        shuffle=False,
-        num_workers=0,
-    )
-    val_loader = DataLoader(
-        PairedHistologyDataset(custom_val_dir, transform=transform),
-        batch_size=1,
-        shuffle=False,
-        num_workers=0,
-    )
-    run_paths = RunPaths(project.run_root)
-    run_paths.create_directories()
-    trainer = Trainer(
-        config=config,
-        run_paths=run_paths,
-        generator=UNetGenerator().to(device),
-        discriminator=PatchGANDiscriminator().to(device),
-        train_loader=train_loader,
-        val_loader=val_loader,
-        device=device,
-        image_size=project.image_size,
-        train_dir=custom_train_dir,
-        val_dir=custom_val_dir,
-    )
-    trainer.train(seed=42)
-
-    with (run_paths.root / "run_metadata.json").open(encoding="utf-8") as f:
-        run_metadata = json.load(f)
-
-    assert run_metadata["train_dir"] == str(custom_train_dir)
-    assert run_metadata["val_dir"] == str(custom_val_dir)
 
 
 # ---------------------------------------------------------------------------

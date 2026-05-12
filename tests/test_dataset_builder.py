@@ -157,12 +157,12 @@ def test_run_all_saves_config_and_environment(
         DatasetBuilder(builder_config).run_all()
 
     root = builder_config.dataset_root
-    assert (root / "config.yaml").exists()
-    assert (root / "environment.json").exists()
+    assert (root / "config" / "resolved.yaml").exists()
+    assert (root / "metadata" / "environment.json").exists()
 
     from virtual_staining.data.config import load_preprocessing_config
 
-    loaded = load_preprocessing_config(root / "config.yaml")
+    loaded = load_preprocessing_config(root / "config" / "resolved.yaml")
     assert loaded == builder_config
 
 

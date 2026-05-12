@@ -437,12 +437,15 @@ class DatasetBuilder:
         print(f"Seed set to {seed}")
 
         root = self.config.dataset_root
-        self.config.to_yaml(root / "config.yaml")
-        with open(root / "environment.json", "w", encoding="utf-8") as f:
-            json.dump(collect_environment(), f, indent=2, default=str)
-
         self.compute_masks()
         self.align()
         self.extract_patches()
         self.filter_patches()
-        return self.split_and_save()
+        result = self.split_and_save()
+
+        metadata_dir = root / "metadata"
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+        with open(metadata_dir / "environment.json", "w", encoding="utf-8") as f:
+            json.dump(collect_environment(), f, indent=2, default=str)
+
+        return result
