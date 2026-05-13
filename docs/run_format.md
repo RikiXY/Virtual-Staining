@@ -27,8 +27,9 @@ local_workspace/results/<run_name>/
 │   ├── output_val/             # generated images for validation-split samples
 │   └── output_test/            # generated images for test-split samples (from vs-infer)
 ├── evaluation/
-│   ├── per_image_metrics.csv   # per-image MAE, RMSE, PSNR, SSIM
-│   └── summary.csv             # aggregate statistics across the test split
+│   ├── per_image_metrics.csv   # per-image metrics for all evaluated test samples
+│   ├── summary.csv             # aggregate statistics across the test split
+│   └── skipped.csv             # samples that could not be evaluated (optional)
 └── comparisons/                # comparison panels produced by vs-compare-panels
 ```
 
@@ -84,12 +85,45 @@ Each file is named after its source patch (e.g. `00512_09216_target_generated.ti
 
 ### `evaluation/per_image_metrics.csv`
 
-One row per test image. Columns: `sample_id`, `mae`, `rmse`, `psnr`, `ssim`.
+One row per evaluated test image.
+
+| Column | Description |
+|---|---|
+| `sample_id` | Sample identifier from the manifest |
+| `target_path` | Absolute path to the ground-truth image |
+| `generated_path` | Absolute path to the generated image |
+| `width` | Image width in pixels |
+| `height` | Image height in pixels |
+| `channels` | Number of image channels |
+| `mae` | Mean Absolute Error |
+| `mse` | Mean Squared Error |
+| `rmse` | Root Mean Squared Error |
+| `psnr` | Peak Signal-to-Noise Ratio (dB) |
+| `ssim` | Structural Similarity Index |
+| `pcc_gray` | Pearson Correlation Coefficient (grayscale) |
+| `pcc_r` | Pearson Correlation Coefficient (red channel) |
+| `pcc_g` | Pearson Correlation Coefficient (green channel) |
+| `pcc_b` | Pearson Correlation Coefficient (blue channel) |
+| `pcc_rgb_mean` | Mean PCC across RGB channels |
 
 ### `evaluation/summary.csv`
 
 Aggregate statistics (mean, std, min, max) for each metric across the full
 test split.
+
+### `evaluation/skipped.csv`
+
+Written when one or more test samples could not be evaluated. Contains one row
+per skipped sample.
+
+| Column | Description |
+|---|---|
+| `sample_id` | Sample identifier from the manifest |
+| `reason` | Why the sample was skipped (`missing_generated`, `missing_target`, or an exception message) |
+| `target_path` | Absolute path to the ground-truth target image |
+| `generated_path` | Absolute path to the expected generated image |
+
+This file is not written when all test samples are evaluated successfully.
 
 ## run.json Schema
 

@@ -9,6 +9,7 @@ _TOP_LEVEL_KEYS: frozenset[str] = frozenset(
         "results_path",
         "run_name",
         "image_size",
+        "manifest_path",
         "preprocessing",
         "training",
         "inference",

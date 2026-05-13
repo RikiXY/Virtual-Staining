@@ -314,6 +314,25 @@ def test_run_all_writes_dataset_build_metadata(builder_config: PreprocessingConf
     assert data["seed"] == builder_config.seed
 
 
+def test_run_all_writes_manifest_metadata(builder_config: PreprocessingConfig) -> None:
+    import json
+
+    with _patched_builder_dependencies():
+        result = DatasetBuilder(builder_config).run_all()
+
+    metadata_path = builder_config.dataset_root / "manifests" / "manifest_metadata.json"
+    data = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    assert data["schema_version"] == "1.0"
+    assert data["created_at"]
+    assert data["record_count"] == result.train_count + result.val_count + result.test_count
+    assert data["splits"] == {
+        "train": result.train_count,
+        "val": result.val_count,
+        "test": result.test_count,
+    }
+
+
 def test_missing_dataset_root_raises(tmp_path: Path) -> None:
     config = PreprocessingConfig(
         dataset_root=tmp_path / "nonexistent",
@@ -353,71 +372,12 @@ def test_split_and_save_requires_filter(builder_config: PreprocessingConfig) -> 
 # ---------------------------------------------------------------------------
 
 
-def test_split_manifest_is_written(builder_config: PreprocessingConfig) -> None:
+def test_split_manifest_csv_is_not_written(builder_config: PreprocessingConfig) -> None:
     with _patched_builder_dependencies():
         DatasetBuilder(builder_config).run_all()
 
     manifest = builder_config.dataset_root / "split_manifest.csv"
-    assert manifest.exists()
-
-
-def test_split_manifest_row_count_equals_valid_pairs(
-    builder_config: PreprocessingConfig,
-) -> None:
-    import csv as csv_module
-
-    with _patched_builder_dependencies():
-        result = DatasetBuilder(builder_config).run_all()
-
-    manifest = builder_config.dataset_root / "split_manifest.csv"
-    with manifest.open(encoding="utf-8", newline="") as f:
-        rows = list(csv_module.DictReader(f))
-
-    expected = result.train_count + result.val_count + result.test_count
-    assert len(rows) == expected
-
-
-def test_split_manifest_split_values(builder_config: PreprocessingConfig) -> None:
-    import csv as csv_module
-
-    with _patched_builder_dependencies():
-        DatasetBuilder(builder_config).run_all()
-
-    manifest = builder_config.dataset_root / "split_manifest.csv"
-    with manifest.open(encoding="utf-8", newline="") as f:
-        rows = list(csv_module.DictReader(f))
-
-    allowed = {"train", "val", "test"}
-    assert all(r["split"] in allowed for r in rows)
-
-
-def test_split_manifest_columns_and_coordinates(
-    builder_config: PreprocessingConfig,
-) -> None:
-    import csv as csv_module
-
-    with _patched_builder_dependencies():
-        DatasetBuilder(builder_config).run_all()
-
-    manifest = builder_config.dataset_root / "split_manifest.csv"
-    with manifest.open(encoding="utf-8", newline="") as f:
-        reader = csv_module.DictReader(f)
-        rows = list(reader)
-        assert reader.fieldnames is not None
-        assert set(reader.fieldnames) >= {
-            "sample_id",
-            "split",
-            "source_name",
-            "target_name",
-            "x",
-            "y",
-        }
-
-    for row in rows:
-        x, y = int(row["x"]), int(row["y"])
-        assert row["sample_id"] == f"{x:05}_{y:05}"
-        assert row["source_name"].startswith(f"{x:05}_{y:05}_source")
-        assert row["target_name"].startswith(f"{x:05}_{y:05}_target")
+    assert not manifest.exists()
 
 
 # ---------------------------------------------------------------------------

@@ -4,9 +4,10 @@ import logging
 from pathlib import Path
 
 from virtual_staining.config.run import RunConfig
+from virtual_staining.data.manifest import load_manifest_or_raise
 from virtual_staining.evaluation.evaluator import evaluate_pairs
-from virtual_staining.evaluation.io import build_evaluation_pairs
 from virtual_staining.evaluation.plotting import save_dataset_plots
+from virtual_staining.evaluation.reports import write_skipped_csv
 from virtual_staining.evaluation.summaries import write_summary_csv
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
@@ -14,6 +15,7 @@ from virtual_staining.experiment.snapshots import (
     save_environment_snapshot,
     save_stage_config_snapshots,
 )
+from virtual_staining.inference.outputs import generated_path_for_record
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +43,6 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
     save_environment_snapshot(snapshot_paths.environment)
     eval_cfg = config.evaluation
 
-    target_dir = (
-        eval_cfg.target_dir if eval_cfg and eval_cfg.target_dir else project.dataset_test_dir
-    )
     generated_dir = (
         eval_cfg.generated_dir if eval_cfg and eval_cfg.generated_dir else paths.output_test_dir
     )
@@ -52,8 +51,33 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
     )
     save_graphs = eval_cfg.save_graphs if eval_cfg else False
 
-    pairs, skipped_ids = build_evaluation_pairs(target_dir, generated_dir)
+    manifest = load_manifest_or_raise(project)
+    manifest.validate(check_files_exist=True, require_splits={"test"})
+    test_records = manifest.filter_split("test").records
+    pairs: list[tuple[Path, Path, str]] = []
+    pairing_skipped: list[dict[str, str]] = []
+    for record in test_records:
+        target_path = project.dataset_root / record.target_path
+        generated_path = generated_path_for_record(record, generated_dir)
+        if target_path.exists() and generated_path.exists():
+            pairs.append((target_path, generated_path, record.sample_id))
+            continue
+
+        reason = "missing_target" if not target_path.exists() else "missing_generated"
+        pairing_skipped.append(
+            {
+                "sample_id": record.sample_id,
+                "reason": reason,
+                "target_path": str(target_path),
+                "generated_path": str(generated_path),
+            }
+        )
+
     result = evaluate_pairs(pairs, output_dir)
+    all_skipped = pairing_skipped + result.skipped_rows
+    if all_skipped:
+        skipped_path = write_skipped_csv(all_skipped, output_dir / "skipped.csv")
+        logger.info("Skipped samples written to %s", skipped_path)
 
     if result.rows:
         result.summary_csv = write_summary_csv(result.rows, output_dir)
@@ -61,10 +85,9 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
     if save_graphs and result.rows:
         save_dataset_plots(result.rows, output_dir)
 
-    total_skipped = result.num_skipped + len(skipped_ids)
     logger.info(
         "Evaluation complete: %s evaluated, %s skipped -> %s",
         result.num_evaluated,
-        total_skipped,
+        len(all_skipped),
         output_dir,
     )

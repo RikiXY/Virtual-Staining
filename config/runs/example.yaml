@@ -3,6 +3,9 @@
 
 # Dataset folder containing the paired full-size input images named below.
 dataset_root: local_workspace/datasets/your_sample
+# Optional: override the default manifest path
+# (defaults to dataset_root/manifests/manifest.csv).
+# manifest_path: local_workspace/datasets/your_sample/manifests/manifest.csv
 
 # All training, inference, and evaluation artifacts are grouped by run_name here.
 results_path: local_workspace/results
@@ -58,10 +61,6 @@ preprocessing:
   seed: 42
 
 training:
-  # Optional dataset split overrides. Defaults:
-  # train_dir: local_workspace/datasets/your_sample/dataset_train
-  # val_dir: local_workspace/datasets/your_sample/dataset_val
-
   batch_size: 8
   epochs: 100
 
@@ -86,8 +85,7 @@ inference:
   # the run root (results_path/run_name/).
   # checkpoint_path: checkpoints/ep099.pth
 
-  # Optional inference directory overrides. Defaults:
-  # test_dir: local_workspace/datasets/your_sample/dataset_test
+  # Output directory override. By default inference writes under the run artifacts tree.
   # output_dir: local_workspace/results/example_run/artifacts/output_test
 
 evaluation:

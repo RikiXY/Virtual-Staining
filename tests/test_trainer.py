@@ -11,60 +11,14 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 
 from virtual_staining.config.project import ProjectConfig
-from virtual_staining.data.dataset import PairedHistologyDataset
+from virtual_staining.data.dataset import PairedManifestDataset
+from virtual_staining.data.manifest import DatasetManifest, ManifestRecord, Split
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.models.config import ModelConfig
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.config import TrainingConfig
 from virtual_staining.training.trainer import Trainer
-
-# ---------------------------------------------------------------------------
-# Internal helper: build a second Trainer that can load a checkpoint
-# ---------------------------------------------------------------------------
-
-
-def _make_resume_trainer(
-    config: TrainingConfig,
-    run_paths: RunPaths,
-    project: ProjectConfig,
-    generator: UNetGenerator,
-    discriminator: PatchGANDiscriminator,
-) -> Trainer:
-    device = torch.device("cpu")
-    transform = transforms.Compose(
-        [
-            transforms.Resize(project.image_size),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5] * 3, [0.5] * 3),
-        ]
-    )
-    train_dir = project.dataset_root / "dataset_train"
-    val_dir = project.dataset_root / "dataset_val"
-    train_loader = DataLoader(
-        PairedHistologyDataset(train_dir, transform=transform), batch_size=1, num_workers=0
-    )
-    val_loader = DataLoader(
-        PairedHistologyDataset(val_dir, transform=transform), batch_size=1, num_workers=0
-    )
-    return Trainer(
-        config=config,
-        model_config=ModelConfig(),
-        run_paths=run_paths,
-        generator=generator.to(device),
-        discriminator=discriminator.to(device),
-        train_loader=train_loader,
-        val_loader=val_loader,
-        device=device,
-        image_size=project.image_size,
-        train_dir=train_dir,
-        val_dir=val_dir,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Helpers / fixtures
-# ---------------------------------------------------------------------------
 
 
 def _write_rgb_pair(directory: Path, prefix: str = "00000_00000") -> None:
@@ -83,18 +37,101 @@ def _make_project(dataset_root: Path, results_path: Path, run_name: str) -> Proj
     )
 
 
+def _make_manifest_dataset(
+    dataset_root: Path,
+    split: Split,
+    prefixes: list[str],
+    transform: transforms.Compose,
+) -> PairedManifestDataset:
+    split_dir = dataset_root / f"dataset_{split}"
+    split_dir.mkdir(parents=True, exist_ok=True)
+    records: list[ManifestRecord] = []
+    for prefix in prefixes:
+        _write_rgb_pair(split_dir, prefix=prefix)
+        x_str, y_str = prefix.split("_", maxsplit=1)
+        records.append(
+            ManifestRecord(
+                sample_id=prefix,
+                split=split,  # type: ignore[arg-type]
+                input_path=Path(f"dataset_{split}/{prefix}_source.png"),
+                target_path=Path(f"dataset_{split}/{prefix}_target.png"),
+                input_modality="label_free",
+                target_modality="stained",
+                x=int(x_str),
+                y=int(y_str),
+                width=32,
+                height=32,
+            )
+        )
+    manifest = DatasetManifest(records=tuple(records), dataset_root=dataset_root)
+    return PairedManifestDataset(manifest.filter_split(split), transform=transform)
+
+
+def _make_train_val_loaders(
+    dataset_root: Path,
+    project: ProjectConfig,
+    *,
+    train_prefixes: list[str],
+    val_prefixes: list[str],
+    batch_size: int = 1,
+    shuffle: bool = False,
+) -> tuple[DataLoader, DataLoader]:
+    transform = transforms.Compose(
+        [
+            transforms.Resize(project.image_size),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5] * 3, [0.5] * 3),
+        ]
+    )
+    train_loader = DataLoader(
+        _make_manifest_dataset(dataset_root, "train", train_prefixes, transform),
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=0,
+    )
+    val_loader = DataLoader(
+        _make_manifest_dataset(dataset_root, "val", val_prefixes, transform),
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=0,
+    )
+    return train_loader, val_loader
+
+
+def _make_resume_trainer(
+    config: TrainingConfig,
+    run_paths: RunPaths,
+    project: ProjectConfig,
+    generator: UNetGenerator,
+    discriminator: PatchGANDiscriminator,
+) -> Trainer:
+    device = torch.device("cpu")
+    train_loader, val_loader = _make_train_val_loaders(
+        project.dataset_root,
+        project,
+        train_prefixes=["00000_00000"],
+        val_prefixes=["00256_00000"],
+    )
+    return Trainer(
+        config=config,
+        model_config=ModelConfig(),
+        run_paths=run_paths,
+        generator=generator.to(device),
+        discriminator=discriminator.to(device),
+        train_loader=train_loader,
+        val_loader=val_loader,
+        device=device,
+        image_size=project.image_size,
+        train_dir=project.dataset_root / "dataset_train",
+        val_dir=project.dataset_root / "dataset_val",
+    )
+
+
 def _make_trainer(
-    tmp_path: Path, checkpoint_rate: int
+    tmp_path: Path,
+    checkpoint_rate: int,
 ) -> tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig]:
     dataset_root = tmp_path / "dataset"
-    train_dir = dataset_root / "dataset_train"
-    val_dir = dataset_root / "dataset_val"
-    train_dir.mkdir(parents=True)
-    val_dir.mkdir(parents=True)
-
-    _write_rgb_pair(train_dir)
-    _write_rgb_pair(val_dir)
-
     project = _make_project(dataset_root, tmp_path / "results", "smoke_run")
     config = TrainingConfig(
         batch_size=1,
@@ -112,25 +149,11 @@ def _make_trainer(
     )
     run_paths = RunPaths(project.run_root)
     run_paths.create_directories()
-
-    transform = transforms.Compose(
-        [
-            transforms.Resize(project.image_size),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5] * 3, [0.5] * 3),
-        ]
-    )
-    train_loader = DataLoader(
-        PairedHistologyDataset(train_dir, transform=transform),
-        batch_size=1,
-        shuffle=False,
-        num_workers=0,
-    )
-    val_loader = DataLoader(
-        PairedHistologyDataset(val_dir, transform=transform),
-        batch_size=1,
-        shuffle=False,
-        num_workers=0,
+    train_loader, val_loader = _make_train_val_loaders(
+        dataset_root,
+        project,
+        train_prefixes=["00000_00000"],
+        val_prefixes=["00256_00000"],
     )
 
     device = torch.device("cpu")
@@ -145,8 +168,8 @@ def _make_trainer(
             val_loader=val_loader,
             device=device,
             image_size=project.image_size,
-            train_dir=train_dir,
-            val_dir=val_dir,
+            train_dir=dataset_root / "dataset_train",
+            val_dir=dataset_root / "dataset_val",
         ),
         config,
         run_paths,
@@ -166,11 +189,6 @@ def checkpointing_trainer(
 ) -> tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig]:
     """Trainer that saves a checkpoint every epoch, for round-trip tests."""
     return _make_trainer(tmp_path, checkpoint_rate=1)
-
-
-# ---------------------------------------------------------------------------
-# Smoke tests (no checkpoint I/O)
-# ---------------------------------------------------------------------------
 
 
 def test_trainer_smoke_run_creates_expected_files(
@@ -205,7 +223,6 @@ def test_trainer_metrics_csv_structure(
         "loss_G_val",
         "loss_D_val",
     }
-    # validate_rate=1, so val columns are present on every epoch
     for row in rows:
         assert row["loss_G_val"] != ""
         assert row["loss_D_val"] != ""
@@ -213,24 +230,9 @@ def test_trainer_metrics_csv_structure(
         assert float(row["loss_D_train"]) > 0
 
 
-# ---------------------------------------------------------------------------
-# Multi-batch averaging
-# ---------------------------------------------------------------------------
-
-
 def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
     """Train losses in metrics.csv must be averages over all batches (not last-batch)."""
     dataset_root = tmp_path / "dataset"
-    train_dir = dataset_root / "dataset_train"
-    val_dir = dataset_root / "dataset_val"
-    train_dir.mkdir(parents=True)
-    val_dir.mkdir(parents=True)
-
-    # Two training samples -> two batches with batch_size=1.
-    _write_rgb_pair(train_dir, prefix="00000_00000")
-    _write_rgb_pair(train_dir, prefix="00001_00001")
-    _write_rgb_pair(val_dir)
-
     project = _make_project(dataset_root, tmp_path / "results", "avg_run")
     config = TrainingConfig(
         batch_size=1,
@@ -247,25 +249,11 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
         log_rate=1,
     )
 
-    transform = transforms.Compose(
-        [
-            transforms.Resize(project.image_size),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5] * 3, [0.5] * 3),
-        ]
-    )
-    device = torch.device("cpu")
-    train_loader = DataLoader(
-        PairedHistologyDataset(train_dir, transform=transform),
-        batch_size=1,
-        shuffle=False,
-        num_workers=0,
-    )
-    val_loader = DataLoader(
-        PairedHistologyDataset(val_dir, transform=transform),
-        batch_size=1,
-        shuffle=False,
-        num_workers=0,
+    train_loader, val_loader = _make_train_val_loaders(
+        dataset_root,
+        project,
+        train_prefixes=["00000_00000", "00001_00001"],
+        val_prefixes=["00256_00000"],
     )
 
     run_paths = RunPaths(project.run_root)
@@ -274,14 +262,14 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
         config=config,
         model_config=ModelConfig(),
         run_paths=run_paths,
-        generator=UNetGenerator().to(device),
-        discriminator=PatchGANDiscriminator().to(device),
+        generator=UNetGenerator().to("cpu"),
+        discriminator=PatchGANDiscriminator().to("cpu"),
         train_loader=train_loader,
         val_loader=val_loader,
-        device=device,
+        device=torch.device("cpu"),
         image_size=project.image_size,
-        train_dir=train_dir,
-        val_dir=val_dir,
+        train_dir=dataset_root / "dataset_train",
+        val_dir=dataset_root / "dataset_val",
     )
     trainer.train(seed=0)
 
@@ -294,11 +282,6 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
     assert float(rows[0]["loss_D_train"]) > 0
 
 
-# ---------------------------------------------------------------------------
-# Checkpoint round-trip (writes one real checkpoint)
-# ---------------------------------------------------------------------------
-
-
 def test_trainer_checkpoint_round_trip(
     checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
 ) -> None:
@@ -307,56 +290,35 @@ def test_trainer_checkpoint_round_trip(
     trainer.train(seed=42)
 
     checkpoint_path = next(run_paths.checkpoints_dir.glob("*.pth"))
-
-    device = torch.device("cpu")
-    train_dir = project.dataset_root / "dataset_train"
-    val_dir = project.dataset_root / "dataset_val"
-    transform = transforms.Compose(
-        [
-            transforms.Resize(project.image_size),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5] * 3, [0.5] * 3),
-        ]
-    )
-    train_loader = DataLoader(
-        PairedHistologyDataset(train_dir, transform=transform),
-        batch_size=1,
-        num_workers=0,
-    )
-    val_loader = DataLoader(
-        PairedHistologyDataset(val_dir, transform=transform),
-        batch_size=1,
-        num_workers=0,
+    train_loader, val_loader = _make_train_val_loaders(
+        project.dataset_root,
+        project,
+        train_prefixes=["00000_00000"],
+        val_prefixes=["00256_00000"],
     )
 
     trainer_2 = Trainer(
         config=config,
         model_config=ModelConfig(),
         run_paths=run_paths,
-        generator=UNetGenerator().to(device),
-        discriminator=PatchGANDiscriminator().to(device),
+        generator=UNetGenerator().to("cpu"),
+        discriminator=PatchGANDiscriminator().to("cpu"),
         train_loader=train_loader,
         val_loader=val_loader,
-        device=device,
+        device=torch.device("cpu"),
         image_size=project.image_size,
-        train_dir=train_dir,
-        val_dir=val_dir,
+        train_dir=project.dataset_root / "dataset_train",
+        val_dir=project.dataset_root / "dataset_val",
     )
 
     start_epoch = trainer_2._checkpoint_manager.load(checkpoint_path)
     assert start_epoch == 1
 
 
-# ---------------------------------------------------------------------------
-# Architecture metadata: presence and validation
-# ---------------------------------------------------------------------------
-
-
 def test_checkpoint_architecture_metadata_present(
     checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
 ) -> None:
-    """Saved checkpoint must include an 'architecture' key with correct model params."""
-    trainer, config, run_paths, _ = checkpointing_trainer
+    trainer, _config, run_paths, _ = checkpointing_trainer
     trainer.train(seed=42)
 
     checkpoint_path = next(run_paths.checkpoints_dir.glob("*.pth"))
@@ -384,7 +346,6 @@ def test_checkpoint_architecture_metadata_present(
 def test_load_checkpoint_validates_matching_architecture(
     checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
 ) -> None:
-    """CheckpointManager.load must succeed when architecture matches the checkpoint."""
     trainer, config, run_paths, project = checkpointing_trainer
     trainer.train(seed=42)
 
@@ -399,7 +360,6 @@ def test_load_checkpoint_validates_matching_architecture(
 def test_load_checkpoint_raises_on_architecture_mismatch(
     checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
 ) -> None:
-    """CheckpointManager.load must raise on mismatched generator architecture params."""
     trainer, config, run_paths, project = checkpointing_trainer
     trainer.train(seed=42)
 
@@ -411,14 +371,8 @@ def test_load_checkpoint_raises_on_architecture_mismatch(
         trainer_mismatch._checkpoint_manager.load(checkpoint_path)
 
 
-# ---------------------------------------------------------------------------
-# Final checkpoint guarantee
-# ---------------------------------------------------------------------------
-
-
 def test_short_run_writes_final_checkpoint(tmp_path: Path) -> None:
-    """epochs=1, checkpoint_rate=10: a final ep000.pth must be written."""
-    trainer, config, run_paths, _ = _make_trainer(tmp_path, checkpoint_rate=10)
+    trainer, _config, run_paths, _ = _make_trainer(tmp_path, checkpoint_rate=10)
     trainer.train(seed=42)
 
     checkpoints = sorted(run_paths.checkpoints_dir.glob("ep*.pth"))
@@ -427,8 +381,7 @@ def test_short_run_writes_final_checkpoint(tmp_path: Path) -> None:
 
 
 def test_no_duplicate_final_checkpoint_when_already_checkpointed(tmp_path: Path) -> None:
-    """epochs=1, checkpoint_rate=1: exactly one checkpoint, no duplicate."""
-    trainer, config, run_paths, _ = _make_trainer(tmp_path, checkpoint_rate=1)
+    trainer, _config, run_paths, _ = _make_trainer(tmp_path, checkpoint_rate=1)
     trainer.train(seed=42)
 
     checkpoints = sorted(run_paths.checkpoints_dir.glob("ep*.pth"))
@@ -437,15 +390,7 @@ def test_no_duplicate_final_checkpoint_when_already_checkpointed(tmp_path: Path)
 
 
 def test_checkpoint_rate_creates_multiple_files(tmp_path: Path) -> None:
-    """epochs=2, checkpoint_rate=1: ep000.pth and ep001.pth must both exist."""
     dataset_root = tmp_path / "dataset"
-    train_dir = dataset_root / "dataset_train"
-    val_dir = dataset_root / "dataset_val"
-    train_dir.mkdir(parents=True)
-    val_dir.mkdir(parents=True)
-    _write_rgb_pair(train_dir)
-    _write_rgb_pair(val_dir)
-
     project = _make_project(dataset_root, tmp_path / "results", "multi_epoch_run")
     config = TrainingConfig(
         batch_size=1,
@@ -463,39 +408,24 @@ def test_checkpoint_rate_creates_multiple_files(tmp_path: Path) -> None:
     )
     run_paths = RunPaths(project.run_root)
     run_paths.create_directories()
-
-    transform = transforms.Compose(
-        [
-            transforms.Resize(project.image_size),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5] * 3, [0.5] * 3),
-        ]
-    )
-    device = torch.device("cpu")
-    train_loader = DataLoader(
-        PairedHistologyDataset(train_dir, transform=transform),
-        batch_size=1,
-        shuffle=False,
-        num_workers=0,
-    )
-    val_loader = DataLoader(
-        PairedHistologyDataset(val_dir, transform=transform),
-        batch_size=1,
-        shuffle=False,
-        num_workers=0,
+    train_loader, val_loader = _make_train_val_loaders(
+        dataset_root,
+        project,
+        train_prefixes=["00000_00000"],
+        val_prefixes=["00256_00000"],
     )
     trainer = Trainer(
         config=config,
         model_config=ModelConfig(),
         run_paths=run_paths,
-        generator=UNetGenerator().to(device),
-        discriminator=PatchGANDiscriminator().to(device),
+        generator=UNetGenerator().to("cpu"),
+        discriminator=PatchGANDiscriminator().to("cpu"),
         train_loader=train_loader,
         val_loader=val_loader,
-        device=device,
+        device=torch.device("cpu"),
         image_size=project.image_size,
-        train_dir=train_dir,
-        val_dir=val_dir,
+        train_dir=dataset_root / "dataset_train",
+        val_dir=dataset_root / "dataset_val",
     )
     trainer.train(seed=42)
 
@@ -505,16 +435,10 @@ def test_checkpoint_rate_creates_multiple_files(tmp_path: Path) -> None:
     assert checkpoints[1].name == "ep001.pth"
 
 
-# ---------------------------------------------------------------------------
-# Architecture metadata: presence and validation (continued)
-# ---------------------------------------------------------------------------
-
-
 def test_load_checkpoint_raises_on_missing_architecture(
     checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
     tmp_path: Path,
 ) -> None:
-    """CheckpointManager.load must raise for checkpoints without architecture metadata."""
     trainer, config, run_paths, project = checkpointing_trainer
     trainer.train(seed=42)
 

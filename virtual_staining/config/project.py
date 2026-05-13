@@ -10,6 +10,7 @@ class ProjectConfig:
     results_path: Path
     run_name: str
     image_size: tuple[int, int]
+    manifest_path_override: Path | None = None
 
     @property
     def run_root(self) -> Path:
@@ -29,6 +30,8 @@ class ProjectConfig:
 
     @property
     def manifest_path(self) -> Path:
+        if self.manifest_path_override is not None:
+            return self.manifest_path_override
         return self.dataset_root / "manifests" / "manifest.csv"
 
     def validate(self) -> None:

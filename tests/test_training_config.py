@@ -42,8 +42,6 @@ def _make_training_config(**overrides: object) -> TrainingConfig:
         "checkpoint_rate": 10,
         "log_rate": 15,
         "resume": None,
-        "train_dir": None,
-        "val_dir": None,
     }
     defaults.update(overrides)
     return TrainingConfig(
@@ -60,8 +58,6 @@ def _make_training_config(**overrides: object) -> TrainingConfig:
         checkpoint_rate=defaults["checkpoint_rate"],  # type: ignore[arg-type]
         log_rate=defaults["log_rate"],  # type: ignore[arg-type]
         resume=defaults["resume"],  # type: ignore[arg-type]
-        train_dir=defaults["train_dir"],  # type: ignore[arg-type]
-        val_dir=defaults["val_dir"],  # type: ignore[arg-type]
     )
 
 
@@ -164,8 +160,6 @@ def test_training_from_run_yaml_section(tmp_path: Path) -> None:
           epochs: 30
           batch_size: 2
           l1_weight: 50
-          train_dir: /custom/train
-          val_dir: /custom/val
     """)
     yaml_file = tmp_path / "run.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
@@ -178,8 +172,6 @@ def test_training_from_run_yaml_section(tmp_path: Path) -> None:
     assert run_config.training.epochs == 30
     assert run_config.training.batch_size == 2
     assert run_config.training.l1_weight == pytest.approx(50)
-    assert run_config.training.train_dir == Path("/custom/train")
-    assert run_config.training.val_dir == Path("/custom/val")
 
 
 def test_inference_from_run_yaml_section(tmp_path: Path) -> None:
@@ -192,7 +184,6 @@ def test_inference_from_run_yaml_section(tmp_path: Path) -> None:
           epochs: 30
         inference:
           checkpoint_path: checkpoints/ep030.pth
-          test_dir: /custom/test
           output_dir: /results/section_run/custom_output
     """)
     yaml_file = tmp_path / "run.yaml"
@@ -201,9 +192,45 @@ def test_inference_from_run_yaml_section(tmp_path: Path) -> None:
     run_config = RunConfig.from_yaml(yaml_file)
     assert run_config.inference is not None
     config = run_config.inference
-    assert config.test_dir == Path("/custom/test")
     assert config.output_dir == Path("/results/section_run/custom_output")
     assert config.checkpoint_path == Path("checkpoints/ep030.pth")
+
+
+def test_training_yaml_rejects_legacy_train_dir_and_val_dir(tmp_path: Path) -> None:
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data
+        results_path: /results
+        run_name: section_run
+        image_size: [512, 512]
+        training:
+          epochs: 30
+          train_dir: /custom/train
+          val_dir: /custom/val
+    """)
+    yaml_file = tmp_path / "run.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unknown key\\(s\\) in training: train_dir, val_dir"):
+        RunConfig.from_yaml(yaml_file)
+
+
+def test_inference_yaml_rejects_legacy_test_dir(tmp_path: Path) -> None:
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data
+        results_path: /results
+        run_name: section_run
+        image_size: [512, 512]
+        training:
+          epochs: 30
+        inference:
+          checkpoint_path: checkpoints/ep030.pth
+          test_dir: /custom/test
+    """)
+    yaml_file = tmp_path / "run.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unknown key\\(s\\) in inference: test_dir"):
+        RunConfig.from_yaml(yaml_file)
 
 
 def test_inference_latest_checkpoint_policy(tmp_path: Path) -> None:

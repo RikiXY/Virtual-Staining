@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 _TRAINING_KEYS: frozenset[str] = frozenset(
     {
@@ -18,8 +17,6 @@ _TRAINING_KEYS: frozenset[str] = frozenset(
         "checkpoint_rate",
         "log_rate",
         "resume",
-        "train_dir",
-        "val_dir",
     }
 )
 
@@ -39,8 +36,6 @@ class TrainingConfig:
     checkpoint_rate: int
     log_rate: int = 15
     resume: str | None = None
-    train_dir: Path | None = None
-    val_dir: Path | None = None
 
     def validate(self) -> None:
         for field_name, value in (

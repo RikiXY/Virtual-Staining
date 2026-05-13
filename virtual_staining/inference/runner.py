@@ -8,8 +8,8 @@ import torch
 from torchvision import transforms
 
 from virtual_staining.config.run import RunConfig
-from virtual_staining.data.dataset import PairedHistologyDataset, PairedManifestDataset
-from virtual_staining.data.manifest import DatasetManifest
+from virtual_staining.data.dataset import PairedManifestDataset
+from virtual_staining.data.manifest import load_manifest_or_raise
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
     resolve_run_snapshot_paths,
@@ -106,36 +106,16 @@ def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
     )
 
     output_dir = config.inference.output_dir or paths.output_test_dir
-    manifest_path = config.project.manifest_path
-    test_dir = config.inference.test_dir or config.project.dataset_test_dir
-
-    use_manifest = False
-    test_manifest = None
-    legacy_dataset: PairedHistologyDataset | None = None
-    if manifest_path.exists():
-        manifest = DatasetManifest.from_csv(
-            manifest_path,
-            dataset_root=config.project.dataset_root,
-        )
-        test_manifest = manifest.filter_split("test")
-        dataset = PairedManifestDataset(test_manifest, transform=transform)
-        use_manifest = True
-        logger.info("Loaded manifest: %s test samples", len(dataset))
-    else:
-        logger.warning(
-            "Manifest not found at %s; falling back to directory scanning.",
-            manifest_path,
-        )
-        legacy_dataset = PairedHistologyDataset(test_dir, transform=transform)
-        dataset = legacy_dataset
+    manifest = load_manifest_or_raise(config.project)
+    manifest.validate(check_files_exist=True, require_splits={"test"})
+    test_manifest = manifest.filter_split("test")
+    dataset = PairedManifestDataset(test_manifest, transform=transform)
+    logger.info("Loaded manifest: %s test samples", len(dataset))
 
     writer = InferenceOutputWriter(output_dir)
     result = InferenceResult(output_dir=output_dir)
     if len(dataset) == 0:
-        if use_manifest:
-            logger.warning("No test pairs found in manifest: %s", manifest_path)
-        else:
-            logger.warning("No test pairs found in: %s", test_dir)
+        logger.warning("No test pairs found in manifest: %s", config.project.manifest_path)
         return result
 
     predictor = Predictor(generator, device, _is_amp_enabled(device))
@@ -143,16 +123,10 @@ def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
     for idx in range(len(dataset)):
         source_tensor, _ = dataset[idx]
         source_tensor = cast(torch.Tensor, source_tensor)
-        if use_manifest:
-            assert test_manifest is not None
-            record = test_manifest.records[idx]
-            source_path = config.project.dataset_root / record.input_path
-        else:
-            assert legacy_dataset is not None
-            source_path = legacy_dataset.pairs[idx][0]
+        record = test_manifest.records[idx]
         batch = source_tensor.unsqueeze(0)
         output = predictor.predict_batch(batch)[0]
-        out_path = writer.write(source_path.stem, source_path.suffix, output)
+        out_path = writer.write(record.sample_id, record.input_path.suffix, output)
         result.generated_paths.append(out_path)
         result.num_samples += 1
 

@@ -27,6 +27,18 @@ from virtual_staining.data.preprocessing import (
 from virtual_staining.data.results import DatasetBuildResult
 
 
+def _build_manifest_metadata(records: list[ManifestRecord]) -> dict[str, Any]:
+    return {
+        "schema_version": DatasetManifest.SCHEMA_VERSION,
+        "created_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        "record_count": len(records),
+        "splits": {
+            split: sum(1 for record in records if record.split == split)
+            for split in ("train", "val", "test")
+        },
+    }
+
+
 class DatasetBuilder:
     """
     Orchestrates the full dataset preparation pipeline.
@@ -317,7 +329,6 @@ class DatasetBuilder:
         )
 
         split_names: tuple[Split, Split, Split] = ("train", "val", "test")
-        manifest_rows: list[dict[str, Any]] = []
         manifest_records: list[ManifestRecord] = []
         for split_name, subset in zip(split_names, split, strict=True):
             subset_dir = root / f"dataset_{split_name}"
@@ -327,16 +338,6 @@ class DatasetBuilder:
                 parts = src_pair[1].split("_")
                 x, y = int(parts[0]), int(parts[1])
                 sample_id = f"{x:05}_{y:05}"
-                manifest_rows.append(
-                    {
-                        "sample_id": sample_id,
-                        "split": split_name,
-                        "source_name": src_pair[1],
-                        "target_name": tgt_pair[1],
-                        "x": x,
-                        "y": y,
-                    }
-                )
                 manifest_records.append(
                     ManifestRecord(
                         sample_id=sample_id,
@@ -351,14 +352,6 @@ class DatasetBuilder:
                         height=self.config.image_size[1],
                     )
                 )
-
-        with open(root / "split_manifest.csv", "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=["sample_id", "split", "source_name", "target_name", "x", "y"],
-            )
-            writer.writeheader()
-            writer.writerows(manifest_rows)
 
         discarded_manifest_records: list[ManifestRecord] = []
         for src_pair, tgt_pair in zip(
@@ -387,6 +380,10 @@ class DatasetBuilder:
         manifest = DatasetManifest(records=tuple(manifest_records), dataset_root=root)
         manifest.validate()
         manifest.to_csv(manifests_dir / "manifest.csv")
+        (manifests_dir / "manifest_metadata.json").write_text(
+            json.dumps(_build_manifest_metadata(manifest_records), indent=2),
+            encoding="utf-8",
+        )
 
         discarded_manifest = DatasetManifest(
             records=tuple(discarded_manifest_records),

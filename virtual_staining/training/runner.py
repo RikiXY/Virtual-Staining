@@ -10,8 +10,8 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 
 from virtual_staining.config.run import RunConfig
-from virtual_staining.data.dataset import PairedHistologyDataset, PairedManifestDataset
-from virtual_staining.data.manifest import DatasetManifest
+from virtual_staining.data.dataset import PairedManifestDataset
+from virtual_staining.data.manifest import load_manifest_or_raise
 from virtual_staining.experiment.metadata import RunMetadata
 from virtual_staining.experiment.run_context import RunContext
 from virtual_staining.experiment.run_paths import RunPaths
@@ -103,35 +103,24 @@ def run_training(
         ]
     )
 
-    manifest_path = config.project.manifest_path
-    train_dir = config.training.train_dir or config.project.dataset_train_dir
-    val_dir = config.training.val_dir or config.project.dataset_val_dir
+    train_dir = config.project.dataset_train_dir
+    val_dir = config.project.dataset_val_dir
 
-    if manifest_path.exists():
-        manifest = DatasetManifest.from_csv(
-            manifest_path,
-            dataset_root=config.project.dataset_root,
-        )
-        train_dataset = PairedManifestDataset(
-            manifest.filter_split("train"),
-            transform=transform,
-        )
-        val_dataset = PairedManifestDataset(
-            manifest.filter_split("val"),
-            transform=transform,
-        )
-        logger.info(
-            "Loaded manifest: %s train, %s val samples",
-            len(train_dataset),
-            len(val_dataset),
-        )
-    else:
-        logger.warning(
-            "Manifest not found at %s; falling back to directory scanning.",
-            manifest_path,
-        )
-        train_dataset = PairedHistologyDataset(train_dir, transform=transform)
-        val_dataset = PairedHistologyDataset(val_dir, transform=transform)
+    manifest = load_manifest_or_raise(config.project)
+    manifest.validate(check_files_exist=True, require_splits={"train", "val"})
+    train_dataset = PairedManifestDataset(
+        manifest.filter_split("train"),
+        transform=transform,
+    )
+    val_dataset = PairedManifestDataset(
+        manifest.filter_split("val"),
+        transform=transform,
+    )
+    logger.info(
+        "Loaded manifest: %s train, %s val samples",
+        len(train_dataset),
+        len(val_dataset),
+    )
 
     train_loader = DataLoader(
         train_dataset,
