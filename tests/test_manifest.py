@@ -266,6 +266,138 @@ def test_dataset_manifest_validate_unique_ids_passes() -> None:
     manifest.validate()  # must not raise
 
 
+def test_validate_duplicate_input_path_raises() -> None:
+    shared_input = Path("dataset_train/shared_source.tif")
+    records = (
+        ManifestRecord(
+            "a",
+            "train",
+            shared_input,
+            Path("a/tgt.tif"),
+            "lf",
+            "st",
+            0,
+            0,
+            256,
+            256,
+        ),
+        ManifestRecord(
+            "b",
+            "train",
+            shared_input,
+            Path("b/tgt.tif"),
+            "lf",
+            "st",
+            64,
+            0,
+            256,
+            256,
+        ),
+    )
+    manifest = DatasetManifest(records=records, dataset_root=Path("/tmp"))
+
+    with pytest.raises(ValueError, match="input_path"):
+        manifest.validate()
+
+
+def test_validate_duplicate_target_path_raises() -> None:
+    shared_target = Path("dataset_train/shared_target.tif")
+    records = (
+        ManifestRecord(
+            "a",
+            "train",
+            Path("a/src.tif"),
+            shared_target,
+            "lf",
+            "st",
+            0,
+            0,
+            256,
+            256,
+        ),
+        ManifestRecord(
+            "b",
+            "train",
+            Path("b/src.tif"),
+            shared_target,
+            "lf",
+            "st",
+            64,
+            0,
+            256,
+            256,
+        ),
+    )
+    manifest = DatasetManifest(records=records, dataset_root=Path("/tmp"))
+
+    with pytest.raises(ValueError, match="target_path"):
+        manifest.validate()
+
+
+def test_validate_sample_in_train_and_val_raises() -> None:
+    records = (
+        ManifestRecord(
+            "abc",
+            "train",
+            Path("train/src.tif"),
+            Path("train/tgt.tif"),
+            "lf",
+            "st",
+            0,
+            0,
+            256,
+            256,
+        ),
+        ManifestRecord(
+            "abc",
+            "val",
+            Path("val/src.tif"),
+            Path("val/tgt.tif"),
+            "lf",
+            "st",
+            0,
+            0,
+            256,
+            256,
+        ),
+    )
+    manifest = DatasetManifest(records=records, dataset_root=Path("/tmp"))
+
+    with pytest.raises(ValueError, match="multiple splits"):
+        manifest.validate()
+
+
+def test_validate_sample_in_train_and_discarded_passes() -> None:
+    records = (
+        ManifestRecord(
+            "abc",
+            "train",
+            Path("train/src.tif"),
+            Path("train/tgt.tif"),
+            "lf",
+            "st",
+            0,
+            0,
+            256,
+            256,
+        ),
+        ManifestRecord(
+            "abc",
+            "discarded",
+            Path("discarded/src.tif"),
+            Path("discarded/tgt.tif"),
+            "lf",
+            "st",
+            0,
+            0,
+            256,
+            256,
+        ),
+    )
+    manifest = DatasetManifest(records=records, dataset_root=Path("/tmp"))
+    manifest.validate()
+
+
 def test_dataset_manifest_len() -> None:
     records = tuple(_make_record(str(i)) for i in range(5))
     manifest = DatasetManifest(records=records, dataset_root=Path("/tmp"))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
@@ -146,14 +147,30 @@ class DatasetManifest:
 
         Checks:
         - sample_ids are unique
+        - no sample_id appears in more than one non-discarded split
         - no duplicate (split, input_path) pairs
+        - no duplicate input_path values
+        - no duplicate target_path values
         - if check_files_exist=True, every resolved path must exist on disk
         """
-        sample_ids = [record.sample_id for record in self.records]
-        if len(sample_ids) != len(set(sample_ids)):
-            duplicate_ids = {
-                sample_id for sample_id in sample_ids if sample_ids.count(sample_id) > 1
-            }
+        splits_by_sample: dict[str, list[Split]] = defaultdict(list)
+        for record in self.records:
+            splits_by_sample[record.sample_id].append(record.split)
+
+        multi_split = {
+            sample_id: sorted({split for split in splits if split != "discarded"})
+            for sample_id, splits in splits_by_sample.items()
+            if len({split for split in splits if split != "discarded"}) > 1
+        }
+        if multi_split:
+            raise ValueError(f"Some sample_ids appear in multiple splits: {multi_split}")
+
+        duplicate_ids = {
+            sample_id
+            for sample_id, splits in splits_by_sample.items()
+            if len(splits) > 1 and not (len(splits) == 2 and "discarded" in splits)
+        }
+        if duplicate_ids:
             raise ValueError(f"Duplicate sample_ids in manifest: {duplicate_ids}")
 
         split_input_pairs = [(record.split, record.input_path) for record in self.records]
@@ -162,6 +179,20 @@ class DatasetManifest:
                 pair for pair in split_input_pairs if split_input_pairs.count(pair) > 1
             }
             raise ValueError(f"Duplicate (split, input_path) pairs in manifest: {duplicate_pairs}")
+
+        input_paths = [record.input_path for record in self.records]
+        if len(input_paths) != len(set(input_paths)):
+            duplicate_input_paths = {
+                input_path for input_path in input_paths if input_paths.count(input_path) > 1
+            }
+            raise ValueError(f"Duplicate input_path values in manifest: {duplicate_input_paths}")
+
+        target_paths = [record.target_path for record in self.records]
+        if len(target_paths) != len(set(target_paths)):
+            duplicate_target_paths = {
+                target_path for target_path in target_paths if target_paths.count(target_path) > 1
+            }
+            raise ValueError(f"Duplicate target_path values in manifest: {duplicate_target_paths}")
 
         if check_files_exist:
             for record in self.records:
