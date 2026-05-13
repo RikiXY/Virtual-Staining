@@ -7,7 +7,6 @@ _INFERENCE_KEYS: frozenset[str] = frozenset(
     {
         "checkpoint_path",
         "checkpoint_policy",
-        "test_dir",
         "output_dir",
     }
 )
@@ -17,7 +16,6 @@ _INFERENCE_KEYS: frozenset[str] = frozenset(
 class InferenceConfig:
     checkpoint_policy: str | None = None
     checkpoint_path: Path | None = None
-    test_dir: Path | None = None
     output_dir: Path | None = None
 
     def validate(self) -> None:

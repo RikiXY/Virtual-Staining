@@ -164,8 +164,6 @@ class RunConfig:
                 "checkpoint_rate": self.training.checkpoint_rate,
                 "log_rate": self.training.log_rate,
                 "resume": self.training.resume,
-                "train_dir": str(self.training.train_dir) if self.training.train_dir else None,
-                "val_dir": str(self.training.val_dir) if self.training.val_dir else None,
             }
 
         if self.inference is not None:
@@ -174,7 +172,6 @@ class RunConfig:
                 "checkpoint_path": (
                     str(self.inference.checkpoint_path) if self.inference.checkpoint_path else None
                 ),
-                "test_dir": str(self.inference.test_dir) if self.inference.test_dir else None,
                 "output_dir": (
                     str(self.inference.output_dir) if self.inference.output_dir else None
                 ),
@@ -413,8 +410,6 @@ def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
         checkpoint_rate=int(data.get("checkpoint_rate", 10)),
         log_rate=int(data.get("log_rate", 15)),
         resume=data.get("resume"),
-        train_dir=Path(data["train_dir"]) if data.get("train_dir") else None,
-        val_dir=Path(data["val_dir"]) if data.get("val_dir") else None,
     )
     config.validate()
     return config
@@ -429,7 +424,6 @@ def _parse_inference(raw: dict[str, Any]) -> InferenceConfig:
     config = InferenceConfig(
         checkpoint_policy=data.get("checkpoint_policy"),
         checkpoint_path=Path(data["checkpoint_path"]) if data.get("checkpoint_path") else None,
-        test_dir=Path(data["test_dir"]) if data.get("test_dir") else None,
         output_dir=Path(data["output_dir"]) if data.get("output_dir") else None,
     )
     config.validate()

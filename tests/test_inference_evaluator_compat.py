@@ -115,7 +115,6 @@ run_name: test_run
 image_size: [{image_size[0]}, {image_size[1]}]
 inference:
   checkpoint_path: {checkpoint_path}
-  test_dir: {Path(test_folder)}
   output_dir: {Path(output_folder)}
 """.strip()
         + "\n",
@@ -144,7 +143,6 @@ run_name: test_run
 image_size: [{_IMAGE_SIZE[0]}, {_IMAGE_SIZE[1]}]
 inference:
   checkpoint_path: {checkpoint}
-  test_dir: {test_dir}
   output_dir: {output_dir}
 """.strip()
         + "\n",

@@ -103,8 +103,8 @@ def run_training(
         ]
     )
 
-    train_dir = config.training.train_dir or config.project.dataset_train_dir
-    val_dir = config.training.val_dir or config.project.dataset_val_dir
+    train_dir = config.project.dataset_train_dir
+    val_dir = config.project.dataset_val_dir
 
     manifest = load_manifest_or_raise(config.project)
     train_dataset = PairedManifestDataset(
