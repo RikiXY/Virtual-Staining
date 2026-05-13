@@ -4,8 +4,9 @@ import hashlib
 import json
 import shutil
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 
@@ -91,6 +92,81 @@ def compute_manifest_hash(manifest_path: Path) -> str:
     """Return sha256:<hex> of the manifest file content."""
     digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     return f"sha256:{digest}"
+
+
+def _hash_bytes(payload: bytes) -> str:
+    digest = hashlib.sha256(payload).hexdigest()
+    return f"sha256:{digest}"
+
+
+def _canonical_json_bytes(payload: Any) -> bytes:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+        "utf-8"
+    )
+
+
+def compute_payload_hash(payload: Any) -> str:
+    """Return sha256:<hex> for a canonical JSON payload."""
+    return _hash_bytes(_canonical_json_bytes(payload))
+
+
+def compute_file_sha256(path: Path) -> str:
+    """Return sha256:<hex> for a file's content."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def build_file_provenance(path: Path) -> dict[str, Any]:
+    """Return canonical provenance for one source dataset file."""
+    resolved = path.resolve()
+    stat = resolved.stat()
+    return {
+        "path": str(resolved),
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "sha256": compute_file_sha256(resolved),
+    }
+
+
+def build_dataset_fingerprint_metadata(
+    *,
+    dataset_root: Path,
+    preprocessing_config: dict[str, Any],
+    source_path: Path,
+    target_path: Path,
+    prepared_at: str | None = None,
+) -> dict[str, Any]:
+    """Build machine-readable dataset fingerprint metadata for prepare reuse checks."""
+    source = build_file_provenance(source_path)
+    target = build_file_provenance(target_path)
+    dataset_root_resolved = str(dataset_root.resolve())
+    preprocessing_hash = compute_payload_hash(preprocessing_config)
+    fingerprint_payload = {
+        "dataset_root": dataset_root_resolved,
+        "preprocessing": preprocessing_config,
+        "source": source,
+        "target": target,
+    }
+    return {
+        "schema_version": "1.0",
+        "fingerprint": compute_payload_hash(fingerprint_payload),
+        "prepared_at": prepared_at or datetime.now(UTC).isoformat(),
+        "dataset_root": dataset_root_resolved,
+        "preprocessing": preprocessing_config,
+        "preprocessing_hash": preprocessing_hash,
+        "source": source,
+        "target": target,
+    }
+
+
+def save_dataset_fingerprint(metadata: dict[str, Any], dest: Path) -> None:
+    """Persist dataset fingerprint metadata as canonical JSON."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with dest.open("w", encoding="utf-8") as handle:
+        json.dump(metadata, handle, indent=2)
 
 
 def save_config_hash(hash_str: str, dest: Path) -> None:

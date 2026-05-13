@@ -26,6 +26,7 @@ local_workspace/datasets/<name>/
 └── metadata/
     ├── config_hash.txt         # sha256 of config/resolved.yaml
     ├── dataset_build.json      # build statistics and provenance
+    ├── dataset_fingerprint.json # cache identity for prepare reuse decisions
     └── environment.json        # runtime environment snapshot
 ```
 
@@ -131,6 +132,42 @@ ratio, and failure reasons) are written to `discarded_patches/discarded_log.csv`
 | `num_val` | int | Patches assigned to the val split |
 | `num_test` | int | Patches assigned to the test split |
 | `seed` | int | Random seed used for the train/val/test split |
+
+## dataset_fingerprint.json Fields
+
+`metadata/dataset_fingerprint.json` records the cache identity of the prepared
+dataset. It is written after a successful `vs-prepare` run and is the intended
+input for later reuse-or-rebuild decisions.
+
+The fingerprint is derived from:
+
+- the resolved `preprocessing` section only
+- the configured `dataset_root`
+- source image provenance
+- target image provenance
+
+Source and target provenance include absolute path, file size, `mtime_ns`, and
+SHA-256 content hash so reuse decisions fail closed if image contents change.
+
+| Field | Type | Description |
+|---|---|---|
+| `schema_version` | string | Fingerprint metadata schema version |
+| `fingerprint` | string | Canonical SHA-256 dataset fingerprint |
+| `prepared_at` | ISO 8601 | UTC timestamp when the fingerprint was recorded |
+| `dataset_root` | path | Absolute path of the dataset root this fingerprint applies to |
+| `preprocessing` | object | Canonical resolved preprocessing payload only |
+| `preprocessing_hash` | string | SHA-256 of the canonical preprocessing payload |
+| `source` | object | Source image provenance record |
+| `target` | object | Target image provenance record |
+
+Each provenance record contains:
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | path | Absolute filesystem path of the input image |
+| `size` | int | File size in bytes |
+| `mtime_ns` | int | File modification time in nanoseconds |
+| `sha256` | string | SHA-256 of the file contents |
 
 ## Config Snapshots
 

@@ -893,6 +893,32 @@ def test_run_all_writes_dataset_build_metadata(builder_config: PreprocessingConf
     assert data["seed"] == builder_config.seed
 
 
+def test_run_all_writes_dataset_fingerprint_metadata(builder_config: PreprocessingConfig) -> None:
+    import json
+
+    with _patched_builder_dependencies():
+        DatasetBuilder(builder_config).run_all()
+
+    metadata_path = builder_config.dataset_root / "metadata" / "dataset_fingerprint.json"
+    data = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    assert data["schema_version"] == "1.0"
+    assert data["fingerprint"].startswith("sha256:")
+    assert data["prepared_at"]
+    assert data["dataset_root"] == str(builder_config.dataset_root.resolve())
+    assert data["preprocessing"]["source_name"] == builder_config.source_name
+    assert data["preprocessing"]["target_name"] == builder_config.target_name
+    assert data["preprocessing"]["image_size"] == list(builder_config.image_size)
+    assert data["source"]["path"] == str((builder_config.dataset_root / "source.png").resolve())
+    assert data["target"]["path"] == str((builder_config.dataset_root / "target.png").resolve())
+    assert data["source"]["size"] > 0
+    assert data["target"]["size"] > 0
+    assert isinstance(data["source"]["mtime_ns"], int)
+    assert isinstance(data["target"]["mtime_ns"], int)
+    assert data["source"]["sha256"].startswith("sha256:")
+    assert data["target"]["sha256"].startswith("sha256:")
+
+
 def test_run_all_writes_manifest_metadata(builder_config: PreprocessingConfig) -> None:
     import json
 

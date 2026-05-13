@@ -29,6 +29,10 @@ from virtual_staining.data.preprocessing import (
     validate_image_filename,
 )
 from virtual_staining.data.results import DatasetBuildResult
+from virtual_staining.experiment.snapshots import (
+    build_dataset_fingerprint_metadata,
+    save_dataset_fingerprint,
+)
 
 logger = logging.getLogger(__name__)
 _MEMORY_WARNING_THRESHOLD_GB = 8.0
@@ -55,6 +59,28 @@ def _build_manifest_metadata(records: list[ManifestRecord]) -> dict[str, Any]:
             split: sum(1 for record in records if record.split == split)
             for split in ("train", "val", "test")
         },
+    }
+
+
+def _build_preprocessing_payload(config: PreprocessingConfig) -> dict[str, Any]:
+    return {
+        "dataset_root": str(config.dataset_root.resolve()),
+        "source_name": config.source_name,
+        "target_name": config.target_name,
+        "image_size": list(config.image_size),
+        "grid_movement": list(config.grid_movement),
+        "margin": config.margin,
+        "seed": config.seed,
+        "save_masks": config.save_masks,
+        "mask_scale": config.mask_scale,
+        "max_memory_gb": config.max_memory_gb,
+        "train_ratio": config.train_ratio,
+        "val_ratio": config.val_ratio,
+        "test_ratio": config.test_ratio,
+        "min_foreground_ratio": config.min_foreground_ratio,
+        "max_white_ratio": config.max_white_ratio,
+        "white_threshold": config.white_threshold,
+        "max_largest_white_component_ratio": config.max_largest_white_component_ratio,
     }
 
 
@@ -487,6 +513,15 @@ class DatasetBuilder:
         }
         with open(metadata_dir / "dataset_build.json", "w", encoding="utf-8") as f:
             json.dump(build_metadata, f, indent=2, default=str)
+
+        fingerprint_metadata = build_dataset_fingerprint_metadata(
+            dataset_root=root,
+            preprocessing_config=_build_preprocessing_payload(self.config),
+            source_path=root / self._source_file.name,
+            target_path=root / self._target_file.name,
+            prepared_at=build_metadata["completed_at"],
+        )
+        save_dataset_fingerprint(fingerprint_metadata, metadata_dir / "dataset_fingerprint.json")
 
         logger.info(
             "Saved: train=%s, val=%s, test=%s, discarded=%s",
