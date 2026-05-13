@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 import pytest
 
+from virtual_staining.applications.complete_run import complete_run
 from virtual_staining.applications.evaluate import evaluate
 from virtual_staining.applications.infer import infer
 from virtual_staining.applications.prepare import prepare
@@ -167,6 +168,25 @@ def test_full_pipeline_smoke(tmp_path: Path) -> None:
     assert rows[0]["sample_id"]
 
 
+@pytest.mark.slow
+def test_complete_run_smoke(tmp_path: Path) -> None:
+    dataset_root = _make_synthetic_dataset(tmp_path / "dataset")
+    config_path = _write_smoke_config(tmp_path, dataset_root)
+    config = RunConfig.from_yaml(config_path)
+
+    with _patched_prepare_dependencies():
+        complete_run(config, config_path)
+
+    metrics_csv = tmp_path / "runs" / "smoke_run" / "evaluation" / "per_image_metrics.csv"
+    assert metrics_csv.exists()
+
+    with metrics_csv.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert rows
+    assert rows[0]["sample_id"]
+
+
 def test_prepare_smoke_reuses_cached_dataset(tmp_path: Path) -> None:
     dataset_root = _make_synthetic_dataset(tmp_path / "dataset")
     config_path = _write_smoke_config(tmp_path, dataset_root)
@@ -190,4 +210,25 @@ def test_prepare_smoke_reuses_cached_dataset(tmp_path: Path) -> None:
     assert second.train_count == first.train_count
     assert second.val_count == first.val_count
     assert second.test_count == first.test_count
+    assert stage_data["reused"] is True
+
+
+@pytest.mark.slow
+def test_complete_run_smoke_reuses_cached_dataset(tmp_path: Path) -> None:
+    dataset_root = _make_synthetic_dataset(tmp_path / "dataset")
+    config_path = _write_smoke_config(tmp_path, dataset_root)
+    config = RunConfig.from_yaml(config_path)
+
+    with _patched_prepare_dependencies():
+        complete_run(config, config_path)
+
+    with patch(
+        "virtual_staining.data.builder.DatasetBuilder.run_all",
+        side_effect=AssertionError("complete_run should reuse the prepared dataset"),
+    ):
+        complete_run(config, config_path)
+
+    stage_data = json.loads(
+        (dataset_root / "metadata" / "stages" / "prepare.json").read_text(encoding="utf-8")
+    )
     assert stage_data["reused"] is True

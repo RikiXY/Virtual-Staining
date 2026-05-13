@@ -10,9 +10,11 @@ import pytest
 import yaml
 
 from virtual_staining.applications.compare_panels import FromMetricsResult
+from virtual_staining.applications.complete_run import complete_run
 from virtual_staining.applications.evaluate_single import DatasetEvalResult
 from virtual_staining.cli import compare as compare_cli
 from virtual_staining.cli import compare_panels as compare_panels_cli
+from virtual_staining.cli import complete_run as complete_run_cli
 from virtual_staining.cli import evaluate as evaluate_cli
 from virtual_staining.cli import evaluate_single as evaluate_single_cli
 from virtual_staining.cli import infer as infer_cli
@@ -23,7 +25,7 @@ from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.statistics import PairedSummary
 
 UV = ("uv", "run")
-CLI_ENTRYPOINTS = ("vs-prepare", "vs-train", "vs-infer", "vs-evaluate")
+CLI_ENTRYPOINTS = ("vs-prepare", "vs-complete-run", "vs-train", "vs-infer", "vs-evaluate")
 MAKE_EXPERIMENT_TARGETS = ("dataset", "train", "infer", "evaluate", "complete-run")
 
 
@@ -81,6 +83,12 @@ def test_make_target_fails_without_config(target: str) -> None:
 def test_makefile_has_no_args_variable() -> None:
     makefile = Path("Makefile").read_text(encoding="utf-8")
     assert "$(ARGS)" not in makefile, "Makefile still references $(ARGS)"
+
+
+def test_make_complete_run_delegates_to_complete_run_cli() -> None:
+    makefile = Path("Makefile").read_text(encoding="utf-8")
+    assert "$(UV) run vs-complete-run --config $(CONFIG)" in makefile
+    assert "$(MAKE) dataset CONFIG=$(CONFIG)" not in makefile
 
 
 def test_example_yaml_is_valid_mapping() -> None:
@@ -394,3 +402,123 @@ def test_prepare_main_passes_full_run_config_and_path(
 
     assert isinstance(captured["config"], RunConfig)
     assert captured["config_path"] == config_path.resolve()
+
+
+def test_complete_run_main_passes_full_run_config_and_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """\
+        preprocessing:
+          source_name: source.png
+          target_name: target.png
+        training:
+          epochs: 1
+        inference:
+          checkpoint_path: /tmp/ep000.pth
+        evaluation:
+          save_graphs: false
+        """,
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_complete_run(config: RunConfig, incoming_path: Path) -> None:
+        captured["config"] = config
+        captured["config_path"] = incoming_path
+
+    monkeypatch.setattr(complete_run_cli, "complete_run", _fake_complete_run)
+
+    complete_run_cli.main(["--config", str(config_path)])
+
+    assert isinstance(captured["config"], RunConfig)
+    assert captured["config_path"] == config_path.resolve()
+
+
+def test_complete_run_executes_stages_in_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """\
+        preprocessing:
+          source_name: source.png
+          target_name: target.png
+        training:
+          epochs: 1
+        inference:
+          checkpoint_path: /tmp/ep000.pth
+        evaluation:
+          save_graphs: false
+        """,
+    )
+    config = RunConfig.from_yaml(config_path)
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "virtual_staining.applications.complete_run.prepare",
+        lambda *_: calls.append("prepare"),
+    )
+    monkeypatch.setattr(
+        "virtual_staining.applications.complete_run.train",
+        lambda *_: calls.append("train"),
+    )
+    monkeypatch.setattr(
+        "virtual_staining.applications.complete_run.infer",
+        lambda *_: calls.append("infer"),
+    )
+    monkeypatch.setattr(
+        "virtual_staining.applications.complete_run.evaluate",
+        lambda *_: calls.append("evaluate"),
+    )
+
+    complete_run(config, config_path)
+
+    assert calls == ["prepare", "train", "infer", "evaluate"]
+
+
+def test_complete_run_stops_on_first_failing_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """\
+        preprocessing:
+          source_name: source.png
+          target_name: target.png
+        training:
+          epochs: 1
+        inference:
+          checkpoint_path: /tmp/ep000.pth
+        evaluation:
+          save_graphs: false
+        """,
+    )
+    config = RunConfig.from_yaml(config_path)
+    calls: list[str] = []
+
+    def _fail_prepare(*_args: object) -> None:
+        calls.append("prepare")
+        raise RuntimeError("prepare failed")
+
+    monkeypatch.setattr(
+        "virtual_staining.applications.complete_run.prepare",
+        _fail_prepare,
+    )
+    monkeypatch.setattr(
+        "virtual_staining.applications.complete_run.train",
+        lambda *_: calls.append("train"),
+    )
+    monkeypatch.setattr(
+        "virtual_staining.applications.complete_run.infer",
+        lambda *_: calls.append("infer"),
+    )
+    monkeypatch.setattr(
+        "virtual_staining.applications.complete_run.evaluate",
+        lambda *_: calls.append("evaluate"),
+    )
+
+    with pytest.raises(RuntimeError, match="prepare failed"):
+        complete_run(config, config_path)
+
+    assert calls == ["prepare"]

@@ -10,6 +10,7 @@ generation of virtually stained images from label-free microscopy inputs (and vi
 | Command | Purpose |
 |---|---|
 | `vs-prepare` | Build the patch dataset from full-size image pairs |
+| `vs-complete-run` | Run prepare, train, infer, and evaluate in sequence |
 | `vs-train` | Train the Pix2Pix model |
 | `vs-infer` | Run inference on the test split |
 | `vs-evaluate` | Evaluate generated images with MAE, RMSE, PSNR, SSIM |
@@ -30,17 +31,8 @@ uv sync --frozen
 # 3. Copy and edit the example run config
 cp config/runs/example.yaml config/runs/local/my_run.yaml
 
-# 4. Prepare dataset
-vs-prepare --config config/runs/local/my_run.yaml
-
-# 5. Train
-vs-train --config config/runs/local/my_run.yaml
-
-# 6. Run inference
-vs-infer --config config/runs/local/my_run.yaml
-
-# 7. Evaluate
-vs-evaluate --config config/runs/local/my_run.yaml
+# 4. Run the full pipeline
+vs-complete-run --config config/runs/local/my_run.yaml
 ```
 
 ### Makefile shortcuts
@@ -50,14 +42,15 @@ make dataset        CONFIG=config/runs/local/my_run.yaml
 make train          CONFIG=config/runs/local/my_run.yaml
 make infer          CONFIG=config/runs/local/my_run.yaml
 make evaluate       CONFIG=config/runs/local/my_run.yaml
+make complete-run   CONFIG=config/runs/local/my_run.yaml
 make compare        CONFIG=config/runs/local/my_run.yaml
 make compare-panels CONFIG=config/runs/local/my_run.yaml
 ```
 
-Or run the full sequence in one command:
+Or call the CLI directly:
 
 ```bash
-make complete-run CONFIG=config/runs/local/my_run.yaml
+vs-complete-run --config config/runs/local/my_run.yaml
 ```
 
 ## Configuration

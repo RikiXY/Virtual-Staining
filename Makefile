@@ -58,10 +58,7 @@ evaluate: require-config
 	$(UV) run vs-evaluate --config $(CONFIG)
 
 complete-run: require-config
-	$(MAKE) dataset CONFIG=$(CONFIG)
-	$(MAKE) train CONFIG=$(CONFIG)
-	$(MAKE) infer CONFIG=$(CONFIG)
-	$(MAKE) evaluate CONFIG=$(CONFIG)
+	$(UV) run vs-complete-run --config $(CONFIG)
 
 compare: require-config
 	$(UV) run vs-compare --config $(CONFIG)
