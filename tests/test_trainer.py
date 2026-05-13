@@ -44,7 +44,7 @@ def _make_manifest_dataset(
     prefixes: list[str],
     transform: transforms.Compose,
 ) -> PairedManifestDataset:
-    split_dir = dataset_root / f"dataset_{split}"
+    split_dir = dataset_root / "splits" / split
     split_dir.mkdir(parents=True, exist_ok=True)
     records: list[ManifestRecord] = []
     for prefix in prefixes:
@@ -54,8 +54,8 @@ def _make_manifest_dataset(
             ManifestRecord(
                 sample_id=prefix,
                 split=split,  # type: ignore[arg-type]
-                input_path=Path(f"dataset_{split}/{prefix}_source.png"),
-                target_path=Path(f"dataset_{split}/{prefix}_target.png"),
+                input_path=Path(f"splits/{split}/{prefix}_source.png"),
+                target_path=Path(f"splits/{split}/{prefix}_target.png"),
                 input_modality="label_free",
                 target_modality="stained",
                 x=int(x_str),
@@ -123,8 +123,8 @@ def _make_resume_trainer(
         val_loader=val_loader,
         device=device,
         image_size=project.image_size,
-        train_dir=project.dataset_root / "dataset_train",
-        val_dir=project.dataset_root / "dataset_val",
+        train_dir=project.dataset_root / "splits" / "train",
+        val_dir=project.dataset_root / "splits" / "val",
     )
 
 
@@ -169,8 +169,8 @@ def _make_trainer(
             val_loader=val_loader,
             device=device,
             image_size=project.image_size,
-            train_dir=dataset_root / "dataset_train",
-            val_dir=dataset_root / "dataset_val",
+            train_dir=dataset_root / "splits" / "train",
+            val_dir=dataset_root / "splits" / "val",
         ),
         config,
         run_paths,
@@ -269,8 +269,8 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
         val_loader=val_loader,
         device=torch.device("cpu"),
         image_size=project.image_size,
-        train_dir=dataset_root / "dataset_train",
-        val_dir=dataset_root / "dataset_val",
+        train_dir=dataset_root / "splits" / "train",
+        val_dir=dataset_root / "splits" / "val",
     )
     trainer.train(seed=0)
 
@@ -308,8 +308,8 @@ def test_trainer_checkpoint_round_trip(
         val_loader=val_loader,
         device=torch.device("cpu"),
         image_size=project.image_size,
-        train_dir=project.dataset_root / "dataset_train",
-        val_dir=project.dataset_root / "dataset_val",
+        train_dir=project.dataset_root / "splits" / "train",
+        val_dir=project.dataset_root / "splits" / "val",
     )
 
     start_epoch = trainer_2._checkpoint_manager.load(checkpoint_path)
@@ -447,8 +447,8 @@ def test_checkpoint_rate_creates_multiple_files(tmp_path: Path) -> None:
         val_loader=val_loader,
         device=torch.device("cpu"),
         image_size=project.image_size,
-        train_dir=dataset_root / "dataset_train",
-        val_dir=dataset_root / "dataset_val",
+        train_dir=dataset_root / "splits" / "train",
+        val_dir=dataset_root / "splits" / "val",
     )
     trainer.train(seed=42)
 

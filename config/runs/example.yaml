@@ -1,5 +1,5 @@
 # Copy this file for a new experiment, then edit the values in one place.
-# Run with: make <target> CONFIG=config/runs/your_run.yaml
+# Run with: make <target> CONFIG=config/runs/local/my_run.yaml
 
 # Dataset folder containing the paired full-size input images named below.
 dataset_root: local_workspace/datasets/your_sample
@@ -101,7 +101,7 @@ evaluation:
   # run_name: example_run
 
   # Optional evaluation directory overrides. Defaults:
-  # target_dir: local_workspace/datasets/your_sample/dataset_test
+  # target_dir: local_workspace/datasets/your_sample/splits/test
   # generated_dir: local_workspace/results/example_run/artifacts/output_test
   # output_dir: local_workspace/results/example_run/evaluation
   save_graphs: true

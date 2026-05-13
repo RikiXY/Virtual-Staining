@@ -25,8 +25,8 @@ def _write_test_manifest(dataset_root: Path, sample_ids: list[str]) -> None:
         ManifestRecord(
             sample_id=sample_id,
             split="test",
-            input_path=Path(f"dataset_test/{sample_id}_source.png"),
-            target_path=Path(f"dataset_test/{sample_id}_target.png"),
+            input_path=Path(f"splits/test/{sample_id}_source.png"),
+            target_path=Path(f"splits/test/{sample_id}_target.png"),
             input_modality="label_free",
             target_modality="stained",
             x=int(sample_id.split("_", maxsplit=1)[0]),
@@ -59,7 +59,7 @@ def test_evaluation_config_defaults_to_run_dirs(tmp_path: Path) -> None:
     assert run_config.evaluation is not None
     paths = RunPaths(run_config.project.run_root)
 
-    assert run_config.project.dataset_test_dir == tmp_path / "data" / "dataset_test"
+    assert run_config.project.split_dir("test") == tmp_path / "data" / "splits" / "test"
     assert paths.output_test_dir == (
         tmp_path / "results" / "section_run" / "artifacts" / "output_test"
     )
@@ -152,7 +152,7 @@ def test_evaluation_from_yaml_string_bool_hide_graphs_path_raises(tmp_path: Path
 
 def test_evaluate_writes_stage_scoped_snapshot_files(tmp_path: Path) -> None:
     dataset_root = tmp_path / "data"
-    target_dir = dataset_root / "dataset_test"
+    target_dir = dataset_root / "splits" / "test"
     generated_dir = tmp_path / "generated"
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
@@ -190,7 +190,7 @@ def test_evaluate_writes_stage_scoped_snapshot_files(tmp_path: Path) -> None:
 
 def test_evaluate_preserves_existing_training_snapshot_files(tmp_path: Path) -> None:
     dataset_root = tmp_path / "data"
-    target_dir = dataset_root / "dataset_test"
+    target_dir = dataset_root / "splits" / "test"
     generated_dir = tmp_path / "generated"
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
@@ -231,7 +231,7 @@ def test_evaluate_preserves_existing_training_snapshot_files(tmp_path: Path) -> 
 
 def test_evaluate_raises_if_manifest_missing(tmp_path: Path) -> None:
     dataset_root = tmp_path / "data"
-    target_dir = dataset_root / "dataset_test"
+    target_dir = dataset_root / "splits" / "test"
     generated_dir = tmp_path / "generated"
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
@@ -258,7 +258,7 @@ def test_evaluate_raises_if_manifest_missing(tmp_path: Path) -> None:
 
 def test_evaluate_raises_if_required_test_split_missing(tmp_path: Path) -> None:
     dataset_root = tmp_path / "data"
-    target_dir = dataset_root / "dataset_test"
+    target_dir = dataset_root / "splits" / "test"
     generated_dir = tmp_path / "generated"
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
@@ -269,8 +269,8 @@ def test_evaluate_raises_if_required_test_split_missing(tmp_path: Path) -> None:
             ManifestRecord(
                 sample_id="00000_00000",
                 split="val",
-                input_path=Path("dataset_test/00000_00000_source.png"),
-                target_path=Path("dataset_test/00000_00000_target.png"),
+                input_path=Path("splits/test/00000_00000_source.png"),
+                target_path=Path("splits/test/00000_00000_target.png"),
                 input_modality="label_free",
                 target_modality="stained",
                 x=0,
@@ -303,7 +303,7 @@ def test_evaluate_raises_if_required_test_split_missing(tmp_path: Path) -> None:
 
 def test_evaluate_pairs_from_manifest_test_split(tmp_path: Path) -> None:
     dataset_root = tmp_path / "data"
-    target_dir = dataset_root / "dataset_test"
+    target_dir = dataset_root / "splits" / "test"
     generated_dir = tmp_path / "generated"
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
@@ -342,7 +342,7 @@ def test_evaluate_pairs_from_manifest_test_split(tmp_path: Path) -> None:
 
 def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
     dataset_root = tmp_path / "data"
-    target_dir = dataset_root / "dataset_test"
+    target_dir = dataset_root / "splits" / "test"
     generated_dir = tmp_path / "generated"
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
@@ -398,7 +398,7 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
 
 def test_evaluate_writes_skipped_csv_for_missing_generated(tmp_path: Path) -> None:
     dataset_root = tmp_path / "data"
-    target_dir = dataset_root / "dataset_test"
+    target_dir = dataset_root / "splits" / "test"
     generated_dir = tmp_path / "generated"
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
@@ -429,7 +429,7 @@ def test_evaluate_writes_skipped_csv_for_missing_generated(tmp_path: Path) -> No
 
 def test_evaluate_skipped_csv_has_correct_columns(tmp_path: Path) -> None:
     dataset_root = tmp_path / "data"
-    target_dir = dataset_root / "dataset_test"
+    target_dir = dataset_root / "splits" / "test"
     generated_dir = tmp_path / "generated"
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
@@ -469,8 +469,8 @@ def test_generated_path_for_record_uses_sample_id(tmp_path: Path) -> None:
     record = ManifestRecord(
         sample_id="00512_09216",
         split="test",
-        input_path=Path("dataset_test/00512_09216_source.tif"),
-        target_path=Path("dataset_test/00512_09216_target.tif"),
+        input_path=Path("splits/test/00512_09216_source.tif"),
+        target_path=Path("splits/test/00512_09216_target.tif"),
         input_modality="label_free",
         target_modality="stained",
         x=512,

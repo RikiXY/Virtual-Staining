@@ -142,9 +142,12 @@ def test_run_all_creates_split_directories(builder_config: PreprocessingConfig) 
         DatasetBuilder(builder_config).run_all()
 
     root = builder_config.dataset_root
-    assert (root / "dataset_train").exists()
-    assert (root / "dataset_val").exists()
-    assert (root / "dataset_test").exists()
+    assert (root / "splits" / "train").exists()
+    assert (root / "splits" / "val").exists()
+    assert (root / "splits" / "test").exists()
+    assert not (root / "dataset_train").exists()
+    assert not (root / "dataset_val").exists()
+    assert not (root / "dataset_test").exists()
 
 
 def test_run_all_result_counts_match_saved_files(
@@ -161,11 +164,11 @@ def test_run_all_result_counts_match_saved_files(
 
     # Each split dir must contain exactly 2 files per pair (source + target).
     for split_name, count in [
-        ("dataset_train", result.train_count),
-        ("dataset_val", result.val_count),
-        ("dataset_test", result.test_count),
+        ("train", result.train_count),
+        ("val", result.val_count),
+        ("test", result.test_count),
     ]:
-        files = list((root / split_name).iterdir())
+        files = list((root / "splits" / split_name).iterdir())
         expected_file_count = count * 2
         assert len(files) == expected_file_count, (
             f"{split_name}: expected {expected_file_count} files, got {len(files)}"
@@ -407,9 +410,9 @@ def test_run_all_produces_same_output_as_old_stages(tmp_path: Path) -> None:
     assert _manifest_rows(streaming_root) == _manifest_rows(legacy_root)
     for split in ("train", "val", "test"):
         streaming_files = sorted(
-            path.name for path in (streaming_root / f"dataset_{split}").iterdir()
+            path.name for path in (streaming_root / "splits" / split).iterdir()
         )
-        legacy_files = sorted(path.name for path in (legacy_root / f"dataset_{split}").iterdir())
+        legacy_files = sorted(path.name for path in (legacy_root / "splits" / split).iterdir())
         assert streaming_files == legacy_files
 
 
@@ -546,9 +549,9 @@ def test_assign_splits_and_finalize_moves_staged_files_and_writes_manifest(
     assert list((root / "processed" / "valid" / "source").iterdir()) == []
     assert list((root / "processed" / "valid" / "target").iterdir()) == []
 
-    train_files = list((root / "dataset_train").iterdir())
-    val_files = list((root / "dataset_val").iterdir())
-    test_files = list((root / "dataset_test").iterdir())
+    train_files = list((root / "splits" / "train").iterdir())
+    val_files = list((root / "splits" / "val").iterdir())
+    test_files = list((root / "splits" / "test").iterdir())
     assert len(train_files) == result.train_count * 2
     assert len(val_files) == result.val_count * 2
     assert len(test_files) == result.test_count * 2
@@ -567,11 +570,7 @@ def test_assign_splits_and_finalize_moves_staged_files_and_writes_manifest(
         rows = list(reader)
     assert len(rows) == len(valid_rows)
     assert {row["split"] for row in rows} <= {"train", "val", "test"}
-    assert {row["input_path"].split("/")[0] for row in rows} <= {
-        "dataset_train",
-        "dataset_val",
-        "dataset_test",
-    }
+    assert {row["input_path"].split("/")[0] for row in rows} == {"splits"}
 
 
 def test_assign_splits_and_finalize_is_deterministic_for_fixed_seed(
@@ -787,8 +786,8 @@ def test_run_all_writes_manifest_columns_and_relative_paths(
     assert rows
     for row in rows:
         assert row["split"] in {"train", "val", "test"}
-        assert row["input_path"].startswith(f"dataset_{row['split']}/")
-        assert row["target_path"].startswith(f"dataset_{row['split']}/")
+        assert row["input_path"].startswith(f"splits/{row['split']}/")
+        assert row["target_path"].startswith(f"splits/{row['split']}/")
         assert row["input_modality"] == "label_free"
         assert row["target_modality"] == "stained"
         assert int(row["width"]) == builder_config.image_size[0]

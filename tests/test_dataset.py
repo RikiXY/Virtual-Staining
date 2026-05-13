@@ -13,18 +13,28 @@ def _make_image(path: Path) -> None:
 
 
 def test_paired_manifest_dataset_smoke(tmp_path: Path) -> None:
-    Image.new("RGB", (32, 32), color=(128, 64, 32)).save(tmp_path / "00000_source.tif")
-    Image.new("RGB", (32, 32), color=(128, 64, 32)).save(tmp_path / "00000_target.tif")
-    Image.new("RGB", (32, 32), color=(128, 64, 32)).save(tmp_path / "00001_source.tif")
-    Image.new("RGB", (32, 32), color=(128, 64, 32)).save(tmp_path / "00001_target.tif")
+    (tmp_path / "splits" / "train").mkdir(parents=True)
+    (tmp_path / "splits" / "val").mkdir(parents=True)
+    Image.new("RGB", (32, 32), color=(128, 64, 32)).save(
+        tmp_path / "splits" / "train" / "00000_source.tif"
+    )
+    Image.new("RGB", (32, 32), color=(128, 64, 32)).save(
+        tmp_path / "splits" / "train" / "00000_target.tif"
+    )
+    Image.new("RGB", (32, 32), color=(128, 64, 32)).save(
+        tmp_path / "splits" / "val" / "00001_source.tif"
+    )
+    Image.new("RGB", (32, 32), color=(128, 64, 32)).save(
+        tmp_path / "splits" / "val" / "00001_target.tif"
+    )
 
     manifest = DatasetManifest(
         records=(
             ManifestRecord(
                 sample_id="00000",
                 split="train",
-                input_path=Path("00000_source.tif"),
-                target_path=Path("00000_target.tif"),
+                input_path=Path("splits/train/00000_source.tif"),
+                target_path=Path("splits/train/00000_target.tif"),
                 input_modality="label_free",
                 target_modality="stained",
                 x=0,
@@ -35,8 +45,8 @@ def test_paired_manifest_dataset_smoke(tmp_path: Path) -> None:
             ManifestRecord(
                 sample_id="00001",
                 split="val",
-                input_path=Path("00001_source.tif"),
-                target_path=Path("00001_target.tif"),
+                input_path=Path("splits/val/00001_source.tif"),
+                target_path=Path("splits/val/00001_target.tif"),
                 input_modality="label_free",
                 target_modality="stained",
                 x=32,
@@ -80,12 +90,13 @@ def test_paired_manifest_dataset_getitem_image_size(tmp_path: Path) -> None:
 
 
 def test_paired_manifest_dataset_sample_ids_ordered(tmp_path: Path) -> None:
+    (tmp_path / "splits" / "train").mkdir(parents=True)
     records = tuple(
         ManifestRecord(
             sample_id=sid,
             split="train",
-            input_path=Path(f"{sid}_source.tif"),
-            target_path=Path(f"{sid}_target.tif"),
+            input_path=Path(f"splits/train/{sid}_source.tif"),
+            target_path=Path(f"splits/train/{sid}_target.tif"),
             input_modality="label_free",
             target_modality="stained",
             x=0,

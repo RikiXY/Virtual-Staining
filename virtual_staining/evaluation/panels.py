@@ -105,9 +105,9 @@ def infer_source_path_from_row(row: dict[str, str]) -> Path:
 
     if row.get("generated_path"):
         generated_path = Path(row["generated_path"])
-        dataset_test_dir = generated_path.parents[1] / "dataset_test"
+        test_split_dir = generated_path.parents[1] / "splits" / "test"
         try:
-            return find_existing_image(dataset_test_dir, sample_id, "_source")
+            return find_existing_image(test_split_dir, sample_id, "_source")
         except FileNotFoundError:
             pass
 

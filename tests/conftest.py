@@ -36,8 +36,8 @@ def manifest_dataset(tmp_path: Path) -> ManifestDataset:
     )
     for split, sample_id in split_samples:
         x_str, y_str = sample_id.split("_", maxsplit=1)
-        input_path = Path(f"dataset_{split}/{sample_id}_source.tif")
-        target_path = Path(f"dataset_{split}/{sample_id}_target.tif")
+        input_path = Path(f"splits/{split}/{sample_id}_source.tif")
+        target_path = Path(f"splits/{split}/{sample_id}_target.tif")
         _write_tiny_image(tmp_path / input_path)
         _write_tiny_image(tmp_path / target_path)
         records.append(

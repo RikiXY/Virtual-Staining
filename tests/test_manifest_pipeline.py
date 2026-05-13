@@ -50,12 +50,12 @@ def test_manifest_evaluation_view_uses_only_test_records(manifest_dataset) -> No
     assert [record.sample_id for record in test_records] == [
         record.sample_id for record in manifest_dataset.test_records
     ]
-    assert all(record.target_path.parts[0] == "dataset_test" for record in test_records)
+    assert all(record.target_path.parts[:2] == ("splits", "test") for record in test_records)
 
 
 def test_extra_files_in_directory_are_not_in_manifest(manifest_dataset) -> None:
-    stray_source = manifest_dataset.root / "dataset_test" / "stray_source.tif"
-    stray_target = manifest_dataset.root / "dataset_test" / "stray_target.tif"
+    stray_source = manifest_dataset.root / "splits" / "test" / "stray_source.tif"
+    stray_target = manifest_dataset.root / "splits" / "test" / "stray_target.tif"
     Image.new("RGB", (3, 3)).save(stray_source)
     Image.new("RGB", (3, 3)).save(stray_target)
 

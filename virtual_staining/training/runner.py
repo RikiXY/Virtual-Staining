@@ -165,8 +165,8 @@ def run_training(
         ]
     )
 
-    train_dir = config.project.dataset_train_dir
-    val_dir = config.project.dataset_val_dir
+    train_dir = config.project.split_dir("train")
+    val_dir = config.project.split_dir("val")
 
     train_dataset = PairedManifestDataset(
         manifest.filter_split("train"),
