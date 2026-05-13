@@ -12,6 +12,13 @@ from torch.amp import GradScaler
 
 logger = logging.getLogger(__name__)
 
+CHECKPOINT_FORMAT_VERSION: int = 2
+GENERATOR_OUTPUT_ACTIVATION = "tanh"
+NORMALIZATION_CONTRACT = {
+    "input_range": "[-1, 1]",
+    "output_range": "[-1, 1]",
+}
+
 
 @dataclass
 class CheckpointState:
@@ -43,6 +50,7 @@ def _make_arch_metadata(
             "norm": getattr(generator, "norm", None),
             "dropout": getattr(generator, "dropout", None),
             "bilinear": getattr(generator, "bilinear", None),
+            "output_activation": GENERATOR_OUTPUT_ACTIVATION,
         },
         "discriminator": {
             "class": type(discriminator).__name__,
@@ -52,6 +60,46 @@ def _make_arch_metadata(
             "use_sigmoid": getattr(discriminator, "use_sigmoid", None),
         },
     }
+
+
+def _validate_checkpoint_metadata(checkpoint: dict[str, Any], path: Path) -> dict[str, Any]:
+    """Return architecture metadata after validating checkpoint format invariants."""
+    ckpt_version = checkpoint.get("format_version")
+    if ckpt_version != CHECKPOINT_FORMAT_VERSION:
+        raise ValueError(
+            f"Checkpoint format version {ckpt_version!r} does not match current version "
+            f"{CHECKPOINT_FORMAT_VERSION}. This checkpoint was saved with an older version "
+            "of the code. Re-train from scratch or use a compatible code version."
+        )
+
+    arch = checkpoint.get("architecture")
+    if arch is None:
+        raise ValueError(
+            f"Checkpoint '{path}' has no architecture metadata. "
+            "Only checkpoints saved with the current version are supported."
+        )
+    if not isinstance(arch, dict):
+        raise ValueError("Checkpoint architecture metadata must be a mapping.")
+
+    generator_arch = arch.get("generator", {})
+    if not isinstance(generator_arch, dict):
+        raise ValueError("Checkpoint generator architecture metadata must be a mapping.")
+
+    ckpt_activation = generator_arch.get("output_activation")
+    if ckpt_activation != GENERATOR_OUTPUT_ACTIVATION:
+        raise ValueError(
+            f"Checkpoint has output_activation={ckpt_activation!r}; current code requires "
+            f"{GENERATOR_OUTPUT_ACTIVATION!r}."
+        )
+
+    normalization_contract = checkpoint.get("normalization_contract")
+    if normalization_contract != NORMALIZATION_CONTRACT:
+        raise ValueError(
+            "Checkpoint normalization_contract "
+            f"{normalization_contract!r} is incompatible with current code."
+        )
+
+    return arch
 
 
 def _check_arch_match(
@@ -86,6 +134,12 @@ def _check_arch_match(
 def _check_generator_arch(checkpoint_arch: dict[str, Any], generator: nn.Module) -> None:
     """Raise ValueError if the checkpoint's generator architecture does not match."""
     gen_arch = checkpoint_arch.get("generator", {})
+    ckpt_activation = gen_arch.get("output_activation")
+    if ckpt_activation != GENERATOR_OUTPUT_ACTIVATION:
+        raise ValueError(
+            f"Checkpoint has output_activation={ckpt_activation!r}; current code requires "
+            f"{GENERATOR_OUTPUT_ACTIVATION!r}."
+        )
     for key in ("in_channels", "out_channels", "base_channels", "norm", "dropout", "bilinear"):
         ckpt_val = gen_arch.get(key)
         curr_val = getattr(generator, key, None)
@@ -148,7 +202,7 @@ class CheckpointManager:
         self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
         path = self.checkpoints_dir / f"ep{epoch:03d}.pth"
         checkpoint = {
-            "schema_version": 1,
+            "format_version": CHECKPOINT_FORMAT_VERSION,
             "epoch": epoch,
             "architecture": _make_arch_metadata(
                 self.generator,
@@ -156,6 +210,7 @@ class CheckpointManager:
                 model_name=self.model_name,
                 gan_loss=self.gan_loss,
             ),
+            "normalization_contract": NORMALIZATION_CONTRACT,
             "generator_state_dict": self.generator.state_dict(),
             "discriminator_state_dict": self.discriminator.state_dict(),
             "optimizerG_state_dict": self.opt_G.state_dict(),
@@ -188,12 +243,7 @@ class CheckpointManager:
                 f"current image_size={tuple(self.image_size)}."
             )
 
-        arch = checkpoint.get("architecture")
-        if arch is None:
-            raise ValueError(
-                f"Checkpoint '{path}' has no architecture metadata. "
-                "Only checkpoints saved with the current version are supported."
-            )
+        arch = _validate_checkpoint_metadata(checkpoint, path)
         _check_arch_match(arch, self.generator, self.discriminator)
 
         self.generator.load_state_dict(checkpoint["generator_state_dict"])

@@ -45,9 +45,14 @@ def _save_checkpoint(path: Path, image_size: tuple[int, int] = _IMAGE_SIZE) -> N
     D = PatchGANDiscriminator()
     torch.save(
         {
+            "format_version": 2,
             "generator_state_dict": G.state_dict(),
             "image_size": image_size,
             "epoch": 0,
+            "normalization_contract": {
+                "input_range": "[-1, 1]",
+                "output_range": "[-1, 1]",
+            },
             "architecture": {
                 "name": "pix2pix",
                 "gan_loss": "bce",
@@ -59,6 +64,7 @@ def _save_checkpoint(path: Path, image_size: tuple[int, int] = _IMAGE_SIZE) -> N
                     "norm": G.norm,
                     "dropout": G.dropout,
                     "bilinear": G.bilinear,
+                    "output_activation": "tanh",
                 },
                 "discriminator": {
                     "class": "PatchGANDiscriminator",
@@ -482,11 +488,10 @@ def test_inference_raises_on_missing_architecture_metadata(tmp_path: Path) -> No
     checkpoint = tmp_path / "ep000.pth"
 
     _write_pair(test_dir)
-    G = UNetGenerator()
-    torch.save(
-        {"generator_state_dict": G.state_dict(), "image_size": _IMAGE_SIZE, "epoch": 0},
-        checkpoint,
-    )
+    _save_checkpoint(checkpoint)
+    ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    ckpt.pop("architecture")
+    torch.save(ckpt, checkpoint)
 
     with pytest.raises(ValueError, match="architecture metadata"):
         _run_inference(
@@ -510,9 +515,14 @@ def test_inference_raises_on_architecture_mismatch(tmp_path: Path) -> None:
     D = PatchGANDiscriminator()
     torch.save(
         {
+            "format_version": 2,
             "generator_state_dict": G.state_dict(),
             "image_size": _IMAGE_SIZE,
             "epoch": 0,
+            "normalization_contract": {
+                "input_range": "[-1, 1]",
+                "output_range": "[-1, 1]",
+            },
             "architecture": {
                 "name": "pix2pix",
                 "gan_loss": "bce",
@@ -524,6 +534,7 @@ def test_inference_raises_on_architecture_mismatch(tmp_path: Path) -> None:
                     "norm": G.norm,
                     "dropout": G.dropout,
                     "bilinear": G.bilinear,
+                    "output_activation": "tanh",
                 },
                 "discriminator": {
                     "class": "PatchGANDiscriminator",
@@ -538,6 +549,69 @@ def test_inference_raises_on_architecture_mismatch(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="base_channels"):
+        _run_inference(
+            checkpoint_path=checkpoint,
+            test_folder=str(test_dir),
+            output_folder=str(output_dir),
+            image_size=_IMAGE_SIZE,
+        )
+
+
+def test_inference_raises_on_checkpoint_format_version_mismatch(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    checkpoint = tmp_path / "ep000.pth"
+
+    _write_pair(test_dir)
+    _save_checkpoint(checkpoint)
+    ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    ckpt["format_version"] = 1
+    torch.save(ckpt, checkpoint)
+
+    with pytest.raises(ValueError, match="format version"):
+        _run_inference(
+            checkpoint_path=checkpoint,
+            test_folder=str(test_dir),
+            output_folder=str(output_dir),
+            image_size=_IMAGE_SIZE,
+        )
+
+
+def test_inference_raises_on_output_activation_mismatch(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    checkpoint = tmp_path / "ep000.pth"
+
+    _write_pair(test_dir)
+    _save_checkpoint(checkpoint)
+    ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    ckpt["architecture"]["generator"]["output_activation"] = "sigmoid"
+    torch.save(ckpt, checkpoint)
+
+    with pytest.raises(ValueError, match="output_activation"):
+        _run_inference(
+            checkpoint_path=checkpoint,
+            test_folder=str(test_dir),
+            output_folder=str(output_dir),
+            image_size=_IMAGE_SIZE,
+        )
+
+
+def test_inference_raises_on_normalization_contract_mismatch(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    checkpoint = tmp_path / "ep000.pth"
+
+    _write_pair(test_dir)
+    _save_checkpoint(checkpoint)
+    ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    ckpt["normalization_contract"] = {"input_range": "[0, 1]", "output_range": "[0, 1]"}
+    torch.save(ckpt, checkpoint)
+
+    with pytest.raises(ValueError, match="normalization_contract"):
         _run_inference(
             checkpoint_path=checkpoint,
             test_folder=str(test_dir),

@@ -333,8 +333,14 @@ def test_checkpoint_architecture_metadata_present(
     assert gen["norm"] == "batch"
     assert gen["dropout"] is False
     assert gen["bilinear"] is False
+    assert gen["output_activation"] == "tanh"
     assert ck["architecture"]["name"] == "pix2pix"
     assert ck["architecture"]["gan_loss"] == "bce"
+    assert ck["format_version"] == 2
+    assert ck["normalization_contract"] == {
+        "input_range": "[-1, 1]",
+        "output_range": "[-1, 1]",
+    }
     disc = ck["architecture"]["discriminator"]
     assert disc["class"] == "PatchGANDiscriminator"
     assert disc["in_channels"] == 6

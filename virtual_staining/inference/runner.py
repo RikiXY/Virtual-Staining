@@ -20,7 +20,10 @@ from virtual_staining.inference.outputs import InferenceOutputWriter
 from virtual_staining.inference.predictor import Predictor
 from virtual_staining.inference.results import InferenceResult
 from virtual_staining.models.factory import build_generator
-from virtual_staining.training.checkpoints import _check_generator_arch
+from virtual_staining.training.checkpoints import (
+    _check_generator_arch,
+    _validate_checkpoint_metadata,
+)
 from virtual_staining.utils.dimensions import to_torchvision_hw
 
 logger = logging.getLogger(__name__)
@@ -84,14 +87,7 @@ def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
             f"config image_size={tuple(config.project.image_size)}."
         )
 
-    checkpoint_arch = checkpoint.get("architecture")
-    if checkpoint_arch is None:
-        raise ValueError(
-            f"Checkpoint '{checkpoint_path}' has no architecture metadata. "
-            "Only checkpoints saved with the current version are supported."
-        )
-    if not isinstance(checkpoint_arch, dict):
-        raise ValueError("Checkpoint architecture metadata must be a mapping.")
+    checkpoint_arch = _validate_checkpoint_metadata(checkpoint, checkpoint_path)
 
     generator = build_generator(config.model.generator).to(device)
     _check_generator_arch(checkpoint_arch, generator)
