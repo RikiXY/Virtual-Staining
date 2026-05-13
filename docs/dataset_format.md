@@ -68,6 +68,35 @@ Paths are relative to the dataset root.
 | `width` | int | Patch width in pixels |
 | `height` | int | Patch height in pixels |
 
+### Sample Identity Contract
+
+`sample_id` encodes the top-left coordinate of a patch within the source image:
+`f"{x:05}_{y:05}"` (zero-padded 5-digit integers, for example `00512_09216`
+for a patch starting at column 512, row 9216).
+
+**Uniqueness scope**: `sample_id` is unique within one `vs-prepare` run over a
+single source/target image pair.
+
+**Not globally unique**: if `vs-prepare` is run separately on two different
+slides and both runs contain the same patch coordinates, the resulting manifests
+will contain colliding `sample_id` values. Such manifests cannot be concatenated
+safely under the current contract.
+
+**Downstream invariants that depend on uniqueness**:
+
+- `DatasetManifest.validate()` rejects duplicate `sample_id` values.
+- Generated image filenames use `{sample_id}_target_generated.<ext>`.
+- Evaluation skipped-sample logs use `sample_id` as the row key.
+- Reproducibility and manifest-hash workflows include `sample_id` values.
+
+**Future multi-slide support**: would require a different identity scheme such
+as `{slide_id}_{x:05}_{y:05}` to avoid collisions across slides. Any change to
+the `sample_id` format would also require a manifest schema version bump and
+updates to downstream filename and evaluation contracts.
+
+Until multi-slide support is added, every manifest is expected to correspond to
+exactly one source/target image pair.
+
 ## discarded_manifest.csv
 
 Patches that failed quality filtering are recorded in

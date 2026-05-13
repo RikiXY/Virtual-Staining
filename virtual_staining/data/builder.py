@@ -399,13 +399,14 @@ class DatasetBuilder:
                 tgt_name = cast(str, row["target"])
                 x = cast(int, row["x"])
                 y = cast(int, row["y"])
+                sample_id = f"{x:05}_{y:05}"  # unique only within this single-pair prepare run
 
                 shutil.move(str(valid_src_dir / src_name), str(subset_dir / src_name))
                 shutil.move(str(valid_tgt_dir / tgt_name), str(subset_dir / tgt_name))
 
                 manifest_records.append(
                     ManifestRecord(
-                        sample_id=f"{x:05}_{y:05}",
+                        sample_id=sample_id,
                         split=split_name,
                         input_path=Path(f"dataset_{split_name}/{src_name}"),
                         target_path=Path(f"dataset_{split_name}/{tgt_name}"),
