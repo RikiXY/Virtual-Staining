@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+SplitName = Literal["train", "val", "test"]
 
 
 @dataclass(frozen=True)
@@ -17,16 +20,11 @@ class ProjectConfig:
         return self.results_path / self.run_name
 
     @property
-    def dataset_train_dir(self) -> Path:
-        return self.dataset_root / "dataset_train"
+    def splits_dir(self) -> Path:
+        return self.dataset_root / "splits"
 
-    @property
-    def dataset_val_dir(self) -> Path:
-        return self.dataset_root / "dataset_val"
-
-    @property
-    def dataset_test_dir(self) -> Path:
-        return self.dataset_root / "dataset_test"
+    def split_dir(self, split: SplitName) -> Path:
+        return self.splits_dir / split
 
     @property
     def manifest_path(self) -> Path:

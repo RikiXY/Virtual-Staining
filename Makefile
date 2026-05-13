@@ -7,7 +7,7 @@ PYRIGHT ?= $(UV) run --group dev pyright
 
 help:
 	@printf "\nTargets:\n"
-	@printf "  %-24s %s\n" "dataset" "Build dataset_train/val/test from CONFIG"
+	@printf "  %-24s %s\n" "dataset" "Build splits/train|val|test from CONFIG"
 	@printf "  %-24s %s\n" "train" "Train Pix2Pix from CONFIG"
 	@printf "  %-24s %s\n" "infer" "Run inference via vs-infer CLI from CONFIG"
 	@printf "  %-24s %s\n" "evaluate" "Evaluate outputs via vs-evaluate CLI from CONFIG"
@@ -29,6 +29,7 @@ help:
 	@printf "  %-24s %s\n" "CONFIG" "Required for experiment and utility targets"
 	@printf "  Put dataset paths, run names, image sizes, epochs, seeds,"
 	@printf " checkpoints, and evaluation paths in YAML.\n"
+	@printf "  Accepted patches are written under dataset_root/splits/<split>/.\n"
 	@printf "\nExamples:\n"
 	@printf "  make dataset CONFIG=config/runs/local/my_run.yaml\n"
 	@printf "  make train CONFIG=config/runs/local/my_run.yaml\n"

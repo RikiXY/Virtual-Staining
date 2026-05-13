@@ -63,9 +63,9 @@ of the target image to the source reference frame.
 
 The dataset builder writes accepted patches into:
 
-- `dataset_train/`
-- `dataset_val/`
-- `dataset_test/`
+- `splits/train/`
+- `splits/val/`
+- `splits/test/`
 
 `manifests/manifest.csv` is the canonical index of accepted patches and their
 split assignments. Downstream training, inference, and evaluation stages rely on
@@ -76,7 +76,7 @@ this manifest rather than discovering files ad hoc.
 The default split is **patch-level**, not slide-level or patient-level.
 
 Patches extracted from the **same full-size image pair / slide** can be assigned
-to different splits. As a result, `dataset_test/` is suitable for same-slide
+to different splits. As a result, `splits/test/` is suitable for same-slide
 internal validation, but it is **not** a fully independent estimate of
 generalization to unseen slides, patients, institutions, or acquisition settings.
 

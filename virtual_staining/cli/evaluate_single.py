@@ -87,7 +87,9 @@ def _build_dataset_request(args: argparse.Namespace) -> EvaluateSingleRequest:
     run_root = config.project.run_root
     paths = RunPaths(run_root)
     target_dir = (
-        eval_cfg.target_dir if eval_cfg and eval_cfg.target_dir else config.project.dataset_test_dir
+        eval_cfg.target_dir
+        if eval_cfg and eval_cfg.target_dir
+        else config.project.split_dir("test")
     )
     generated_dir = (
         eval_cfg.generated_dir if eval_cfg and eval_cfg.generated_dir else paths.output_test_dir
@@ -197,7 +199,7 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Examples:\n"
             "  vs-evaluate-single single\n"
-            "      --target-image local_workspace/datasets/your_run/dataset_test/00512_09216_target.tif\n"  # noqa: E501
+            "      --target-image local_workspace/datasets/your_run/splits/test/00512_09216_target.tif\n"  # noqa: E501
             "      --generated-image local_workspace/results/your_run/artifacts/output_test/00512_09216_target_generated.tif\n"  # noqa: E501
             "\n"
             "  vs-evaluate-single dataset\n"

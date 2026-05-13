@@ -25,8 +25,8 @@ def _write_training_manifest(dataset_root: Path) -> None:
         ManifestRecord(
             sample_id="00000_00000",
             split="train",
-            input_path=Path("dataset_train/00000_00000_source.png"),
-            target_path=Path("dataset_train/00000_00000_target.png"),
+            input_path=Path("splits/train/00000_00000_source.png"),
+            target_path=Path("splits/train/00000_00000_target.png"),
             input_modality="label_free",
             target_modality="stained",
             x=0,
@@ -37,8 +37,8 @@ def _write_training_manifest(dataset_root: Path) -> None:
         ManifestRecord(
             sample_id="00256_00000",
             split="val",
-            input_path=Path("dataset_val/00256_00000_source.png"),
-            target_path=Path("dataset_val/00256_00000_target.png"),
+            input_path=Path("splits/val/00256_00000_source.png"),
+            target_path=Path("splits/val/00256_00000_target.png"),
             input_modality="label_free",
             target_modality="stained",
             x=256,
@@ -55,8 +55,8 @@ def _write_val_only_manifest(dataset_root: Path) -> None:
         ManifestRecord(
             sample_id="00256_00000",
             split="val",
-            input_path=Path("dataset_val/00256_00000_source.png"),
-            target_path=Path("dataset_val/00256_00000_target.png"),
+            input_path=Path("splits/val/00256_00000_source.png"),
+            target_path=Path("splits/val/00256_00000_target.png"),
             input_modality="label_free",
             target_modality="stained",
             x=256,
@@ -73,8 +73,8 @@ def _write_missing_file_manifest(dataset_root: Path) -> None:
         ManifestRecord(
             sample_id="00000_00000",
             split="train",
-            input_path=Path("dataset_train/00000_00000_source.png"),
-            target_path=Path("dataset_train/00000_00000_target.png"),
+            input_path=Path("splits/train/00000_00000_source.png"),
+            target_path=Path("splits/train/00000_00000_target.png"),
             input_modality="label_free",
             target_modality="stained",
             x=0,
@@ -85,8 +85,8 @@ def _write_missing_file_manifest(dataset_root: Path) -> None:
         ManifestRecord(
             sample_id="00256_00000",
             split="val",
-            input_path=Path("dataset_val/00256_00000_source.png"),
-            target_path=Path("dataset_val/00256_00000_target.png"),
+            input_path=Path("splits/val/00256_00000_source.png"),
+            target_path=Path("splits/val/00256_00000_target.png"),
             input_modality="label_free",
             target_modality="stained",
             x=256,
@@ -100,8 +100,8 @@ def _write_missing_file_manifest(dataset_root: Path) -> None:
 
 def test_run_training_raises_if_manifest_missing(tmp_path: Path) -> None:
     dataset_root = tmp_path / "dataset"
-    train_dir = dataset_root / "dataset_train"
-    val_dir = dataset_root / "dataset_val"
+    train_dir = dataset_root / "splits" / "train"
+    val_dir = dataset_root / "splits" / "val"
     train_dir.mkdir(parents=True)
     val_dir.mkdir(parents=True)
     _write_rgb_pair(train_dir)
@@ -129,7 +129,7 @@ training:
 
 def test_run_training_raises_if_required_train_split_missing(tmp_path: Path) -> None:
     dataset_root = tmp_path / "dataset"
-    val_dir = dataset_root / "dataset_val"
+    val_dir = dataset_root / "splits" / "val"
     val_dir.mkdir(parents=True)
     _write_rgb_pair(val_dir, prefix="00256_00000")
     _write_val_only_manifest(dataset_root)
@@ -156,8 +156,8 @@ training:
 
 def test_run_training_raises_if_manifest_input_file_missing(tmp_path: Path) -> None:
     dataset_root = tmp_path / "dataset"
-    train_dir = dataset_root / "dataset_train"
-    val_dir = dataset_root / "dataset_val"
+    train_dir = dataset_root / "splits" / "train"
+    val_dir = dataset_root / "splits" / "val"
     train_dir.mkdir(parents=True)
     val_dir.mkdir(parents=True)
     _write_rgb_pair(val_dir, prefix="00256_00000")
@@ -185,8 +185,8 @@ training:
 
 def test_run_training_writes_resolved_config_and_hash(tmp_path: Path, monkeypatch) -> None:
     dataset_root = tmp_path / "dataset"
-    train_dir = dataset_root / "dataset_train"
-    val_dir = dataset_root / "dataset_val"
+    train_dir = dataset_root / "splits" / "train"
+    val_dir = dataset_root / "splits" / "val"
     train_dir.mkdir(parents=True)
     val_dir.mkdir(parents=True)
     _write_rgb_pair(train_dir)
@@ -261,8 +261,8 @@ training:
 
 def test_run_training_writes_failed_stage_metadata_and_events(tmp_path: Path, monkeypatch) -> None:
     dataset_root = tmp_path / "dataset"
-    train_dir = dataset_root / "dataset_train"
-    val_dir = dataset_root / "dataset_val"
+    train_dir = dataset_root / "splits" / "train"
+    val_dir = dataset_root / "splits" / "val"
     train_dir.mkdir(parents=True)
     val_dir.mkdir(parents=True)
     _write_rgb_pair(train_dir)

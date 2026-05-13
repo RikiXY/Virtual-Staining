@@ -410,9 +410,9 @@ def test_run_all_produces_same_output_as_old_stages(tmp_path: Path) -> None:
     assert _manifest_rows(streaming_root) == _manifest_rows(legacy_root)
     for split in ("train", "val", "test"):
         streaming_files = sorted(
-            path.name for path in (streaming_root / f"dataset_{split}").iterdir()
+            path.name for path in (streaming_root / "splits" / split).iterdir()
         )
-        legacy_files = sorted(path.name for path in (legacy_root / f"dataset_{split}").iterdir())
+        legacy_files = sorted(path.name for path in (legacy_root / "splits" / split).iterdir())
         assert streaming_files == legacy_files
 
 
