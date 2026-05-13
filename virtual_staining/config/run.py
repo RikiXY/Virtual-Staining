@@ -146,6 +146,9 @@ class RunConfig:
             },
         }
 
+        if self.project.manifest_path_override is not None:
+            data["manifest_path"] = str(self.project.manifest_path_override)
+
         if self.training is not None:
             data["training"] = {
                 "batch_size": self.training.batch_size,
@@ -287,11 +290,13 @@ def _drop_nones(value: Any) -> Any:
 
 
 def _parse_project(raw: dict[str, Any]) -> ProjectConfig:
+    manifest_path_raw = raw.get("manifest_path")
     project = ProjectConfig(
         dataset_root=Path(raw["dataset_root"]),
         results_path=Path(raw["results_path"]),
         run_name=raw["run_name"],
         image_size=parse_wh_size_from_aliases(raw, ("model_image_size", "image_size"), (256, 256)),
+        manifest_path_override=Path(manifest_path_raw) if manifest_path_raw else None,
     )
     project.validate()
     return project

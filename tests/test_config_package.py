@@ -105,6 +105,63 @@ training:
     assert "resume" not in data["training"]
 
 
+def test_project_config_default_manifest_path(tmp_path: Path) -> None:
+    yaml_path = tmp_path / "run.yaml"
+    yaml_path.write_text(
+        """
+dataset_root: /tmp/ds
+results_path: /tmp/results
+run_name: t
+image_size: [256, 256]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = RunConfig.from_yaml(yaml_path)
+
+    assert config.project.manifest_path == Path("/tmp/ds") / "manifests" / "manifest.csv"
+
+
+def test_project_config_explicit_manifest_path(tmp_path: Path) -> None:
+    yaml_path = tmp_path / "run.yaml"
+    yaml_path.write_text(
+        """
+dataset_root: /tmp/ds
+results_path: /tmp/results
+run_name: t
+image_size: [256, 256]
+manifest_path: /tmp/ds/manifests/fold_0.csv
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = RunConfig.from_yaml(yaml_path)
+
+    assert config.project.manifest_path == Path("/tmp/ds/manifests/fold_0.csv")
+
+
+def test_run_config_to_yaml_dict_includes_manifest_path_override(tmp_path: Path) -> None:
+    yaml_path = tmp_path / "run.yaml"
+    yaml_path.write_text(
+        """
+dataset_root: /tmp/ds
+results_path: /tmp/results
+run_name: t
+image_size: [256, 256]
+manifest_path: /tmp/ds/manifests/fold_0.csv
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = RunConfig.from_yaml(yaml_path)
+    data = config.to_yaml_dict()
+
+    assert data["manifest_path"] == "/tmp/ds/manifests/fold_0.csv"
+
+
 def test_model_bilinear_string_false_raises(tmp_path: Path) -> None:
     yaml_path = tmp_path / "run.yaml"
     yaml_path.write_text(

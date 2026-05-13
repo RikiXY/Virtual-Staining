@@ -3,6 +3,9 @@
 
 # Dataset folder containing the paired full-size input images named below.
 dataset_root: local_workspace/datasets/your_sample
+# Optional: override the default manifest path
+# (defaults to dataset_root/manifests/manifest.csv).
+# manifest_path: local_workspace/datasets/your_sample/manifests/manifest.csv
 
 # All training, inference, and evaluation artifacts are grouped by run_name here.
 results_path: local_workspace/results
