@@ -9,10 +9,10 @@
 local_workspace/datasets/<name>/
 ├── raw/                        # (reserved for future use)
 ├── processed/                  # intermediate aligned images
-├── splits/                     # (reserved for future use)
-├── dataset_train/              # train-split patches (input + target pairs)
-├── dataset_val/                # validation-split patches
-├── dataset_test/               # test-split patches
+├── splits/
+│   ├── train/                  # accepted train-split patch pairs
+│   ├── val/                    # accepted validation-split patch pairs
+│   └── test/                   # accepted test-split patch pairs
 ├── discarded_patches/
 │   ├── source/                 # source patches that failed quality filters
 │   ├── target/                 # corresponding target patches
@@ -54,6 +54,13 @@ example in [`config/runs/example.yaml`](../config/runs/example.yaml).
 
 All accepted patches (train, val, test) are indexed in `manifests/manifest.csv`.
 Paths are relative to the dataset root.
+
+Accepted source and target files are stored side by side under the split
+directory named by the manifest `split` value. Example manifest row:
+
+```csv
+00512_09216,train,splits/train/00512_09216_source.tif,splits/train/00512_09216_target.tif,label_free,stained,512,9216,256,256
+```
 
 | Column | Type | Description |
 |---|---|---|

@@ -32,8 +32,8 @@ def make_manifest_records(
             ManifestRecord(
                 sample_id=sample_id,
                 split=typed_split,
-                input_path=Path(f"dataset_{typed_split}/{sample_id}_source.tif"),
-                target_path=Path(f"dataset_{typed_split}/{sample_id}_target.tif"),
+                input_path=Path(f"splits/{typed_split}/{sample_id}_source.tif"),
+                target_path=Path(f"splits/{typed_split}/{sample_id}_target.tif"),
                 input_modality="label_free",
                 target_modality="stained",
                 x=x,

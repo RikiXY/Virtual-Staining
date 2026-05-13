@@ -229,8 +229,8 @@ def test_manifest_record_nested_relative_path_passes() -> None:
     rec = ManifestRecord(
         sample_id="abc",
         split="train",
-        input_path=Path("dataset_train/00512_09216_source.tif"),
-        target_path=Path("dataset_train/00512_09216_target.tif"),
+        input_path=Path("splits/train/00512_09216_source.tif"),
+        target_path=Path("splits/train/00512_09216_target.tif"),
         input_modality="label_free",
         target_modality="stained",
         x=512,
@@ -239,7 +239,7 @@ def test_manifest_record_nested_relative_path_passes() -> None:
         height=256,
     )
 
-    assert rec.input_path == Path("dataset_train/00512_09216_source.tif")
+    assert rec.input_path == Path("splits/train/00512_09216_source.tif")
 
 
 def test_dataset_manifest_filter_split() -> None:
@@ -270,7 +270,7 @@ def test_dataset_manifest_validate_unique_ids_passes() -> None:
 
 
 def test_validate_duplicate_input_path_raises() -> None:
-    shared_input = Path("dataset_train/shared_source.tif")
+    shared_input = Path("splits/train/shared_source.tif")
     records = (
         ManifestRecord(
             "a",
@@ -304,7 +304,7 @@ def test_validate_duplicate_input_path_raises() -> None:
 
 
 def test_validate_duplicate_target_path_raises() -> None:
-    shared_target = Path("dataset_train/shared_target.tif")
+    shared_target = Path("splits/train/shared_target.tif")
     records = (
         ManifestRecord(
             "a",
