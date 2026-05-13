@@ -29,6 +29,27 @@ local_workspace/datasets/<name>/
     └── environment.json        # runtime environment snapshot
 ```
 
+## Manifest as Pipeline Contract
+
+`manifests/manifest.csv` is the authoritative record of which accepted patches
+exist and which dataset split they belong to. All downstream pipeline stages
+depend on it:
+
+- **Training** (`vs-train`) loads the manifest, validates it, filters to the
+  `train` and `val` splits, and fails loudly if the manifest is missing.
+- **Inference** (`vs-infer`) loads the manifest, validates it, filters to the
+  `test` split, and fails loudly if the manifest is missing.
+- **Evaluation** (`vs-evaluate`) loads the manifest, validates it, iterates the
+  `test` split records, and pairs each target image with the generated image
+  expected for that manifest record.
+
+All pipeline stages therefore require `manifests/manifest.csv` to exist.
+
+To use a non-default manifest (for example a curated subset or a
+cross-validation fold), set `manifest_path:` in the run YAML. If omitted, the
+default path is `<dataset_root>/manifests/manifest.csv`. See the commented
+example in [`config/runs/example.yaml`](../config/runs/example.yaml).
+
 ## manifest.csv Columns
 
 All accepted patches (train, val, test) are indexed in `manifests/manifest.csv`.
