@@ -31,6 +31,7 @@ _PREPROCESSING_KEYS: frozenset[str] = frozenset(
         "margin",
         "seed",
         "save_masks",
+        "mask_scale",
         "train_ratio",
         "val_ratio",
         "test_ratio",
@@ -64,6 +65,7 @@ class PreprocessingConfig:
     margin: int = 200
     seed: int | None = None
     save_masks: bool = False
+    mask_scale: float = 1.0
     train_ratio: float = 0.8
     val_ratio: float = 0.05
     test_ratio: float = 0.15
@@ -71,6 +73,9 @@ class PreprocessingConfig:
     max_white_ratio: float = 0.7
     white_threshold: int = 250
     max_largest_white_component_ratio: float = 0.20
+
+    def __post_init__(self) -> None:
+        self.validate()
 
     def validate(self) -> None:
         if not isinstance(self.source_name, str) or not self.source_name.strip():
@@ -89,6 +94,11 @@ class PreprocessingConfig:
 
         if self.margin < 0:
             raise ValueError("margin must be greater than or equal to 0")
+
+        if not (0.0 < self.mask_scale <= 1.0):
+            raise ValueError(
+                f"PreprocessingConfig.mask_scale must be in (0.0, 1.0], got {self.mask_scale}"
+            )
 
         split_ratios = {
             "train_ratio": self.train_ratio,
@@ -126,6 +136,7 @@ class PreprocessingConfig:
             margin=getattr(args, "margin", 200),
             seed=getattr(args, "seed", None),
             save_masks=getattr(args, "save_masks", False),
+            mask_scale=getattr(args, "mask_scale", 1.0),
             train_ratio=getattr(args, "train_ratio", 0.8),
             val_ratio=getattr(args, "val_ratio", 0.05),
             test_ratio=getattr(args, "test_ratio", 0.15),
@@ -136,7 +147,6 @@ class PreprocessingConfig:
                 args, "max_largest_white_component_ratio", 0.20
             ),
         )
-        config.validate()
         return config
 
     def to_yaml(self, path: str | Path) -> None:
@@ -151,6 +161,7 @@ class PreprocessingConfig:
             "margin": self.margin,
             "seed": self.seed,
             "save_masks": self.save_masks,
+            "mask_scale": self.mask_scale,
             "train_ratio": self.train_ratio,
             "val_ratio": self.val_ratio,
             "test_ratio": self.test_ratio,
@@ -180,6 +191,7 @@ def load_preprocessing_config(path: str | Path) -> PreprocessingConfig:
         margin=int(data.get("margin", 200)),
         seed=data.get("seed"),
         save_masks=parse_bool_strict(data.get("save_masks", False), "save_masks"),
+        mask_scale=float(data.get("mask_scale", 1.0)),
         train_ratio=float(data.get("train_ratio", 0.8)),
         val_ratio=float(data.get("val_ratio", 0.05)),
         test_ratio=float(data.get("test_ratio", 0.15)),
@@ -190,5 +202,4 @@ def load_preprocessing_config(path: str | Path) -> PreprocessingConfig:
             data.get("max_largest_white_component_ratio", 0.20)
         ),
     )
-    config.validate()
     return config

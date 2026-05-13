@@ -104,6 +104,34 @@ def builder_config(tmp_path: Path) -> PreprocessingConfig:
     )
 
 
+@pytest.fixture()
+def builder_scaled_config(tmp_path: Path) -> PreprocessingConfig:
+    root = tmp_path / "data"
+    root.mkdir()
+
+    cv2.imwrite(str(root / "source.png"), _make_synthetic_image(seed=0))
+    cv2.imwrite(str(root / "target.png"), _make_synthetic_image(seed=1))
+
+    return PreprocessingConfig(
+        dataset_root=root,
+        source_name="source.png",
+        target_name="target.png",
+        image_size=(64, 64),
+        grid_movement=(64, 64),
+        margin=0,
+        seed=42,
+        save_masks=False,
+        mask_scale=0.25,
+        train_ratio=0.8,
+        val_ratio=0.1,
+        test_ratio=0.1,
+        min_foreground_ratio=0.0,
+        max_white_ratio=1.0,
+        white_threshold=250,
+        max_largest_white_component_ratio=1.0,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Smoke tests
 # ---------------------------------------------------------------------------
@@ -159,6 +187,36 @@ def test_builder_logs_stage_progress(
     assert any(message == "Aligning images..." for message in messages)
     assert any("patch pairs" in message for message in messages)
     assert any(message.startswith("Saved: train=") for message in messages)
+
+
+def test_compute_masks_with_mask_scale(
+    builder_scaled_config: PreprocessingConfig,
+) -> None:
+    builder = DatasetBuilder(builder_scaled_config)
+    source_calls: list[tuple[int, int, int]] = []
+    target_calls: list[tuple[int, int, int]] = []
+
+    def _record_mask_shape(img: np.ndarray, _params: object) -> np.ndarray:
+        if not source_calls:
+            source_calls.append(img.shape)
+        else:
+            target_calls.append(img.shape)
+        return np.full(img.shape[:2], 255, dtype=np.uint8)
+
+    with patch(
+        "virtual_staining.data.builder.calculate_mask_with_multiple_parameters",
+        side_effect=_record_mask_shape,
+    ):
+        builder.compute_masks()
+
+    assert source_calls == [(150, 150, 3)]
+    assert target_calls == [(150, 150, 3)]
+    assert builder._source_image is not None
+    assert builder._target_image is not None
+    assert builder._source_mask is not None
+    assert builder._target_mask is not None
+    assert builder._source_mask.shape == builder._source_image.shape[:2]
+    assert builder._target_mask.shape == builder._target_image.shape[:2]
 
 
 def test_builder_logs_memory_after_stages(

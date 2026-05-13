@@ -102,12 +102,34 @@ class DatasetBuilder:
             )
 
         logger.info("Calculating masks...")
-        self._source_mask = calculate_mask_with_multiple_parameters(
-            self._source_image, MASK_PARAMETER_GRID
-        )
-        self._target_mask = calculate_mask_with_multiple_parameters(
-            self._target_image, MASK_PARAMETER_GRID
-        )
+        scale = self.config.mask_scale
+        if scale < 1.0:
+            source_h, source_w = self._source_image.shape[:2]
+            target_h, target_w = self._target_image.shape[:2]
+            scaled_source_size = (max(1, int(source_w * scale)), max(1, int(source_h * scale)))
+            scaled_target_size = (max(1, int(target_w * scale)), max(1, int(target_h * scale)))
+
+            small_source = cv2.resize(self._source_image, scaled_source_size)
+            small_target = cv2.resize(self._target_image, scaled_target_size)
+            source_mask = calculate_mask_with_multiple_parameters(small_source, MASK_PARAMETER_GRID)
+            target_mask = calculate_mask_with_multiple_parameters(small_target, MASK_PARAMETER_GRID)
+            self._source_mask = cv2.resize(
+                source_mask,
+                (source_w, source_h),
+                interpolation=cv2.INTER_NEAREST,
+            )
+            self._target_mask = cv2.resize(
+                target_mask,
+                (target_w, target_h),
+                interpolation=cv2.INTER_NEAREST,
+            )
+        else:
+            self._source_mask = calculate_mask_with_multiple_parameters(
+                self._source_image, MASK_PARAMETER_GRID
+            )
+            self._target_mask = calculate_mask_with_multiple_parameters(
+                self._target_image, MASK_PARAMETER_GRID
+            )
 
         if self.config.save_masks:
             cv2.imwrite(
