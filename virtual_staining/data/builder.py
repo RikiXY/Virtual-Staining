@@ -293,6 +293,123 @@ class DatasetBuilder:
 
         _log_memory("filter_patches")
 
+    def _stream_patches_to_disk(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """
+        Extract, filter, and write patches in a single pass.
+
+        Returns metadata rows for valid and discarded patches without retaining
+        patch arrays on the builder.
+        """
+        if (
+            self._source_image is None
+            or self._source_mask is None
+            or self._aligned_target is None
+            or self._aligned_target_mask is None
+        ):
+            raise RuntimeError("align() must be called before _stream_patches_to_disk()")
+
+        root = self.config.dataset_root
+        valid_src_dir = root / "processed" / "valid" / "source"
+        valid_tgt_dir = root / "processed" / "valid" / "target"
+        discarded_src_dir = root / "discarded_patches" / "source"
+        discarded_tgt_dir = root / "discarded_patches" / "target"
+        for path in [valid_src_dir, valid_tgt_dir, discarded_src_dir, discarded_tgt_dir]:
+            ensure_clean_directory(path)
+
+        m = self.config.margin
+
+        def _crop(img: np.ndarray) -> np.ndarray:
+            # img[0:-0] returns an empty array, so treat margin=0 as no crop.
+            return img[m:-m, m:-m] if m > 0 else img
+
+        source_images, source_masks, positions = divide_image_with_grid(
+            _crop(self._source_image),
+            self.config.image_size,
+            self.config.grid_movement,
+            _crop(self._source_mask),
+        )
+        if source_masks is None:
+            raise RuntimeError("Patch extraction did not return source masks")
+        target_images = divide_image_with_positions(
+            _crop(self._aligned_target),
+            self.config.image_size,
+            positions,
+        )
+        target_masks = divide_image_with_positions(
+            _crop(self._aligned_target_mask),
+            self.config.image_size,
+            positions,
+        )
+        n_pos = len(positions)
+        n_src = len(source_images)
+        n_src_mask = len(source_masks)
+        n_tgt = len(target_images)
+        n_tgt_mask = len(target_masks)
+        if not (n_pos == n_src == n_src_mask == n_tgt == n_tgt_mask):
+            raise RuntimeError(
+                f"Patch count mismatch after extraction: "
+                f"positions={n_pos}, source_patches={n_src}, source_masks={n_src_mask}, "
+                f"target_patches={n_tgt}, target_masks={n_tgt_mask}"
+            )
+
+        valid_rows: list[dict[str, Any]] = []
+        discarded_rows: list[dict[str, Any]] = []
+        for (x, y), src, src_mask, tgt, tgt_mask in zip(
+            positions,
+            source_images,
+            source_masks,
+            target_images,
+            target_masks,
+            strict=True,
+        ):
+            patch_source_name = f"{x:05}_{y:05}_source{self._source_suffix}"
+            patch_target_name = f"{x:05}_{y:05}_target{self._target_suffix}"
+
+            is_valid, debug_info = is_valid_patch_pair(
+                source_img=src,
+                target_img=tgt,
+                source_mask=src_mask,
+                target_mask=tgt_mask,
+                min_foreground_ratio=self.config.min_foreground_ratio,
+                max_white_ratio=self.config.max_white_ratio,
+                white_threshold=self.config.white_threshold,
+                max_largest_white_component_ratio=self.config.max_largest_white_component_ratio,
+            )
+            if is_valid:
+                cv2.imwrite(str(valid_src_dir / patch_source_name), src)
+                cv2.imwrite(str(valid_tgt_dir / patch_target_name), tgt)
+                valid_rows.append(
+                    {
+                        "x": x,
+                        "y": y,
+                        "source": patch_source_name,
+                        "target": patch_target_name,
+                    }
+                )
+            else:
+                cv2.imwrite(str(discarded_src_dir / patch_source_name), src)
+                cv2.imwrite(str(discarded_tgt_dir / patch_target_name), tgt)
+                discarded_rows.append(
+                    {
+                        "sample_id": f"{x:05}_{y:05}",
+                        "source_name": patch_source_name,
+                        "target_name": patch_target_name,
+                        "source_foreground_ratio": debug_info["source_foreground_ratio"],
+                        "target_foreground_ratio": debug_info["target_foreground_ratio"],
+                        "source_white_ratio": debug_info["source_white_ratio"],
+                        "target_white_ratio": debug_info["target_white_ratio"],
+                        "source_largest_white_component_ratio": debug_info[
+                            "source_largest_white_component_ratio"
+                        ],
+                        "target_largest_white_component_ratio": debug_info[
+                            "target_largest_white_component_ratio"
+                        ],
+                        "reasons": ";".join(cast(list[str], debug_info["reasons"])),
+                    }
+                )
+
+        return valid_rows, discarded_rows
+
     def split_and_save(self) -> DatasetBuildResult:
         """Split valid pairs into train/val/test and write all output files."""
         if (

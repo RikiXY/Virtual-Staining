@@ -188,6 +188,98 @@ def test_builder_logs_memory_after_stages(
     }
 
 
+def test_stream_patches_to_disk_writes_valid_patch_staging(
+    builder_config: PreprocessingConfig,
+) -> None:
+    builder = DatasetBuilder(builder_config)
+
+    with _patched_builder_dependencies():
+        builder.compute_masks()
+        builder.align()
+        valid_rows, discarded_rows = builder._stream_patches_to_disk()
+
+    assert len(valid_rows) == 81
+    assert discarded_rows == []
+    assert all(set(row) == {"x", "y", "source", "target"} for row in valid_rows)
+    assert all(
+        not any(isinstance(value, np.ndarray) for value in row.values()) for row in valid_rows
+    )
+
+    root = builder_config.dataset_root
+    valid_source_files = list((root / "processed" / "valid" / "source").iterdir())
+    valid_target_files = list((root / "processed" / "valid" / "target").iterdir())
+    discarded_source_files = list((root / "discarded_patches" / "source").iterdir())
+    discarded_target_files = list((root / "discarded_patches" / "target").iterdir())
+    assert len(valid_source_files) == 81
+    assert len(valid_target_files) == 81
+    assert discarded_source_files == []
+    assert discarded_target_files == []
+
+
+def test_stream_patches_to_disk_writes_discarded_patch_staging(
+    builder_config: PreprocessingConfig,
+) -> None:
+    builder = DatasetBuilder(builder_config)
+    validation_results = [
+        (
+            index % 2 == 0,
+            {
+                "source_foreground_ratio": 1.0,
+                "target_foreground_ratio": 1.0,
+                "source_white_ratio": 0.0,
+                "target_white_ratio": 0.0,
+                "source_largest_white_component_ratio": 0.0,
+                "target_largest_white_component_ratio": 0.0,
+                "reasons": [] if index % 2 == 0 else ["synthetic_rejection"],
+            },
+        )
+        for index in range(81)
+    ]
+
+    with (
+        _patched_builder_dependencies(),
+        patch(
+            "virtual_staining.data.builder.is_valid_patch_pair",
+            side_effect=validation_results,
+        ),
+    ):
+        builder.compute_masks()
+        builder.align()
+        valid_rows, discarded_rows = builder._stream_patches_to_disk()
+
+    assert len(valid_rows) + len(discarded_rows) == 81
+    assert valid_rows
+    assert discarded_rows
+    assert all(set(row) == {"x", "y", "source", "target"} for row in valid_rows)
+    assert all("reasons" in row for row in discarded_rows)
+    assert all(
+        {
+            "sample_id",
+            "source_name",
+            "target_name",
+            "source_foreground_ratio",
+            "target_foreground_ratio",
+            "source_white_ratio",
+            "target_white_ratio",
+            "reasons",
+            "source_largest_white_component_ratio",
+            "target_largest_white_component_ratio",
+        }
+        == set(row)
+        for row in discarded_rows
+    )
+
+    root = builder_config.dataset_root
+    valid_source_files = list((root / "processed" / "valid" / "source").iterdir())
+    valid_target_files = list((root / "processed" / "valid" / "target").iterdir())
+    discarded_source_files = list((root / "discarded_patches" / "source").iterdir())
+    discarded_target_files = list((root / "discarded_patches" / "target").iterdir())
+    assert len(valid_source_files) == len(valid_rows)
+    assert len(valid_target_files) == len(valid_rows)
+    assert len(discarded_source_files) == len(discarded_rows)
+    assert len(discarded_target_files) == len(discarded_rows)
+
+
 def test_log_memory_handles_missing_resource(caplog: pytest.LogCaptureFixture) -> None:
     original_import = builtins.__import__
 
