@@ -167,7 +167,7 @@ training:
     assert config.model.generator.bilinear is False
 
 
-def test_model_use_sigmoid_yaml_bool_true_parses(tmp_path: Path) -> None:
+def test_model_use_sigmoid_yaml_bool_true_raises(tmp_path: Path) -> None:
     yaml_path = tmp_path / "run.yaml"
     yaml_path.write_text(
         """
@@ -185,9 +185,31 @@ training:
         encoding="utf-8",
     )
 
+    with pytest.raises(ValueError, match="BCEWithLogitsLoss"):
+        RunConfig.from_yaml(yaml_path)
+
+
+def test_model_use_sigmoid_yaml_bool_false_parses(tmp_path: Path) -> None:
+    yaml_path = tmp_path / "run.yaml"
+    yaml_path.write_text(
+        """
+dataset_root: /tmp/ds
+results_path: /tmp/results
+run_name: t
+image_size: [256, 256]
+model:
+  discriminator:
+    use_sigmoid: false
+training:
+  epochs: 1
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
     config = RunConfig.from_yaml(yaml_path)
 
-    assert config.model.discriminator.use_sigmoid is True
+    assert config.model.discriminator.use_sigmoid is False
 
 
 def test_save_resolved_config_writes_valid_yaml(tmp_path: Path) -> None:

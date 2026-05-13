@@ -12,6 +12,12 @@ run_name: example_run
 # Convention: [width, height] - e.g. [320, 256] means 320 px wide, 256 px tall.
 image_size: [256, 256]
 
+model:
+  discriminator:
+    # Must stay false with the current training loss.
+    # BCEWithLogitsLoss applies sigmoid internally.
+    # use_sigmoid: false
+
 preprocessing:
   # Full-size paired input files inside dataset_root.
   source_name: label_free.tif
