@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
+import subprocess
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from virtual_staining.applications.compare_panels import FromMetricsResult
 from virtual_staining.applications.evaluate_single import DatasetEvalResult
@@ -18,6 +21,10 @@ from virtual_staining.cli import prepare_dataset as prepare_cli
 from virtual_staining.cli import train as train_cli
 from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.statistics import PairedSummary
+
+UV = ("uv", "run")
+CLI_ENTRYPOINTS = ("vs-prepare", "vs-train", "vs-infer", "vs-evaluate")
+MAKE_EXPERIMENT_TARGETS = ("dataset", "train", "infer", "evaluate", "complete-run")
 
 
 def _write_metrics_csv(run_path: Path) -> Path:
@@ -41,6 +48,53 @@ def _write_config(tmp_path: Path, section_yaml: str) -> Path:
         encoding="utf-8",
     )
     return config_path
+
+
+def _run_subprocess(
+    *args: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(args, capture_output=True, text=True, env=env, check=False)
+
+
+@pytest.mark.parametrize("cmd", CLI_ENTRYPOINTS)
+def test_cli_help_includes_config_flag(cmd: str) -> None:
+    result = _run_subprocess(*UV, cmd, "--help")
+    assert result.returncode == 0, f"{cmd} --help failed: {result.stderr}"
+    assert "--config" in result.stdout, f"{cmd} --help does not mention --config"
+
+
+@pytest.mark.parametrize("cmd", CLI_ENTRYPOINTS)
+def test_cli_exits_nonzero_without_config(cmd: str) -> None:
+    result = _run_subprocess(*UV, cmd)
+    assert result.returncode != 0, f"{cmd} succeeded without --config"
+
+
+@pytest.mark.parametrize("target", MAKE_EXPERIMENT_TARGETS)
+def test_make_target_fails_without_config(target: str) -> None:
+    env = {**os.environ, "CONFIG": ""}
+    result = _run_subprocess("make", target, env=env)
+    assert result.returncode != 0, (
+        f"make {target} succeeded without CONFIG; require-config guard is missing"
+    )
+
+
+def test_makefile_has_no_args_variable() -> None:
+    makefile = Path("Makefile").read_text(encoding="utf-8")
+    assert "$(ARGS)" not in makefile, "Makefile still references $(ARGS)"
+
+
+def test_example_yaml_is_valid_mapping() -> None:
+    config_path = Path("config/runs/example.yaml")
+    assert config_path.exists(), "config/runs/example.yaml is missing"
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert isinstance(data, dict), "config/runs/example.yaml is not a YAML mapping"
+
+
+def test_readme_examples_use_local_run_configs() -> None:
+    readme = Path("README.md").read_text(encoding="utf-8")
+    assert "config/runs/local/" in readme
+    assert "ARGS=" not in readme
+    assert "CONFIG=config/runs/example.yaml" not in readme
 
 
 @pytest.mark.parametrize(

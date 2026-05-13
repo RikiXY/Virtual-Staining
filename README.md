@@ -50,8 +50,8 @@ make dataset        CONFIG=config/runs/local/my_run.yaml
 make train          CONFIG=config/runs/local/my_run.yaml
 make infer          CONFIG=config/runs/local/my_run.yaml
 make evaluate       CONFIG=config/runs/local/my_run.yaml
-make compare        ARGS="--run-path local_workspace/results/my_run"
-make compare-panels ARGS="from-metrics --run-path local_workspace/results/my_run"
+make compare        CONFIG=config/runs/local/my_run.yaml
+make compare-panels CONFIG=config/runs/local/my_run.yaml
 ```
 
 Or run the full sequence in one command:
