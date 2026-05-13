@@ -61,7 +61,7 @@ def _infer_run_dir_from_generated_path(generated_path: str | Path) -> Path:
     if "results" not in parts:
         raise ValueError(
             "Could not infer run directory from generated path. Expected a path like "
-            ".../results/NAME_RUN/output_test/..."
+            ".../results/NAME_RUN/artifacts/output_test/..."
         )
 
     results_index = parts.index("results")
@@ -69,7 +69,7 @@ def _infer_run_dir_from_generated_path(generated_path: str | Path) -> Path:
     if results_index + 1 >= len(parts):
         raise ValueError(
             "Could not infer NAME_RUN from generated path. Expected a path like "
-            ".../results/NAME_RUN/output_test/..."
+            ".../results/NAME_RUN/artifacts/output_test/..."
         )
 
     run_dir = Path(*parts[: results_index + 2])

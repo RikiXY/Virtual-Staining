@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from virtual_staining.applications.organize import OrganizeRequest, organize
+from virtual_staining.config.run import RunConfig
 from virtual_staining.utils.metrics import DEFAULT_METRICS
 
 
@@ -91,6 +92,12 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Path to run config YAML. Uses the config's organize section.",
+    )
 
     parser.add_argument(
         "--run-path",
@@ -148,8 +155,44 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_request_from_config(config_path: Path) -> OrganizeRequest:
+    config = RunConfig.from_yaml(config_path.resolve())
+    organize_cfg = config.organize
+    if organize_cfg is None:
+        raise SystemExit("Config has no 'organize' section.")
+    args = argparse.Namespace(
+        run_path=(
+            organize_cfg.run_path
+            if organize_cfg.run_path is not None
+            else config.project.run_root
+            if organize_cfg.metrics_csv is None
+            else None
+        ),
+        metrics_csv=organize_cfg.metrics_csv,
+        output_dir=organize_cfg.output_dir,
+        metrics=(
+            list(organize_cfg.metrics)
+            if organize_cfg.metrics is not None
+            else list(DEFAULT_METRICS)
+        ),
+        top_k=organize_cfg.top_k,
+        mode=organize_cfg.mode,
+        overwrite=organize_cfg.overwrite,
+        include_all_ranked=organize_cfg.include_all_ranked,
+    )
+    return _build_request(args)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    request = _build_request(args)
+    if args.config is not None:
+        organize(_build_request_from_config(args.config))
+        return
+    if args.run_path is None and args.metrics_csv is None:
+        parser.error("either --config, --run-path, or --metrics-csv is required")
+    try:
+        request = _build_request(args)
+    except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
     organize(request)

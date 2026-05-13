@@ -25,7 +25,6 @@ from virtual_staining.data.preprocessing import (
     validate_image_filename,
 )
 from virtual_staining.data.results import DatasetBuildResult
-from virtual_staining.experiment.environment import collect_environment
 
 
 class DatasetBuilder:
@@ -272,7 +271,6 @@ class DatasetBuilder:
         root = self.config.dataset_root
         discarded_root = root / "discarded_patches"
         manifests_dir = root / "manifests"
-        config_dir = root / "config"
         metadata_dir = root / "metadata"
 
         for d in [
@@ -282,12 +280,11 @@ class DatasetBuilder:
             root / "dataset_val",
             root / "dataset_test",
             manifests_dir,
-            config_dir,
-            metadata_dir,
             discarded_root / "source",
             discarded_root / "target",
         ]:
             ensure_clean_directory(d)
+        metadata_dir.mkdir(parents=True, exist_ok=True)
 
         for img, name in self._discarded_source_images:
             cv2.imwrite(str(discarded_root / "source" / name), img)
@@ -398,8 +395,6 @@ class DatasetBuilder:
         discarded_manifest.validate()
         discarded_manifest.to_csv(manifests_dir / "discarded_manifest.csv")
 
-        self.config.to_yaml(config_dir / "resolved.yaml")
-
         build_metadata = {
             "dataset_name": root.name,
             "status": "completed",
@@ -436,13 +431,10 @@ class DatasetBuilder:
         random.seed(seed)
         print(f"Seed set to {seed}")
 
-        root = self.config.dataset_root
-        self.config.to_yaml(root / "config.yaml")
-        with open(root / "environment.json", "w", encoding="utf-8") as f:
-            json.dump(collect_environment(), f, indent=2, default=str)
-
         self.compute_masks()
         self.align()
         self.extract_patches()
         self.filter_patches()
-        return self.split_and_save()
+        result = self.split_and_save()
+
+        return result

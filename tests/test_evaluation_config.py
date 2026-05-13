@@ -4,7 +4,9 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
+from virtual_staining.applications.evaluate import evaluate
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.run_paths import RunPaths
 
@@ -113,3 +115,80 @@ def test_evaluation_from_yaml_string_bool_hide_graphs_path_raises(tmp_path: Path
     yaml_file.write_text(yaml_content, encoding="utf-8")
     with pytest.raises(ValueError, match="hide_graphs_path"):
         RunConfig.from_yaml(yaml_file)
+
+
+def test_evaluate_writes_stage_scoped_snapshot_files(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "data"
+    target_dir = dataset_root / "dataset_test"
+    generated_dir = tmp_path / "generated"
+    target_dir.mkdir(parents=True)
+    generated_dir.mkdir()
+
+    Image.new("RGB", (16, 16)).save(target_dir / "00000_00000_target.png")
+    Image.new("RGB", (16, 16)).save(generated_dir / "00000_00000_target_generated.png")
+
+    yaml_file = tmp_path / "evaluate.yaml"
+    yaml_file.write_text(
+        textwrap.dedent(f"""\
+            dataset_root: {dataset_root}
+            results_path: {tmp_path / "results"}
+            run_name: eval_run
+            evaluation:
+              target_dir: {target_dir}
+              generated_dir: {generated_dir}
+              output_dir: {tmp_path / "results" / "eval_run" / "evaluation"}
+        """),
+        encoding="utf-8",
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+    evaluate(run_config, yaml_file)
+
+    run_root = tmp_path / "results" / "eval_run"
+    assert (run_root / "config" / "evaluation.input.yaml").exists()
+    assert (run_root / "config" / "evaluation.resolved.yaml").exists()
+    assert (run_root / "metadata" / "evaluation_config_hash.txt").exists()
+    assert (run_root / "metadata" / "evaluation_environment.json").exists()
+    assert not (run_root / "config" / "input.yaml").exists()
+    assert not (run_root / "config" / "resolved.yaml").exists()
+    assert not (run_root / "metadata" / "config_hash.txt").exists()
+
+
+def test_evaluate_preserves_existing_training_snapshot_files(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "data"
+    target_dir = dataset_root / "dataset_test"
+    generated_dir = tmp_path / "generated"
+    target_dir.mkdir(parents=True)
+    generated_dir.mkdir()
+
+    Image.new("RGB", (16, 16)).save(target_dir / "00000_00000_target.png")
+    Image.new("RGB", (16, 16)).save(generated_dir / "00000_00000_target_generated.png")
+
+    yaml_file = tmp_path / "evaluate.yaml"
+    yaml_file.write_text(
+        textwrap.dedent(f"""\
+            dataset_root: {dataset_root}
+            results_path: {tmp_path / "results"}
+            run_name: eval_run
+            evaluation:
+              target_dir: {target_dir}
+              generated_dir: {generated_dir}
+              output_dir: {tmp_path / "results" / "eval_run" / "evaluation"}
+        """),
+        encoding="utf-8",
+    )
+    run_root = tmp_path / "results" / "eval_run"
+    config_dir = run_root / "config"
+    metadata_dir = run_root / "metadata"
+    config_dir.mkdir(parents=True)
+    metadata_dir.mkdir(parents=True)
+    (config_dir / "input.yaml").write_text("train input\n", encoding="utf-8")
+    (config_dir / "resolved.yaml").write_text("train resolved\n", encoding="utf-8")
+    (metadata_dir / "config_hash.txt").write_text("sha256:train\n", encoding="utf-8")
+
+    run_config = RunConfig.from_yaml(yaml_file)
+    evaluate(run_config, yaml_file)
+
+    assert (config_dir / "input.yaml").read_text(encoding="utf-8") == "train input\n"
+    assert (config_dir / "resolved.yaml").read_text(encoding="utf-8") == "train resolved\n"
+    assert (metadata_dir / "config_hash.txt").read_text(encoding="utf-8") == "sha256:train\n"

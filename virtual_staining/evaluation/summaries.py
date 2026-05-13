@@ -111,30 +111,42 @@ def read_summary_csv(path: str | Path) -> dict[str, dict[str, float]]:
         raise FileNotFoundError(f"Summary CSV not found: {summary_path}")
 
     rows: dict[str, dict[str, float]] = {}
+    fieldnames = [
+        "metric",
+        "count",
+        "finite_count",
+        "non_finite_count",
+        "mean",
+        "median",
+        "std",
+        "min",
+        "max",
+    ]
 
     with summary_path.open("r", newline="", encoding="utf-8") as file:
-        reader = csv.reader(file)
-        header_found = False
+        raw_reader = csv.reader(file)
 
-        for row in reader:
-            if not row:
+        for row in raw_reader:
+            if row and row[0] == "metric":
+                break
+        else:
+            return rows
+
+        dict_reader = csv.DictReader(file, fieldnames=fieldnames)
+        for row in dict_reader:
+            if not row["metric"]:
                 continue
 
-            if row[0] == "metric":
-                header_found = True
-                continue
-
-            if not header_found:
-                continue
-
-            metric_name = row[0].strip().lower()
+            metric_name = row["metric"].strip().lower()
             rows[metric_name] = {
-                "count": float(row[1]),
-                "mean": float(row[2]),
-                "median": float(row[3]),
-                "std": float(row[4]),
-                "min": float(row[5]),
-                "max": float(row[6]),
+                "count": float(row["count"]),
+                "finite_count": float(row["finite_count"]),
+                "non_finite_count": float(row["non_finite_count"]),
+                "mean": float(row["mean"]),
+                "median": float(row["median"]),
+                "std": float(row["std"]),
+                "min": float(row["min"]),
+                "max": float(row["max"]),
             }
 
     return rows

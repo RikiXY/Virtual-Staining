@@ -7,6 +7,7 @@ import pytest
 
 from virtual_staining.config import RunConfig
 from virtual_staining.config.project import ProjectConfig
+from virtual_staining.models.config import ModelConfig
 from virtual_staining.training.config import TrainingConfig
 
 
@@ -92,6 +93,44 @@ def test_run_config_from_yaml(tmp_path: Path) -> None:
     assert run_config.training.epochs == 20
     assert run_config.training.batch_size == 4
     assert run_config.training.seed == 7
+    assert run_config.model == ModelConfig()
+
+
+def test_run_config_model_explicit_contract_parses(tmp_path: Path) -> None:
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data
+        results_path: /results
+        run_name: yaml_run
+        image_size: [128, 128]
+        model:
+          name: pix2pix
+          generator:
+            name: unet
+            in_channels: 1
+            out_channels: 3
+            base_channels: 32
+            norm: instance
+            dropout: true
+            bilinear: false
+          discriminator:
+            name: patchgan
+            in_channels: 4
+            ndf: 32
+            norm: batch
+            use_sigmoid: false
+          gan_loss: bce
+        training:
+          epochs: 1
+    """)
+    yaml_file = tmp_path / "train.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+
+    run_config = RunConfig.from_yaml(yaml_file)
+    assert run_config.model.name == "pix2pix"
+    assert run_config.model.generator.norm == "instance"
+    assert run_config.model.generator.dropout is True
+    assert run_config.model.discriminator.norm == "batch"
+    assert run_config.model.gan_loss == "bce"
 
 
 def test_training_from_run_yaml_defaults(tmp_path: Path) -> None:

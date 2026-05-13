@@ -11,6 +11,11 @@ from virtual_staining.config.run import RunConfig
 from virtual_staining.data.dataset import PairedHistologyDataset, PairedManifestDataset
 from virtual_staining.data.manifest import DatasetManifest
 from virtual_staining.experiment.run_paths import RunPaths
+from virtual_staining.experiment.snapshots import (
+    resolve_run_snapshot_paths,
+    save_environment_snapshot,
+    save_stage_config_snapshots,
+)
 from virtual_staining.inference.outputs import InferenceOutputWriter
 from virtual_staining.inference.predictor import Predictor
 from virtual_staining.inference.results import InferenceResult
@@ -51,7 +56,6 @@ def _resolve_checkpoint(config: RunConfig, paths: RunPaths) -> Path:
 
 def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
     """Load a checkpoint, run the generator on the test split, and write outputs."""
-    _ = config_path
     if config.inference is None:
         raise ValueError("RunConfig.inference is required to run inference.")
 
@@ -59,6 +63,16 @@ def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
     logger.info("Inference device: %s", device)
 
     paths = RunPaths(config.project.run_root)
+    paths.create_directories()
+    snapshot_paths = resolve_run_snapshot_paths(stage="inference", run_paths=paths)
+    save_stage_config_snapshots(
+        config,
+        config_path,
+        input_dest=snapshot_paths.input_config,
+        resolved_dest=snapshot_paths.resolved_config,
+        hash_dest=snapshot_paths.config_hash,
+    )
+    save_environment_snapshot(snapshot_paths.environment)
     checkpoint_path = _resolve_checkpoint(config, paths)
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 

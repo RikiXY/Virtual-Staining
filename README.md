@@ -28,36 +28,36 @@ nix develop
 uv sync --frozen
 
 # 3. Copy and edit the example run config
-cp config/runs/example.yaml config/runs/my_run.yaml
+cp config/runs/example.yaml config/runs/local/my_run.yaml
 
 # 4. Prepare dataset
-vs-prepare --config config/runs/my_run.yaml
+vs-prepare --config config/runs/local/my_run.yaml
 
 # 5. Train
-vs-train --config config/runs/my_run.yaml
+vs-train --config config/runs/local/my_run.yaml
 
 # 6. Run inference
-vs-infer --config config/runs/my_run.yaml
+vs-infer --config config/runs/local/my_run.yaml
 
 # 7. Evaluate
-vs-evaluate --config config/runs/my_run.yaml
+vs-evaluate --config config/runs/local/my_run.yaml
 ```
 
 ### Makefile shortcuts
 
 ```bash
-make dataset        CONFIG=config/runs/my_run.yaml
-make train          CONFIG=config/runs/my_run.yaml
-make infer          CONFIG=config/runs/my_run.yaml
-make evaluate       CONFIG=config/runs/my_run.yaml
-make compare        ARGS="--run-path local_workspace/results/my_run"
-make compare-panels ARGS="from-metrics --run-path local_workspace/results/my_run"
+make dataset        CONFIG=config/runs/local/my_run.yaml
+make train          CONFIG=config/runs/local/my_run.yaml
+make infer          CONFIG=config/runs/local/my_run.yaml
+make evaluate       CONFIG=config/runs/local/my_run.yaml
+make compare        CONFIG=config/runs/local/my_run.yaml
+make compare-panels CONFIG=config/runs/local/my_run.yaml
 ```
 
 Or run the full sequence in one command:
 
 ```bash
-make complete-run CONFIG=config/runs/my_run.yaml
+make complete-run CONFIG=config/runs/local/my_run.yaml
 ```
 
 ## Configuration

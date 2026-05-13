@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import random
 from pathlib import Path
@@ -13,14 +12,13 @@ from torchvision import transforms
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.dataset import PairedHistologyDataset, PairedManifestDataset
 from virtual_staining.data.manifest import DatasetManifest
-from virtual_staining.experiment.environment import collect_environment
 from virtual_staining.experiment.metadata import RunMetadata
 from virtual_staining.experiment.run_context import RunContext
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
-    compute_config_hash,
-    save_config_hash,
-    save_input_config,
+    resolve_run_snapshot_paths,
+    save_environment_snapshot,
+    save_stage_config_snapshots,
 )
 from virtual_staining.models.factory import build_discriminator, build_generator
 from virtual_staining.reporting.base import TrainingReporter
@@ -63,10 +61,15 @@ def run_training(
     run_root = config.project.results_path / config.project.run_name
     paths = RunPaths(run_root)
     paths.create_directories()
+    snapshot_paths = resolve_run_snapshot_paths(stage="training", run_paths=paths)
 
-    save_input_config(config_path, paths.input_config)
-    config_hash = compute_config_hash(config_path)
-    save_config_hash(config_hash, paths.config_hash)
+    config_hash = save_stage_config_snapshots(
+        config,
+        config_path,
+        input_dest=snapshot_paths.input_config,
+        resolved_dest=snapshot_paths.resolved_config,
+        hash_dest=snapshot_paths.config_hash,
+    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Device: %s", device)
@@ -81,9 +84,7 @@ def run_training(
     )
     metadata.save(paths.run_metadata)
 
-    env = collect_environment()
-    with paths.environment_metadata.open("w", encoding="utf-8") as handle:
-        json.dump(env, handle, indent=2, default=str)
+    save_environment_snapshot(snapshot_paths.environment)
 
     context = RunContext(
         name=config.project.run_name,
@@ -152,6 +153,7 @@ def run_training(
 
     trainer = Trainer(
         config=config.training,
+        model_config=config.model,
         run_paths=paths,
         generator=generator,
         discriminator=discriminator,

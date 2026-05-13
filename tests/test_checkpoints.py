@@ -17,6 +17,8 @@ class _TinyGenerator(nn.Module):
         self.in_channels = 3
         self.out_channels = 3
         self.base_channels = 64
+        self.norm = "batch"
+        self.dropout = False
         self.bilinear = False
         self.linear = nn.Linear(3, 3)
 
@@ -29,6 +31,7 @@ class _TinyDiscriminator(nn.Module):
         super().__init__()
         self.in_channels = 6
         self.ndf = 64
+        self.norm = "instance"
         self.use_sigmoid = False
         self.linear = nn.Linear(3, 1)
 

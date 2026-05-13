@@ -13,6 +13,8 @@ def build_generator(config: GeneratorConfig) -> nn.Module:
             in_channels=config.in_channels,
             out_channels=config.out_channels,
             base_channels=config.base_channels,
+            norm=config.norm,
+            dropout=config.dropout,
             bilinear=config.bilinear,
         )
     raise ValueError(f"Unknown generator name: {config.name!r}")
@@ -23,6 +25,7 @@ def build_discriminator(config: DiscriminatorConfig) -> nn.Module:
         return PatchGANDiscriminator(
             in_channels=config.in_channels,
             ndf=config.ndf,
+            norm=config.norm,
             use_sigmoid=config.use_sigmoid,
         )
     raise ValueError(f"Unknown discriminator name: {config.name!r}")
