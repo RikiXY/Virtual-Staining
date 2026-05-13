@@ -167,6 +167,28 @@ training:
     assert config.model.generator.bilinear is False
 
 
+def test_model_bilinear_yaml_bool_true_raises(tmp_path: Path) -> None:
+    yaml_path = tmp_path / "run.yaml"
+    yaml_path.write_text(
+        """
+dataset_root: /tmp/ds
+results_path: /tmp/results
+run_name: t
+image_size: [256, 256]
+model:
+  generator:
+    bilinear: true
+training:
+  epochs: 1
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="bilinear"):
+        RunConfig.from_yaml(yaml_path)
+
+
 def test_model_use_sigmoid_yaml_bool_true_raises(tmp_path: Path) -> None:
     yaml_path = tmp_path / "run.yaml"
     yaml_path.write_text(

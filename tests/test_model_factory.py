@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+import torch
 
 from virtual_staining.models.config import DiscriminatorConfig, GeneratorConfig, ModelConfig
 from virtual_staining.models.discriminator import PatchGANDiscriminator
@@ -52,6 +53,20 @@ def test_build_discriminator_uses_configured_parameters() -> None:
 def test_build_generator_raises_on_unknown_name() -> None:
     with pytest.raises(ValueError, match="Unknown generator name"):
         build_generator(GeneratorConfig(name="unknown"))  # type: ignore[arg-type]
+
+
+def test_unet_generator_output_range_with_tanh() -> None:
+    generator = build_generator(
+        GeneratorConfig(in_channels=3, out_channels=3, base_channels=16, bilinear=False)
+    )
+    generator.eval()
+
+    with torch.no_grad():
+        output = generator(torch.randn(1, 3, 64, 64))
+
+    assert output.shape == (1, 3, 64, 64)
+    assert output.min().item() >= -1.0 - 1e-5
+    assert output.max().item() <= 1.0 + 1e-5
 
 
 def test_build_discriminator_raises_on_unknown_name() -> None:

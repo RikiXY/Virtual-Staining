@@ -290,6 +290,12 @@ def _parse_model(model_raw: dict[str, Any]) -> ModelConfig:
     disc_raw = model_raw.get("discriminator", {})
     reject_unknown_keys(disc_raw, _DISCRIMINATOR_KEYS, "model.discriminator")
     bilinear = parse_bool_strict(gen_raw.get("bilinear", False), "model.generator.bilinear")
+    if bilinear:
+        raise ValueError(
+            "model.generator.bilinear=True is not supported. The bilinear "
+            "upsampling path has a channel mismatch bug. Use 'bilinear: false' "
+            "(the default)."
+        )
     use_sigmoid = parse_bool_strict(
         disc_raw.get("use_sigmoid", False), "model.discriminator.use_sigmoid"
     )
