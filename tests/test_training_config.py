@@ -255,6 +255,40 @@ def test_inference_latest_checkpoint_policy(tmp_path: Path) -> None:
     assert config.output_dir is None
 
 
+def test_inference_best_val_loss_checkpoint_policy(tmp_path: Path) -> None:
+    yaml_content = textwrap.dedent(f"""\
+        dataset_root: {tmp_path / "data"}
+        results_path: {tmp_path / "results"}
+        run_name: section_run
+        image_size: [512, 512]
+        training:
+          epochs: 30
+        inference:
+          checkpoint_policy: best_val_loss
+    """)
+    yaml_file = tmp_path / "run.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+
+    run_config = RunConfig.from_yaml(yaml_file)
+    assert run_config.inference is not None
+    assert run_config.inference.checkpoint_policy == "best_val_loss"
+
+
+def test_inference_unknown_checkpoint_policy_raises(tmp_path: Path) -> None:
+    yaml_content = textwrap.dedent("""\
+        dataset_root: /data
+        results_path: /results
+        run_name: my_run
+        inference:
+          checkpoint_policy: best_ssim
+    """)
+    yaml_file = tmp_path / "bad_policy.yaml"
+    yaml_file.write_text(yaml_content, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Supported values"):
+        RunConfig.from_yaml(yaml_file)
+
+
 @pytest.mark.parametrize(
     ("overrides", "field"),
     [

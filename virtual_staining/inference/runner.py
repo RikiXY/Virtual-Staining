@@ -30,6 +30,7 @@ from virtual_staining.models.factory import build_generator
 from virtual_staining.training.checkpoints import (
     _check_generator_arch,
     _validate_checkpoint_metadata,
+    resolve_best_checkpoint_path,
 )
 from virtual_staining.utils.dimensions import to_torchvision_hw
 
@@ -58,6 +59,12 @@ def _resolve_checkpoint(config: RunConfig, paths: RunPaths) -> Path:
                 f"checkpoint_policy='latest' but no checkpoints found in {paths.checkpoints_dir}"
             )
         return candidates[-1]
+
+    if config.inference.checkpoint_policy == "best_val_loss":
+        return resolve_best_checkpoint_path(
+            paths.checkpoints_dir,
+            policy=config.inference.checkpoint_policy,
+        )
 
     raise ValueError(
         "inference.checkpoint_path or inference.checkpoint_policy must be set in the config."

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,7 @@ NORMALIZATION_CONTRACT = {
     "input_range": "[-1, 1]",
     "output_range": "[-1, 1]",
 }
+BEST_CHECKPOINT_POLICY = "best_val_loss"
 
 
 @dataclass
@@ -197,6 +199,10 @@ class CheckpointManager:
         self.num_workers = num_workers
         self.dataset_root = dataset_root
 
+    @property
+    def best_record_path(self) -> Path:
+        return self.checkpoints_dir / "best.json"
+
     def save(self, epoch: int) -> Path:
         """Save a full training checkpoint. Returns the path."""
         self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
@@ -231,6 +237,28 @@ class CheckpointManager:
         logger.info("Checkpoint saved: %s", path)
         return path
 
+    def save_best_record(
+        self,
+        *,
+        policy: str,
+        metric: str,
+        epoch: int,
+        checkpoint_path: Path,
+        metric_value: float,
+    ) -> Path:
+        """Write the machine-readable best-checkpoint selection record."""
+        self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "policy": policy,
+            "metric": metric,
+            "epoch": epoch,
+            "checkpoint_path": checkpoint_path.name,
+            "metric_value": metric_value,
+        }
+        self.best_record_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        logger.info("Best checkpoint record saved: %s", self.best_record_path)
+        return self.best_record_path
+
     def load(self, path: Path) -> int:
         """Load a training checkpoint. Returns the start_epoch for resuming."""
         checkpoint = torch.load(path, map_location=self.device, weights_only=False)
@@ -261,3 +289,41 @@ class CheckpointManager:
         """Return the path to the most recent ep*.pth file, or None."""
         candidates = sorted(self.checkpoints_dir.glob("ep*.pth"))
         return candidates[-1] if candidates else None
+
+
+def resolve_best_checkpoint_path(checkpoints_dir: Path, *, policy: str) -> Path:
+    """Resolve a best-checkpoint policy via checkpoints/best.json."""
+    best_path = checkpoints_dir / "best.json"
+    if not best_path.exists():
+        raise FileNotFoundError(
+            f"checkpoint_policy={policy!r} requires {best_path}, but that file does not exist."
+        )
+
+    try:
+        payload = json.loads(best_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Best checkpoint metadata at {best_path} is not valid JSON.") from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError(f"Best checkpoint metadata at {best_path} must be a JSON object.")
+
+    stored_policy = payload.get("policy")
+    if stored_policy != policy:
+        raise ValueError(
+            f"Best checkpoint metadata at {best_path} is for policy {stored_policy!r}, "
+            f"not requested policy {policy!r}."
+        )
+
+    checkpoint_value = payload.get("checkpoint_path")
+    if not isinstance(checkpoint_value, str) or not checkpoint_value.strip():
+        raise ValueError(f"Best checkpoint metadata at {best_path} has no valid checkpoint_path.")
+
+    checkpoint_path = Path(checkpoint_value)
+    if not checkpoint_path.is_absolute():
+        checkpoint_path = checkpoints_dir / checkpoint_path
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(
+            f"Best checkpoint metadata at {best_path} points to missing file {checkpoint_path}."
+        )
+
+    return checkpoint_path

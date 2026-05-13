@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -9,9 +10,11 @@ import torch.optim as optim
 from torch.amp import GradScaler
 
 from virtual_staining.training.checkpoints import (
+    BEST_CHECKPOINT_POLICY,
     CHECKPOINT_FORMAT_VERSION,
     NORMALIZATION_CONTRACT,
     CheckpointManager,
+    resolve_best_checkpoint_path,
 )
 
 
@@ -112,6 +115,59 @@ def test_checkpoint_manager_latest_returns_last(tmp_path: Path) -> None:
 def test_checkpoint_manager_latest_none_when_empty(tmp_path: Path) -> None:
     mgr = _make_manager(tmp_path)
     assert mgr.latest() is None
+
+
+def test_checkpoint_manager_saves_best_record(tmp_path: Path) -> None:
+    mgr = _make_manager(tmp_path)
+    checkpoint_path = mgr.save(epoch=3)
+
+    best_record_path = mgr.save_best_record(
+        policy=BEST_CHECKPOINT_POLICY,
+        metric="loss_G_val",
+        epoch=3,
+        checkpoint_path=checkpoint_path,
+        metric_value=0.1234,
+    )
+
+    payload = json.loads(best_record_path.read_text(encoding="utf-8"))
+    assert payload == {
+        "policy": BEST_CHECKPOINT_POLICY,
+        "metric": "loss_G_val",
+        "epoch": 3,
+        "checkpoint_path": "ep003.pth",
+        "metric_value": 0.1234,
+    }
+
+
+def test_resolve_best_checkpoint_path_returns_selected_checkpoint(tmp_path: Path) -> None:
+    mgr = _make_manager(tmp_path)
+    checkpoint_path = mgr.save(epoch=3)
+    mgr.save_best_record(
+        policy=BEST_CHECKPOINT_POLICY,
+        metric="loss_G_val",
+        epoch=3,
+        checkpoint_path=checkpoint_path,
+        metric_value=0.1234,
+    )
+
+    resolved = resolve_best_checkpoint_path(mgr.checkpoints_dir, policy=BEST_CHECKPOINT_POLICY)
+    assert resolved == checkpoint_path
+
+
+def test_resolve_best_checkpoint_path_raises_when_record_missing(tmp_path: Path) -> None:
+    mgr = _make_manager(tmp_path)
+
+    with pytest.raises(FileNotFoundError, match="best.json"):
+        resolve_best_checkpoint_path(mgr.checkpoints_dir, policy=BEST_CHECKPOINT_POLICY)
+
+
+def test_resolve_best_checkpoint_path_raises_when_record_invalid(tmp_path: Path) -> None:
+    mgr = _make_manager(tmp_path)
+    mgr.checkpoints_dir.mkdir(parents=True)
+    (mgr.checkpoints_dir / "best.json").write_text("{bad json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="valid JSON"):
+        resolve_best_checkpoint_path(mgr.checkpoints_dir, policy=BEST_CHECKPOINT_POLICY)
 
 
 def test_checkpoint_manager_image_size_mismatch_raises(tmp_path: Path) -> None:

@@ -125,14 +125,21 @@ def _write_non_test_manifest(dataset_root: Path) -> None:
 
 
 def _run_inference(
-    checkpoint_path: Path,
+    checkpoint_path: Path | None,
     test_folder: str,
     output_folder: str,
     image_size: tuple[int, int] = _IMAGE_SIZE,
+    checkpoint_policy: str | None = None,
 ) -> RunConfig:
     dataset_root = Path(test_folder).parent
     _write_test_manifest(dataset_root, Path(test_folder))
     config_path = Path(output_folder).parent / "infer.yaml"
+    inference_lines = []
+    if checkpoint_path is not None:
+        inference_lines.append(f"  checkpoint_path: {checkpoint_path}")
+    if checkpoint_policy is not None:
+        inference_lines.append(f"  checkpoint_policy: {checkpoint_policy}")
+    inference_lines.append(f"  output_dir: {Path(output_folder)}")
     config_path.write_text(
         f"""
 dataset_root: {dataset_root}
@@ -140,8 +147,7 @@ results_path: {Path(output_folder).parent}
 run_name: test_run
 image_size: [{image_size[0]}, {image_size[1]}]
 inference:
-  checkpoint_path: {checkpoint_path}
-  output_dir: {Path(output_folder)}
+{chr(10).join(inference_lines)}
 """.strip()
         + "\n",
         encoding="utf-8",
@@ -266,6 +272,83 @@ def test_inference_writes_stage_scoped_snapshot_files(tmp_path: Path) -> None:
     assert not (run_root / "config" / "input.yaml").exists()
     assert not (run_root / "config" / "resolved.yaml").exists()
     assert not (run_root / "metadata" / "config_hash.txt").exists()
+
+
+def test_inference_resolves_best_val_loss_checkpoint_policy(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    run_root = tmp_path / "test_run"
+    checkpoints_dir = run_root / "checkpoints"
+    checkpoints_dir.mkdir(parents=True)
+    checkpoint = checkpoints_dir / "ep000.pth"
+
+    _write_pair(test_dir)
+    _save_checkpoint(checkpoint)
+    (checkpoints_dir / "best.json").write_text(
+        """
+{
+  "policy": "best_val_loss",
+  "metric": "loss_G_val",
+  "epoch": 0,
+  "checkpoint_path": "ep000.pth",
+  "metric_value": 0.1234
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = _run_inference(
+        checkpoint_path=None,
+        checkpoint_policy="best_val_loss",
+        test_folder=str(test_dir),
+        output_folder=str(output_dir),
+        image_size=_IMAGE_SIZE,
+    )
+
+    metadata = json.loads(
+        (config.project.run_root / "metadata" / "stages" / "infer.json").read_text(encoding="utf-8")
+    )
+    assert metadata["checkpoint_path"] == str(checkpoint)
+
+
+def test_inference_best_val_loss_raises_when_best_record_missing(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    _write_pair(test_dir)
+
+    with pytest.raises(FileNotFoundError, match="best.json"):
+        _run_inference(
+            checkpoint_path=None,
+            checkpoint_policy="best_val_loss",
+            test_folder=str(test_dir),
+            output_folder=str(output_dir),
+            image_size=_IMAGE_SIZE,
+        )
+
+
+def test_inference_best_val_loss_raises_when_best_record_invalid(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    run_root = tmp_path / "test_run"
+    checkpoints_dir = run_root / "checkpoints"
+    checkpoints_dir.mkdir(parents=True)
+
+    _write_pair(test_dir)
+    (checkpoints_dir / "best.json").write_text("{bad json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="valid JSON"):
+        _run_inference(
+            checkpoint_path=None,
+            checkpoint_policy="best_val_loss",
+            test_folder=str(test_dir),
+            output_folder=str(output_dir),
+            image_size=_IMAGE_SIZE,
+        )
 
 
 def test_inference_writes_stage_metadata_json(tmp_path: Path) -> None:

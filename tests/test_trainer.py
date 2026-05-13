@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 
 import numpy as np
@@ -347,6 +348,22 @@ def test_checkpoint_architecture_metadata_present(
     assert disc["ndf"] == 64
     assert disc["norm"] == "instance"
     assert disc["use_sigmoid"] is False
+
+
+def test_training_writes_best_checkpoint_record(
+    checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
+) -> None:
+    trainer, _config, run_paths, _ = checkpointing_trainer
+    result = trainer.train(seed=42)
+
+    best_record = json.loads((run_paths.checkpoints_dir / "best.json").read_text(encoding="utf-8"))
+
+    assert best_record["policy"] == "best_val_loss"
+    assert best_record["metric"] == "loss_G_val"
+    assert best_record["epoch"] == 0
+    assert best_record["checkpoint_path"] == "ep000.pth"
+    assert isinstance(best_record["metric_value"], float)
+    assert result.best_checkpoint_path == run_paths.checkpoints_dir / "ep000.pth"
 
 
 def test_load_checkpoint_validates_matching_architecture(
