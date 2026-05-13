@@ -4,7 +4,10 @@ import csv
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
+
+if TYPE_CHECKING:
+    from virtual_staining.config.project import ProjectConfig
 
 Split = Literal["train", "val", "test", "discarded"]
 
@@ -78,6 +81,17 @@ def _parse_path_field(value: str, field: str, row_num: int, csv_path: Path) -> P
     except ValueError as exc:
         raise ValueError(f"Manifest CSV {csv_path}, row {row_num}: {exc}") from None
     return path
+
+
+def load_manifest_or_raise(project: ProjectConfig) -> DatasetManifest:
+    """Load the project manifest, raising a clear error when it is missing."""
+    manifest_path = project.manifest_path
+    if not manifest_path.exists():
+        raise FileNotFoundError(
+            f"Manifest not found at {manifest_path}. "
+            "Run 'vs-prepare' or set 'manifest_path' in your run config."
+        )
+    return DatasetManifest.from_csv(manifest_path, dataset_root=project.dataset_root)
 
 
 @dataclass(frozen=True)

@@ -9,7 +9,7 @@ from torchvision import transforms
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.dataset import PairedHistologyDataset, PairedManifestDataset
-from virtual_staining.data.manifest import DatasetManifest
+from virtual_staining.data.manifest import load_manifest_or_raise
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
     resolve_run_snapshot_paths,
@@ -106,25 +106,23 @@ def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
     )
 
     output_dir = config.inference.output_dir or paths.output_test_dir
-    manifest_path = config.project.manifest_path
     test_dir = config.inference.test_dir or config.project.dataset_test_dir
 
     use_manifest = False
     test_manifest = None
     legacy_dataset: PairedHistologyDataset | None = None
-    if manifest_path.exists():
-        manifest = DatasetManifest.from_csv(
-            manifest_path,
-            dataset_root=config.project.dataset_root,
-        )
+    try:
+        manifest = load_manifest_or_raise(config.project)
         test_manifest = manifest.filter_split("test")
         dataset = PairedManifestDataset(test_manifest, transform=transform)
         use_manifest = True
         logger.info("Loaded manifest: %s test samples", len(dataset))
-    else:
+    except OSError as exc:
+        if "Manifest not found at " not in str(exc):
+            raise
         logger.warning(
             "Manifest not found at %s; falling back to directory scanning.",
-            manifest_path,
+            config.project.manifest_path,
         )
         legacy_dataset = PairedHistologyDataset(test_dir, transform=transform)
         dataset = legacy_dataset
@@ -133,7 +131,7 @@ def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
     result = InferenceResult(output_dir=output_dir)
     if len(dataset) == 0:
         if use_manifest:
-            logger.warning("No test pairs found in manifest: %s", manifest_path)
+            logger.warning("No test pairs found in manifest: %s", config.project.manifest_path)
         else:
             logger.warning("No test pairs found in: %s", test_dir)
         return result

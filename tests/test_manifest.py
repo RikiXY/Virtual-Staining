@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from virtual_staining.data.manifest import DatasetManifest, ManifestRecord
+from virtual_staining.config.project import ProjectConfig
+from virtual_staining.data.manifest import DatasetManifest, ManifestRecord, load_manifest_or_raise
 
 
 def _make_record(sample_id: str, split: str = "train") -> ManifestRecord:
@@ -425,6 +426,38 @@ def test_dataset_manifest_roundtrip_preserves_paths(tmp_path: Path) -> None:
     manifest.to_csv(csv_path)
     loaded = DatasetManifest.from_csv(csv_path, dataset_root=tmp_path)
     assert loaded.records[0].input_path == Path("splits/test/x_source.tif")
+
+
+def test_load_manifest_or_raise_raises_if_missing(tmp_path: Path) -> None:
+    project = ProjectConfig(
+        dataset_root=tmp_path / "dataset",
+        results_path=tmp_path / "results",
+        run_name="run",
+        image_size=(256, 256),
+        manifest_path_override=tmp_path / "dataset" / "manifests" / "manifest.csv",
+    )
+
+    with pytest.raises(FileNotFoundError, match="Manifest not found"):
+        load_manifest_or_raise(project)
+
+
+def test_load_manifest_or_raise_returns_manifest(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "dataset"
+    manifest_path = dataset_root / "manifests" / "manifest.csv"
+    manifest_path.parent.mkdir(parents=True)
+    manifest = DatasetManifest(records=(_make_record("a"),), dataset_root=dataset_root)
+    manifest.to_csv(manifest_path)
+    project = ProjectConfig(
+        dataset_root=dataset_root,
+        results_path=tmp_path / "results",
+        run_name="run",
+        image_size=(256, 256),
+    )
+
+    loaded = load_manifest_or_raise(project)
+
+    assert len(loaded.records) == 1
+    assert loaded.records[0].sample_id == "a"
 
 
 def test_dataset_manifest_from_csv_rejects_traversal_path(tmp_path: Path) -> None:
