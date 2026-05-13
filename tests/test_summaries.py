@@ -4,7 +4,13 @@ import csv
 import math
 from pathlib import Path
 
-from virtual_staining.evaluation.summaries import SUMMARY_METRIC_NAMES, write_summary_csv
+import pytest
+
+from virtual_staining.evaluation.summaries import (
+    SUMMARY_METRIC_NAMES,
+    read_summary_csv,
+    write_summary_csv,
+)
 
 
 def _make_rows(n: int) -> list[dict[str, object]]:
@@ -77,3 +83,41 @@ def test_write_summary_csv_empty_rows_writes_nan_means(tmp_path: Path) -> None:
     assert len(rows) == len(SUMMARY_METRIC_NAMES)
     assert all(row["count"] == "0" for row in rows)
     assert all(math.isnan(float(row["mean"])) for row in rows)
+
+
+def test_read_write_summary_csv_roundtrip(tmp_path: Path) -> None:
+    path = write_summary_csv(_make_rows(3), tmp_path)
+    summary = read_summary_csv(path)
+
+    mae = summary["mae"]
+    assert mae["count"] == 3.0
+    assert mae["finite_count"] == 3.0
+    assert mae["non_finite_count"] == 0.0
+    assert mae["mean"] == pytest.approx(0.05)
+    assert mae["median"] == pytest.approx(0.05)
+    assert mae["std"] == pytest.approx(0.05)
+    assert mae["min"] == pytest.approx(0.0)
+    assert mae["max"] == pytest.approx(0.1)
+
+
+def test_read_summary_csv_roundtrip_with_preamble(tmp_path: Path) -> None:
+    path = write_summary_csv(
+        _make_rows(2),
+        tmp_path,
+        num_targets_found=2,
+        num_generated_found=2,
+        num_pairs_evaluated=2,
+        num_skipped=0,
+    )
+
+    summary = read_summary_csv(path)
+    psnr = summary["psnr"]
+
+    assert psnr["count"] == 2.0
+    assert psnr["finite_count"] == 2.0
+    assert psnr["non_finite_count"] == 0.0
+    assert psnr["mean"] == pytest.approx(30.5)
+    assert psnr["median"] == pytest.approx(30.5)
+    assert psnr["std"] == pytest.approx(math.sqrt(0.5))
+    assert psnr["min"] == pytest.approx(30.0)
+    assert psnr["max"] == pytest.approx(31.0)
