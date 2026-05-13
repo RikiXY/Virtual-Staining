@@ -58,10 +58,18 @@ def _build_manifest_metadata(records: list[ManifestRecord]) -> dict[str, Any]:
     }
 
 
-def _estimate_memory_gb(h: int, w: int) -> float:
+def _estimate_memory_gb(h: int, w: int, *, mask_scale: float = 1.0) -> float:
     """Rough working-set estimate for processing a single image pair."""
     pixels = h * w
-    estimated_bytes = pixels * (2 * 3 + 2 + 2 * 4) * 3
+    scaled_h = max(1, int(h * mask_scale))
+    scaled_w = max(1, int(w * mask_scale))
+    scaled_pixels = scaled_h * scaled_w
+
+    # Full-resolution resident state kept across the pipeline.
+    full_res_bytes = pixels * (2 * 3 + 2 + (3 + 1))
+    # Mask computation scales with the downsampled image area when mask_scale < 1.0.
+    scaled_mask_bytes = scaled_pixels * (2 * 3 + 2) * 3
+    estimated_bytes = full_res_bytes + scaled_mask_bytes
     return estimated_bytes / (1024**3)
 
 
@@ -121,7 +129,11 @@ class DatasetBuilder:
 
         source_w, source_h = _read_image_size(root / self._source_file.name)
 
-        estimated_gb = _estimate_memory_gb(source_h, source_w)
+        estimated_gb = _estimate_memory_gb(
+            source_h,
+            source_w,
+            mask_scale=self.config.mask_scale,
+        )
         if self.config.max_memory_gb is not None and estimated_gb > self.config.max_memory_gb:
             raise MemoryError(
                 f"Estimated working-set size {estimated_gb:.1f} GB exceeds configured "

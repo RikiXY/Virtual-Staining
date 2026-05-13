@@ -271,6 +271,13 @@ def test_compute_masks_warns_when_estimate_is_high_without_limit(
     assert any("mask_scale: 0.25" in message for message in caplog.messages)
 
 
+def test_estimate_memory_gb_decreases_with_mask_scale() -> None:
+    full_scale = builder_module._estimate_memory_gb(6000, 8000, mask_scale=1.0)
+    quarter_scale = builder_module._estimate_memory_gb(6000, 8000, mask_scale=0.25)
+
+    assert quarter_scale < full_scale
+
+
 def test_read_image_size_disables_pillow_bomb_limit_temporarily() -> None:
     original_max_image_pixels = builder_module.Image.MAX_IMAGE_PIXELS
 
