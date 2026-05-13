@@ -6,6 +6,7 @@ import datetime
 import json
 import logging
 import random
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, cast
@@ -409,6 +410,150 @@ class DatasetBuilder:
                 )
 
         return valid_rows, discarded_rows
+
+    def _assign_splits_and_finalize(
+        self,
+        valid_rows: list[dict[str, Any]],
+        discarded_rows: list[dict[str, Any]],
+    ) -> DatasetBuildResult:
+        """Assign splits from staged valid patches and write manifests/metadata."""
+        root = self.config.dataset_root
+        valid_src_dir = root / "processed" / "valid" / "source"
+        valid_tgt_dir = root / "processed" / "valid" / "target"
+        discarded_root = root / "discarded_patches"
+        manifests_dir = root / "manifests"
+        metadata_dir = root / "metadata"
+
+        for path in [
+            root / "splits",
+            root / "dataset_train",
+            root / "dataset_val",
+            root / "dataset_test",
+            manifests_dir,
+            discarded_root / "source",
+            discarded_root / "target",
+        ]:
+            ensure_clean_directory(path)
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+
+        if self._effective_seed is not None:
+            random.seed(self._effective_seed)
+        split = split_items(
+            valid_rows,
+            [self.config.train_ratio, self.config.val_ratio, self.config.test_ratio],
+        )
+        split_names: tuple[Split, Split, Split] = ("train", "val", "test")
+        split_dirs = {
+            "train": root / "dataset_train",
+            "val": root / "dataset_val",
+            "test": root / "dataset_test",
+        }
+
+        manifest_records: list[ManifestRecord] = []
+        for split_name, subset in zip(split_names, split, strict=True):
+            subset_dir = split_dirs[split_name]
+            for row in subset:
+                src_name = cast(str, row["source"])
+                tgt_name = cast(str, row["target"])
+                x = cast(int, row["x"])
+                y = cast(int, row["y"])
+
+                shutil.move(str(valid_src_dir / src_name), str(subset_dir / src_name))
+                shutil.move(str(valid_tgt_dir / tgt_name), str(subset_dir / tgt_name))
+
+                manifest_records.append(
+                    ManifestRecord(
+                        sample_id=f"{x:05}_{y:05}",
+                        split=split_name,
+                        input_path=Path(f"dataset_{split_name}/{src_name}"),
+                        target_path=Path(f"dataset_{split_name}/{tgt_name}"),
+                        input_modality="label_free",
+                        target_modality="stained",
+                        x=x,
+                        y=y,
+                        width=self.config.image_size[0],
+                        height=self.config.image_size[1],
+                    )
+                )
+
+        discarded_manifest_records: list[ManifestRecord] = []
+        for row in discarded_rows:
+            src_name = cast(str, row["source_name"])
+            tgt_name = cast(str, row["target_name"])
+            sample_id = cast(str, row["sample_id"])
+            x, y = [int(part) for part in sample_id.split("_")]
+            discarded_manifest_records.append(
+                ManifestRecord(
+                    sample_id=sample_id,
+                    split="discarded",
+                    input_path=Path(f"discarded_patches/source/{src_name}"),
+                    target_path=Path(f"discarded_patches/target/{tgt_name}"),
+                    input_modality="label_free",
+                    target_modality="stained",
+                    x=x,
+                    y=y,
+                    width=self.config.image_size[0],
+                    height=self.config.image_size[1],
+                )
+            )
+
+        manifest = DatasetManifest(records=tuple(manifest_records), dataset_root=root)
+        manifest.validate()
+        manifest.to_csv(manifests_dir / "manifest.csv")
+        (manifests_dir / "manifest_metadata.json").write_text(
+            json.dumps(_build_manifest_metadata(manifest_records), indent=2),
+            encoding="utf-8",
+        )
+
+        discarded_manifest = DatasetManifest(
+            records=tuple(discarded_manifest_records),
+            dataset_root=root,
+        )
+        discarded_manifest.validate()
+        discarded_manifest.to_csv(manifests_dir / "discarded_manifest.csv")
+
+        with open(discarded_root / "discarded_log.csv", "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "sample_id",
+                    "source_name",
+                    "target_name",
+                    "source_foreground_ratio",
+                    "target_foreground_ratio",
+                    "source_white_ratio",
+                    "target_white_ratio",
+                    "reasons",
+                    "source_largest_white_component_ratio",
+                    "target_largest_white_component_ratio",
+                ],
+            )
+            writer.writeheader()
+            writer.writerows(discarded_rows)
+
+        build_metadata = {
+            "dataset_name": root.name,
+            "status": "completed",
+            "started_at": self._started_at,
+            "completed_at": datetime.datetime.now(datetime.UTC).isoformat(),
+            "num_patches_total": len(manifest_records) + len(discarded_manifest_records),
+            "num_patches_valid": len(manifest_records),
+            "num_patches_discarded": len(discarded_manifest_records),
+            "num_train": len(split[0]),
+            "num_val": len(split[1]),
+            "num_test": len(split[2]),
+            "seed": self._effective_seed,
+        }
+        with open(metadata_dir / "dataset_build.json", "w", encoding="utf-8") as f:
+            json.dump(build_metadata, f, indent=2, default=str)
+
+        return DatasetBuildResult(
+            train_count=len(split[0]),
+            val_count=len(split[1]),
+            test_count=len(split[2]),
+            skipped_count=len(discarded_rows),
+            output_root=root,
+        )
 
     def split_and_save(self) -> DatasetBuildResult:
         """Split valid pairs into train/val/test and write all output files."""

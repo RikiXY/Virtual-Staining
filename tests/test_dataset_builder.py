@@ -280,6 +280,122 @@ def test_stream_patches_to_disk_writes_discarded_patch_staging(
     assert len(discarded_target_files) == len(discarded_rows)
 
 
+def test_assign_splits_and_finalize_moves_staged_files_and_writes_manifest(
+    builder_config: PreprocessingConfig,
+) -> None:
+    builder = DatasetBuilder(builder_config)
+    validation_results = [
+        (
+            index % 2 == 0,
+            {
+                "source_foreground_ratio": 1.0,
+                "target_foreground_ratio": 1.0,
+                "source_white_ratio": 0.0,
+                "target_white_ratio": 0.0,
+                "source_largest_white_component_ratio": 0.0,
+                "target_largest_white_component_ratio": 0.0,
+                "reasons": [] if index % 2 == 0 else ["synthetic_rejection"],
+            },
+        )
+        for index in range(81)
+    ]
+
+    with (
+        _patched_builder_dependencies(),
+        patch(
+            "virtual_staining.data.builder.is_valid_patch_pair",
+            side_effect=validation_results,
+        ),
+    ):
+        builder.compute_masks()
+        builder.align()
+        builder._started_at = "2026-01-01T00:00:00+00:00"
+        builder._effective_seed = builder_config.seed
+        valid_rows, discarded_rows = builder._stream_patches_to_disk()
+        result = builder._assign_splits_and_finalize(valid_rows, discarded_rows)
+
+    assert result.train_count + result.val_count + result.test_count == len(valid_rows)
+    assert result.skipped_count == len(discarded_rows)
+
+    root = builder_config.dataset_root
+    assert list((root / "processed" / "valid" / "source").iterdir()) == []
+    assert list((root / "processed" / "valid" / "target").iterdir()) == []
+
+    train_files = list((root / "dataset_train").iterdir())
+    val_files = list((root / "dataset_val").iterdir())
+    test_files = list((root / "dataset_test").iterdir())
+    assert len(train_files) == result.train_count * 2
+    assert len(val_files) == result.val_count * 2
+    assert len(test_files) == result.test_count * 2
+
+    manifest = builder_config.dataset_root / "manifests" / "manifest.csv"
+    discarded_manifest = builder_config.dataset_root / "manifests" / "discarded_manifest.csv"
+    discarded_log = builder_config.dataset_root / "discarded_patches" / "discarded_log.csv"
+    assert manifest.exists()
+    assert discarded_manifest.exists()
+    assert discarded_log.exists()
+
+    import csv as csv_module
+
+    with manifest.open(encoding="utf-8", newline="") as f:
+        reader = csv_module.DictReader(f)
+        rows = list(reader)
+    assert len(rows) == len(valid_rows)
+    assert {row["split"] for row in rows} <= {"train", "val", "test"}
+    assert {row["input_path"].split("/")[0] for row in rows} <= {
+        "dataset_train",
+        "dataset_val",
+        "dataset_test",
+    }
+
+
+def test_assign_splits_and_finalize_is_deterministic_for_fixed_seed(
+    tmp_path: Path,
+) -> None:
+    import csv as csv_module
+
+    def _run_finalize(dataset_root: Path) -> dict[str, str]:
+        config = PreprocessingConfig(
+            dataset_root=dataset_root,
+            source_name="source.png",
+            target_name="target.png",
+            image_size=(64, 64),
+            grid_movement=(64, 64),
+            margin=0,
+            seed=42,
+            save_masks=False,
+            train_ratio=0.8,
+            val_ratio=0.1,
+            test_ratio=0.1,
+            min_foreground_ratio=0.0,
+            max_white_ratio=1.0,
+            white_threshold=250,
+            max_largest_white_component_ratio=1.0,
+        )
+        dataset_root.mkdir()
+        cv2.imwrite(str(dataset_root / "source.png"), _make_synthetic_image(seed=0))
+        cv2.imwrite(str(dataset_root / "target.png"), _make_synthetic_image(seed=1))
+
+        builder = DatasetBuilder(config)
+        with _patched_builder_dependencies():
+            builder.compute_masks()
+            builder.align()
+            builder._started_at = "2026-01-01T00:00:00+00:00"
+            builder._effective_seed = config.seed
+            valid_rows, discarded_rows = builder._stream_patches_to_disk()
+            builder._assign_splits_and_finalize(valid_rows, discarded_rows)
+
+        manifest = dataset_root / "manifests" / "manifest.csv"
+        with manifest.open(encoding="utf-8", newline="") as f:
+            reader = csv_module.DictReader(f)
+            return {row["sample_id"]: row["split"] for row in reader}
+
+    first_assignment = _run_finalize(tmp_path / "run_one")
+    second_assignment = _run_finalize(tmp_path / "run_two")
+
+    assert first_assignment == second_assignment
+
+
 def test_log_memory_handles_missing_resource(caplog: pytest.LogCaptureFixture) -> None:
     original_import = builtins.__import__
 
