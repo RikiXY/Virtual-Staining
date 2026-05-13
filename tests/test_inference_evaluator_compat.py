@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from pathlib import Path
 
@@ -264,6 +266,39 @@ def test_inference_writes_stage_scoped_snapshot_files(tmp_path: Path) -> None:
     assert not (run_root / "config" / "input.yaml").exists()
     assert not (run_root / "config" / "resolved.yaml").exists()
     assert not (run_root / "metadata" / "config_hash.txt").exists()
+
+
+def test_inference_writes_stage_metadata_json(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    checkpoint = tmp_path / "ep000.pth"
+
+    _write_pair(test_dir)
+    _save_checkpoint(checkpoint)
+
+    config = _run_inference(
+        checkpoint_path=checkpoint,
+        test_folder=str(test_dir),
+        output_folder=str(output_dir),
+        image_size=_IMAGE_SIZE,
+    )
+
+    metadata_path = config.project.run_root / "metadata" / "stages" / "infer.json"
+    assert metadata_path.exists()
+
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    manifest_path = config.project.manifest_path
+    expected_manifest_hash = f"sha256:{hashlib.sha256(manifest_path.read_bytes()).hexdigest()}"
+
+    assert metadata["stage"] == "inference"
+    assert metadata["completed_at"]
+    assert metadata["checkpoint_path"] == str(checkpoint)
+    assert metadata["manifest_path"] == str(manifest_path)
+    assert metadata["manifest_sha256"] == expected_manifest_hash
+    assert metadata["output_dir"] == str(output_dir)
+    assert metadata["test_sample_count"] == 1
+    assert metadata["inferred_count"] == 1
 
 
 def test_inference_preserves_existing_training_snapshot_files(tmp_path: Path) -> None:

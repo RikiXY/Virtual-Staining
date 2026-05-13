@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import textwrap
 from pathlib import Path
 
@@ -336,6 +338,51 @@ def test_evaluate_pairs_from_manifest_test_split(tmp_path: Path) -> None:
     assert len(rows) == 3
     assert "99999_99999" not in per_image_metrics.read_text(encoding="utf-8")
     assert not (output_dir / "skipped.csv").exists()
+
+
+def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "data"
+    target_dir = dataset_root / "dataset_test"
+    generated_dir = tmp_path / "generated"
+    target_dir.mkdir(parents=True)
+    generated_dir.mkdir()
+    _write_test_manifest(dataset_root, ["00000_00000"])
+    _write_eval_pair(target_dir, "00000_00000")
+    Image.new("RGB", (16, 16)).save(generated_dir / "00000_00000_target_generated.png")
+
+    yaml_file = tmp_path / "evaluate.yaml"
+    output_dir = tmp_path / "results" / "eval_run" / "evaluation"
+    yaml_file.write_text(
+        textwrap.dedent(f"""\
+            dataset_root: {dataset_root}
+            results_path: {tmp_path / "results"}
+            run_name: eval_run
+            evaluation:
+              generated_dir: {generated_dir}
+              output_dir: {output_dir}
+        """),
+        encoding="utf-8",
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+    evaluate(run_config, yaml_file)
+
+    metadata_path = tmp_path / "results" / "eval_run" / "metadata" / "stages" / "evaluate.json"
+    assert metadata_path.exists()
+
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    manifest_path = run_config.project.manifest_path
+    expected_manifest_hash = f"sha256:{hashlib.sha256(manifest_path.read_bytes()).hexdigest()}"
+
+    assert metadata["stage"] == "evaluation"
+    assert metadata["completed_at"]
+    assert metadata["manifest_path"] == str(manifest_path)
+    assert metadata["manifest_sha256"] == expected_manifest_hash
+    assert metadata["evaluated_count"] == 1
+    assert metadata["skipped_count"] == 0
+    assert metadata["metrics_csv_path"] == str(output_dir / "per_image_metrics.csv")
+    assert metadata["summary_csv_path"] == str(output_dir / "summary.csv")
+    assert metadata["metric_config"]["ssim"] is True
 
 
 def test_evaluate_writes_skipped_csv_for_missing_generated(tmp_path: Path) -> None:

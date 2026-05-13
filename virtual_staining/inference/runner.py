@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -12,6 +14,7 @@ from virtual_staining.data.dataset import PairedManifestDataset
 from virtual_staining.data.manifest import load_manifest_or_raise
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
+    compute_manifest_hash,
     resolve_run_snapshot_paths,
     save_environment_snapshot,
     save_stage_config_snapshots,
@@ -55,6 +58,38 @@ def _resolve_checkpoint(config: RunConfig, paths: RunPaths) -> Path:
     raise ValueError(
         "inference.checkpoint_path or inference.checkpoint_policy must be set in the config."
     )
+
+
+def _write_inference_stage_metadata(
+    paths: RunPaths,
+    *,
+    checkpoint_path: Path,
+    manifest_path: Path,
+    output_dir: Path,
+    test_sample_count: int,
+    inferred_count: int,
+) -> None:
+    """Best-effort writer for metadata/stages/infer.json."""
+    metadata = {
+        "stage": "inference",
+        "completed_at": datetime.now(UTC).isoformat(),
+        "checkpoint_path": str(checkpoint_path),
+        "manifest_path": str(manifest_path),
+        "manifest_sha256": compute_manifest_hash(manifest_path),
+        "output_dir": str(output_dir),
+        "test_sample_count": test_sample_count,
+        "inferred_count": inferred_count,
+    }
+
+    stage_path = paths.metadata_dir / "stages" / "infer.json"
+    try:
+        stage_path.parent.mkdir(parents=True, exist_ok=True)
+        stage_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Failed to write inference stage metadata to %s: %s", stage_path, exc)
+        return
+
+    logger.info("Inference metadata written -> %s", stage_path)
 
 
 def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
@@ -112,6 +147,14 @@ def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
     result = InferenceResult(output_dir=output_dir)
     if len(dataset) == 0:
         logger.warning("No test pairs found in manifest: %s", config.project.manifest_path)
+        _write_inference_stage_metadata(
+            paths,
+            checkpoint_path=checkpoint_path,
+            manifest_path=config.project.manifest_path,
+            output_dir=output_dir,
+            test_sample_count=len(test_manifest.records),
+            inferred_count=result.num_samples,
+        )
         return result
 
     predictor = Predictor(generator, device, _is_amp_enabled(device))
@@ -126,5 +169,13 @@ def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
         result.generated_paths.append(out_path)
         result.num_samples += 1
 
+    _write_inference_stage_metadata(
+        paths,
+        checkpoint_path=checkpoint_path,
+        manifest_path=config.project.manifest_path,
+        output_dir=output_dir,
+        test_sample_count=len(test_manifest.records),
+        inferred_count=result.num_samples,
+    )
     logger.info("Inference complete: %s samples -> %s", result.num_samples, output_dir)
     return result
