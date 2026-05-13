@@ -11,7 +11,9 @@ import torch
 from PIL import Image
 from torchvision import transforms
 
+from tests.manifest_helpers import write_manifest_csv
 from virtual_staining.config.run import RunConfig
+from virtual_staining.data.manifest import ManifestRecord
 from virtual_staining.evaluation.io import collect_image_files, extract_single_sample_id
 from virtual_staining.evaluation.metrics import evaluate_pair
 from virtual_staining.inference.runner import run_inference as _run_inference_impl
@@ -71,16 +73,43 @@ def _save_checkpoint(path: Path, image_size: tuple[int, int] = _IMAGE_SIZE) -> N
     )
 
 
+def _write_test_manifest(dataset_root: Path, test_dir: Path) -> None:
+    records: list[ManifestRecord] = []
+    for source_path in sorted(test_dir.glob("*_source.*")):
+        sample_id = source_path.stem[: -len("_source")]
+        target_path = test_dir / f"{sample_id}_target{source_path.suffix}"
+        if not target_path.exists():
+            continue
+        x_str, y_str = sample_id.split("_", maxsplit=1)
+        records.append(
+            ManifestRecord(
+                sample_id=sample_id,
+                split="test",
+                input_path=source_path.relative_to(dataset_root),
+                target_path=target_path.relative_to(dataset_root),
+                input_modality="label_free",
+                target_modality="stained",
+                x=int(x_str),
+                y=int(y_str),
+                width=256,
+                height=256,
+            )
+        )
+    write_manifest_csv(dataset_root, records)
+
+
 def _run_inference(
     checkpoint_path: Path,
     test_folder: str,
     output_folder: str,
     image_size: tuple[int, int] = _IMAGE_SIZE,
 ) -> RunConfig:
+    dataset_root = Path(test_folder).parent
+    _write_test_manifest(dataset_root, Path(test_folder))
     config_path = Path(output_folder).parent / "infer.yaml"
     config_path.write_text(
         f"""
-dataset_root: {Path(test_folder).parent}
+dataset_root: {dataset_root}
 results_path: {Path(output_folder).parent}
 run_name: test_run
 image_size: [{image_size[0]}, {image_size[1]}]
@@ -95,6 +124,36 @@ inference:
     config = RunConfig.from_yaml(config_path)
     _run_inference_impl(config, config_path)
     return config
+
+
+def test_run_inference_raises_if_manifest_missing(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    checkpoint = tmp_path / "ep000.pth"
+
+    _write_pair(test_dir)
+    _save_checkpoint(checkpoint)
+
+    config_path = tmp_path / "infer.yaml"
+    config_path.write_text(
+        f"""
+dataset_root: {tmp_path}
+results_path: {tmp_path}
+run_name: test_run
+image_size: [{_IMAGE_SIZE[0]}, {_IMAGE_SIZE[1]}]
+inference:
+  checkpoint_path: {checkpoint}
+  test_dir: {test_dir}
+  output_dir: {output_dir}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    config = RunConfig.from_yaml(config_path)
+
+    with pytest.raises(FileNotFoundError, match="Manifest not found"):
+        _run_inference_impl(config, config_path)
 
 
 # ---------------------------------------------------------------------------
