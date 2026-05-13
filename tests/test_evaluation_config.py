@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import textwrap
 from pathlib import Path
 
@@ -334,6 +335,69 @@ def test_evaluate_pairs_from_manifest_test_split(tmp_path: Path) -> None:
     rows = per_image_metrics.read_text(encoding="utf-8").splitlines()
     assert len(rows) == 3
     assert "99999_99999" not in per_image_metrics.read_text(encoding="utf-8")
+    assert not (output_dir / "skipped.csv").exists()
+
+
+def test_evaluate_writes_skipped_csv_for_missing_generated(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "data"
+    target_dir = dataset_root / "dataset_test"
+    generated_dir = tmp_path / "generated"
+    target_dir.mkdir(parents=True)
+    generated_dir.mkdir()
+    _write_test_manifest(dataset_root, ["00000_00000"])
+    _write_eval_pair(target_dir, "00000_00000")
+
+    yaml_file = tmp_path / "evaluate.yaml"
+    output_dir = tmp_path / "results" / "eval_run" / "evaluation"
+    yaml_file.write_text(
+        textwrap.dedent(f"""\
+            dataset_root: {dataset_root}
+            results_path: {tmp_path / "results"}
+            run_name: eval_run
+            evaluation:
+              generated_dir: {generated_dir}
+              output_dir: {output_dir}
+        """),
+        encoding="utf-8",
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+    evaluate(run_config, yaml_file)
+
+    skipped_csv = output_dir / "skipped.csv"
+    assert skipped_csv.exists()
+    assert "missing_generated" in skipped_csv.read_text(encoding="utf-8")
+
+
+def test_evaluate_skipped_csv_has_correct_columns(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "data"
+    target_dir = dataset_root / "dataset_test"
+    generated_dir = tmp_path / "generated"
+    target_dir.mkdir(parents=True)
+    generated_dir.mkdir()
+    _write_test_manifest(dataset_root, ["00000_00000"])
+    _write_eval_pair(target_dir, "00000_00000")
+
+    yaml_file = tmp_path / "evaluate.yaml"
+    output_dir = tmp_path / "results" / "eval_run" / "evaluation"
+    yaml_file.write_text(
+        textwrap.dedent(f"""\
+            dataset_root: {dataset_root}
+            results_path: {tmp_path / "results"}
+            run_name: eval_run
+            evaluation:
+              generated_dir: {generated_dir}
+              output_dir: {output_dir}
+        """),
+        encoding="utf-8",
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+    evaluate(run_config, yaml_file)
+
+    with (output_dir / "skipped.csv").open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        assert reader.fieldnames == ["sample_id", "reason", "target_path", "generated_path"]
 
 
 def test_generated_filename_for_sample() -> None:

@@ -7,6 +7,7 @@ from virtual_staining.config.run import RunConfig
 from virtual_staining.data.manifest import load_manifest_or_raise
 from virtual_staining.evaluation.evaluator import evaluate_pairs
 from virtual_staining.evaluation.plotting import save_dataset_plots
+from virtual_staining.evaluation.reports import write_skipped_csv
 from virtual_staining.evaluation.summaries import write_summary_csv
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
@@ -73,6 +74,10 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
         )
 
     result = evaluate_pairs(pairs, output_dir)
+    all_skipped = pairing_skipped + result.skipped_rows
+    if all_skipped:
+        skipped_path = write_skipped_csv(all_skipped, output_dir / "skipped.csv")
+        logger.info("Skipped samples written to %s", skipped_path)
 
     if result.rows:
         result.summary_csv = write_summary_csv(result.rows, output_dir)
@@ -80,10 +85,9 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
     if save_graphs and result.rows:
         save_dataset_plots(result.rows, output_dir)
 
-    total_skipped = result.num_skipped + len(pairing_skipped)
     logger.info(
         "Evaluation complete: %s evaluated, %s skipped -> %s",
         result.num_evaluated,
-        total_skipped,
+        len(all_skipped),
         output_dir,
     )
