@@ -317,7 +317,6 @@ class DatasetBuilder:
         )
 
         split_names: tuple[Split, Split, Split] = ("train", "val", "test")
-        manifest_rows: list[dict[str, Any]] = []
         manifest_records: list[ManifestRecord] = []
         for split_name, subset in zip(split_names, split, strict=True):
             subset_dir = root / f"dataset_{split_name}"
@@ -327,16 +326,6 @@ class DatasetBuilder:
                 parts = src_pair[1].split("_")
                 x, y = int(parts[0]), int(parts[1])
                 sample_id = f"{x:05}_{y:05}"
-                manifest_rows.append(
-                    {
-                        "sample_id": sample_id,
-                        "split": split_name,
-                        "source_name": src_pair[1],
-                        "target_name": tgt_pair[1],
-                        "x": x,
-                        "y": y,
-                    }
-                )
                 manifest_records.append(
                     ManifestRecord(
                         sample_id=sample_id,
@@ -351,14 +340,6 @@ class DatasetBuilder:
                         height=self.config.image_size[1],
                     )
                 )
-
-        with open(root / "split_manifest.csv", "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=["sample_id", "split", "source_name", "target_name", "x", "y"],
-            )
-            writer.writeheader()
-            writer.writerows(manifest_rows)
 
         discarded_manifest_records: list[ManifestRecord] = []
         for src_pair, tgt_pair in zip(
