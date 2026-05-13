@@ -9,6 +9,7 @@ import pytest
 
 from virtual_staining.data.preprocessing import (
     AlignmentMetadata,
+    align_from_scaled,
     align_images,
     calculate_mask,
     calculate_mask_with_grid,
@@ -289,11 +290,54 @@ def test_alignment_metadata_has_expected_fields() -> None:
         n_keypoints_tgt=180,
         n_matches=60,
         n_inliers=50,
+        inlier_ratio=50 / 60,
+        scale_x=1.0,
+        scale_y=1.0,
+        rotation_deg=0.0,
+        translation_x=0.0,
+        translation_y=0.0,
         warp_matrix=eye.tolist(),
     )
     assert meta.n_keypoints_src == 200
     assert meta.n_keypoints_tgt == 180
     assert meta.n_matches == 60
     assert meta.n_inliers == 50
+    assert meta.inlier_ratio == 50 / 60
     assert len(meta.warp_matrix) == 2
     assert len(meta.warp_matrix[0]) == 3
+
+
+def test_align_from_scaled_uses_nearest_neighbor_for_scaled_masks() -> None:
+    img = _textured_image()
+    mask = np.full(img.shape[:2], 255, dtype=np.uint8)
+    metadata = AlignmentMetadata(
+        n_keypoints_src=100,
+        n_keypoints_tgt=100,
+        n_matches=50,
+        n_inliers=45,
+        inlier_ratio=0.9,
+        scale_x=1.0,
+        scale_y=1.0,
+        rotation_deg=0.0,
+        translation_x=0.0,
+        translation_y=0.0,
+        warp_matrix=np.eye(2, 3, dtype=np.float64).tolist(),
+    )
+
+    resize_calls: list[dict[str, Any]] = []
+    original_resize = cv2.resize
+
+    def _record_resize(*args: Any, **kwargs: Any) -> np.ndarray:
+        resize_calls.append(kwargs)
+        return original_resize(*args, **kwargs)
+
+    with (
+        patch("virtual_staining.data.preprocessing.cv2.resize", side_effect=_record_resize),
+        patch(
+            "virtual_staining.data.preprocessing.estimate_affine_transform",
+            return_value=(np.eye(2, 3, dtype=np.float64), metadata),
+        ),
+    ):
+        align_from_scaled(img, img, scale=0.5, mask1=mask, mask2=mask)
+
+    assert any(call.get("interpolation") == cv2.INTER_NEAREST for call in resize_calls[2:4])

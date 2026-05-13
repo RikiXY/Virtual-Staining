@@ -21,10 +21,10 @@ from virtual_staining.data.preprocessing import (
     MASK_PARAMETER_GRID,
     align_from_scaled,
     calculate_mask_with_multiple_parameters,
-    divide_image_with_grid,
-    divide_image_with_positions,
     ensure_clean_directory,
+    extract_image,
     is_valid_patch_pair,
+    iter_image_with_grid,
     split_items,
     validate_image_filename,
 )
@@ -114,6 +114,7 @@ class DatasetBuilder:
         self._target_mask: np.ndarray | None = None
         self._aligned_target: np.ndarray | None = None
         self._aligned_target_mask: np.ndarray | None = None
+        self._alignment_metadata: dict[str, Any] | None = None
         self._started_at: str | None = None
         self._effective_seed: int | None = None
 
@@ -220,6 +221,11 @@ class DatasetBuilder:
             raise RuntimeError("Alignment did not return a target mask")
         self._aligned_target = aligned_target
         self._aligned_target_mask = aligned_target_mask
+        self._alignment_metadata = dataclasses.asdict(metadata)
+
+        # After alignment, patch extraction uses only source + aligned target state.
+        self._target_image = None
+        self._target_mask = None
 
         root = self.config.dataset_root
         stem = self._target_file.stem
@@ -229,7 +235,7 @@ class DatasetBuilder:
             aligned_target_mask,
         )
         with open(root / "alignment_metadata.json", "w", encoding="utf-8") as f:
-            json.dump(dataclasses.asdict(metadata), f, indent=2)
+            json.dump(self._alignment_metadata, f, indent=2)
 
         _log_memory("align")
 
@@ -262,48 +268,41 @@ class DatasetBuilder:
             # img[0:-0] returns an empty array, so treat margin=0 as no crop.
             return img[m:-m, m:-m] if m > 0 else img
 
-        source_images, source_masks, positions = divide_image_with_grid(
-            _crop(self._source_image),
+        cropped_source = _crop(self._source_image)
+        cropped_source_mask = _crop(self._source_mask)
+        cropped_target = _crop(self._aligned_target)
+        cropped_target_mask = _crop(self._aligned_target_mask)
+        source_iter = iter_image_with_grid(
+            cropped_source,
             self.config.image_size,
             self.config.grid_movement,
-            _crop(self._source_mask),
+            cropped_source_mask,
+            max_mask_percentage=self.config.min_foreground_ratio,
         )
-        if source_masks is None:
-            raise RuntimeError("Patch extraction did not return source masks")
-        target_images = divide_image_with_positions(
-            _crop(self._aligned_target),
-            self.config.image_size,
-            positions,
-        )
-        target_masks = divide_image_with_positions(
-            _crop(self._aligned_target_mask),
-            self.config.image_size,
-            positions,
-        )
-        n_pos = len(positions)
-        n_src = len(source_images)
-        n_src_mask = len(source_masks)
-        n_tgt = len(target_images)
-        n_tgt_mask = len(target_masks)
-        if not (n_pos == n_src == n_src_mask == n_tgt == n_tgt_mask):
-            raise RuntimeError(
-                f"Patch count mismatch after extraction: "
-                f"positions={n_pos}, source_patches={n_src}, source_masks={n_src_mask}, "
-                f"target_patches={n_tgt}, target_masks={n_tgt_mask}"
-            )
 
-        logger.info("Extracted %s patch pairs", len(source_images))
+        extracted_pairs = 0
         _log_memory("extract_patches")
         valid_rows: list[dict[str, Any]] = []
         discarded_rows: list[dict[str, Any]] = []
-        for (x, y), src, src_mask, tgt, tgt_mask in zip(
-            positions,
-            source_images,
-            source_masks,
-            target_images,
-            target_masks,
-            strict=True,
-        ):
+        patch_w, patch_h = self.config.image_size
+        for (x, y), src, src_mask in source_iter:
+            if src_mask is None:
+                raise RuntimeError("Patch extraction did not return source masks")
+            tgt = extract_image(cropped_target, x, y, patch_w, patch_h)
+            tgt_mask = extract_image(cropped_target_mask, x, y, patch_w, patch_h)
+            if (
+                tgt.shape[0] < patch_h
+                or tgt.shape[1] < patch_w
+                or tgt_mask.shape[0] < patch_h
+                or tgt_mask.shape[1] < patch_w
+            ):
+                raise RuntimeError(
+                    "Patch extraction mismatch after extraction: "
+                    f"source=({x}, {y}), target_shape={tgt.shape}, "
+                    f"target_mask_shape={tgt_mask.shape}"
+                )
+
+            extracted_pairs += 1
             patch_source_name = f"{x:05}_{y:05}_source{self._source_suffix}"
             patch_target_name = f"{x:05}_{y:05}_target{self._target_suffix}"
 
@@ -350,6 +349,7 @@ class DatasetBuilder:
                     }
                 )
 
+        logger.info("Extracted %s patch pairs", extracted_pairs)
         _log_memory("filter_patches")
         return valid_rows, discarded_rows
 
@@ -369,13 +369,12 @@ class DatasetBuilder:
 
         for path in [
             manifests_dir,
-            discarded_root / "source",
-            discarded_root / "target",
         ]:
             ensure_clean_directory(path)
         for split_name in ("train", "val", "test"):
             ensure_clean_directory(splits_root / split_name)
         metadata_dir.mkdir(parents=True, exist_ok=True)
+        discarded_root.mkdir(parents=True, exist_ok=True)
 
         if self._effective_seed is not None:
             random.seed(self._effective_seed)

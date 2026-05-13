@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 import random
 import shutil
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
@@ -35,6 +35,12 @@ class AlignmentMetadata:
     n_keypoints_tgt: int
     n_matches: int
     n_inliers: int
+    inlier_ratio: float
+    scale_x: float
+    scale_y: float
+    rotation_deg: float
+    translation_x: float
+    translation_y: float
     warp_matrix: list[list[float]]
 
 
@@ -98,17 +104,18 @@ def calculate_mask(img: np.ndarray) -> np.ndarray:
         if w < 100 and h < 100:
             continue
 
-        component_mask = (labels == i).astype(np.uint8) * 255
+        label_roi = labels[y : y + h, x : x + w]
+        component_mask = (label_roi == i).astype(np.uint8) * 255
         countours, _ = cv2.findContours(component_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(component_mask, countours, -1, 255, thickness=cv2.FILLED)
-
         roi = img[y : y + h, x : x + w]
-        roi_mask = component_mask[y : y + h, x : x + w]
+        roi_mask = component_mask
 
-        std_dev = cv2.meanStdDev(roi, mask=roi_mask)[1][0, 0]
+        std_dev = float(np.mean(cv2.meanStdDev(roi, mask=roi_mask)[1]))
 
         if std_dev < MIN_STD_DEV:
-            mask[component_mask == 255] = 255
+            mask_roi = mask[y : y + h, x : x + w]
+            mask_roi[component_mask == 255] = 255
 
     # Inverts the mask to get the foreground.
     # The mask is 255 for the foreground and 0 for the background.
@@ -181,16 +188,28 @@ def calculate_mask_with_multiple_parameters(
     return mask
 
 
-def align_images(
+def _affine_diagnostics(warp_matrix: np.ndarray) -> dict[str, float]:
+    a, b, tx = warp_matrix[0]
+    c, d, ty = warp_matrix[1]
+    return {
+        "scale_x": float(np.sqrt(a * a + c * c)),
+        "scale_y": float(np.sqrt(b * b + d * d)),
+        "rotation_deg": float(np.degrees(np.arctan2(c, a))),
+        "translation_x": float(tx),
+        "translation_y": float(ty),
+    }
+
+
+def estimate_affine_transform(
     img1: np.ndarray,
     img2: np.ndarray,
     mask1: np.ndarray | None = None,
     mask2: np.ndarray | None = None,
     nfeatures: int = 10000,
     ed_distance: int = 200,
-) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, AlignmentMetadata]:
+) -> tuple[np.ndarray, AlignmentMetadata]:
     """
-    Aligns a moving image to a reference image.
+    Estimate an affine transform that maps ``img2`` into ``img1`` coordinates.
 
     Parameters
     ----------
@@ -209,10 +228,6 @@ def align_images(
 
     Returns
     -------
-    img2_aligned : np.ndarray
-        The aligned second image.
-    mask2_aligned : np.ndarray, optional
-        The aligned mask for the second image.
     warp_matrix : np.ndarray
         The transformation matrix.
     metadata : AlignmentMetadata
@@ -271,18 +286,75 @@ def align_images(
             f"Alignment rejected: only {n_inliers} inliers found (minimum {MIN_INLIERS} required)"
         )
 
+    inlier_ratio = n_inliers / len(filtered_matches)
+    diagnostics = _affine_diagnostics(warp_matrix)
     metadata = AlignmentMetadata(
         n_keypoints_src=len(keypoints_1),
         n_keypoints_tgt=len(keypoints_2),
         n_matches=len(filtered_matches),
         n_inliers=n_inliers,
+        inlier_ratio=inlier_ratio,
+        scale_x=diagnostics["scale_x"],
+        scale_y=diagnostics["scale_y"],
+        rotation_deg=diagnostics["rotation_deg"],
+        translation_x=diagnostics["translation_x"],
+        translation_y=diagnostics["translation_y"],
         warp_matrix=warp_matrix.tolist(),
     )
 
-    img2_aligned = cv2.warpAffine(img2, warp_matrix, (img1.shape[1], img1.shape[0]))
+    return warp_matrix, metadata
+
+
+def warp_aligned_image(
+    img: np.ndarray,
+    warp_matrix: np.ndarray,
+    output_size: tuple[int, int],
+    *,
+    is_mask: bool,
+) -> np.ndarray:
+    """Warp an image or mask with interpolation appropriate to its data type."""
+    return cv2.warpAffine(
+        img,
+        warp_matrix,
+        output_size,
+        flags=cv2.INTER_NEAREST if is_mask else cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0 if is_mask else (255, 255, 255),
+    )
+
+
+def align_images(
+    img1: np.ndarray,
+    img2: np.ndarray,
+    mask1: np.ndarray | None = None,
+    mask2: np.ndarray | None = None,
+    nfeatures: int = 10000,
+    ed_distance: int = 200,
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, AlignmentMetadata]:
+    """Align a moving image to a reference image and return warped outputs."""
+    warp_matrix, metadata = estimate_affine_transform(
+        img1,
+        img2,
+        mask1=mask1,
+        mask2=mask2,
+        nfeatures=nfeatures,
+        ed_distance=ed_distance,
+    )
+
+    img2_aligned = warp_aligned_image(
+        img2,
+        warp_matrix,
+        (img1.shape[1], img1.shape[0]),
+        is_mask=False,
+    )
     mask2_aligned = None
     if mask2 is not None:
-        mask2_aligned = cv2.warpAffine(mask2, warp_matrix, (img1.shape[1], img1.shape[0]))
+        mask2_aligned = warp_aligned_image(
+            mask2,
+            warp_matrix,
+            (img1.shape[1], img1.shape[0]),
+            is_mask=True,
+        )
 
     return img2_aligned, mask2_aligned, warp_matrix, metadata
 
@@ -334,10 +406,10 @@ def align_from_scaled(
     if mask1 is None or mask2 is None:
         raise ValueError("Error: the scaled mask is None. Cannot align images.")
     else:
-        mask1_scaled = cv2.resize(mask1, None, fx=scale, fy=scale)
-        mask2_scaled = cv2.resize(mask2, None, fx=scale, fy=scale)
+        mask1_scaled = cv2.resize(mask1, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
+        mask2_scaled = cv2.resize(mask2, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
 
-    _, _, warp_matrix, metadata = align_images(
+    warp_matrix, metadata = estimate_affine_transform(
         img1_scaled,
         img2_scaled,
         mask1_scaled if mask1 is not None else None,
@@ -348,12 +420,31 @@ def align_from_scaled(
 
     warp_matrix[0, 2] /= scale
     warp_matrix[1, 2] /= scale
-    metadata = dataclasses.replace(metadata, warp_matrix=warp_matrix.tolist())
+    diagnostics = _affine_diagnostics(warp_matrix)
+    metadata = dataclasses.replace(
+        metadata,
+        scale_x=diagnostics["scale_x"],
+        scale_y=diagnostics["scale_y"],
+        rotation_deg=diagnostics["rotation_deg"],
+        translation_x=diagnostics["translation_x"],
+        translation_y=diagnostics["translation_y"],
+        warp_matrix=warp_matrix.tolist(),
+    )
 
-    img2_aligned = cv2.warpAffine(img2, warp_matrix, (img1.shape[1], img1.shape[0]))
+    img2_aligned = warp_aligned_image(
+        img2,
+        warp_matrix,
+        (img1.shape[1], img1.shape[0]),
+        is_mask=False,
+    )
     mask2_aligned = None
     if mask2 is not None:
-        mask2_aligned = cv2.warpAffine(mask2, warp_matrix, (img1.shape[1], img1.shape[0]))
+        mask2_aligned = warp_aligned_image(
+            mask2,
+            warp_matrix,
+            (img1.shape[1], img1.shape[0]),
+            is_mask=True,
+        )
 
     return img2_aligned, mask2_aligned, warp_matrix, metadata
 
@@ -406,8 +497,8 @@ def divide_image_with_grid(
     mask : np.ndarray, optional
         Image mask for filtering. Default is None.
     max_mask_percentage : float, optional
-        Maximum allowed percentage of masked (non-zero) pixels for a region to be
-        included. Default is 0.4.
+        Minimum required foreground ratio for a region to be included.
+        Default is 0.4.
 
     Returns
     -------
@@ -446,6 +537,35 @@ def divide_image_with_grid(
     return images, masks, positions
 
 
+def iter_image_with_grid(
+    img: np.ndarray,
+    img_size: tuple[int, int],
+    grid_movement: tuple[int, int],
+    mask: np.ndarray | None = None,
+    max_mask_percentage: float = 0.4,
+) -> Iterator[tuple[tuple[int, int], np.ndarray, np.ndarray | None]]:
+    """
+    Yield valid grid patches one at a time instead of materializing them all.
+
+    Each yielded item contains ``((x, y), image_patch, mask_patch)`` where
+    ``mask_patch`` is ``None`` when no mask was provided.
+    """
+    for x in range(0, img.shape[1], grid_movement[0]):
+        for y in range(0, img.shape[0], grid_movement[1]):
+            roi_img = extract_image(img, x, y, img_size[0], img_size[1])
+
+            if roi_img.shape[0] < img_size[1] or roi_img.shape[1] < img_size[0]:
+                continue
+
+            roi_mask = None
+            if mask is not None:
+                roi_mask = extract_image(mask, x, y, img_size[0], img_size[1])
+                if cv2.countNonZero(roi_mask) < max_mask_percentage * roi_mask.size:
+                    continue
+
+            yield (x, y), roi_img, roi_mask
+
+
 def divide_image_with_positions(
     img: np.ndarray, img_size: tuple[int, int], positions: list[tuple[int, int]]
 ) -> list[np.ndarray]:
@@ -475,6 +595,18 @@ def divide_image_with_positions(
         images.append(roi_img)
 
     return images
+
+
+def iter_image_with_positions(
+    img: np.ndarray, img_size: tuple[int, int], positions: Sequence[tuple[int, int]]
+) -> Iterator[tuple[tuple[int, int], np.ndarray]]:
+    """Yield image patches for known positions one at a time."""
+    for x, y in positions:
+        roi_img = extract_image(img, x, y, img_size[0], img_size[1])
+
+        if roi_img.shape[0] < img_size[1] or roi_img.shape[1] < img_size[0]:
+            continue
+        yield (x, y), roi_img
 
 
 def split_items(items: list[T], ratios: Sequence[float]) -> list[list[T]]:
@@ -550,6 +682,35 @@ def compute_white_ratio(img: np.ndarray, white_threshold: int = 240) -> float:
     return float(np.mean(gray >= white_threshold))
 
 
+def compute_white_stats(
+    img: np.ndarray,
+    white_threshold: int = 245,
+    *,
+    largest_component_threshold: float | None = None,
+) -> tuple[float, float]:
+    """
+    Compute the white-pixel ratio and largest white-component ratio in one pass.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    white_mask = gray >= white_threshold
+    white_ratio = float(np.mean(white_mask))
+
+    if largest_component_threshold is not None and white_ratio <= largest_component_threshold:
+        return white_ratio, 0.0
+
+    white_mask_u8 = white_mask.astype(np.uint8) * 255
+    num_labels, _, stats, _ = cv2.connectedComponentsWithStats(
+        white_mask_u8,
+        connectivity=8,
+    )
+
+    if num_labels <= 1:
+        return white_ratio, 0.0
+
+    largest_area = int(np.max(stats[1:, cv2.CC_STAT_AREA]))
+    return white_ratio, float(largest_area / white_mask_u8.size)
+
+
 def compute_largest_white_component_ratio(
     img: np.ndarray,
     white_threshold: int = 245,
@@ -571,19 +732,7 @@ def compute_largest_white_component_ratio(
         Ratio between the largest white connected component area and the total
         patch area.
     """
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    white_mask = (gray >= white_threshold).astype(np.uint8) * 255
-
-    num_labels, _, stats, _ = cv2.connectedComponentsWithStats(
-        white_mask,
-        connectivity=8,
-    )
-
-    if num_labels <= 1:
-        return 0.0
-
-    largest_area = int(np.max(stats[1:, cv2.CC_STAT_AREA]))
-    return float(largest_area / white_mask.size)
+    return compute_white_stats(img, white_threshold)[1]
 
 
 def ensure_clean_directory(directory: str | Path) -> None:
@@ -624,16 +773,15 @@ def is_valid_patch_pair(
     source_foreground_ratio = cv2.countNonZero(source_mask) / source_mask.size
     target_foreground_ratio = cv2.countNonZero(target_mask) / target_mask.size
 
-    source_white_ratio = compute_white_ratio(source_img, white_threshold)
-    target_white_ratio = compute_white_ratio(target_img, white_threshold)
-
-    source_largest_white_component_ratio = compute_largest_white_component_ratio(
+    source_white_ratio, source_largest_white_component_ratio = compute_white_stats(
         source_img,
         white_threshold,
+        largest_component_threshold=max_largest_white_component_ratio,
     )
-    target_largest_white_component_ratio = compute_largest_white_component_ratio(
+    target_white_ratio, target_largest_white_component_ratio = compute_white_stats(
         target_img,
         white_threshold,
+        largest_component_threshold=max_largest_white_component_ratio,
     )
 
     reasons: list[str] = []

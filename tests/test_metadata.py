@@ -41,6 +41,12 @@ def _identity_align(
         n_keypoints_tgt=100,
         n_matches=50,
         n_inliers=45,
+        inlier_ratio=0.9,
+        scale_x=1.0,
+        scale_y=1.0,
+        rotation_deg=0.0,
+        translation_x=0.0,
+        translation_y=0.0,
         warp_matrix=eye.tolist(),
     )
     return tgt.copy(), aligned_mask, eye, metadata

@@ -52,6 +52,12 @@ def _identity_align(
         n_keypoints_tgt=100,
         n_matches=50,
         n_inliers=45,
+        inlier_ratio=0.9,
+        scale_x=1.0,
+        scale_y=1.0,
+        rotation_deg=0.0,
+        translation_x=0.0,
+        translation_y=0.0,
         warp_matrix=eye.tolist(),
     )
     return tgt.copy(), aligned_mask, eye, metadata
@@ -444,6 +450,23 @@ def test_stream_patches_to_disk_writes_valid_patch_staging(
     assert discarded_target_files == []
 
 
+def test_stream_patches_to_disk_uses_min_foreground_ratio_for_source_prefilter(
+    builder_config: PreprocessingConfig,
+) -> None:
+    builder = DatasetBuilder(builder_config)
+
+    with (
+        _patched_builder_dependencies(),
+        patch("virtual_staining.data.builder.iter_image_with_grid") as mock_iter,
+    ):
+        mock_iter.return_value = iter(())
+        builder.compute_masks()
+        builder.align()
+        builder._stream_patches_to_disk()
+
+    assert mock_iter.call_args.kwargs["max_mask_percentage"] == builder_config.min_foreground_ratio
+
+
 def test_stream_patches_to_disk_writes_discarded_patch_staging(
     builder_config: PreprocessingConfig,
 ) -> None:
@@ -571,6 +594,45 @@ def test_assign_splits_and_finalize_moves_staged_files_and_writes_manifest(
     assert len(rows) == len(valid_rows)
     assert {row["split"] for row in rows} <= {"train", "val", "test"}
     assert {row["input_path"].split("/")[0] for row in rows} == {"splits"}
+
+
+def test_assign_splits_and_finalize_preserves_discarded_patch_files(
+    builder_config: PreprocessingConfig,
+) -> None:
+    builder = DatasetBuilder(builder_config)
+    validation_results = [
+        (
+            False,
+            {
+                "source_foreground_ratio": 1.0,
+                "target_foreground_ratio": 1.0,
+                "source_white_ratio": 0.0,
+                "target_white_ratio": 0.0,
+                "source_largest_white_component_ratio": 0.0,
+                "target_largest_white_component_ratio": 0.0,
+                "reasons": ["synthetic_rejection"],
+            },
+        )
+        for _ in range(81)
+    ]
+
+    with (
+        _patched_builder_dependencies(),
+        patch(
+            "virtual_staining.data.builder.is_valid_patch_pair",
+            side_effect=validation_results,
+        ),
+    ):
+        builder.compute_masks()
+        builder.align()
+        builder._started_at = "2026-01-01T00:00:00+00:00"
+        builder._effective_seed = builder_config.seed
+        valid_rows, discarded_rows = builder._stream_patches_to_disk()
+        builder._assign_splits_and_finalize(valid_rows, discarded_rows)
+
+    root = builder_config.dataset_root
+    assert len(list((root / "discarded_patches" / "source").iterdir())) == len(discarded_rows)
+    assert len(list((root / "discarded_patches" / "target").iterdir())) == len(discarded_rows)
 
 
 def test_assign_splits_and_finalize_is_deterministic_for_fixed_seed(
@@ -758,6 +820,21 @@ def test_run_all_saves_manifest_layout_and_resolved_config(
     assert len(manifest.filter_split("train")) == result.train_count
 
 
+def test_align_releases_original_target_arrays(builder_config: PreprocessingConfig) -> None:
+    builder = DatasetBuilder(builder_config)
+
+    with _patched_builder_dependencies():
+        builder.compute_masks()
+        assert builder._target_image is not None
+        assert builder._target_mask is not None
+        builder.align()
+
+    assert builder._aligned_target is not None
+    assert builder._aligned_target_mask is not None
+    assert builder._target_image is None
+    assert builder._target_mask is None
+
+
 def test_run_all_writes_manifest_columns_and_relative_paths(
     builder_config: PreprocessingConfig,
 ) -> None:
@@ -918,6 +995,7 @@ def test_stream_patches_to_disk_raises_on_count_mismatch(
 ) -> None:
     builder = DatasetBuilder(builder_config)
     dummy = np.zeros((64, 64, 3), dtype=np.uint8)
+    dummy_mask = np.zeros((64, 64), dtype=np.uint8)
 
     with _patched_builder_dependencies():
         builder.compute_masks()
@@ -925,9 +1003,31 @@ def test_stream_patches_to_disk_raises_on_count_mismatch(
 
         with (
             patch(
-                "virtual_staining.data.builder.divide_image_with_positions",
-                return_value=[dummy],
+                "virtual_staining.data.builder.extract_image",
+                side_effect=[dummy, dummy_mask[:32, :32]],
             ),
             pytest.raises(RuntimeError, match="mismatch"),
+        ):
+            builder._stream_patches_to_disk()
+
+
+def test_stream_patches_to_disk_does_not_use_bulk_patch_helpers(
+    builder_config: PreprocessingConfig,
+) -> None:
+    builder = DatasetBuilder(builder_config)
+
+    with _patched_builder_dependencies():
+        builder.compute_masks()
+        builder.align()
+
+        with (
+            patch(
+                "virtual_staining.data.preprocessing.divide_image_with_grid",
+                side_effect=AssertionError("bulk grid helper should not be used"),
+            ),
+            patch(
+                "virtual_staining.data.preprocessing.divide_image_with_positions",
+                side_effect=AssertionError("bulk position helper should not be used"),
+            ),
         ):
             builder._stream_patches_to_disk()
