@@ -6,9 +6,34 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from tests.manifest_helpers import write_manifest_csv
 from virtual_staining.applications.evaluate import evaluate
 from virtual_staining.config.run import RunConfig
+from virtual_staining.data.manifest import ManifestRecord
 from virtual_staining.experiment.run_paths import RunPaths
+from virtual_staining.inference.outputs import (
+    generated_filename_for_sample,
+    generated_path_for_record,
+)
+
+
+def _write_test_manifest(dataset_root: Path, sample_ids: list[str]) -> None:
+    records = tuple(
+        ManifestRecord(
+            sample_id=sample_id,
+            split="test",
+            input_path=Path(f"dataset_test/{sample_id}_source.png"),
+            target_path=Path(f"dataset_test/{sample_id}_target.png"),
+            input_modality="label_free",
+            target_modality="stained",
+            x=int(sample_id.split("_", maxsplit=1)[0]),
+            y=int(sample_id.split("_", maxsplit=1)[1]),
+            width=256,
+            height=256,
+        )
+        for sample_id in sample_ids
+    )
+    write_manifest_csv(dataset_root, records)
 
 
 def test_evaluation_config_defaults_to_run_dirs(tmp_path: Path) -> None:
@@ -123,6 +148,7 @@ def test_evaluate_writes_stage_scoped_snapshot_files(tmp_path: Path) -> None:
     generated_dir = tmp_path / "generated"
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
+    _write_test_manifest(dataset_root, ["00000_00000"])
 
     Image.new("RGB", (16, 16)).save(target_dir / "00000_00000_target.png")
     Image.new("RGB", (16, 16)).save(generated_dir / "00000_00000_target_generated.png")
@@ -160,6 +186,7 @@ def test_evaluate_preserves_existing_training_snapshot_files(tmp_path: Path) -> 
     generated_dir = tmp_path / "generated"
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
+    _write_test_manifest(dataset_root, ["00000_00000"])
 
     Image.new("RGB", (16, 16)).save(target_dir / "00000_00000_target.png")
     Image.new("RGB", (16, 16)).save(generated_dir / "00000_00000_target_generated.png")
@@ -192,3 +219,94 @@ def test_evaluate_preserves_existing_training_snapshot_files(tmp_path: Path) -> 
     assert (config_dir / "input.yaml").read_text(encoding="utf-8") == "train input\n"
     assert (config_dir / "resolved.yaml").read_text(encoding="utf-8") == "train resolved\n"
     assert (metadata_dir / "config_hash.txt").read_text(encoding="utf-8") == "sha256:train\n"
+
+
+def test_evaluate_raises_if_manifest_missing(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "data"
+    target_dir = dataset_root / "dataset_test"
+    generated_dir = tmp_path / "generated"
+    target_dir.mkdir(parents=True)
+    generated_dir.mkdir()
+
+    yaml_file = tmp_path / "evaluate.yaml"
+    yaml_file.write_text(
+        textwrap.dedent(f"""\
+            dataset_root: {dataset_root}
+            results_path: {tmp_path / "results"}
+            run_name: eval_run
+            evaluation:
+              target_dir: {target_dir}
+              generated_dir: {generated_dir}
+              output_dir: {tmp_path / "results" / "eval_run" / "evaluation"}
+        """),
+        encoding="utf-8",
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+
+    with pytest.raises(FileNotFoundError, match="Manifest not found"):
+        evaluate(run_config, yaml_file)
+
+
+def test_evaluate_pairs_from_manifest_test_split(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "data"
+    target_dir = dataset_root / "dataset_test"
+    generated_dir = tmp_path / "generated"
+    target_dir.mkdir(parents=True)
+    generated_dir.mkdir()
+    _write_test_manifest(dataset_root, ["00000_00000", "00256_00000"])
+
+    for sample_id in ["00000_00000", "00256_00000"]:
+        Image.new("RGB", (16, 16)).save(target_dir / f"{sample_id}_target.png")
+        Image.new("RGB", (16, 16)).save(
+            generated_dir / generated_filename_for_sample(sample_id, ".PNG")
+        )
+    Image.new("RGB", (16, 16)).save(generated_dir / "99999_99999_target_generated.png")
+
+    yaml_file = tmp_path / "evaluate.yaml"
+    output_dir = tmp_path / "results" / "eval_run" / "evaluation"
+    yaml_file.write_text(
+        textwrap.dedent(f"""\
+            dataset_root: {dataset_root}
+            results_path: {tmp_path / "results"}
+            run_name: eval_run
+            evaluation:
+              generated_dir: {generated_dir}
+              output_dir: {output_dir}
+        """),
+        encoding="utf-8",
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+    evaluate(run_config, yaml_file)
+
+    per_image_metrics = output_dir / "per_image_metrics.csv"
+    rows = per_image_metrics.read_text(encoding="utf-8").splitlines()
+    assert len(rows) == 3
+    assert "99999_99999" not in per_image_metrics.read_text(encoding="utf-8")
+
+
+def test_generated_filename_for_sample() -> None:
+    assert (
+        generated_filename_for_sample("00512_09216", ".tif") == "00512_09216_target_generated.tif"
+    )
+    assert generated_filename_for_sample("patch_001", ".PNG") == "patch_001_target_generated.png"
+
+
+def test_generated_path_for_record_uses_sample_id(tmp_path: Path) -> None:
+    record = ManifestRecord(
+        sample_id="00512_09216",
+        split="test",
+        input_path=Path("dataset_test/00512_09216_source.tif"),
+        target_path=Path("dataset_test/00512_09216_target.tif"),
+        input_modality="label_free",
+        target_modality="stained",
+        x=512,
+        y=9216,
+        width=256,
+        height=256,
+    )
+
+    result = generated_path_for_record(record, tmp_path)
+
+    assert result == tmp_path / "00512_09216_target_generated.tif"

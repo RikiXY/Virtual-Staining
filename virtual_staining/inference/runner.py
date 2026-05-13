@@ -123,10 +123,9 @@ def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
         source_tensor, _ = dataset[idx]
         source_tensor = cast(torch.Tensor, source_tensor)
         record = test_manifest.records[idx]
-        source_path = config.project.dataset_root / record.input_path
         batch = source_tensor.unsqueeze(0)
         output = predictor.predict_batch(batch)[0]
-        out_path = writer.write(source_path.stem, source_path.suffix, output)
+        out_path = writer.write(record.sample_id, record.input_path.suffix, output)
         result.generated_paths.append(out_path)
         result.num_samples += 1
 
