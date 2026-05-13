@@ -374,8 +374,10 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
     manifest_path = run_config.project.manifest_path
     expected_manifest_hash = f"sha256:{hashlib.sha256(manifest_path.read_bytes()).hexdigest()}"
 
-    assert metadata["stage"] == "evaluation"
+    assert metadata["stage"] == "evaluate"
+    assert metadata["status"] == "completed"
     assert metadata["completed_at"]
+    assert metadata["started_at"]
     assert metadata["manifest_path"] == str(manifest_path)
     assert metadata["manifest_sha256"] == expected_manifest_hash
     assert metadata["evaluated_count"] == 1
@@ -383,6 +385,15 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
     assert metadata["metrics_csv_path"] == str(output_dir / "per_image_metrics.csv")
     assert metadata["summary_csv_path"] == str(output_dir / "summary.csv")
     assert metadata["metric_config"]["ssim"] is True
+
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "results" / "eval_run" / "metadata" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [event["event_type"] for event in events] == ["stage_started", "stage_completed"]
+    assert all(event["stage"] == "evaluate" for event in events)
 
 
 def test_evaluate_writes_skipped_csv_for_missing_generated(tmp_path: Path) -> None:

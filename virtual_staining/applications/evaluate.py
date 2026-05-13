@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +10,11 @@ from virtual_staining.evaluation.evaluator import evaluate_pairs
 from virtual_staining.evaluation.plotting import save_dataset_plots
 from virtual_staining.evaluation.reports import write_skipped_csv
 from virtual_staining.evaluation.summaries import write_summary_csv
+from virtual_staining.experiment.metadata import (
+    append_run_event,
+    ensure_run_metadata,
+    save_stage_metadata,
+)
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
     compute_manifest_hash,
@@ -22,7 +26,7 @@ from virtual_staining.inference.outputs import generated_path_for_record
 
 logger = logging.getLogger(__name__)
 
-_METRIC_CONFIG = {
+_METRIC_CONFIG: dict[str, bool] = {
     "mae": True,
     "mse": True,
     "rmse": True,
@@ -36,38 +40,10 @@ _METRIC_CONFIG = {
 }
 
 
-def _write_evaluation_stage_metadata(
-    paths: RunPaths,
-    *,
-    manifest_path: Path,
-    output_dir: Path,
-    evaluated_count: int,
-    skipped_count: int,
-    metrics_csv_path: Path,
-    summary_csv_path: Path | None,
-) -> None:
-    """Best-effort writer for metadata/stages/evaluate.json."""
-    metadata = {
-        "stage": "evaluation",
-        "completed_at": datetime.now(UTC).isoformat(),
-        "manifest_path": str(manifest_path),
-        "manifest_sha256": compute_manifest_hash(manifest_path),
-        "evaluated_count": evaluated_count,
-        "skipped_count": skipped_count,
-        "metrics_csv_path": str(metrics_csv_path),
-        "summary_csv_path": str(summary_csv_path) if summary_csv_path is not None else None,
-        "metric_config": _METRIC_CONFIG,
-    }
-
-    stage_path = paths.metadata_dir / "stages" / "evaluate.json"
-    try:
-        stage_path.parent.mkdir(parents=True, exist_ok=True)
-        stage_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    except OSError as exc:
-        logger.warning("Failed to write evaluation stage metadata to %s: %s", stage_path, exc)
-        return
-
-    logger.info("Evaluation metadata written -> %s", stage_path)
+def _write_evaluation_stage_metadata(paths: RunPaths, payload: dict[str, object]) -> None:
+    stage_path = save_stage_metadata("evaluate", payload, paths.metadata_dir)
+    if stage_path is not None:
+        logger.info("Evaluation metadata written -> %s", stage_path)
 
 
 def evaluate(config: RunConfig, config_path: Path) -> None:
@@ -103,9 +79,51 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
 
     manifest = load_manifest_or_raise(project)
     manifest.validate(check_files_exist=True, require_splits={"test"})
+    manifest_path = project.manifest_path
+    manifest_hash = compute_manifest_hash(manifest_path)
+    config_hash = snapshot_paths.config_hash.read_text(encoding="utf-8")
+    ensure_run_metadata(
+        paths.run_metadata,
+        run_name=project.run_name,
+        entrypoint="vs-evaluate",
+        config_hash=config_hash,
+        manifest_path=str(manifest_path),
+        manifest_sha256=manifest_hash,
+    )
+    started_at = datetime.now(UTC).isoformat()
     test_records = manifest.filter_split("test").records
     pairs: list[tuple[Path, Path, str]] = []
     pairing_skipped: list[dict[str, str]] = []
+    evaluation_details: dict[str, object] = {
+        "manifest_path": str(manifest_path),
+        "manifest_sha256": manifest_hash,
+        "generated_dir": str(generated_dir),
+        "output_dir": str(output_dir),
+        "metric_config": _METRIC_CONFIG,
+    }
+    _write_evaluation_stage_metadata(
+        paths,
+        {
+            "stage": "evaluate",
+            "status": "running",
+            "started_at": started_at,
+            "completed_at": None,
+            "config_hash": config_hash,
+            **evaluation_details,
+        },
+    )
+    append_run_event(
+        {
+            "timestamp": started_at,
+            "run_name": project.run_name,
+            "stage": "evaluate",
+            "event_type": "stage_started",
+            "status": "running",
+            "config_hash": config_hash,
+            "details": evaluation_details,
+        },
+        paths.metadata_dir,
+    )
     for record in test_records:
         target_path = project.dataset_root / record.target_path
         generated_path = generated_path_for_record(record, generated_dir)
@@ -123,7 +141,36 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
             }
         )
 
-    result = evaluate_pairs(pairs, output_dir)
+    try:
+        result = evaluate_pairs(pairs, output_dir)
+    except Exception as exc:
+        completed_at = datetime.now(UTC).isoformat()
+        _write_evaluation_stage_metadata(
+            paths,
+            {
+                "stage": "evaluate",
+                "status": "failed",
+                "started_at": started_at,
+                "completed_at": completed_at,
+                "config_hash": config_hash,
+                **evaluation_details,
+                "error": str(exc),
+            },
+        )
+        append_run_event(
+            {
+                "timestamp": completed_at,
+                "run_name": project.run_name,
+                "stage": "evaluate",
+                "event_type": "stage_failed",
+                "status": "failed",
+                "config_hash": config_hash,
+                "details": {**evaluation_details, "error": str(exc)},
+            },
+            paths.metadata_dir,
+        )
+        raise
+
     all_skipped = pairing_skipped + result.skipped_rows
     if all_skipped:
         skipped_path = write_skipped_csv(all_skipped, output_dir / "skipped.csv")
@@ -135,14 +182,43 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
     if save_graphs and result.rows:
         save_dataset_plots(result.rows, output_dir)
 
+    completed_at = datetime.now(UTC).isoformat()
     _write_evaluation_stage_metadata(
         paths,
-        manifest_path=project.manifest_path,
-        output_dir=output_dir,
-        evaluated_count=result.num_evaluated,
-        skipped_count=len(all_skipped),
-        metrics_csv_path=output_dir / "per_image_metrics.csv",
-        summary_csv_path=result.summary_csv,
+        {
+            "stage": "evaluate",
+            "status": "completed",
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "config_hash": config_hash,
+            **evaluation_details,
+            "evaluated_count": result.num_evaluated,
+            "skipped_count": len(all_skipped),
+            "metrics_csv_path": str(output_dir / "per_image_metrics.csv"),
+            "summary_csv_path": (
+                str(result.summary_csv) if result.summary_csv is not None else None
+            ),
+        },
+    )
+    append_run_event(
+        {
+            "timestamp": completed_at,
+            "run_name": project.run_name,
+            "stage": "evaluate",
+            "event_type": "stage_completed",
+            "status": "completed",
+            "config_hash": config_hash,
+            "details": {
+                **evaluation_details,
+                "evaluated_count": result.num_evaluated,
+                "skipped_count": len(all_skipped),
+                "metrics_csv_path": str(output_dir / "per_image_metrics.csv"),
+                "summary_csv_path": (
+                    str(result.summary_csv) if result.summary_csv is not None else None
+                ),
+            },
+        },
+        paths.metadata_dir,
     )
     logger.info(
         "Evaluation complete: %s evaluated, %s skipped -> %s",

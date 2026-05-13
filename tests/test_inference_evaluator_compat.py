@@ -291,14 +291,25 @@ def test_inference_writes_stage_metadata_json(tmp_path: Path) -> None:
     manifest_path = config.project.manifest_path
     expected_manifest_hash = f"sha256:{hashlib.sha256(manifest_path.read_bytes()).hexdigest()}"
 
-    assert metadata["stage"] == "inference"
+    assert metadata["stage"] == "infer"
+    assert metadata["status"] == "completed"
     assert metadata["completed_at"]
+    assert metadata["started_at"]
     assert metadata["checkpoint_path"] == str(checkpoint)
     assert metadata["manifest_path"] == str(manifest_path)
     assert metadata["manifest_sha256"] == expected_manifest_hash
     assert metadata["output_dir"] == str(output_dir)
     assert metadata["test_sample_count"] == 1
     assert metadata["inferred_count"] == 1
+
+    events = [
+        json.loads(line)
+        for line in (config.project.run_root / "metadata" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [event["event_type"] for event in events] == ["stage_started", "stage_completed"]
+    assert all(event["stage"] == "infer" for event in events)
 
 
 def test_inference_preserves_existing_training_snapshot_files(tmp_path: Path) -> None:
