@@ -3,13 +3,17 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import patch
 
+import cv2
 import numpy as np
 import pytest
 
 from virtual_staining.data.preprocessing import (
     AlignmentMetadata,
     align_images,
+    calculate_mask,
+    calculate_mask_with_grid,
     is_valid_patch_pair,
+    pad_image,
     split_items,
 )
 
@@ -69,6 +73,66 @@ def test_split_items_no_duplicates_no_missing() -> None:
     parts = split_items(items, [0.8, 0.1, 0.1])
     all_items = [item for part in parts for item in part]
     assert sorted(all_items) == items
+
+
+# ---------------------------------------------------------------------------
+# calculate_mask_with_grid
+# ---------------------------------------------------------------------------
+
+
+def _legacy_calculate_mask_with_grid(
+    img: np.ndarray, sub_shape: tuple[int, int], grid: int
+) -> np.ndarray:
+    mask = np.ones((img.shape[0], img.shape[1]), dtype=np.uint8) * 255
+
+    for y in range(0, img.shape[0], img.shape[0] // grid):
+        for x in range(0, img.shape[1], img.shape[1] // grid):
+            roi = img[y : y + sub_shape[0], x : x + sub_shape[1]]
+            roi_mask = calculate_mask(roi)
+            roi_mask = pad_image(roi_mask, x, y, img.shape[1], img.shape[0])
+            mask = cv2.bitwise_and(mask, roi_mask)
+
+    return mask
+
+
+def test_calculate_mask_with_grid_matches_legacy_behavior() -> None:
+    rng = np.random.default_rng(0)
+    img = rng.integers(0, 255, size=(64, 64, 3), dtype=np.uint8)
+
+    mask = calculate_mask_with_grid(img, sub_shape=(16, 16), grid=4)
+    legacy_mask = _legacy_calculate_mask_with_grid(img, sub_shape=(16, 16), grid=4)
+
+    assert np.array_equal(mask, legacy_mask)
+
+
+def test_calculate_mask_with_grid_returns_expected_shape_and_dtype() -> None:
+    rng = np.random.default_rng(1)
+    img = rng.integers(0, 255, size=(64, 64, 3), dtype=np.uint8)
+
+    mask = calculate_mask_with_grid(img, sub_shape=(16, 16), grid=4)
+
+    assert mask.shape == (64, 64)
+    assert mask.dtype == np.uint8
+
+
+def test_calculate_mask_with_grid_does_not_call_pad_image() -> None:
+    rng = np.random.default_rng(2)
+    img = rng.integers(0, 255, size=(64, 64, 3), dtype=np.uint8)
+
+    with patch("virtual_staining.data.preprocessing.pad_image") as mock_pad_image:
+        calculate_mask_with_grid(img, sub_shape=(16, 16), grid=4)
+
+    mock_pad_image.assert_not_called()
+
+
+def test_calculate_mask_with_grid_handles_grid_larger_than_image() -> None:
+    rng = np.random.default_rng(3)
+    img = rng.integers(0, 255, size=(4, 5, 3), dtype=np.uint8)
+
+    mask = calculate_mask_with_grid(img, sub_shape=(2, 2), grid=10)
+
+    assert mask.shape == (4, 5)
+    assert mask.dtype == np.uint8
 
 
 # ---------------------------------------------------------------------------

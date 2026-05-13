@@ -135,15 +135,19 @@ def calculate_mask_with_grid(img: np.ndarray, sub_shape: tuple[int, int], grid: 
         Mask of the image.
     """
     mask = np.ones((img.shape[0], img.shape[1]), dtype=np.uint8) * 255
+    step_y = max(1, img.shape[0] // grid)
+    step_x = max(1, img.shape[1] // grid)
 
-    for y in range(0, img.shape[0], img.shape[0] // grid):
-        for x in range(0, img.shape[1], img.shape[1] // grid):
-            roi = img[y : y + sub_shape[0], x : x + sub_shape[1]]
+    for y in range(0, img.shape[0], step_y):
+        for x in range(0, img.shape[1], step_x):
+            y2 = min(y + sub_shape[0], img.shape[0])
+            x2 = min(x + sub_shape[1], img.shape[1])
+            roi = img[y:y2, x:x2]
+            if roi.size == 0:
+                continue
+
             roi_mask = calculate_mask(roi)
-
-            roi_mask = pad_image(roi_mask, x, y, img.shape[1], img.shape[0])
-
-            mask = cv2.bitwise_and(mask, roi_mask)
+            mask[y:y2, x:x2] = cv2.bitwise_and(mask[y:y2, x:x2], roi_mask)
     return mask
 
 
