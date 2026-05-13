@@ -29,6 +29,31 @@ class ManifestRecord:
     width: int
     height: int
 
+    def __post_init__(self) -> None:
+        if not self.sample_id.strip():
+            raise ValueError("ManifestRecord.sample_id must be a non-empty string")
+        if self.split not in _VALID_SPLITS:
+            raise ValueError(
+                f"ManifestRecord.split must be one of {sorted(_VALID_SPLITS)}, got {self.split!r}"
+            )
+        if not self.input_modality.strip():
+            raise ValueError("ManifestRecord.input_modality must be a non-empty string")
+        if not self.target_modality.strip():
+            raise ValueError("ManifestRecord.target_modality must be a non-empty string")
+        if self.x < 0:
+            raise ValueError(f"ManifestRecord.x must be >= 0, got {self.x}")
+        if self.y < 0:
+            raise ValueError(f"ManifestRecord.y must be >= 0, got {self.y}")
+        if self.width <= 0:
+            raise ValueError(f"ManifestRecord.width must be > 0, got {self.width}")
+        if self.height <= 0:
+            raise ValueError(f"ManifestRecord.height must be > 0, got {self.height}")
+        if self.input_path == self.target_path:
+            raise ValueError(
+                "ManifestRecord.input_path and target_path must be different, "
+                f"got {self.input_path!r}"
+            )
+
 
 @dataclass(frozen=True)
 class DatasetManifest:
