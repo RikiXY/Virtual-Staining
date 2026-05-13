@@ -295,13 +295,17 @@ def _parse_model(model_raw: dict[str, Any]) -> ModelConfig:
             in_channels=int(gen_raw.get("in_channels", 3)),
             out_channels=int(gen_raw.get("out_channels", 3)),
             base_channels=int(gen_raw.get("base_channels", 64)),
-            bilinear=bool(gen_raw.get("bilinear", False)),
+            bilinear=parse_bool_strict(
+                gen_raw.get("bilinear", False), "model.generator.bilinear"
+            ),
         ),
         discriminator=DiscriminatorConfig(
             name=disc_raw.get("name", "patchgan"),
             in_channels=int(disc_raw.get("in_channels", 6)),
             ndf=int(disc_raw.get("ndf", 64)),
-            use_sigmoid=bool(disc_raw.get("use_sigmoid", False)),
+            use_sigmoid=parse_bool_strict(
+                disc_raw.get("use_sigmoid", False), "model.discriminator.use_sigmoid"
+            ),
         ),
     )
 

@@ -100,6 +100,96 @@ training:
     assert "resume" not in data["training"]
 
 
+def test_model_bilinear_string_false_raises(tmp_path: Path) -> None:
+    yaml_path = tmp_path / "run.yaml"
+    yaml_path.write_text(
+        """
+dataset_root: /tmp/ds
+results_path: /tmp/results
+run_name: t
+image_size: [256, 256]
+model:
+  generator:
+    bilinear: "false"
+training:
+  epochs: 1
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TypeError, match="bilinear"):
+        RunConfig.from_yaml(yaml_path)
+
+
+def test_model_use_sigmoid_string_true_raises(tmp_path: Path) -> None:
+    yaml_path = tmp_path / "run.yaml"
+    yaml_path.write_text(
+        """
+dataset_root: /tmp/ds
+results_path: /tmp/results
+run_name: t
+image_size: [256, 256]
+model:
+  discriminator:
+    use_sigmoid: "true"
+training:
+  epochs: 1
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TypeError, match="use_sigmoid"):
+        RunConfig.from_yaml(yaml_path)
+
+
+def test_model_bilinear_yaml_bool_false_parses(tmp_path: Path) -> None:
+    yaml_path = tmp_path / "run.yaml"
+    yaml_path.write_text(
+        """
+dataset_root: /tmp/ds
+results_path: /tmp/results
+run_name: t
+image_size: [256, 256]
+model:
+  generator:
+    bilinear: false
+training:
+  epochs: 1
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = RunConfig.from_yaml(yaml_path)
+
+    assert config.model.generator.bilinear is False
+
+
+def test_model_use_sigmoid_yaml_bool_true_parses(tmp_path: Path) -> None:
+    yaml_path = tmp_path / "run.yaml"
+    yaml_path.write_text(
+        """
+dataset_root: /tmp/ds
+results_path: /tmp/results
+run_name: t
+image_size: [256, 256]
+model:
+  discriminator:
+    use_sigmoid: true
+training:
+  epochs: 1
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = RunConfig.from_yaml(yaml_path)
+
+    assert config.model.discriminator.use_sigmoid is True
+
+
 def test_save_resolved_config_writes_valid_yaml(tmp_path: Path) -> None:
     dest = tmp_path / "config" / "resolved.yaml"
 
