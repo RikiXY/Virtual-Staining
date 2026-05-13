@@ -365,17 +365,16 @@ class DatasetBuilder:
         discarded_root = root / "discarded_patches"
         manifests_dir = root / "manifests"
         metadata_dir = root / "metadata"
+        splits_root = root / "splits"
 
         for path in [
-            root / "splits",
-            root / "dataset_train",
-            root / "dataset_val",
-            root / "dataset_test",
             manifests_dir,
             discarded_root / "source",
             discarded_root / "target",
         ]:
             ensure_clean_directory(path)
+        for split_name in ("train", "val", "test"):
+            ensure_clean_directory(splits_root / split_name)
         metadata_dir.mkdir(parents=True, exist_ok=True)
 
         if self._effective_seed is not None:
@@ -386,9 +385,9 @@ class DatasetBuilder:
         )
         split_names: tuple[Split, Split, Split] = ("train", "val", "test")
         split_dirs = {
-            "train": root / "dataset_train",
-            "val": root / "dataset_val",
-            "test": root / "dataset_test",
+            "train": splits_root / "train",
+            "val": splits_root / "val",
+            "test": splits_root / "test",
         }
 
         manifest_records: list[ManifestRecord] = []
@@ -408,8 +407,8 @@ class DatasetBuilder:
                     ManifestRecord(
                         sample_id=sample_id,
                         split=split_name,
-                        input_path=Path(f"dataset_{split_name}/{src_name}"),
-                        target_path=Path(f"dataset_{split_name}/{tgt_name}"),
+                        input_path=Path(f"splits/{split_name}/{src_name}"),
+                        target_path=Path(f"splits/{split_name}/{tgt_name}"),
                         input_modality="label_free",
                         target_modality="stained",
                         x=x,
