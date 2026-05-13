@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import random
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -12,10 +13,16 @@ from torchvision import transforms
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.dataset import PairedManifestDataset
 from virtual_staining.data.manifest import load_manifest_or_raise
-from virtual_staining.experiment.metadata import RunMetadata
+from virtual_staining.experiment.metadata import (
+    RunMetadata,
+    append_run_event,
+    ensure_run_metadata,
+    save_stage_metadata,
+)
 from virtual_staining.experiment.run_context import RunContext
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
+    compute_manifest_hash,
     resolve_run_snapshot_paths,
     save_environment_snapshot,
     save_stage_config_snapshots,
@@ -74,17 +81,72 @@ def run_training(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Device: %s", device)
 
-    metadata = RunMetadata.create(
+    manifest = load_manifest_or_raise(config.project)
+    manifest.validate(check_files_exist=True, require_splits={"train", "val"})
+    manifest_path = config.project.manifest_path
+    manifest_hash = compute_manifest_hash(manifest_path)
+
+    run_metadata = RunMetadata.create(
         run_name=config.project.run_name,
         entrypoint="vs-train",
         seed=seed,
         config_hash=config_hash,
+        manifest_path=str(manifest_path),
+        manifest_sha256=manifest_hash,
         device=str(device),
         cuda_device_name=torch.cuda.get_device_name(device) if device.type == "cuda" else None,
     )
-    metadata.save(paths.run_metadata)
+    ensure_run_metadata(
+        paths.run_metadata,
+        run_name=run_metadata.run_name,
+        entrypoint=run_metadata.entrypoint,
+        config_hash=run_metadata.config_hash,
+        manifest_path=run_metadata.manifest_path,
+        manifest_sha256=run_metadata.manifest_sha256,
+        seed=run_metadata.seed,
+        device=run_metadata.device,
+        cuda_device_name=run_metadata.cuda_device_name,
+        git_commit=run_metadata.git_commit,
+        git_dirty=run_metadata.git_dirty,
+        package_version=run_metadata.package_version,
+    )
 
     save_environment_snapshot(snapshot_paths.environment)
+
+    started_at = datetime.now(UTC).isoformat()
+    train_details = {
+        "manifest_path": str(manifest_path),
+        "manifest_sha256": manifest_hash,
+        "seed": seed,
+        "device": str(device),
+        "cuda_device_name": torch.cuda.get_device_name(device) if device.type == "cuda" else None,
+        "train_sample_count": len(manifest.filter_split("train")),
+        "val_sample_count": len(manifest.filter_split("val")),
+    }
+    save_stage_metadata(
+        "train",
+        {
+            "stage": "train",
+            "status": "running",
+            "started_at": started_at,
+            "completed_at": None,
+            "config_hash": config_hash,
+            **train_details,
+        },
+        paths.metadata_dir,
+    )
+    append_run_event(
+        {
+            "timestamp": started_at,
+            "run_name": config.project.run_name,
+            "stage": "train",
+            "event_type": "stage_started",
+            "status": "running",
+            "config_hash": config_hash,
+            "details": train_details,
+        },
+        paths.metadata_dir,
+    )
 
     context = RunContext(
         name=config.project.run_name,
@@ -106,8 +168,6 @@ def run_training(
     train_dir = config.project.dataset_train_dir
     val_dir = config.project.dataset_val_dir
 
-    manifest = load_manifest_or_raise(config.project)
-    manifest.validate(check_files_exist=True, require_splits={"train", "val"})
     train_dataset = PairedManifestDataset(
         manifest.filter_split("train"),
         transform=transform,
@@ -166,13 +226,74 @@ def run_training(
 
     try:
         result = trainer.train(seed=seed, start_epoch=start_epoch, reporter=reporter)
-    except Exception:
-        metadata.mark_failed()
-        metadata.save(paths.run_metadata)
+    except Exception as exc:
+        completed_at = datetime.now(UTC).isoformat()
+        save_stage_metadata(
+            "train",
+            {
+                "stage": "train",
+                "status": "failed",
+                "started_at": started_at,
+                "completed_at": completed_at,
+                "config_hash": config_hash,
+                **train_details,
+                "error": str(exc),
+            },
+            paths.metadata_dir,
+        )
+        append_run_event(
+            {
+                "timestamp": completed_at,
+                "run_name": config.project.run_name,
+                "stage": "train",
+                "event_type": "stage_failed",
+                "status": "failed",
+                "config_hash": config_hash,
+                "details": {**train_details, "error": str(exc)},
+            },
+            paths.metadata_dir,
+        )
         raise
 
-    metadata.mark_completed()
-    metadata.save(paths.run_metadata)
+    completed_at = datetime.now(UTC).isoformat()
+    save_stage_metadata(
+        "train",
+        {
+            "stage": "train",
+            "status": "completed",
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "config_hash": config_hash,
+            **train_details,
+            "final_epoch": result.final_epoch,
+            "best_checkpoint_path": (
+                str(result.best_checkpoint_path)
+                if result.best_checkpoint_path is not None
+                else None
+            ),
+        },
+        paths.metadata_dir,
+    )
+    append_run_event(
+        {
+            "timestamp": completed_at,
+            "run_name": config.project.run_name,
+            "stage": "train",
+            "event_type": "stage_completed",
+            "status": "completed",
+            "config_hash": config_hash,
+            "details": {
+                **train_details,
+                "final_epoch": result.final_epoch,
+                "best_checkpoint_path": (
+                    str(result.best_checkpoint_path)
+                    if result.best_checkpoint_path is not None
+                    else None
+                ),
+            },
+        },
+        paths.metadata_dir,
+    )
     reporter.on_training_completed(result)
     return result
 

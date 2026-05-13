@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -230,3 +231,79 @@ training:
 
     expected = f"sha256:{hashlib.sha256(resolved_path.read_bytes()).hexdigest()}"
     assert hash_path.read_text(encoding="utf-8") == expected
+
+    run_metadata = json.loads((run_root / "metadata" / "run.json").read_text(encoding="utf-8"))
+    manifest_path = dataset_root / "manifests" / "manifest.csv"
+    manifest_hash = f"sha256:{hashlib.sha256(manifest_path.read_bytes()).hexdigest()}"
+
+    assert run_metadata["manifest_path"] == str(manifest_path)
+    assert run_metadata["manifest_sha256"] == manifest_hash
+    assert run_metadata["stages_present"] == ["train"]
+    assert run_metadata["last_completed_stage"] == "train"
+
+    stage_metadata = json.loads(
+        (run_root / "metadata" / "stages" / "train.json").read_text(encoding="utf-8")
+    )
+    assert stage_metadata["stage"] == "train"
+    assert stage_metadata["status"] == "completed"
+    assert stage_metadata["config_hash"] == expected
+    assert stage_metadata["manifest_sha256"] == manifest_hash
+
+    events = [
+        json.loads(line)
+        for line in (run_root / "metadata" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [event["event_type"] for event in events] == ["stage_started", "stage_completed"]
+    assert all(event["stage"] == "train" for event in events)
+
+
+def test_run_training_writes_failed_stage_metadata_and_events(tmp_path: Path, monkeypatch) -> None:
+    dataset_root = tmp_path / "dataset"
+    train_dir = dataset_root / "dataset_train"
+    val_dir = dataset_root / "dataset_val"
+    train_dir.mkdir(parents=True)
+    val_dir.mkdir(parents=True)
+    _write_rgb_pair(train_dir)
+    _write_rgb_pair(val_dir, prefix="00256_00000")
+    _write_training_manifest(dataset_root)
+
+    config_path = tmp_path / "train.yaml"
+    config_path.write_text(
+        f"""
+dataset_root: {dataset_root}
+results_path: {tmp_path / "results"}
+run_name: smoke_run
+image_size: [32, 32]
+training:
+  epochs: 1
+  num_workers: 0
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    config = RunConfig.from_yaml(config_path)
+
+    def _fail_train(self, seed: int, start_epoch: int = 0, reporter=None) -> TrainingResult:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("virtual_staining.training.trainer.Trainer.train", _fail_train)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        run_training(config, config_path)
+
+    run_root = tmp_path / "results" / "smoke_run"
+    stage_metadata = json.loads(
+        (run_root / "metadata" / "stages" / "train.json").read_text(encoding="utf-8")
+    )
+    assert stage_metadata["status"] == "failed"
+    assert stage_metadata["error"] == "boom"
+
+    events = [
+        json.loads(line)
+        for line in (run_root / "metadata" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [event["event_type"] for event in events] == ["stage_started", "stage_failed"]

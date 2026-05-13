@@ -10,9 +10,14 @@ local_workspace/results/<run_name>/
 │   ├── input.yaml              # exact copy of the user-supplied run YAML
 │   └── resolved.yaml           # fully expanded effective config
 ├── metadata/
-│   ├── run.json                # run status, timing, git state, device
-│   ├── environment.json        # Python, CUDA, and package provenance
-│   └── config_hash.txt         # sha256 of resolved.yaml
+│   ├── run.json                # run-level provenance and aggregate stage summary
+│   ├── environment.json        # training-stage environment snapshot
+│   ├── config_hash.txt         # training-stage sha256 of resolved.yaml
+│   ├── events.jsonl            # append-only stage lifecycle log
+│   └── stages/
+│       ├── train.json          # current train stage state
+│       ├── infer.json          # current inference stage state
+│       └── evaluate.json       # current evaluation stage state
 ├── logs/
 │   └── training.log            # Python logging output
 ├── checkpoints/
@@ -48,12 +53,13 @@ values that were not explicitly set by the user.
 
 ### `metadata/run.json`
 
-Written at the start of a run and updated on completion or failure.
+Stable run-level provenance and aggregate summary. It identifies what the run is
+without pretending to be the complete lifecycle record for every stage.
 See [run.json Schema](#runjson-schema) below.
 
 ### `metadata/environment.json`
 
-Snapshot of the runtime environment captured at run start:
+Snapshot of the runtime environment captured for the training stage:
 
 - Python version and platform
 - `torch`, `numpy`, `opencv` package versions
@@ -61,8 +67,33 @@ Snapshot of the runtime environment captured at run start:
 
 ### `metadata/config_hash.txt`
 
-SHA-256 hash of `config/resolved.yaml`. Two runs with identical hashes used the
-same effective configuration.
+SHA-256 hash of `config/resolved.yaml` for the training stage. Inference and
+evaluation keep their own stage-scoped hash files (`inference_config_hash.txt`
+and `evaluation_config_hash.txt`).
+
+### `metadata/stages/<stage>.json`
+
+Current-state records for each stage. These files are overwritten on rerun and
+contain fields such as:
+
+- `stage`
+- `status`
+- `started_at`
+- `completed_at`
+- `config_hash`
+- stage-specific provenance such as checkpoint path, manifest hash, counts, and output paths
+
+### `metadata/events.jsonl`
+
+Append-only execution log. Each line is a JSON object representing a lifecycle
+event such as:
+
+- `stage_started`
+- `stage_completed`
+- `stage_failed`
+
+Events include `timestamp`, `run_name`, `stage`, `status`, `config_hash`, and
+optional `details`.
 
 ### `metrics/train.csv` and `metrics/validation.csv`
 
@@ -130,31 +161,37 @@ This file is not written when all test samples are evaluated successfully.
 ```json
 {
   "run_name":       "example_run",
-  "status":         "completed",
   "started_at":     "2025-01-15T10:30:00+00:00",
-  "completed_at":   "2025-01-15T12:45:00+00:00",
   "git_commit":     "abc1234...",
   "git_dirty":      false,
   "config_hash":    "sha256:e3b0c4...",
+  "manifest_path":  "/abs/path/to/manifest.csv",
+  "manifest_sha256": "sha256:abcd...",
   "seed":           42,
   "device":         "cuda",
   "cuda_device_name": "NVIDIA GeForce RTX 3090",
   "entrypoint":     "vs-train",
-  "package_version": "0.1.0"
+  "package_version": "0.1.0",
+  "last_event_at":  "2025-01-15T12:45:00+00:00",
+  "stages_present": ["train", "infer", "evaluate"],
+  "last_completed_stage": "evaluate"
 }
 ```
 
 | Field | Description |
 |---|---|
 | `run_name` | Value of `run_name` from the config |
-| `status` | `"running"`, `"completed"`, or `"failed"` |
-| `started_at` | UTC ISO 8601 timestamp set at run start |
-| `completed_at` | UTC ISO 8601 timestamp set on completion or failure; `null` if still running |
+| `started_at` | UTC ISO 8601 timestamp when `run.json` was first bootstrapped |
 | `git_commit` | Full SHA of HEAD at run start; `null` if not in a git repo |
 | `git_dirty` | `true` if there were uncommitted changes; `null` if not in a git repo |
-| `config_hash` | SHA-256 of `config/resolved.yaml`; matches `metadata/config_hash.txt` |
-| `seed` | Random seed used for the run |
-| `device` | PyTorch device string (`"cuda"` or `"cpu"`) |
-| `cuda_device_name` | GPU model name; `null` when running on CPU |
-| `entrypoint` | CLI command that created the run (e.g. `"vs-train"`) |
+| `config_hash` | Most recently recorded stable config hash for the run-level bootstrap |
+| `manifest_path` | Most recently recorded manifest path associated with the run |
+| `manifest_sha256` | Hash of the recorded manifest |
+| `seed` | Training seed when training has populated the record |
+| `device` | Training or inference device string (`"cuda"` or `"cpu"`) when available |
+| `cuda_device_name` | GPU model name; `null` when running on CPU or unknown |
+| `entrypoint` | CLI command that first created the run record |
 | `package_version` | Installed `virtual-staining` package version |
+| `last_event_at` | Timestamp of the most recent appended stage event |
+| `stages_present` | Unique set of stage names observed so far in `events.jsonl` |
+| `last_completed_stage` | Most recent stage that completed successfully |

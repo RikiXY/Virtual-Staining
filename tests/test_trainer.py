@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 
 import numpy as np
@@ -333,14 +334,36 @@ def test_checkpoint_architecture_metadata_present(
     assert gen["norm"] == "batch"
     assert gen["dropout"] is False
     assert gen["bilinear"] is False
+    assert gen["output_activation"] == "tanh"
     assert ck["architecture"]["name"] == "pix2pix"
     assert ck["architecture"]["gan_loss"] == "bce"
+    assert ck["format_version"] == 2
+    assert ck["normalization_contract"] == {
+        "input_range": "[-1, 1]",
+        "output_range": "[-1, 1]",
+    }
     disc = ck["architecture"]["discriminator"]
     assert disc["class"] == "PatchGANDiscriminator"
     assert disc["in_channels"] == 6
     assert disc["ndf"] == 64
     assert disc["norm"] == "instance"
     assert disc["use_sigmoid"] is False
+
+
+def test_training_writes_best_checkpoint_record(
+    checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
+) -> None:
+    trainer, _config, run_paths, _ = checkpointing_trainer
+    result = trainer.train(seed=42)
+
+    best_record = json.loads((run_paths.checkpoints_dir / "best.json").read_text(encoding="utf-8"))
+
+    assert best_record["policy"] == "best_val_loss"
+    assert best_record["metric"] == "loss_G_val"
+    assert best_record["epoch"] == 0
+    assert best_record["checkpoint_path"] == "ep000.pth"
+    assert isinstance(best_record["metric_value"], float)
+    assert result.best_checkpoint_path == run_paths.checkpoints_dir / "ep000.pth"
 
 
 def test_load_checkpoint_validates_matching_architecture(

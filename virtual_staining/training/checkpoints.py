@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,14 @@ import torch.optim as optim
 from torch.amp import GradScaler
 
 logger = logging.getLogger(__name__)
+
+CHECKPOINT_FORMAT_VERSION: int = 2
+GENERATOR_OUTPUT_ACTIVATION = "tanh"
+NORMALIZATION_CONTRACT = {
+    "input_range": "[-1, 1]",
+    "output_range": "[-1, 1]",
+}
+BEST_CHECKPOINT_POLICY = "best_val_loss"
 
 
 @dataclass
@@ -43,6 +52,7 @@ def _make_arch_metadata(
             "norm": getattr(generator, "norm", None),
             "dropout": getattr(generator, "dropout", None),
             "bilinear": getattr(generator, "bilinear", None),
+            "output_activation": GENERATOR_OUTPUT_ACTIVATION,
         },
         "discriminator": {
             "class": type(discriminator).__name__,
@@ -52,6 +62,46 @@ def _make_arch_metadata(
             "use_sigmoid": getattr(discriminator, "use_sigmoid", None),
         },
     }
+
+
+def _validate_checkpoint_metadata(checkpoint: dict[str, Any], path: Path) -> dict[str, Any]:
+    """Return architecture metadata after validating checkpoint format invariants."""
+    ckpt_version = checkpoint.get("format_version")
+    if ckpt_version != CHECKPOINT_FORMAT_VERSION:
+        raise ValueError(
+            f"Checkpoint format version {ckpt_version!r} does not match current version "
+            f"{CHECKPOINT_FORMAT_VERSION}. This checkpoint was saved with an older version "
+            "of the code. Re-train from scratch or use a compatible code version."
+        )
+
+    arch = checkpoint.get("architecture")
+    if arch is None:
+        raise ValueError(
+            f"Checkpoint '{path}' has no architecture metadata. "
+            "Only checkpoints saved with the current version are supported."
+        )
+    if not isinstance(arch, dict):
+        raise ValueError("Checkpoint architecture metadata must be a mapping.")
+
+    generator_arch = arch.get("generator", {})
+    if not isinstance(generator_arch, dict):
+        raise ValueError("Checkpoint generator architecture metadata must be a mapping.")
+
+    ckpt_activation = generator_arch.get("output_activation")
+    if ckpt_activation != GENERATOR_OUTPUT_ACTIVATION:
+        raise ValueError(
+            f"Checkpoint has output_activation={ckpt_activation!r}; current code requires "
+            f"{GENERATOR_OUTPUT_ACTIVATION!r}."
+        )
+
+    normalization_contract = checkpoint.get("normalization_contract")
+    if normalization_contract != NORMALIZATION_CONTRACT:
+        raise ValueError(
+            "Checkpoint normalization_contract "
+            f"{normalization_contract!r} is incompatible with current code."
+        )
+
+    return arch
 
 
 def _check_arch_match(
@@ -86,6 +136,12 @@ def _check_arch_match(
 def _check_generator_arch(checkpoint_arch: dict[str, Any], generator: nn.Module) -> None:
     """Raise ValueError if the checkpoint's generator architecture does not match."""
     gen_arch = checkpoint_arch.get("generator", {})
+    ckpt_activation = gen_arch.get("output_activation")
+    if ckpt_activation != GENERATOR_OUTPUT_ACTIVATION:
+        raise ValueError(
+            f"Checkpoint has output_activation={ckpt_activation!r}; current code requires "
+            f"{GENERATOR_OUTPUT_ACTIVATION!r}."
+        )
     for key in ("in_channels", "out_channels", "base_channels", "norm", "dropout", "bilinear"):
         ckpt_val = gen_arch.get(key)
         curr_val = getattr(generator, key, None)
@@ -143,12 +199,16 @@ class CheckpointManager:
         self.num_workers = num_workers
         self.dataset_root = dataset_root
 
+    @property
+    def best_record_path(self) -> Path:
+        return self.checkpoints_dir / "best.json"
+
     def save(self, epoch: int) -> Path:
         """Save a full training checkpoint. Returns the path."""
         self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
         path = self.checkpoints_dir / f"ep{epoch:03d}.pth"
         checkpoint = {
-            "schema_version": 1,
+            "format_version": CHECKPOINT_FORMAT_VERSION,
             "epoch": epoch,
             "architecture": _make_arch_metadata(
                 self.generator,
@@ -156,6 +216,7 @@ class CheckpointManager:
                 model_name=self.model_name,
                 gan_loss=self.gan_loss,
             ),
+            "normalization_contract": NORMALIZATION_CONTRACT,
             "generator_state_dict": self.generator.state_dict(),
             "discriminator_state_dict": self.discriminator.state_dict(),
             "optimizerG_state_dict": self.opt_G.state_dict(),
@@ -176,6 +237,28 @@ class CheckpointManager:
         logger.info("Checkpoint saved: %s", path)
         return path
 
+    def save_best_record(
+        self,
+        *,
+        policy: str,
+        metric: str,
+        epoch: int,
+        checkpoint_path: Path,
+        metric_value: float,
+    ) -> Path:
+        """Write the machine-readable best-checkpoint selection record."""
+        self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "policy": policy,
+            "metric": metric,
+            "epoch": epoch,
+            "checkpoint_path": checkpoint_path.name,
+            "metric_value": metric_value,
+        }
+        self.best_record_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        logger.info("Best checkpoint record saved: %s", self.best_record_path)
+        return self.best_record_path
+
     def load(self, path: Path) -> int:
         """Load a training checkpoint. Returns the start_epoch for resuming."""
         checkpoint = torch.load(path, map_location=self.device, weights_only=False)
@@ -188,12 +271,7 @@ class CheckpointManager:
                 f"current image_size={tuple(self.image_size)}."
             )
 
-        arch = checkpoint.get("architecture")
-        if arch is None:
-            raise ValueError(
-                f"Checkpoint '{path}' has no architecture metadata. "
-                "Only checkpoints saved with the current version are supported."
-            )
+        arch = _validate_checkpoint_metadata(checkpoint, path)
         _check_arch_match(arch, self.generator, self.discriminator)
 
         self.generator.load_state_dict(checkpoint["generator_state_dict"])
@@ -211,3 +289,41 @@ class CheckpointManager:
         """Return the path to the most recent ep*.pth file, or None."""
         candidates = sorted(self.checkpoints_dir.glob("ep*.pth"))
         return candidates[-1] if candidates else None
+
+
+def resolve_best_checkpoint_path(checkpoints_dir: Path, *, policy: str) -> Path:
+    """Resolve a best-checkpoint policy via checkpoints/best.json."""
+    best_path = checkpoints_dir / "best.json"
+    if not best_path.exists():
+        raise FileNotFoundError(
+            f"checkpoint_policy={policy!r} requires {best_path}, but that file does not exist."
+        )
+
+    try:
+        payload = json.loads(best_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Best checkpoint metadata at {best_path} is not valid JSON.") from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError(f"Best checkpoint metadata at {best_path} must be a JSON object.")
+
+    stored_policy = payload.get("policy")
+    if stored_policy != policy:
+        raise ValueError(
+            f"Best checkpoint metadata at {best_path} is for policy {stored_policy!r}, "
+            f"not requested policy {policy!r}."
+        )
+
+    checkpoint_value = payload.get("checkpoint_path")
+    if not isinstance(checkpoint_value, str) or not checkpoint_value.strip():
+        raise ValueError(f"Best checkpoint metadata at {best_path} has no valid checkpoint_path.")
+
+    checkpoint_path = Path(checkpoint_value)
+    if not checkpoint_path.is_absolute():
+        checkpoint_path = checkpoints_dir / checkpoint_path
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(
+            f"Best checkpoint metadata at {best_path} points to missing file {checkpoint_path}."
+        )
+
+    return checkpoint_path

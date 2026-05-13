@@ -16,7 +16,7 @@ from torchvision.utils import save_image
 
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.models.config import ModelConfig
-from virtual_staining.training.checkpoints import CheckpointManager
+from virtual_staining.training.checkpoints import BEST_CHECKPOINT_POLICY, CheckpointManager
 from virtual_staining.training.config import TrainingConfig
 from virtual_staining.training.losses import build_gan_loss
 from virtual_staining.training.results import EpochMetrics, TrainingResult
@@ -358,6 +358,7 @@ class Trainer:
 
             metrics_path = self._run_paths.root / "metrics.csv"
             best_checkpoint_path: Path | None = None
+            best_val_loss: float | None = None
             with open(metrics_path, "w", newline="", encoding="utf-8") as metrics_file:
                 metrics_writer = csv.DictWriter(
                     metrics_file,
@@ -377,16 +378,18 @@ class Trainer:
                     epoch_metrics = self._train_epoch(
                         epoch, log_file, progress_tracker, training_status
                     )
+                    checkpoint_path_for_epoch: Path | None = None
 
                     logger.debug("Finished epoch %s", epoch)
 
                     if (epoch + 1) % self.config.checkpoint_rate == 0:
-                        checkpoint_path = self._checkpoint_manager.save(epoch)
-                        best_checkpoint_path = checkpoint_path
-                        training_status["last_checkpoint"] = checkpoint_path.name
-                        logger.info("Checkpoint saved to %s at epoch %s", checkpoint_path, epoch)
+                        checkpoint_path_for_epoch = self._checkpoint_manager.save(epoch)
+                        training_status["last_checkpoint"] = checkpoint_path_for_epoch.name
+                        logger.info(
+                            "Checkpoint saved to %s at epoch %s", checkpoint_path_for_epoch, epoch
+                        )
                         if reporter is not None:
-                            reporter.on_checkpoint_saved(checkpoint_path, epoch)
+                            reporter.on_checkpoint_saved(checkpoint_path_for_epoch, epoch)
                         if epoch == self.config.epochs - 1:
                             _update_console_progress(
                                 f"{_render_progress_bar(1.0)} "
@@ -403,6 +406,27 @@ class Trainer:
                     val_metrics = None
                     if (epoch + 1) % self.config.validate_rate == 0:
                         val_metrics = self._validate(epoch, log_file)
+                        if best_val_loss is None or val_metrics.loss_G < best_val_loss:
+                            if checkpoint_path_for_epoch is None:
+                                checkpoint_path_for_epoch = self._checkpoint_manager.save(epoch)
+                                training_status["last_checkpoint"] = checkpoint_path_for_epoch.name
+                                logger.info(
+                                    "Checkpoint saved to %s at epoch %s for %s",
+                                    checkpoint_path_for_epoch,
+                                    epoch,
+                                    BEST_CHECKPOINT_POLICY,
+                                )
+                                if reporter is not None:
+                                    reporter.on_checkpoint_saved(checkpoint_path_for_epoch, epoch)
+                            self._checkpoint_manager.save_best_record(
+                                policy=BEST_CHECKPOINT_POLICY,
+                                metric="loss_G_val",
+                                epoch=epoch,
+                                checkpoint_path=checkpoint_path_for_epoch,
+                                metric_value=val_metrics.loss_G,
+                            )
+                            best_val_loss = val_metrics.loss_G
+                            best_checkpoint_path = checkpoint_path_for_epoch
 
                     metrics_writer.writerow(
                         {
@@ -421,7 +445,6 @@ class Trainer:
                 final_epoch = self.config.epochs - 1
                 if (final_epoch + 1) % self.config.checkpoint_rate != 0:
                     checkpoint_path = self._checkpoint_manager.save(final_epoch)
-                    best_checkpoint_path = checkpoint_path
                     training_status["last_checkpoint"] = checkpoint_path.name
                     logger.info(
                         "Final checkpoint saved to %s (epoch %s)",
@@ -430,6 +453,10 @@ class Trainer:
                     )
                     if reporter is not None:
                         reporter.on_checkpoint_saved(checkpoint_path, final_epoch)
+                    if best_checkpoint_path is None:
+                        best_checkpoint_path = checkpoint_path
+            if best_checkpoint_path is None:
+                best_checkpoint_path = self._checkpoint_manager.latest()
 
             _finish_console_progress()
             total_seconds = time.time() - start_time

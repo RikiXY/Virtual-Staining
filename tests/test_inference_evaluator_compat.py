@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from pathlib import Path
 
@@ -45,9 +47,14 @@ def _save_checkpoint(path: Path, image_size: tuple[int, int] = _IMAGE_SIZE) -> N
     D = PatchGANDiscriminator()
     torch.save(
         {
+            "format_version": 2,
             "generator_state_dict": G.state_dict(),
             "image_size": image_size,
             "epoch": 0,
+            "normalization_contract": {
+                "input_range": "[-1, 1]",
+                "output_range": "[-1, 1]",
+            },
             "architecture": {
                 "name": "pix2pix",
                 "gan_loss": "bce",
@@ -59,6 +66,7 @@ def _save_checkpoint(path: Path, image_size: tuple[int, int] = _IMAGE_SIZE) -> N
                     "norm": G.norm,
                     "dropout": G.dropout,
                     "bilinear": G.bilinear,
+                    "output_activation": "tanh",
                 },
                 "discriminator": {
                     "class": "PatchGANDiscriminator",
@@ -117,14 +125,21 @@ def _write_non_test_manifest(dataset_root: Path) -> None:
 
 
 def _run_inference(
-    checkpoint_path: Path,
+    checkpoint_path: Path | None,
     test_folder: str,
     output_folder: str,
     image_size: tuple[int, int] = _IMAGE_SIZE,
+    checkpoint_policy: str | None = None,
 ) -> RunConfig:
     dataset_root = Path(test_folder).parent
     _write_test_manifest(dataset_root, Path(test_folder))
     config_path = Path(output_folder).parent / "infer.yaml"
+    inference_lines = []
+    if checkpoint_path is not None:
+        inference_lines.append(f"  checkpoint_path: {checkpoint_path}")
+    if checkpoint_policy is not None:
+        inference_lines.append(f"  checkpoint_policy: {checkpoint_policy}")
+    inference_lines.append(f"  output_dir: {Path(output_folder)}")
     config_path.write_text(
         f"""
 dataset_root: {dataset_root}
@@ -132,8 +147,7 @@ results_path: {Path(output_folder).parent}
 run_name: test_run
 image_size: [{image_size[0]}, {image_size[1]}]
 inference:
-  checkpoint_path: {checkpoint_path}
-  output_dir: {Path(output_folder)}
+{chr(10).join(inference_lines)}
 """.strip()
         + "\n",
         encoding="utf-8",
@@ -258,6 +272,127 @@ def test_inference_writes_stage_scoped_snapshot_files(tmp_path: Path) -> None:
     assert not (run_root / "config" / "input.yaml").exists()
     assert not (run_root / "config" / "resolved.yaml").exists()
     assert not (run_root / "metadata" / "config_hash.txt").exists()
+
+
+def test_inference_resolves_best_val_loss_checkpoint_policy(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    run_root = tmp_path / "test_run"
+    checkpoints_dir = run_root / "checkpoints"
+    checkpoints_dir.mkdir(parents=True)
+    checkpoint = checkpoints_dir / "ep000.pth"
+
+    _write_pair(test_dir)
+    _save_checkpoint(checkpoint)
+    (checkpoints_dir / "best.json").write_text(
+        """
+{
+  "policy": "best_val_loss",
+  "metric": "loss_G_val",
+  "epoch": 0,
+  "checkpoint_path": "ep000.pth",
+  "metric_value": 0.1234
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = _run_inference(
+        checkpoint_path=None,
+        checkpoint_policy="best_val_loss",
+        test_folder=str(test_dir),
+        output_folder=str(output_dir),
+        image_size=_IMAGE_SIZE,
+    )
+
+    metadata = json.loads(
+        (config.project.run_root / "metadata" / "stages" / "infer.json").read_text(encoding="utf-8")
+    )
+    assert metadata["checkpoint_path"] == str(checkpoint)
+
+
+def test_inference_best_val_loss_raises_when_best_record_missing(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    _write_pair(test_dir)
+
+    with pytest.raises(FileNotFoundError, match="best.json"):
+        _run_inference(
+            checkpoint_path=None,
+            checkpoint_policy="best_val_loss",
+            test_folder=str(test_dir),
+            output_folder=str(output_dir),
+            image_size=_IMAGE_SIZE,
+        )
+
+
+def test_inference_best_val_loss_raises_when_best_record_invalid(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    run_root = tmp_path / "test_run"
+    checkpoints_dir = run_root / "checkpoints"
+    checkpoints_dir.mkdir(parents=True)
+
+    _write_pair(test_dir)
+    (checkpoints_dir / "best.json").write_text("{bad json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="valid JSON"):
+        _run_inference(
+            checkpoint_path=None,
+            checkpoint_policy="best_val_loss",
+            test_folder=str(test_dir),
+            output_folder=str(output_dir),
+            image_size=_IMAGE_SIZE,
+        )
+
+
+def test_inference_writes_stage_metadata_json(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    checkpoint = tmp_path / "ep000.pth"
+
+    _write_pair(test_dir)
+    _save_checkpoint(checkpoint)
+
+    config = _run_inference(
+        checkpoint_path=checkpoint,
+        test_folder=str(test_dir),
+        output_folder=str(output_dir),
+        image_size=_IMAGE_SIZE,
+    )
+
+    metadata_path = config.project.run_root / "metadata" / "stages" / "infer.json"
+    assert metadata_path.exists()
+
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    manifest_path = config.project.manifest_path
+    expected_manifest_hash = f"sha256:{hashlib.sha256(manifest_path.read_bytes()).hexdigest()}"
+
+    assert metadata["stage"] == "infer"
+    assert metadata["status"] == "completed"
+    assert metadata["completed_at"]
+    assert metadata["started_at"]
+    assert metadata["checkpoint_path"] == str(checkpoint)
+    assert metadata["manifest_path"] == str(manifest_path)
+    assert metadata["manifest_sha256"] == expected_manifest_hash
+    assert metadata["output_dir"] == str(output_dir)
+    assert metadata["test_sample_count"] == 1
+    assert metadata["inferred_count"] == 1
+
+    events = [
+        json.loads(line)
+        for line in (config.project.run_root / "metadata" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [event["event_type"] for event in events] == ["stage_started", "stage_completed"]
+    assert all(event["stage"] == "infer" for event in events)
 
 
 def test_inference_preserves_existing_training_snapshot_files(tmp_path: Path) -> None:
@@ -482,11 +617,10 @@ def test_inference_raises_on_missing_architecture_metadata(tmp_path: Path) -> No
     checkpoint = tmp_path / "ep000.pth"
 
     _write_pair(test_dir)
-    G = UNetGenerator()
-    torch.save(
-        {"generator_state_dict": G.state_dict(), "image_size": _IMAGE_SIZE, "epoch": 0},
-        checkpoint,
-    )
+    _save_checkpoint(checkpoint)
+    ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    ckpt.pop("architecture")
+    torch.save(ckpt, checkpoint)
 
     with pytest.raises(ValueError, match="architecture metadata"):
         _run_inference(
@@ -510,9 +644,14 @@ def test_inference_raises_on_architecture_mismatch(tmp_path: Path) -> None:
     D = PatchGANDiscriminator()
     torch.save(
         {
+            "format_version": 2,
             "generator_state_dict": G.state_dict(),
             "image_size": _IMAGE_SIZE,
             "epoch": 0,
+            "normalization_contract": {
+                "input_range": "[-1, 1]",
+                "output_range": "[-1, 1]",
+            },
             "architecture": {
                 "name": "pix2pix",
                 "gan_loss": "bce",
@@ -524,6 +663,7 @@ def test_inference_raises_on_architecture_mismatch(tmp_path: Path) -> None:
                     "norm": G.norm,
                     "dropout": G.dropout,
                     "bilinear": G.bilinear,
+                    "output_activation": "tanh",
                 },
                 "discriminator": {
                     "class": "PatchGANDiscriminator",
@@ -538,6 +678,69 @@ def test_inference_raises_on_architecture_mismatch(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="base_channels"):
+        _run_inference(
+            checkpoint_path=checkpoint,
+            test_folder=str(test_dir),
+            output_folder=str(output_dir),
+            image_size=_IMAGE_SIZE,
+        )
+
+
+def test_inference_raises_on_checkpoint_format_version_mismatch(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    checkpoint = tmp_path / "ep000.pth"
+
+    _write_pair(test_dir)
+    _save_checkpoint(checkpoint)
+    ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    ckpt["format_version"] = 1
+    torch.save(ckpt, checkpoint)
+
+    with pytest.raises(ValueError, match="format version"):
+        _run_inference(
+            checkpoint_path=checkpoint,
+            test_folder=str(test_dir),
+            output_folder=str(output_dir),
+            image_size=_IMAGE_SIZE,
+        )
+
+
+def test_inference_raises_on_output_activation_mismatch(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    checkpoint = tmp_path / "ep000.pth"
+
+    _write_pair(test_dir)
+    _save_checkpoint(checkpoint)
+    ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    ckpt["architecture"]["generator"]["output_activation"] = "sigmoid"
+    torch.save(ckpt, checkpoint)
+
+    with pytest.raises(ValueError, match="output_activation"):
+        _run_inference(
+            checkpoint_path=checkpoint,
+            test_folder=str(test_dir),
+            output_folder=str(output_dir),
+            image_size=_IMAGE_SIZE,
+        )
+
+
+def test_inference_raises_on_normalization_contract_mismatch(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    checkpoint = tmp_path / "ep000.pth"
+
+    _write_pair(test_dir)
+    _save_checkpoint(checkpoint)
+    ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    ckpt["normalization_contract"] = {"input_range": "[0, 1]", "output_range": "[0, 1]"}
+    torch.save(ckpt, checkpoint)
+
+    with pytest.raises(ValueError, match="normalization_contract"):
         _run_inference(
             checkpoint_path=checkpoint,
             test_folder=str(test_dir),

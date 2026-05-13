@@ -72,11 +72,20 @@ class RunPaths:
     def config_hash(self) -> Path:
         return self.metadata_dir / "config_hash.txt"
 
+    @property
+    def stages_dir(self) -> Path:
+        return self.metadata_dir / "stages"
+
+    @property
+    def events_log(self) -> Path:
+        return self.metadata_dir / "events.jsonl"
+
     def create_directories(self) -> None:
         """Create all run sub-directories."""
         for directory in [
             self.config_dir,
             self.metadata_dir,
+            self.stages_dir,
             self.logs_dir,
             self.checkpoints_dir,
             self.metrics_dir,

@@ -174,6 +174,20 @@ uv run pyright
 uv run --group dev pytest
 ```
 
+### Pre-commit hooks
+
+Install the hooks once per clone:
+
+```bash
+nix develop -c pre-commit install
+```
+
+Run them manually across the repository:
+
+```bash
+nix develop -c pre-commit run --all-files
+```
+
 Other useful commands:
 
 ```bash

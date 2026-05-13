@@ -22,6 +22,7 @@ help:
 	@printf "  %-24s %s\n" "format-check" "Check formatting without applying changes"
 	@printf "  %-24s %s\n" "check-types" "Run pyright type checker"
 	@printf "  %-24s %s\n" "test" "Run pytest"
+	@printf "  %-24s %s\n" "test-slow" "Run only slow pytest tests"
 	@printf "  %-24s %s\n" "qa" "Run checks and tests"
 	@printf "  %-24s %s\n" "clean" "Remove local caches"
 	@printf "\nExperiment configuration policy:\n"
@@ -86,13 +87,16 @@ check-types:
 	$(PYRIGHT)
 
 test:
-	$(UV) run --group dev pytest
+	$(UV) run --group dev pytest -m "not slow"
+
+test-slow:
+	$(UV) run --group dev pytest -m "slow"
 
 qa:
 	$(RUFF) check .
 	$(RUFF) format --check .
 	$(PYRIGHT)
-	$(UV) run --group dev pytest
+	$(UV) run --group dev pytest -m "not slow"
 
 clean:
 	rm -rf .ruff_cache .mypy_cache .pyright __pycache__ .pytest_tmp

@@ -17,7 +17,7 @@ upper layers may import from lower layers, never the reverse.
 |---|---|
 | `utils/` | Shared primitives: image dimensions, image I/O helpers, pixel-level metric utilities |
 | `config/` | YAML loading and validation, typed config dataclasses, per-section accessors |
-| `experiment/` | Run concept: `RunPaths` (directory layout), `RunContext`, `RunMetadata` (status/timing/git), environment snapshots |
+| `experiment/` | Run concept: `RunPaths` (directory layout), `RunContext`, `RunMetadata` (run-level provenance), stage/event metadata helpers, environment snapshots |
 | `reporting/` | `Reporter` protocol with `NullReporter`, `LoggingReporter`, and `ConsoleReporter` implementations |
 | `models/` | `UNetGenerator`, `PatchGANDiscriminator`, model factory, model config dataclass |
 | `data/` | `DatasetManifest`, `ManifestRecord`, `DatasetBuilder` (preprocessing pipeline), `PatchDataset` |
@@ -70,7 +70,7 @@ These constraints are enforced by convention and checked in code review:
 | Data type | Format | Example path |
 |---|---|---|
 | User experiment config | YAML | `config/runs/example.yaml` |
-| Run metadata (status, timing, git) | JSON | `results/<run>/metadata/run.json` |
+| Run metadata (provenance + aggregate stage summary) | JSON | `results/<run>/metadata/run.json` |
 | Environment provenance | JSON | `results/<run>/metadata/environment.json` |
 | Per-epoch training losses | CSV | `results/<run>/metrics/train.csv` |
 | Per-image evaluation metrics | CSV | `results/<run>/evaluation/per_image_metrics.csv` |

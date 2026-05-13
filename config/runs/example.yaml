@@ -83,7 +83,9 @@ training:
   resume: null
 
 inference:
-  # Uses the newest ep*.pth file in results_path/run_name/checkpoints.
+  # Supported policies:
+  # - latest: newest ep*.pth file in results_path/run_name/checkpoints
+  # - best_val_loss: checkpoint recorded in checkpoints/best.json during training
   checkpoint_policy: latest
   # Or choose a checkpoint explicitly. Relative paths are resolved from
   # the run root (results_path/run_name/).
