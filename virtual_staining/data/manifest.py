@@ -16,6 +16,20 @@ def _parse_split(value: str) -> Split:
     return cast(Split, value)
 
 
+def _validate_manifest_path(path: Path, field_name: str) -> None:
+    """Raise ValueError if a manifest path is empty, absolute, or contains traversal."""
+    if not path.parts:
+        raise ValueError(f"ManifestRecord.{field_name} must not be empty")
+    if path.is_absolute():
+        raise ValueError(
+            f"ManifestRecord.{field_name} must be a relative path, got absolute path: {path!r}"
+        )
+    if ".." in path.parts:
+        raise ValueError(
+            f"ManifestRecord.{field_name} must not contain '..' components, got: {path!r}"
+        )
+
+
 @dataclass(frozen=True)
 class ManifestRecord:
     sample_id: str
@@ -53,6 +67,8 @@ class ManifestRecord:
                 "ManifestRecord.input_path and target_path must be different, "
                 f"got {self.input_path!r}"
             )
+        _validate_manifest_path(self.input_path, "input_path")
+        _validate_manifest_path(self.target_path, "target_path")
 
 
 @dataclass(frozen=True)
@@ -143,21 +159,27 @@ class DatasetManifest:
     def from_csv(cls, path: Path, dataset_root: Path) -> DatasetManifest:
         with path.open(newline="", encoding="utf-8") as handle:
             reader = csv.DictReader(handle)
-            records = tuple(
-                ManifestRecord(
-                    sample_id=row["sample_id"],
-                    split=_parse_split(row["split"]),
-                    input_path=Path(row["input_path"]),
-                    target_path=Path(row["target_path"]),
-                    input_modality=row["input_modality"],
-                    target_modality=row["target_modality"],
-                    x=int(row["x"]),
-                    y=int(row["y"]),
-                    width=int(row["width"]),
-                    height=int(row["height"]),
+            records_list: list[ManifestRecord] = []
+            for row in reader:
+                input_path = Path(row["input_path"])
+                target_path = Path(row["target_path"])
+                _validate_manifest_path(input_path, "input_path")
+                _validate_manifest_path(target_path, "target_path")
+                records_list.append(
+                    ManifestRecord(
+                        sample_id=row["sample_id"],
+                        split=_parse_split(row["split"]),
+                        input_path=input_path,
+                        target_path=target_path,
+                        input_modality=row["input_modality"],
+                        target_modality=row["target_modality"],
+                        x=int(row["x"]),
+                        y=int(row["y"]),
+                        width=int(row["width"]),
+                        height=int(row["height"]),
+                    )
                 )
-                for row in reader
-            )
+            records = tuple(records_list)
         return cls(records=records, dataset_root=dataset_root)
 
     def __len__(self) -> int:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 import pytest
@@ -173,6 +174,71 @@ def test_manifest_record_same_input_target_path_raises() -> None:
         )
 
 
+def test_manifest_record_absolute_path_raises() -> None:
+    with pytest.raises(ValueError, match="relative"):
+        ManifestRecord(
+            sample_id="abc",
+            split="train",
+            input_path=Path("/tmp/source.tif"),
+            target_path=Path("splits/train/abc_target.tif"),
+            input_modality="label_free",
+            target_modality="stained",
+            x=0,
+            y=0,
+            width=256,
+            height=256,
+        )
+
+
+def test_manifest_record_empty_path_raises() -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        ManifestRecord(
+            sample_id="abc",
+            split="train",
+            input_path=Path(""),
+            target_path=Path("splits/train/abc_target.tif"),
+            input_modality="label_free",
+            target_modality="stained",
+            x=0,
+            y=0,
+            width=256,
+            height=256,
+        )
+
+
+def test_manifest_record_traversal_path_raises() -> None:
+    with pytest.raises(ValueError, match=r"\.\."):
+        ManifestRecord(
+            sample_id="abc",
+            split="train",
+            input_path=Path("../outside/source.tif"),
+            target_path=Path("splits/train/abc_target.tif"),
+            input_modality="label_free",
+            target_modality="stained",
+            x=0,
+            y=0,
+            width=256,
+            height=256,
+        )
+
+
+def test_manifest_record_nested_relative_path_passes() -> None:
+    rec = ManifestRecord(
+        sample_id="abc",
+        split="train",
+        input_path=Path("dataset_train/00512_09216_source.tif"),
+        target_path=Path("dataset_train/00512_09216_target.tif"),
+        input_modality="label_free",
+        target_modality="stained",
+        x=512,
+        y=9216,
+        width=256,
+        height=256,
+    )
+
+    assert rec.input_path == Path("dataset_train/00512_09216_source.tif")
+
+
 def test_dataset_manifest_filter_split() -> None:
     records = (_make_record("a", "train"), _make_record("b", "val"), _make_record("c", "train"))
     manifest = DatasetManifest(records=records, dataset_root=Path("/tmp"))
@@ -227,3 +293,41 @@ def test_dataset_manifest_roundtrip_preserves_paths(tmp_path: Path) -> None:
     manifest.to_csv(csv_path)
     loaded = DatasetManifest.from_csv(csv_path, dataset_root=tmp_path)
     assert loaded.records[0].input_path == Path("splits/test/x_source.tif")
+
+
+def test_dataset_manifest_from_csv_rejects_traversal_path(tmp_path: Path) -> None:
+    csv_path = tmp_path / "manifest.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "sample_id",
+                "split",
+                "input_path",
+                "target_path",
+                "input_modality",
+                "target_modality",
+                "x",
+                "y",
+                "width",
+                "height",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "sample_id": "abc",
+                "split": "train",
+                "input_path": "../outside/source.tif",
+                "target_path": "splits/train/abc_target.tif",
+                "input_modality": "label_free",
+                "target_modality": "stained",
+                "x": 0,
+                "y": 0,
+                "width": 256,
+                "height": 256,
+            }
+        )
+
+    with pytest.raises(ValueError, match=r"\.\."):
+        DatasetManifest.from_csv(csv_path, dataset_root=tmp_path)
