@@ -2,112 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from PIL import Image
 
-from virtual_staining.data.dataset import PairedHistologyDataset, PairedManifestDataset
+from virtual_staining.data.dataset import PairedManifestDataset
 from virtual_staining.data.manifest import DatasetManifest, ManifestRecord
 
 
 def _make_image(path: Path) -> None:
     Image.new("RGB", (4, 4), color=(128, 64, 32)).save(path)
-
-
-@pytest.fixture()
-def dataset_dir(tmp_path: Path) -> Path:
-    # Two complete pairs
-    _make_image(tmp_path / "00000_00000_source.png")
-    _make_image(tmp_path / "00000_00000_target.png")
-    _make_image(tmp_path / "00001_00001_source.png")
-    _make_image(tmp_path / "00001_00001_target.png")
-    # Mask files - must be skipped
-    _make_image(tmp_path / "mask_00002_00002_source.png")
-    _make_image(tmp_path / "00002_mask_00002_target.png")
-    # Unmatched source - must be skipped (no matching target)
-    _make_image(tmp_path / "00003_00003_source.png")
-    # Unmatched target - must be skipped (no matching source)
-    _make_image(tmp_path / "00004_00004_target.png")
-    # Too few stem parts - must be skipped
-    _make_image(tmp_path / "invalid.png")
-    return tmp_path
-
-
-def test_finds_correct_pair_count(dataset_dir: Path) -> None:
-    dataset = PairedHistologyDataset(dataset_dir)
-    assert len(dataset) == 2
-
-
-def test_source_and_target_are_matched(dataset_dir: Path) -> None:
-    dataset = PairedHistologyDataset(dataset_dir)
-    for source_path, target_path in dataset.pairs:
-        src_stem = Path(source_path).stem
-        tgt_stem = Path(target_path).stem
-        assert src_stem.lower().endswith("_source")
-        assert tgt_stem.lower().endswith("_target")
-        assert src_stem[: -len("_source")] == tgt_stem[: -len("_target")]
-
-
-def test_skips_mask_files(dataset_dir: Path) -> None:
-    dataset = PairedHistologyDataset(dataset_dir)
-    all_names = [Path(path).name for pair in dataset.pairs for path in pair]
-    assert all("mask_" not in name and "_mask_" not in name for name in all_names)
-
-
-def test_skips_unmatched_files(dataset_dir: Path) -> None:
-    dataset = PairedHistologyDataset(dataset_dir)
-    sample_ids = {Path(src).stem[: -len("_source")] for src, _ in dataset.pairs}
-    assert "00003_00003" not in sample_ids
-    assert "00004_00004" not in sample_ids
-
-
-def test_empty_directory(tmp_path: Path) -> None:
-    dataset = PairedHistologyDataset(tmp_path)
-    assert len(dataset) == 0
-
-
-def test_getitem_returns_pil_images(dataset_dir: Path) -> None:
-    dataset = PairedHistologyDataset(dataset_dir)
-    source, target = dataset[0]
-    assert isinstance(source, Image.Image)
-    assert isinstance(target, Image.Image)
-    assert source.mode == "RGB"
-    assert target.mode == "RGB"
-
-
-def test_multiunderscore_sample_id(tmp_path: Path) -> None:
-    _make_image(tmp_path / "slide_A_patch_001_source.png")
-    _make_image(tmp_path / "slide_A_patch_001_target.png")
-    dataset = PairedHistologyDataset(tmp_path)
-    assert len(dataset) == 1
-    src, tgt = dataset.pairs[0]
-    assert Path(src).stem == "slide_A_patch_001_source"
-    assert Path(tgt).stem == "slide_A_patch_001_target"
-
-
-def test_coordinate_sample_id(tmp_path: Path) -> None:
-    _make_image(tmp_path / "00512_09216_source.tif")
-    _make_image(tmp_path / "00512_09216_target.tif")
-    dataset = PairedHistologyDataset(tmp_path)
-    assert len(dataset) == 1
-    src, tgt = dataset.pairs[0]
-    assert Path(src).stem == "00512_09216_source"
-    assert Path(tgt).stem == "00512_09216_target"
-
-
-def test_duplicate_source_raises(tmp_path: Path) -> None:
-    _make_image(tmp_path / "sample_source.tif")
-    _make_image(tmp_path / "sample_source.png")
-    _make_image(tmp_path / "sample_target.png")
-    with pytest.raises(ValueError, match="Duplicate source"):
-        PairedHistologyDataset(tmp_path)
-
-
-def test_duplicate_target_raises(tmp_path: Path) -> None:
-    _make_image(tmp_path / "sample_source.png")
-    _make_image(tmp_path / "sample_target.tif")
-    _make_image(tmp_path / "sample_target.png")
-    with pytest.raises(ValueError, match="Duplicate target"):
-        PairedHistologyDataset(tmp_path)
 
 
 def test_paired_manifest_dataset_smoke(tmp_path: Path) -> None:
