@@ -22,16 +22,25 @@ from virtual_staining.config.validation import (
     reject_unknown_keys,
 )
 from virtual_staining.evaluation.config import _EVALUATION_KEYS, EvaluationConfig
-from virtual_staining.models.config import DiscriminatorConfig, GeneratorConfig, ModelConfig
+from virtual_staining.models.config import (
+    DiscriminatorConfig,
+    GanLossName,
+    GeneratorConfig,
+    ModelConfig,
+    ModelName,
+    NormName,
+)
 from virtual_staining.utils.dimensions import parse_wh_size_from_aliases
 
-_MODEL_KEYS: frozenset[str] = frozenset({"generator", "discriminator"})
+_MODEL_KEYS: frozenset[str] = frozenset({"name", "generator", "discriminator", "gan_loss"})
 
 _GENERATOR_KEYS: frozenset[str] = frozenset(
-    {"name", "in_channels", "out_channels", "base_channels", "bilinear"}
+    {"name", "in_channels", "out_channels", "base_channels", "norm", "dropout", "bilinear"}
 )
 
-_DISCRIMINATOR_KEYS: frozenset[str] = frozenset({"name", "in_channels", "ndf", "use_sigmoid"})
+_DISCRIMINATOR_KEYS: frozenset[str] = frozenset(
+    {"name", "in_channels", "ndf", "norm", "use_sigmoid"}
+)
 
 _FLAT_EVALUATION_KEYS: frozenset[str] = frozenset(
     {
@@ -116,19 +125,24 @@ class RunConfig:
             "run_name": self.project.run_name,
             "image_size": list(self.project.image_size),
             "model": {
+                "name": self.model.name,
                 "generator": {
                     "name": self.model.generator.name,
                     "in_channels": self.model.generator.in_channels,
                     "out_channels": self.model.generator.out_channels,
                     "base_channels": self.model.generator.base_channels,
+                    "norm": self.model.generator.norm,
+                    "dropout": self.model.generator.dropout,
                     "bilinear": self.model.generator.bilinear,
                 },
                 "discriminator": {
                     "name": self.model.discriminator.name,
                     "in_channels": self.model.discriminator.in_channels,
                     "ndf": self.model.discriminator.ndf,
+                    "norm": self.model.discriminator.norm,
                     "use_sigmoid": self.model.discriminator.use_sigmoid,
                 },
+                "gan_loss": self.model.gan_loss,
             },
         }
 
@@ -289,6 +303,23 @@ def _parse_model(model_raw: dict[str, Any]) -> ModelConfig:
     reject_unknown_keys(gen_raw, _GENERATOR_KEYS, "model.generator")
     disc_raw = model_raw.get("discriminator", {})
     reject_unknown_keys(disc_raw, _DISCRIMINATOR_KEYS, "model.discriminator")
+    model_name = cast(
+        ModelName,
+        _parse_supported_choice(model_raw.get("name", "pix2pix"), "model.name", {"pix2pix"}),
+    )
+    generator_name = cast(
+        Literal["unet"],
+        _parse_supported_choice(gen_raw.get("name", "unet"), "model.generator.name", {"unet"}),
+    )
+    generator_norm = cast(
+        NormName,
+        _parse_supported_choice(
+            gen_raw.get("norm", "batch"),
+            "model.generator.norm",
+            {"batch", "instance"},
+        ),
+    )
+    generator_dropout = parse_bool_strict(gen_raw.get("dropout", False), "model.generator.dropout")
     bilinear = parse_bool_strict(gen_raw.get("bilinear", False), "model.generator.bilinear")
     if bilinear:
         raise ValueError(
@@ -296,6 +327,22 @@ def _parse_model(model_raw: dict[str, Any]) -> ModelConfig:
             "upsampling path has a channel mismatch bug. Use 'bilinear: false' "
             "(the default)."
         )
+    discriminator_name = cast(
+        Literal["patchgan"],
+        _parse_supported_choice(
+            disc_raw.get("name", "patchgan"),
+            "model.discriminator.name",
+            {"patchgan"},
+        ),
+    )
+    discriminator_norm = cast(
+        NormName,
+        _parse_supported_choice(
+            disc_raw.get("norm", "instance"),
+            "model.discriminator.norm",
+            {"batch", "instance"},
+        ),
+    )
     use_sigmoid = parse_bool_strict(
         disc_raw.get("use_sigmoid", False), "model.discriminator.use_sigmoid"
     )
@@ -307,21 +354,38 @@ def _parse_model(model_raw: dict[str, Any]) -> ModelConfig:
             "and breaks training. Set 'use_sigmoid: false' (the default) or "
             "implement explicit loss switching."
         )
+    gan_loss = cast(
+        GanLossName,
+        _parse_supported_choice(model_raw.get("gan_loss", "bce"), "model.gan_loss", {"bce"}),
+    )
     return ModelConfig(
+        name=model_name,
         generator=GeneratorConfig(
-            name=gen_raw.get("name", "unet"),
+            name=generator_name,
             in_channels=int(gen_raw.get("in_channels", 3)),
             out_channels=int(gen_raw.get("out_channels", 3)),
             base_channels=int(gen_raw.get("base_channels", 64)),
+            norm=generator_norm,
+            dropout=generator_dropout,
             bilinear=bilinear,
         ),
         discriminator=DiscriminatorConfig(
-            name=disc_raw.get("name", "patchgan"),
+            name=discriminator_name,
             in_channels=int(disc_raw.get("in_channels", 6)),
             ndf=int(disc_raw.get("ndf", 64)),
+            norm=discriminator_norm,
             use_sigmoid=use_sigmoid,
         ),
+        gan_loss=gan_loss,
     )
+
+
+def _parse_supported_choice(raw: Any, field: str, choices: set[str]) -> str:
+    if not isinstance(raw, str):
+        raise TypeError(f"{field} must be a string. Supported values: {sorted(choices)}.")
+    if raw not in choices:
+        raise ValueError(f"{field} must be one of {sorted(choices)}. Got {raw!r}.")
+    return raw
 
 
 def _parse_training(raw: dict[str, Any]) -> TrainingConfig:

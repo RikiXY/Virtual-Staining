@@ -13,10 +13,24 @@ run_name: example_run
 image_size: [256, 256]
 
 model:
+  name: pix2pix
+  generator:
+    name: unet
+    in_channels: 3
+    out_channels: 3
+    base_channels: 64
+    norm: batch
+    dropout: false
+    bilinear: false
   discriminator:
+    name: patchgan
+    in_channels: 6
+    ndf: 64
+    norm: instance
     # Must stay false with the current training loss.
     # BCEWithLogitsLoss applies sigmoid internally.
-    # use_sigmoid: false
+    use_sigmoid: false
+  gan_loss: bce
 
 preprocessing:
   # Full-size paired input files inside dataset_root.

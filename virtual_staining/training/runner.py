@@ -153,6 +153,7 @@ def run_training(
 
     trainer = Trainer(
         config=config.training,
+        model_config=config.model,
         run_paths=paths,
         generator=generator,
         discriminator=discriminator,

@@ -25,21 +25,30 @@ class CheckpointState:
 
 
 def _make_arch_metadata(
-    generator: nn.Module, discriminator: nn.Module
-) -> dict[str, dict[str, Any]]:
+    generator: nn.Module,
+    discriminator: nn.Module,
+    *,
+    model_name: str | None = None,
+    gan_loss: str | None = None,
+) -> dict[str, Any]:
     """Build the architecture dict saved inside every checkpoint."""
     return {
+        "name": model_name,
+        "gan_loss": gan_loss,
         "generator": {
             "class": type(generator).__name__,
             "in_channels": getattr(generator, "in_channels", None),
             "out_channels": getattr(generator, "out_channels", None),
             "base_channels": getattr(generator, "base_channels", None),
+            "norm": getattr(generator, "norm", None),
+            "dropout": getattr(generator, "dropout", None),
             "bilinear": getattr(generator, "bilinear", None),
         },
         "discriminator": {
             "class": type(discriminator).__name__,
             "in_channels": getattr(discriminator, "in_channels", None),
             "ndf": getattr(discriminator, "ndf", None),
+            "norm": getattr(discriminator, "norm", None),
             "use_sigmoid": getattr(discriminator, "use_sigmoid", None),
         },
     }
@@ -52,7 +61,7 @@ def _check_arch_match(
 ) -> None:
     """Raise ValueError if checkpoint architecture does not match the current models."""
     gen_arch = checkpoint_arch.get("generator", {})
-    for key in ("in_channels", "out_channels", "base_channels", "bilinear"):
+    for key in ("in_channels", "out_channels", "base_channels", "norm", "dropout", "bilinear"):
         ckpt_val = gen_arch.get(key)
         curr_val = getattr(generator, key, None)
         if ckpt_val != curr_val:
@@ -63,7 +72,7 @@ def _check_arch_match(
             )
 
     disc_arch = checkpoint_arch.get("discriminator", {})
-    for key in ("in_channels", "ndf", "use_sigmoid"):
+    for key in ("in_channels", "ndf", "norm", "use_sigmoid"):
         ckpt_val = disc_arch.get(key)
         curr_val = getattr(discriminator, key, None)
         if ckpt_val != curr_val:
@@ -77,7 +86,7 @@ def _check_arch_match(
 def _check_generator_arch(checkpoint_arch: dict[str, Any], generator: nn.Module) -> None:
     """Raise ValueError if the checkpoint's generator architecture does not match."""
     gen_arch = checkpoint_arch.get("generator", {})
-    for key in ("in_channels", "out_channels", "base_channels", "bilinear"):
+    for key in ("in_channels", "out_channels", "base_channels", "norm", "dropout", "bilinear"):
         ckpt_val = gen_arch.get(key)
         curr_val = getattr(generator, key, None)
         if ckpt_val != curr_val:
@@ -103,6 +112,8 @@ class CheckpointManager:
         image_size: tuple[int, int],
         device: torch.device,
         *,
+        model_name: str | None = None,
+        gan_loss: str | None = None,
         l1_weight: float | None = None,
         lr_g: float | None = None,
         lr_d: float | None = None,
@@ -121,6 +132,8 @@ class CheckpointManager:
         self.scaler_D = scaler_D
         self.image_size = image_size
         self.device = device
+        self.model_name = model_name
+        self.gan_loss = gan_loss
         self.l1_weight = l1_weight
         self.lr_g = lr_g
         self.lr_d = lr_d
@@ -137,7 +150,12 @@ class CheckpointManager:
         checkpoint = {
             "schema_version": 1,
             "epoch": epoch,
-            "architecture": _make_arch_metadata(self.generator, self.discriminator),
+            "architecture": _make_arch_metadata(
+                self.generator,
+                self.discriminator,
+                model_name=self.model_name,
+                gan_loss=self.gan_loss,
+            ),
             "generator_state_dict": self.generator.state_dict(),
             "discriminator_state_dict": self.discriminator.state_dict(),
             "optimizerG_state_dict": self.opt_G.state_dict(),

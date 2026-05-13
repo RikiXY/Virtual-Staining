@@ -15,9 +15,10 @@ from torch.amp import GradScaler, autocast
 from torchvision.utils import save_image
 
 from virtual_staining.experiment.run_paths import RunPaths
+from virtual_staining.models.config import ModelConfig
 from virtual_staining.training.checkpoints import CheckpointManager
 from virtual_staining.training.config import TrainingConfig
-from virtual_staining.training.losses import Pix2PixLoss
+from virtual_staining.training.losses import build_gan_loss
 from virtual_staining.training.results import EpochMetrics, TrainingResult
 from virtual_staining.training.steps import Pix2PixTrainingStep
 
@@ -198,6 +199,7 @@ class Trainer:
     def __init__(
         self,
         config: TrainingConfig,
+        model_config: ModelConfig,
         run_paths: RunPaths,
         generator: nn.Module,
         discriminator: nn.Module,
@@ -210,6 +212,7 @@ class Trainer:
         val_dir: Path,
     ) -> None:
         self.config = config
+        self.model_config = model_config
         self._run_paths = run_paths
         self.generator = generator
         self.discriminator = discriminator
@@ -234,7 +237,7 @@ class Trainer:
         )
         self._scaler_G = GradScaler(enabled=self._amp_enabled)
         self._scaler_D = GradScaler(enabled=self._amp_enabled)
-        self._loss_fn = Pix2PixLoss(l1_weight=config.l1_weight)
+        self._loss_fn = build_gan_loss(model_config.gan_loss, l1_weight=config.l1_weight)
         self._step = Pix2PixTrainingStep(
             generator=generator,
             discriminator=discriminator,
@@ -261,6 +264,8 @@ class Trainer:
             scaler_D=self._scaler_D,
             image_size=image_size,
             device=device,
+            model_name=model_config.name,
+            gan_loss=model_config.gan_loss,
             l1_weight=config.l1_weight,
             lr_g=config.lr_g,
             lr_d=config.lr_d,

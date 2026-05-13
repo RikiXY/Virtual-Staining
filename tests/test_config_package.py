@@ -95,6 +95,11 @@ training:
     assert data["dataset_root"] == "/tmp/ds"
     assert data["run_name"] == "test_run"
     assert data["image_size"] == [256, 256]
+    assert data["model"]["name"] == "pix2pix"
+    assert data["model"]["generator"]["norm"] == "batch"
+    assert data["model"]["generator"]["dropout"] is False
+    assert data["model"]["discriminator"]["norm"] == "instance"
+    assert data["model"]["gan_loss"] == "bce"
     assert data["training"]["epochs"] == 10
     assert "seed" not in data["training"]
     assert "resume" not in data["training"]
@@ -167,6 +172,51 @@ training:
     assert config.model.generator.bilinear is False
 
 
+def test_model_generator_dropout_string_true_raises(tmp_path: Path) -> None:
+    yaml_path = tmp_path / "run.yaml"
+    yaml_path.write_text(
+        """
+dataset_root: /tmp/ds
+results_path: /tmp/results
+run_name: t
+image_size: [256, 256]
+model:
+  generator:
+    dropout: "true"
+training:
+  epochs: 1
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TypeError, match="dropout"):
+        RunConfig.from_yaml(yaml_path)
+
+
+def test_model_generator_dropout_yaml_bool_true_parses(tmp_path: Path) -> None:
+    yaml_path = tmp_path / "run.yaml"
+    yaml_path.write_text(
+        """
+dataset_root: /tmp/ds
+results_path: /tmp/results
+run_name: t
+image_size: [256, 256]
+model:
+  generator:
+    dropout: true
+training:
+  epochs: 1
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = RunConfig.from_yaml(yaml_path)
+
+    assert config.model.generator.dropout is True
+
+
 def test_model_bilinear_yaml_bool_true_raises(tmp_path: Path) -> None:
     yaml_path = tmp_path / "run.yaml"
     yaml_path.write_text(
@@ -232,6 +282,119 @@ training:
     config = RunConfig.from_yaml(yaml_path)
 
     assert config.model.discriminator.use_sigmoid is False
+
+
+def test_model_norm_and_loss_round_trip_are_preserved(tmp_path: Path) -> None:
+    yaml_path = tmp_path / "run.yaml"
+    yaml_path.write_text(
+        """
+dataset_root: /tmp/ds
+results_path: /tmp/results
+run_name: t
+image_size: [256, 256]
+model:
+  name: pix2pix
+  generator:
+    norm: instance
+    dropout: true
+    bilinear: false
+  discriminator:
+    norm: batch
+    use_sigmoid: false
+  gan_loss: bce
+training:
+  epochs: 1
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = RunConfig.from_yaml(yaml_path)
+    data = config.to_yaml_dict()
+
+    assert data["model"] == {
+        "name": "pix2pix",
+        "generator": {
+            "name": "unet",
+            "in_channels": 3,
+            "out_channels": 3,
+            "base_channels": 64,
+            "norm": "instance",
+            "dropout": True,
+            "bilinear": False,
+        },
+        "discriminator": {
+            "name": "patchgan",
+            "in_channels": 6,
+            "ndf": 64,
+            "norm": "batch",
+            "use_sigmoid": False,
+        },
+        "gan_loss": "bce",
+    }
+
+
+@pytest.mark.parametrize(
+    ("block", "match"),
+    [
+        ("name: cyclegan", "model.name"),
+        ("gan_loss: hinge", "model.gan_loss"),
+    ],
+)
+def test_model_top_level_choice_validation_rejects_invalid_values(
+    tmp_path: Path, block: str, match: str
+) -> None:
+    yaml_path = tmp_path / "run.yaml"
+    yaml_path.write_text(
+        f"""
+dataset_root: /tmp/ds
+results_path: /tmp/results
+run_name: t
+image_size: [256, 256]
+model:
+  {block}
+training:
+  epochs: 1
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=match):
+        RunConfig.from_yaml(yaml_path)
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("generator", "norm", "group"),
+        ("discriminator", "norm", "layer"),
+        ("generator", "name", "resnet"),
+        ("discriminator", "name", "basic"),
+    ],
+)
+def test_model_nested_choice_validation_rejects_invalid_values(
+    tmp_path: Path, section: str, field: str, value: str
+) -> None:
+    yaml_path = tmp_path / "run.yaml"
+    yaml_path.write_text(
+        f"""
+dataset_root: /tmp/ds
+results_path: /tmp/results
+run_name: t
+image_size: [256, 256]
+model:
+  {section}:
+    {field}: {value}
+training:
+  epochs: 1
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=field):
+        RunConfig.from_yaml(yaml_path)
 
 
 def test_save_resolved_config_writes_valid_yaml(tmp_path: Path) -> None:

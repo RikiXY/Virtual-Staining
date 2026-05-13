@@ -13,6 +13,7 @@ from torchvision import transforms
 from virtual_staining.config.project import ProjectConfig
 from virtual_staining.data.dataset import PairedHistologyDataset
 from virtual_staining.experiment.run_paths import RunPaths
+from virtual_staining.models.config import ModelConfig
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.config import TrainingConfig
@@ -48,6 +49,7 @@ def _make_resume_trainer(
     )
     return Trainer(
         config=config,
+        model_config=ModelConfig(),
         run_paths=run_paths,
         generator=generator.to(device),
         discriminator=discriminator.to(device),
@@ -135,6 +137,7 @@ def _make_trainer(
     return (
         Trainer(
             config=config,
+            model_config=ModelConfig(),
             run_paths=run_paths,
             generator=UNetGenerator().to(device),
             discriminator=PatchGANDiscriminator().to(device),
@@ -269,6 +272,7 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
     run_paths.create_directories()
     trainer = Trainer(
         config=config,
+        model_config=ModelConfig(),
         run_paths=run_paths,
         generator=UNetGenerator().to(device),
         discriminator=PatchGANDiscriminator().to(device),
@@ -327,6 +331,7 @@ def test_trainer_checkpoint_round_trip(
 
     trainer_2 = Trainer(
         config=config,
+        model_config=ModelConfig(),
         run_paths=run_paths,
         generator=UNetGenerator().to(device),
         discriminator=PatchGANDiscriminator().to(device),
@@ -363,11 +368,16 @@ def test_checkpoint_architecture_metadata_present(
     assert gen["in_channels"] == 3
     assert gen["out_channels"] == 3
     assert gen["base_channels"] == 64
+    assert gen["norm"] == "batch"
+    assert gen["dropout"] is False
     assert gen["bilinear"] is False
+    assert ck["architecture"]["name"] == "pix2pix"
+    assert ck["architecture"]["gan_loss"] == "bce"
     disc = ck["architecture"]["discriminator"]
     assert disc["class"] == "PatchGANDiscriminator"
     assert disc["in_channels"] == 6
     assert disc["ndf"] == 64
+    assert disc["norm"] == "instance"
     assert disc["use_sigmoid"] is False
 
 
@@ -476,6 +486,7 @@ def test_checkpoint_rate_creates_multiple_files(tmp_path: Path) -> None:
     )
     trainer = Trainer(
         config=config,
+        model_config=ModelConfig(),
         run_paths=run_paths,
         generator=UNetGenerator().to(device),
         discriminator=PatchGANDiscriminator().to(device),
