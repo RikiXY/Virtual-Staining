@@ -294,11 +294,14 @@ def test_read_image_size_disables_pillow_bomb_limit_temporarily() -> None:
         assert builder_module.Image.MAX_IMAGE_PIXELS is None
         return _DummyImage()
 
-    with patch("virtual_staining.data.builder.Image.open", side_effect=_open_asserting_limit_disabled):
+    with patch(
+        "virtual_staining.data.builder.Image.open",
+        side_effect=_open_asserting_limit_disabled,
+    ):
         size = builder_module._read_image_size(Path("/tmp/fake.tif"))
 
     assert size == (123, 456)
-    assert builder_module.Image.MAX_IMAGE_PIXELS == original_max_image_pixels
+    assert original_max_image_pixels == builder_module.Image.MAX_IMAGE_PIXELS
 
 
 def test_builder_logs_memory_after_stages(

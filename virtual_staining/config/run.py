@@ -438,6 +438,8 @@ def _parse_preprocessing(raw: dict[str, Any]) -> PreprocessingConfig:
     data = section_with_shared_fields(raw, "preprocessing", {"dataset_root", "image_size"})
     reject_unknown_keys(data, _PREPROCESSING_KEYS, "preprocessing")
 
+    max_memory_gb_raw = data.get("max_memory_gb")
+
     config = PreprocessingConfig(
         dataset_root=Path(data["dataset_root"]),
         source_name=data["source_name"],
@@ -448,9 +450,7 @@ def _parse_preprocessing(raw: dict[str, Any]) -> PreprocessingConfig:
         seed=data.get("seed"),
         save_masks=parse_bool_strict(data.get("save_masks", False), "save_masks"),
         mask_scale=float(data.get("mask_scale", 1.0)),
-        max_memory_gb=(
-            None if data.get("max_memory_gb") is None else float(data.get("max_memory_gb"))
-        ),
+        max_memory_gb=None if max_memory_gb_raw is None else float(max_memory_gb_raw),
         train_ratio=float(data.get("train_ratio", 0.8)),
         val_ratio=float(data.get("val_ratio", 0.05)),
         test_ratio=float(data.get("test_ratio", 0.15)),
