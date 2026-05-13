@@ -187,6 +187,8 @@ class RunConfig:
                 "margin": self.preprocessing.margin,
                 "seed": self.preprocessing.seed,
                 "save_masks": self.preprocessing.save_masks,
+                "mask_scale": self.preprocessing.mask_scale,
+                "max_memory_gb": self.preprocessing.max_memory_gb,
                 "train_ratio": self.preprocessing.train_ratio,
                 "val_ratio": self.preprocessing.val_ratio,
                 "test_ratio": self.preprocessing.test_ratio,
@@ -445,6 +447,10 @@ def _parse_preprocessing(raw: dict[str, Any]) -> PreprocessingConfig:
         margin=int(data.get("margin", 200)),
         seed=data.get("seed"),
         save_masks=parse_bool_strict(data.get("save_masks", False), "save_masks"),
+        mask_scale=float(data.get("mask_scale", 1.0)),
+        max_memory_gb=(
+            None if data.get("max_memory_gb") is None else float(data.get("max_memory_gb"))
+        ),
         train_ratio=float(data.get("train_ratio", 0.8)),
         val_ratio=float(data.get("val_ratio", 0.05)),
         test_ratio=float(data.get("test_ratio", 0.15)),
