@@ -9,6 +9,7 @@ import yaml
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
+    compute_manifest_hash,
     resolve_prepare_snapshot_paths,
     resolve_run_snapshot_paths,
     save_environment_snapshot,
@@ -79,6 +80,25 @@ def test_save_stage_config_snapshots_is_hash_stable_for_same_effective_config(
     )
 
     assert first_hash == second_hash
+
+
+def test_compute_manifest_hash_returns_sha256_prefix(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.csv"
+    manifest_path.write_text("sample_id,split\nabc,train\n", encoding="utf-8")
+
+    manifest_hash = compute_manifest_hash(manifest_path)
+
+    assert manifest_hash.startswith("sha256:")
+    assert len(manifest_hash) > 10
+
+
+def test_compute_manifest_hash_changes_with_file_contents(tmp_path: Path) -> None:
+    first_manifest = tmp_path / "first.csv"
+    second_manifest = tmp_path / "second.csv"
+    first_manifest.write_text("sample_id,split\nabc,train\n", encoding="utf-8")
+    second_manifest.write_text("sample_id,split\nxyz,val\n", encoding="utf-8")
+
+    assert compute_manifest_hash(first_manifest) != compute_manifest_hash(second_manifest)
 
 
 def test_save_environment_snapshot_writes_json(tmp_path: Path, monkeypatch) -> None:

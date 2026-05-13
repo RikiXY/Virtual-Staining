@@ -16,6 +16,7 @@ from virtual_staining.experiment.metadata import RunMetadata
 from virtual_staining.experiment.run_context import RunContext
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
+    compute_manifest_hash,
     resolve_run_snapshot_paths,
     save_environment_snapshot,
     save_stage_config_snapshots,
@@ -74,11 +75,18 @@ def run_training(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Device: %s", device)
 
+    manifest = load_manifest_or_raise(config.project)
+    manifest.validate(check_files_exist=True, require_splits={"train", "val"})
+    manifest_path = config.project.manifest_path
+    manifest_hash = compute_manifest_hash(manifest_path)
+
     metadata = RunMetadata.create(
         run_name=config.project.run_name,
         entrypoint="vs-train",
         seed=seed,
         config_hash=config_hash,
+        manifest_path=str(manifest_path),
+        manifest_sha256=manifest_hash,
         device=str(device),
         cuda_device_name=torch.cuda.get_device_name(device) if device.type == "cuda" else None,
     )
@@ -106,8 +114,6 @@ def run_training(
     train_dir = config.project.dataset_train_dir
     val_dir = config.project.dataset_val_dir
 
-    manifest = load_manifest_or_raise(config.project)
-    manifest.validate(check_files_exist=True, require_splits={"train", "val"})
     train_dataset = PairedManifestDataset(
         manifest.filter_split("train"),
         transform=transform,

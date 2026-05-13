@@ -17,6 +17,8 @@ class RunMetadata:
     git_commit: str | None = None
     git_dirty: bool | None = None
     config_hash: str | None = None
+    manifest_path: str | None = None
+    manifest_sha256: str | None = None
     seed: int | None = None
     device: str | None = None
     cuda_device_name: str | None = None

@@ -5,6 +5,7 @@ from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
     SnapshotPaths,
     compute_config_hash,
+    compute_manifest_hash,
     resolve_prepare_snapshot_paths,
     resolve_run_snapshot_paths,
     save_config_hash,
@@ -20,6 +21,7 @@ __all__ = [
     "RunMetadata",
     "SnapshotPaths",
     "compute_config_hash",
+    "compute_manifest_hash",
     "resolve_prepare_snapshot_paths",
     "resolve_run_snapshot_paths",
     "save_environment_snapshot",

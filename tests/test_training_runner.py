@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -230,3 +231,10 @@ training:
 
     expected = f"sha256:{hashlib.sha256(resolved_path.read_bytes()).hexdigest()}"
     assert hash_path.read_text(encoding="utf-8") == expected
+
+    run_metadata = json.loads((run_root / "metadata" / "run.json").read_text(encoding="utf-8"))
+    manifest_path = dataset_root / "manifests" / "manifest.csv"
+    manifest_hash = f"sha256:{hashlib.sha256(manifest_path.read_bytes()).hexdigest()}"
+
+    assert run_metadata["manifest_path"] == str(manifest_path)
+    assert run_metadata["manifest_sha256"] == manifest_hash

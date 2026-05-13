@@ -87,6 +87,12 @@ def compute_config_hash(yaml_path: Path) -> str:
     return f"sha256:{digest}"
 
 
+def compute_manifest_hash(manifest_path: Path) -> str:
+    """Return sha256:<hex> of the manifest file content."""
+    digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    return f"sha256:{digest}"
+
+
 def save_config_hash(hash_str: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(hash_str, encoding="utf-8")
