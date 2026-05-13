@@ -331,3 +331,65 @@ def test_dataset_manifest_from_csv_rejects_traversal_path(tmp_path: Path) -> Non
 
     with pytest.raises(ValueError, match=r"\.\."):
         DatasetManifest.from_csv(csv_path, dataset_root=tmp_path)
+
+
+def test_from_csv_missing_column_raises(tmp_path: Path) -> None:
+    csv_path = tmp_path / "bad.csv"
+    csv_path.write_text(
+        "sample_id,split,input_path,target_path,input_modality,target_modality,x,y,height\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="width"):
+        DatasetManifest.from_csv(csv_path, tmp_path)
+
+
+def test_from_csv_unexpected_column_raises(tmp_path: Path) -> None:
+    csv_path = tmp_path / "bad.csv"
+    csv_path.write_text(
+        (
+            "sample_id,split,input_path,target_path,input_modality,target_modality,"
+            "x,y,width,height,extra\n"
+            "abc,train,a/s.tif,a/t.tif,lf,st,0,0,256,256,ignored\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unexpected columns"):
+        DatasetManifest.from_csv(csv_path, tmp_path)
+
+
+def test_from_csv_invalid_integer_raises(tmp_path: Path) -> None:
+    csv_path = tmp_path / "bad.csv"
+    header = (
+        "sample_id,split,input_path,target_path,input_modality,target_modality,x,y,width,height\n"
+    )
+    row = "abc,train,a/s.tif,a/t.tif,lf,st,NOT_AN_INT,0,256,256\n"
+    csv_path.write_text(header + row, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="field 'x' must be an integer"):
+        DatasetManifest.from_csv(csv_path, tmp_path)
+
+
+def test_from_csv_invalid_split_raises(tmp_path: Path) -> None:
+    csv_path = tmp_path / "bad.csv"
+    header = (
+        "sample_id,split,input_path,target_path,input_modality,target_modality,x,y,width,height\n"
+    )
+    row = "abc,INVALID_SPLIT,a/s.tif,a/t.tif,lf,st,0,0,256,256\n"
+    csv_path.write_text(header + row, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="split must be one of"):
+        DatasetManifest.from_csv(csv_path, tmp_path)
+
+
+def test_from_csv_empty_sample_id_raises(tmp_path: Path) -> None:
+    csv_path = tmp_path / "bad.csv"
+    header = (
+        "sample_id,split,input_path,target_path,input_modality,target_modality,x,y,width,height\n"
+    )
+    row = ",train,a/s.tif,a/t.tif,lf,st,0,0,256,256\n"
+    csv_path.write_text(header + row, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="sample_id"):
+        DatasetManifest.from_csv(csv_path, tmp_path)

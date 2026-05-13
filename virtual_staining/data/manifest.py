@@ -8,6 +8,18 @@ from typing import Literal, cast
 Split = Literal["train", "val", "test", "discarded"]
 
 _VALID_SPLITS: frozenset[str] = frozenset({"train", "val", "test", "discarded"})
+_REQUIRED_FIELDNAMES = (
+    "sample_id",
+    "split",
+    "input_path",
+    "target_path",
+    "input_modality",
+    "target_modality",
+    "x",
+    "y",
+    "width",
+    "height",
+)
 
 
 def _parse_split(value: str) -> Split:
@@ -28,6 +40,43 @@ def _validate_manifest_path(path: Path, field_name: str) -> None:
         raise ValueError(
             f"ManifestRecord.{field_name} must not contain '..' components, got: {path!r}"
         )
+
+
+def _parse_int_field(value: str, field: str, row_num: int, csv_path: Path) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"Manifest CSV {csv_path}, row {row_num}: "
+            f"field '{field}' must be an integer, got {value!r}"
+        ) from None
+
+
+def _parse_split_field(value: str, row_num: int, csv_path: Path) -> Split:
+    try:
+        return _parse_split(value)
+    except ValueError:
+        raise ValueError(
+            f"Manifest CSV {csv_path}, row {row_num}: "
+            f"split must be one of {sorted(_VALID_SPLITS)}, got {value!r}"
+        ) from None
+
+
+def _require_nonempty(value: str, field: str, row_num: int, csv_path: Path) -> str:
+    if not value.strip():
+        raise ValueError(
+            f"Manifest CSV {csv_path}, row {row_num}: field '{field}' must not be empty"
+        )
+    return value
+
+
+def _parse_path_field(value: str, field: str, row_num: int, csv_path: Path) -> Path:
+    path = Path(value)
+    try:
+        _validate_manifest_path(path, field)
+    except ValueError as exc:
+        raise ValueError(f"Manifest CSV {csv_path}, row {row_num}: {exc}") from None
+    return path
 
 
 @dataclass(frozen=True)
@@ -76,18 +125,7 @@ class DatasetManifest:
     records: tuple[ManifestRecord, ...]
     dataset_root: Path
 
-    _FIELDNAMES = (
-        "sample_id",
-        "split",
-        "input_path",
-        "target_path",
-        "input_modality",
-        "target_modality",
-        "x",
-        "y",
-        "width",
-        "height",
-    )
+    _FIELDNAMES = _REQUIRED_FIELDNAMES
 
     def filter_split(self, split: Split) -> DatasetManifest:
         """Return a new manifest containing only records with the given split."""
@@ -159,24 +197,35 @@ class DatasetManifest:
     def from_csv(cls, path: Path, dataset_root: Path) -> DatasetManifest:
         with path.open(newline="", encoding="utf-8") as handle:
             reader = csv.DictReader(handle)
+            fieldnames = reader.fieldnames or []
+            missing = [field for field in cls._FIELDNAMES if field not in fieldnames]
+            if missing:
+                raise ValueError(f"Manifest CSV at {path} is missing required columns: {missing}")
+            unexpected = [field for field in fieldnames if field not in cls._FIELDNAMES]
+            if unexpected:
+                raise ValueError(f"Manifest CSV at {path} has unexpected columns: {unexpected}")
             records_list: list[ManifestRecord] = []
-            for row in reader:
-                input_path = Path(row["input_path"])
-                target_path = Path(row["target_path"])
-                _validate_manifest_path(input_path, "input_path")
-                _validate_manifest_path(target_path, "target_path")
+            for row_num, row in enumerate(reader, start=2):
                 records_list.append(
                     ManifestRecord(
-                        sample_id=row["sample_id"],
-                        split=_parse_split(row["split"]),
-                        input_path=input_path,
-                        target_path=target_path,
-                        input_modality=row["input_modality"],
-                        target_modality=row["target_modality"],
-                        x=int(row["x"]),
-                        y=int(row["y"]),
-                        width=int(row["width"]),
-                        height=int(row["height"]),
+                        sample_id=_require_nonempty(row["sample_id"], "sample_id", row_num, path),
+                        split=_parse_split_field(row["split"], row_num, path),
+                        input_path=_parse_path_field(
+                            row["input_path"], "input_path", row_num, path
+                        ),
+                        target_path=_parse_path_field(
+                            row["target_path"], "target_path", row_num, path
+                        ),
+                        input_modality=_require_nonempty(
+                            row["input_modality"], "input_modality", row_num, path
+                        ),
+                        target_modality=_require_nonempty(
+                            row["target_modality"], "target_modality", row_num, path
+                        ),
+                        x=_parse_int_field(row["x"], "x", row_num, path),
+                        y=_parse_int_field(row["y"], "y", row_num, path),
+                        width=_parse_int_field(row["width"], "width", row_num, path),
+                        height=_parse_int_field(row["height"], "height", row_num, path),
                     )
                 )
             records = tuple(records_list)
