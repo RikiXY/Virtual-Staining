@@ -25,6 +25,7 @@ def _make_namespace(**overrides: object) -> argparse.Namespace:
         white_threshold=250,
         max_largest_white_component_ratio=0.20,
         mask_scale=1.0,
+        max_memory_gb=None,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -41,6 +42,7 @@ def test_from_args_basic() -> None:
     assert config.seed is None
     assert config.save_masks is False
     assert config.mask_scale == pytest.approx(1.0)
+    assert config.max_memory_gb is None
 
 
 def test_from_args_thresholds() -> None:
@@ -87,6 +89,7 @@ def test_from_yaml(tmp_path: Path) -> None:
         seed: 7
         save_masks: true
         mask_scale: 0.25
+        max_memory_gb: 6.5
         train_ratio: 0.7
         val_ratio: 0.1
         test_ratio: 0.2
@@ -107,6 +110,7 @@ def test_from_yaml(tmp_path: Path) -> None:
     assert config.seed == 7
     assert config.save_masks is True
     assert config.mask_scale == pytest.approx(0.25)
+    assert config.max_memory_gb == pytest.approx(6.5)
     assert config.train_ratio == pytest.approx(0.7)
     assert config.val_ratio == pytest.approx(0.1)
     assert config.test_ratio == pytest.approx(0.2)
@@ -124,6 +128,7 @@ def test_from_args_partial_namespace() -> None:
     assert config.seed is None
     assert config.save_masks is False
     assert config.mask_scale == pytest.approx(1.0)
+    assert config.max_memory_gb is None
     assert config.train_ratio == pytest.approx(0.8)
     assert config.min_foreground_ratio == pytest.approx(0.25)
     assert config.white_threshold == 250
@@ -140,6 +145,7 @@ def test_to_yaml_round_trip(tmp_path: Path) -> None:
         seed=7,
         save_masks=True,
         mask_scale=0.25,
+        max_memory_gb=6.5,
         train_ratio=0.7,
         val_ratio=0.1,
         test_ratio=0.2,
@@ -181,6 +187,7 @@ def test_from_yaml_defaults_for_optional_fields(tmp_path: Path) -> None:
     assert config.seed is None
     assert config.save_masks is False
     assert config.mask_scale == pytest.approx(1.0)
+    assert config.max_memory_gb is None
     assert config.train_ratio == pytest.approx(0.8)
     assert config.val_ratio == pytest.approx(0.05)
     assert config.test_ratio == pytest.approx(0.15)
@@ -200,6 +207,7 @@ def test_from_run_yaml_section(tmp_path: Path) -> None:
           grid_movement: [512, 512]
           save_masks: true
           mask_scale: 0.5
+          max_memory_gb: 4
     """)
     yaml_file = tmp_path / "run.yaml"
     yaml_file.write_text(yaml_content, encoding="utf-8")
@@ -212,6 +220,7 @@ def test_from_run_yaml_section(tmp_path: Path) -> None:
     assert config.grid_movement == (512, 512)
     assert config.save_masks is True
     assert config.mask_scale == pytest.approx(0.5)
+    assert config.max_memory_gb == pytest.approx(4.0)
 
 
 @pytest.mark.parametrize(
@@ -224,6 +233,7 @@ def test_from_run_yaml_section(tmp_path: Path) -> None:
         ({"margin": -1}, "margin"),
         ({"mask_scale": 0.0}, "mask_scale"),
         ({"mask_scale": 1.5}, "mask_scale"),
+        ({"max_memory_gb": 0.0}, "max_memory_gb"),
         ({"train_ratio": 1.2}, "train_ratio"),
         ({"train_ratio": 0.6, "val_ratio": 0.2, "test_ratio": 0.3}, "split"),
         ({"min_foreground_ratio": -0.1}, "min_foreground_ratio"),

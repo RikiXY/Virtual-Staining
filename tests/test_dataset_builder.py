@@ -219,6 +219,58 @@ def test_compute_masks_with_mask_scale(
     assert builder._target_mask.shape == builder._target_image.shape[:2]
 
 
+def test_compute_masks_raises_if_estimated_memory_exceeds_limit(
+    builder_config: PreprocessingConfig,
+) -> None:
+    config = PreprocessingConfig(
+        dataset_root=builder_config.dataset_root,
+        source_name=builder_config.source_name,
+        target_name=builder_config.target_name,
+        image_size=builder_config.image_size,
+        grid_movement=builder_config.grid_movement,
+        margin=builder_config.margin,
+        seed=builder_config.seed,
+        save_masks=builder_config.save_masks,
+        mask_scale=builder_config.mask_scale,
+        max_memory_gb=0.0001,
+        train_ratio=builder_config.train_ratio,
+        val_ratio=builder_config.val_ratio,
+        test_ratio=builder_config.test_ratio,
+        min_foreground_ratio=builder_config.min_foreground_ratio,
+        max_white_ratio=builder_config.max_white_ratio,
+        white_threshold=builder_config.white_threshold,
+        max_largest_white_component_ratio=builder_config.max_largest_white_component_ratio,
+    )
+    builder = DatasetBuilder(config)
+
+    with (
+        patch(
+            "virtual_staining.data.builder.cv2.imread",
+            side_effect=AssertionError("compute_masks() should fail before image loading"),
+        ),
+        pytest.raises(MemoryError, match="max_memory_gb") as exc_info,
+    ):
+        builder.compute_masks()
+
+    assert "mask_scale" in str(exc_info.value)
+
+
+def test_compute_masks_warns_when_estimate_is_high_without_limit(
+    builder_config: PreprocessingConfig,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    builder = DatasetBuilder(builder_config)
+
+    with (
+        _patched_builder_dependencies(),
+        patch("virtual_staining.data.builder._estimate_memory_gb", return_value=9.0),
+        caplog.at_level(logging.WARNING, logger="virtual_staining.data.builder"),
+    ):
+        builder.compute_masks()
+
+    assert any("mask_scale: 0.25" in message for message in caplog.messages)
+
+
 def test_builder_logs_memory_after_stages(
     builder_config: PreprocessingConfig, caplog: pytest.LogCaptureFixture
 ) -> None:

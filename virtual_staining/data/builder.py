@@ -13,6 +13,7 @@ from typing import Any, cast
 
 import cv2
 import numpy as np
+from PIL import Image
 
 from virtual_staining.data.config import PreprocessingConfig
 from virtual_staining.data.manifest import DatasetManifest, ManifestRecord, Split
@@ -30,6 +31,7 @@ from virtual_staining.data.preprocessing import (
 from virtual_staining.data.results import DatasetBuildResult
 
 logger = logging.getLogger(__name__)
+_MEMORY_WARNING_THRESHOLD_GB = 8.0
 
 
 def _log_memory(stage: str) -> None:
@@ -54,6 +56,13 @@ def _build_manifest_metadata(records: list[ManifestRecord]) -> dict[str, Any]:
             for split in ("train", "val", "test")
         },
     }
+
+
+def _estimate_memory_gb(h: int, w: int) -> float:
+    """Rough working-set estimate for processing a single image pair."""
+    pixels = h * w
+    estimated_bytes = pixels * (2 * 3 + 2 + 2 * 4) * 3
+    return estimated_bytes / (1024**3)
 
 
 class DatasetBuilder:
@@ -92,6 +101,24 @@ class DatasetBuilder:
         root = self.config.dataset_root
         if not root.exists():
             raise FileNotFoundError(f"Dataset root not found: {root}")
+
+        with Image.open(root / self._source_file.name) as img:
+            source_w, source_h = img.size
+
+        estimated_gb = _estimate_memory_gb(source_h, source_w)
+        if self.config.max_memory_gb is not None and estimated_gb > self.config.max_memory_gb:
+            raise MemoryError(
+                f"Estimated working-set size {estimated_gb:.1f} GB exceeds configured "
+                f"max_memory_gb={self.config.max_memory_gb}. Consider using 'mask_scale: 0.25' "
+                "in your preprocessing config, splitting large images, or increasing "
+                "max_memory_gb."
+            )
+        if self.config.max_memory_gb is None and estimated_gb > _MEMORY_WARNING_THRESHOLD_GB:
+            logger.warning(
+                "Estimated working-set size %.1f GB is large. If the process is killed, "
+                "use 'mask_scale: 0.25' to reduce memory usage.",
+                estimated_gb,
+            )
 
         self._source_image = cv2.imread(str(root / self._source_file.name))
         self._target_image = cv2.imread(str(root / self._target_file.name))

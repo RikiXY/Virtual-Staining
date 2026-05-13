@@ -47,6 +47,8 @@ preprocessing:
   margin: 200
   # Optional: compute tissue masks at reduced resolution to save memory.
   # mask_scale: 0.25
+  # Optional: fail early if the estimated working set would exceed this limit.
+  # max_memory_gb: 8.0
 
   # Dataset split; ratios should sum to 1.0.
   train_ratio: 0.80
