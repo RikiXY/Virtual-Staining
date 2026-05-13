@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -586,3 +588,43 @@ def test_from_csv_empty_sample_id_raises(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="sample_id"):
         DatasetManifest.from_csv(csv_path, tmp_path)
+
+
+def test_from_csv_warns_on_schema_version_mismatch(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    manifest = DatasetManifest(records=(_make_record("a", "train"),), dataset_root=tmp_path)
+    manifest_path = tmp_path / "manifests" / "manifest.csv"
+    manifest.to_csv(manifest_path)
+    metadata_path = manifest_path.parent / "manifest_metadata.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "0.9",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "record_count": 1,
+                "splits": {"train": 1, "val": 0, "test": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        DatasetManifest.from_csv(manifest_path, dataset_root=tmp_path)
+
+    assert "schema version mismatch" in caplog.text.lower()
+
+
+def test_from_csv_silent_when_metadata_absent(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    manifest = DatasetManifest(records=(_make_record("a", "train"),), dataset_root=tmp_path)
+    manifest_path = tmp_path / "manifests" / "manifest.csv"
+    manifest.to_csv(manifest_path)
+
+    with caplog.at_level(logging.WARNING):
+        DatasetManifest.from_csv(manifest_path, dataset_root=tmp_path)
+
+    assert "schema version" not in caplog.text.lower()

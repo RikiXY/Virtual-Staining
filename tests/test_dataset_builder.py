@@ -314,6 +314,25 @@ def test_run_all_writes_dataset_build_metadata(builder_config: PreprocessingConf
     assert data["seed"] == builder_config.seed
 
 
+def test_run_all_writes_manifest_metadata(builder_config: PreprocessingConfig) -> None:
+    import json
+
+    with _patched_builder_dependencies():
+        result = DatasetBuilder(builder_config).run_all()
+
+    metadata_path = builder_config.dataset_root / "manifests" / "manifest_metadata.json"
+    data = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    assert data["schema_version"] == "1.0"
+    assert data["created_at"]
+    assert data["record_count"] == result.train_count + result.val_count + result.test_count
+    assert data["splits"] == {
+        "train": result.train_count,
+        "val": result.val_count,
+        "test": result.test_count,
+    }
+
+
 def test_missing_dataset_root_raises(tmp_path: Path) -> None:
     config = PreprocessingConfig(
         dataset_root=tmp_path / "nonexistent",

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import json
+import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +14,7 @@ if TYPE_CHECKING:
 Split = Literal["train", "val", "test", "discarded"]
 
 _VALID_SPLITS: frozenset[str] = frozenset({"train", "val", "test", "discarded"})
+MANIFEST_SCHEMA_VERSION = "1.0"
 _REQUIRED_FIELDNAMES = (
     "sample_id",
     "split",
@@ -24,6 +27,8 @@ _REQUIRED_FIELDNAMES = (
     "width",
     "height",
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_split(value: str) -> Split:
@@ -94,6 +99,22 @@ def load_manifest_or_raise(project: ProjectConfig) -> DatasetManifest:
     return DatasetManifest.from_csv(manifest_path, dataset_root=project.dataset_root)
 
 
+def _warn_on_schema_version_mismatch(manifest_path: Path, expected_version: str) -> None:
+    metadata_path = manifest_path.parent / "manifest_metadata.json"
+    if not metadata_path.exists():
+        return
+
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    on_disk_version = metadata.get("schema_version", "unknown")
+    if on_disk_version != expected_version:
+        logger.warning(
+            "Manifest schema version mismatch: file has '%s', code expects '%s'. "
+            "Re-run 'vs-prepare' if you see unexpected errors.",
+            on_disk_version,
+            expected_version,
+        )
+
+
 @dataclass(frozen=True)
 class ManifestRecord:
     sample_id: str
@@ -137,6 +158,7 @@ class ManifestRecord:
 
 @dataclass(frozen=True)
 class DatasetManifest:
+    SCHEMA_VERSION = MANIFEST_SCHEMA_VERSION
     records: tuple[ManifestRecord, ...]
     dataset_root: Path
 
@@ -294,6 +316,7 @@ class DatasetManifest:
                     )
                 )
             records = tuple(records_list)
+        _warn_on_schema_version_mismatch(path, cls.SCHEMA_VERSION)
         return cls(records=records, dataset_root=dataset_root)
 
     def __len__(self) -> int:
