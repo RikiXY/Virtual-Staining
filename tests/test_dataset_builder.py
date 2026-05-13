@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -12,6 +13,7 @@ import pytest
 
 from virtual_staining.applications.prepare import prepare
 from virtual_staining.config.run import RunConfig
+from virtual_staining.data import builder as builder_module
 from virtual_staining.data.builder import DatasetBuilder
 from virtual_staining.data.config import PreprocessingConfig
 from virtual_staining.data.preprocessing import AlignmentMetadata
@@ -157,6 +159,56 @@ def test_builder_logs_stage_progress(
     assert any(message == "Aligning images..." for message in messages)
     assert any("patch pairs" in message for message in messages)
     assert any(message.startswith("Saved: train=") for message in messages)
+
+
+def test_builder_logs_memory_after_stages(
+    builder_config: PreprocessingConfig, caplog: pytest.LogCaptureFixture
+) -> None:
+    with (
+        _patched_builder_dependencies(),
+        caplog.at_level(logging.INFO, logger="virtual_staining.data.builder"),
+    ):
+        DatasetBuilder(builder_config).run_all()
+
+    memory_messages = [
+        record.message for record in caplog.records if "Memory after" in record.message
+    ]
+    assert len(memory_messages) == 5
+
+    logged_stages = {
+        message.removeprefix("Memory after ").split(":", maxsplit=1)[0]
+        for message in memory_messages
+    }
+    assert logged_stages == {
+        "compute_masks",
+        "align",
+        "extract_patches",
+        "filter_patches",
+        "split_and_save",
+    }
+
+
+def test_log_memory_handles_missing_resource(caplog: pytest.LogCaptureFixture) -> None:
+    original_import = builtins.__import__
+
+    def _import_with_missing_resource(
+        name: str,
+        globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        if name == "resource":
+            raise ImportError("resource unavailable")
+        return original_import(name, globals, locals, fromlist, level)
+
+    with (
+        patch("builtins.__import__", side_effect=_import_with_missing_resource),
+        caplog.at_level(logging.INFO, logger="virtual_staining.data.builder"),
+    ):
+        builder_module._log_memory("compute_masks")
+
+    assert "Memory after compute_masks: (not available on this platform)" in caplog.messages
 
 
 def test_run_all_discarded_log_is_written(builder_config: PreprocessingConfig) -> None:

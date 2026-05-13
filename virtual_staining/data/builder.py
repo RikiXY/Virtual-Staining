@@ -6,6 +6,7 @@ import datetime
 import json
 import logging
 import random
+import sys
 from pathlib import Path
 from typing import Any, cast
 
@@ -28,6 +29,18 @@ from virtual_staining.data.preprocessing import (
 from virtual_staining.data.results import DatasetBuildResult
 
 logger = logging.getLogger(__name__)
+
+
+def _log_memory(stage: str) -> None:
+    try:
+        import resource
+    except ImportError:
+        logger.info("Memory after %s: (not available on this platform)", stage)
+        return
+
+    max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    rss_mb = max_rss / 1024 if sys.platform == "linux" else max_rss / (1024 * 1024)
+    logger.info("Memory after %s: max_rss=%.1f MB", stage, rss_mb)
 
 
 def _build_manifest_metadata(records: list[ManifestRecord]) -> dict[str, Any]:
@@ -116,6 +129,8 @@ class DatasetBuilder:
                 self._target_mask,
             )
 
+        _log_memory("compute_masks")
+
     def align(self) -> None:
         """Align the target image to the source reference frame."""
         if (
@@ -148,6 +163,8 @@ class DatasetBuilder:
         )
         with open(root / "alignment_metadata.json", "w", encoding="utf-8") as f:
             json.dump(dataclasses.asdict(metadata), f, indent=2)
+
+        _log_memory("align")
 
     def extract_patches(self) -> None:
         """Extract paired patches from the source and aligned target images."""
@@ -201,6 +218,8 @@ class DatasetBuilder:
         self._target_patches = target_images
         self._target_patch_masks = target_masks
         self._positions = positions
+
+        _log_memory("extract_patches")
 
     def filter_patches(self) -> None:
         """Classify each patch pair as valid or discarded based on quality thresholds."""
@@ -271,6 +290,8 @@ class DatasetBuilder:
         self._discarded_source_images = discarded_source
         self._discarded_target_images = discarded_target
         self._discarded_log_rows = log_rows
+
+        _log_memory("filter_patches")
 
     def split_and_save(self) -> DatasetBuildResult:
         """Split valid pairs into train/val/test and write all output files."""
@@ -418,6 +439,7 @@ class DatasetBuilder:
             len(split[2]),
             len(self._discarded_source_images),
         )
+        _log_memory("split_and_save")
         return DatasetBuildResult(
             train_count=len(split[0]),
             val_count=len(split[1]),
