@@ -17,6 +17,7 @@ from virtual_staining.data import builder as builder_module
 from virtual_staining.data.builder import DatasetBuilder
 from virtual_staining.data.config import PreprocessingConfig
 from virtual_staining.data.preprocessing import AlignmentMetadata
+from virtual_staining.data.results import DatasetBuildResult
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -798,6 +799,271 @@ preprocessing:
 
     loaded = RunConfig.from_yaml(root / "config" / "resolved.yaml")
     assert loaded == run_config
+
+
+def test_prepare_reuses_existing_dataset_when_fingerprint_matches(
+    builder_config: PreprocessingConfig,
+) -> None:
+    import json
+
+    config_path = builder_config.dataset_root.parent / "prepare.yaml"
+    config_path.write_text(
+        f"""
+dataset_root: {builder_config.dataset_root}
+results_path: {builder_config.dataset_root.parent / "results"}
+run_name: prepare_run
+image_size: [{builder_config.image_size[0]}, {builder_config.image_size[1]}]
+preprocessing:
+  source_name: {builder_config.source_name}
+  target_name: {builder_config.target_name}
+  grid_movement: [{builder_config.grid_movement[0]}, {builder_config.grid_movement[1]}]
+  margin: {builder_config.margin}
+  seed: {builder_config.seed}
+  save_masks: false
+  train_ratio: {builder_config.train_ratio}
+  val_ratio: {builder_config.val_ratio}
+  test_ratio: {builder_config.test_ratio}
+  min_foreground_ratio: {builder_config.min_foreground_ratio}
+  max_white_ratio: {builder_config.max_white_ratio}
+  white_threshold: {builder_config.white_threshold}
+  max_largest_white_component_ratio: {builder_config.max_largest_white_component_ratio}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    run_config = RunConfig.from_yaml(config_path)
+
+    with _patched_builder_dependencies():
+        first = prepare(run_config, config_path)
+
+    assert first.reused is False
+
+    def _unexpected_run_all(self: DatasetBuilder) -> DatasetBuildResult:
+        raise AssertionError("run_all() should not be called when prepare reuses the dataset")
+
+    with patch.object(DatasetBuilder, "run_all", autospec=True, side_effect=_unexpected_run_all):
+        second = prepare(run_config, config_path)
+
+    stage_data = json.loads(
+        (builder_config.dataset_root / "metadata" / "stages" / "prepare.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert second.reused is True
+    assert second.train_count == first.train_count
+    assert second.val_count == first.val_count
+    assert second.test_count == first.test_count
+    assert stage_data["reused"] is True
+
+
+def test_prepare_rebuilds_when_preprocessing_changes(builder_config: PreprocessingConfig) -> None:
+    config_path = builder_config.dataset_root.parent / "prepare.yaml"
+    config_path.write_text(
+        f"""
+dataset_root: {builder_config.dataset_root}
+results_path: {builder_config.dataset_root.parent / "results"}
+run_name: prepare_run
+image_size: [{builder_config.image_size[0]}, {builder_config.image_size[1]}]
+preprocessing:
+  source_name: {builder_config.source_name}
+  target_name: {builder_config.target_name}
+  image_size: [32, 64]
+  grid_movement: [{builder_config.grid_movement[0]}, {builder_config.grid_movement[1]}]
+  margin: {builder_config.margin}
+  seed: {builder_config.seed}
+  save_masks: false
+  train_ratio: {builder_config.train_ratio}
+  val_ratio: {builder_config.val_ratio}
+  test_ratio: {builder_config.test_ratio}
+  min_foreground_ratio: {builder_config.min_foreground_ratio}
+  max_white_ratio: {builder_config.max_white_ratio}
+  white_threshold: {builder_config.white_threshold}
+  max_largest_white_component_ratio: {builder_config.max_largest_white_component_ratio}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    original_config_path = builder_config.dataset_root.parent / "original.yaml"
+    original_config_text = config_path.read_text(encoding="utf-8").replace(
+        "image_size: [32, 64]",
+        "image_size: [64, 64]",
+        1,
+    )
+    original_config_path.write_text(
+        original_config_text,
+        encoding="utf-8",
+    )
+    original_config = RunConfig.from_yaml(original_config_path)
+    changed_config = RunConfig.from_yaml(config_path)
+
+    with _patched_builder_dependencies():
+        prepare(original_config, original_config_path)
+
+    with (
+        _patched_builder_dependencies(),
+        patch.object(
+            DatasetBuilder,
+            "run_all",
+            autospec=True,
+            wraps=DatasetBuilder.run_all,
+        ) as run_all,
+    ):
+        result = prepare(changed_config, config_path)
+
+    assert result.reused is False
+    assert run_all.call_count == 1
+
+
+def test_prepare_rebuilds_when_source_content_changes(builder_config: PreprocessingConfig) -> None:
+    config_path = builder_config.dataset_root.parent / "prepare.yaml"
+    config_path.write_text(
+        f"""
+dataset_root: {builder_config.dataset_root}
+results_path: {builder_config.dataset_root.parent / "results"}
+run_name: prepare_run
+image_size: [{builder_config.image_size[0]}, {builder_config.image_size[1]}]
+preprocessing:
+  source_name: {builder_config.source_name}
+  target_name: {builder_config.target_name}
+  grid_movement: [{builder_config.grid_movement[0]}, {builder_config.grid_movement[1]}]
+  margin: {builder_config.margin}
+  seed: {builder_config.seed}
+  save_masks: false
+  train_ratio: {builder_config.train_ratio}
+  val_ratio: {builder_config.val_ratio}
+  test_ratio: {builder_config.test_ratio}
+  min_foreground_ratio: {builder_config.min_foreground_ratio}
+  max_white_ratio: {builder_config.max_white_ratio}
+  white_threshold: {builder_config.white_threshold}
+  max_largest_white_component_ratio: {builder_config.max_largest_white_component_ratio}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    run_config = RunConfig.from_yaml(config_path)
+
+    with _patched_builder_dependencies():
+        prepare(run_config, config_path)
+
+    cv2.imwrite(
+        str(builder_config.dataset_root / builder_config.source_name),
+        _make_synthetic_image(seed=99),
+    )
+
+    with (
+        _patched_builder_dependencies(),
+        patch.object(
+            DatasetBuilder,
+            "run_all",
+            autospec=True,
+            wraps=DatasetBuilder.run_all,
+        ) as run_all,
+    ):
+        result = prepare(run_config, config_path)
+
+    assert result.reused is False
+    assert run_all.call_count == 1
+
+
+def test_prepare_rebuilds_when_target_content_changes(builder_config: PreprocessingConfig) -> None:
+    config_path = builder_config.dataset_root.parent / "prepare.yaml"
+    config_path.write_text(
+        f"""
+dataset_root: {builder_config.dataset_root}
+results_path: {builder_config.dataset_root.parent / "results"}
+run_name: prepare_run
+image_size: [{builder_config.image_size[0]}, {builder_config.image_size[1]}]
+preprocessing:
+  source_name: {builder_config.source_name}
+  target_name: {builder_config.target_name}
+  grid_movement: [{builder_config.grid_movement[0]}, {builder_config.grid_movement[1]}]
+  margin: {builder_config.margin}
+  seed: {builder_config.seed}
+  save_masks: false
+  train_ratio: {builder_config.train_ratio}
+  val_ratio: {builder_config.val_ratio}
+  test_ratio: {builder_config.test_ratio}
+  min_foreground_ratio: {builder_config.min_foreground_ratio}
+  max_white_ratio: {builder_config.max_white_ratio}
+  white_threshold: {builder_config.white_threshold}
+  max_largest_white_component_ratio: {builder_config.max_largest_white_component_ratio}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    run_config = RunConfig.from_yaml(config_path)
+
+    with _patched_builder_dependencies():
+        prepare(run_config, config_path)
+
+    cv2.imwrite(
+        str(builder_config.dataset_root / builder_config.target_name),
+        _make_synthetic_image(seed=123),
+    )
+
+    with (
+        _patched_builder_dependencies(),
+        patch.object(
+            DatasetBuilder,
+            "run_all",
+            autospec=True,
+            wraps=DatasetBuilder.run_all,
+        ) as run_all,
+    ):
+        result = prepare(run_config, config_path)
+
+    assert result.reused is False
+    assert run_all.call_count == 1
+
+
+def test_prepare_rebuilds_when_required_outputs_are_missing(
+    builder_config: PreprocessingConfig,
+) -> None:
+    config_path = builder_config.dataset_root.parent / "prepare.yaml"
+    config_path.write_text(
+        f"""
+dataset_root: {builder_config.dataset_root}
+results_path: {builder_config.dataset_root.parent / "results"}
+run_name: prepare_run
+image_size: [{builder_config.image_size[0]}, {builder_config.image_size[1]}]
+preprocessing:
+  source_name: {builder_config.source_name}
+  target_name: {builder_config.target_name}
+  grid_movement: [{builder_config.grid_movement[0]}, {builder_config.grid_movement[1]}]
+  margin: {builder_config.margin}
+  seed: {builder_config.seed}
+  save_masks: false
+  train_ratio: {builder_config.train_ratio}
+  val_ratio: {builder_config.val_ratio}
+  test_ratio: {builder_config.test_ratio}
+  min_foreground_ratio: {builder_config.min_foreground_ratio}
+  max_white_ratio: {builder_config.max_white_ratio}
+  white_threshold: {builder_config.white_threshold}
+  max_largest_white_component_ratio: {builder_config.max_largest_white_component_ratio}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    run_config = RunConfig.from_yaml(config_path)
+
+    with _patched_builder_dependencies():
+        prepare(run_config, config_path)
+
+    (builder_config.dataset_root / "manifests" / "manifest.csv").unlink()
+
+    with (
+        _patched_builder_dependencies(),
+        patch.object(
+            DatasetBuilder,
+            "run_all",
+            autospec=True,
+            wraps=DatasetBuilder.run_all,
+        ) as run_all,
+    ):
+        result = prepare(run_config, config_path)
+
+    assert result.reused is False
+    assert run_all.call_count == 1
 
 
 def test_run_all_saves_manifest_layout_and_resolved_config(

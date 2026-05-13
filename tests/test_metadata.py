@@ -180,6 +180,7 @@ preprocessing:
     assert run_data["last_completed_stage"] == "prepare"
     assert stage_data["stage"] == "prepare"
     assert stage_data["status"] == "completed"
+    assert stage_data["reused"] is False
     assert stage_data["manifest_path"].endswith("manifests/manifest.csv")
     assert fingerprint_data["fingerprint"].startswith("sha256:")
     assert fingerprint_data["source"]["path"] == str((dataset_root / "source.png").resolve())

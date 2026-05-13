@@ -6,13 +6,16 @@ import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import yaml
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.environment import collect_environment
 from virtual_staining.experiment.run_paths import RunPaths
+
+if TYPE_CHECKING:
+    from virtual_staining.data.config import PreprocessingConfig
 
 
 @dataclass(frozen=True)
@@ -128,6 +131,29 @@ def build_file_provenance(path: Path) -> dict[str, Any]:
         "size": stat.st_size,
         "mtime_ns": stat.st_mtime_ns,
         "sha256": compute_file_sha256(resolved),
+    }
+
+
+def serialize_preprocessing_config(config: PreprocessingConfig) -> dict[str, Any]:
+    """Return the canonical preprocessing payload used for dataset fingerprints."""
+    return {
+        "dataset_root": str(config.dataset_root.resolve()),
+        "source_name": config.source_name,
+        "target_name": config.target_name,
+        "image_size": list(config.image_size),
+        "grid_movement": list(config.grid_movement),
+        "margin": config.margin,
+        "seed": config.seed,
+        "save_masks": config.save_masks,
+        "mask_scale": config.mask_scale,
+        "max_memory_gb": config.max_memory_gb,
+        "train_ratio": config.train_ratio,
+        "val_ratio": config.val_ratio,
+        "test_ratio": config.test_ratio,
+        "min_foreground_ratio": config.min_foreground_ratio,
+        "max_white_ratio": config.max_white_ratio,
+        "white_threshold": config.white_threshold,
+        "max_largest_white_component_ratio": config.max_largest_white_component_ratio,
     }
 
 

@@ -11,3 +11,4 @@ class DatasetBuildResult:
     test_count: int
     skipped_count: int
     output_root: Path
+    reused: bool = False

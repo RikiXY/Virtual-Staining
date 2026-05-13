@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -164,3 +165,29 @@ def test_full_pipeline_smoke(tmp_path: Path) -> None:
 
     assert rows
     assert rows[0]["sample_id"]
+
+
+def test_prepare_smoke_reuses_cached_dataset(tmp_path: Path) -> None:
+    dataset_root = _make_synthetic_dataset(tmp_path / "dataset")
+    config_path = _write_smoke_config(tmp_path, dataset_root)
+    config = RunConfig.from_yaml(config_path)
+
+    with _patched_prepare_dependencies():
+        first = prepare(config, config_path)
+
+    with patch(
+        "virtual_staining.data.builder.DatasetBuilder.run_all",
+        side_effect=AssertionError("prepare should reuse the prepared dataset"),
+    ):
+        second = prepare(config, config_path)
+
+    stage_data = json.loads(
+        (dataset_root / "metadata" / "stages" / "prepare.json").read_text(encoding="utf-8")
+    )
+
+    assert first.reused is False
+    assert second.reused is True
+    assert second.train_count == first.train_count
+    assert second.val_count == first.val_count
+    assert second.test_count == first.test_count
+    assert stage_data["reused"] is True

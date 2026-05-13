@@ -139,6 +139,10 @@ ratio, and failure reasons) are written to `discarded_patches/discarded_log.csv`
 dataset. It is written after a successful `vs-prepare` run and is the intended
 input for later reuse-or-rebuild decisions.
 
+`vs-prepare` may skip rebuilding and reuse the existing dataset only when this
+fingerprint matches the current preprocessing request and the required prepared
+outputs still exist. Matching fingerprint metadata alone is not sufficient.
+
 The fingerprint is derived from:
 
 - the resolved `preprocessing` section only
