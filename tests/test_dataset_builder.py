@@ -188,6 +188,110 @@ def test_builder_logs_memory_after_stages(
     }
 
 
+def test_run_all_uses_streaming_finalize_not_old_stages(
+    builder_config: PreprocessingConfig,
+) -> None:
+    builder = DatasetBuilder(builder_config)
+
+    with (
+        _patched_builder_dependencies(),
+        patch.object(
+            builder,
+            "extract_patches",
+            side_effect=AssertionError("run_all() should not call extract_patches()"),
+        ),
+        patch.object(
+            builder,
+            "filter_patches",
+            side_effect=AssertionError("run_all() should not call filter_patches()"),
+        ),
+        patch.object(
+            builder,
+            "split_and_save",
+            side_effect=AssertionError("run_all() should not call split_and_save()"),
+        ),
+    ):
+        result = builder.run_all()
+
+    assert result.train_count + result.val_count + result.test_count > 0
+
+
+def test_run_all_produces_same_output_as_old_stages(tmp_path: Path) -> None:
+    import csv as csv_module
+    import random
+
+    def _make_config(dataset_root: Path) -> PreprocessingConfig:
+        return PreprocessingConfig(
+            dataset_root=dataset_root,
+            source_name="source.png",
+            target_name="target.png",
+            image_size=(64, 64),
+            grid_movement=(64, 64),
+            margin=0,
+            seed=42,
+            save_masks=False,
+            train_ratio=0.8,
+            val_ratio=0.1,
+            test_ratio=0.1,
+            min_foreground_ratio=0.0,
+            max_white_ratio=1.0,
+            white_threshold=250,
+            max_largest_white_component_ratio=1.0,
+        )
+
+    def _write_pair(dataset_root: Path) -> None:
+        dataset_root.mkdir()
+        cv2.imwrite(str(dataset_root / "source.png"), _make_synthetic_image(seed=0))
+        cv2.imwrite(str(dataset_root / "target.png"), _make_synthetic_image(seed=1))
+
+    def _manifest_rows(dataset_root: Path) -> list[dict[str, str]]:
+        manifest_path = dataset_root / "manifests" / "manifest.csv"
+        with manifest_path.open(encoding="utf-8", newline="") as f:
+            reader = csv_module.DictReader(f)
+            return sorted(
+                list(reader),
+                key=lambda row: (
+                    row["sample_id"],
+                    row["split"],
+                    row["input_path"],
+                    row["target_path"],
+                ),
+            )
+
+    streaming_root = tmp_path / "streaming"
+    legacy_root = tmp_path / "legacy"
+    _write_pair(streaming_root)
+    _write_pair(legacy_root)
+
+    streaming_builder = DatasetBuilder(_make_config(streaming_root))
+    legacy_builder = DatasetBuilder(_make_config(legacy_root))
+
+    with _patched_builder_dependencies():
+        streaming_result = streaming_builder.run_all()
+
+    with _patched_builder_dependencies():
+        legacy_builder._started_at = "2026-01-01T00:00:00+00:00"
+        legacy_builder._effective_seed = legacy_builder.config.seed
+        random.seed(legacy_builder.config.seed)
+        legacy_builder.compute_masks()
+        legacy_builder.align()
+        legacy_builder.extract_patches()
+        legacy_builder.filter_patches()
+        legacy_result = legacy_builder.split_and_save()
+
+    assert streaming_result.train_count == legacy_result.train_count
+    assert streaming_result.val_count == legacy_result.val_count
+    assert streaming_result.test_count == legacy_result.test_count
+    assert streaming_result.skipped_count == legacy_result.skipped_count
+    assert _manifest_rows(streaming_root) == _manifest_rows(legacy_root)
+    for split in ("train", "val", "test"):
+        streaming_files = sorted(
+            path.name for path in (streaming_root / f"dataset_{split}").iterdir()
+        )
+        legacy_files = sorted(path.name for path in (legacy_root / f"dataset_{split}").iterdir())
+        assert streaming_files == legacy_files
+
+
 def test_stream_patches_to_disk_writes_valid_patch_staging(
     builder_config: PreprocessingConfig,
 ) -> None:

@@ -353,6 +353,8 @@ class DatasetBuilder:
                 f"target_patches={n_tgt}, target_masks={n_tgt_mask}"
             )
 
+        logger.info("Extracted %s patch pairs", len(source_images))
+        _log_memory("extract_patches")
         valid_rows: list[dict[str, Any]] = []
         discarded_rows: list[dict[str, Any]] = []
         for (x, y), src, src_mask, tgt, tgt_mask in zip(
@@ -409,6 +411,7 @@ class DatasetBuilder:
                     }
                 )
 
+        _log_memory("filter_patches")
         return valid_rows, discarded_rows
 
     def _assign_splits_and_finalize(
@@ -547,6 +550,14 @@ class DatasetBuilder:
         with open(metadata_dir / "dataset_build.json", "w", encoding="utf-8") as f:
             json.dump(build_metadata, f, indent=2, default=str)
 
+        logger.info(
+            "Saved: train=%s, val=%s, test=%s, discarded=%s",
+            len(split[0]),
+            len(split[1]),
+            len(split[2]),
+            len(discarded_rows),
+        )
+        _log_memory("split_and_save")
         return DatasetBuildResult(
             train_count=len(split[0]),
             val_count=len(split[1]),
@@ -720,8 +731,7 @@ class DatasetBuilder:
 
         self.compute_masks()
         self.align()
-        self.extract_patches()
-        self.filter_patches()
-        result = self.split_and_save()
+        valid_rows, discarded_rows = self._stream_patches_to_disk()
+        result = self._assign_splits_and_finalize(valid_rows, discarded_rows)
 
         return result
