@@ -155,7 +155,11 @@ class DatasetManifest:
     def resolved_target_paths(self) -> list[Path]:
         return [self.dataset_root / record.target_path for record in self.records]
 
-    def validate(self, check_files_exist: bool = False) -> None:
+    def validate(
+        self,
+        check_files_exist: bool = False,
+        require_splits: set[str] | None = None,
+    ) -> None:
         """
         Raise if the manifest is inconsistent.
 
@@ -166,6 +170,7 @@ class DatasetManifest:
         - no duplicate input_path values
         - no duplicate target_path values
         - if check_files_exist=True, every resolved path must exist on disk
+        - if require_splits is provided, each listed split must have at least one record
         """
         splits_by_sample: dict[str, list[Split]] = defaultdict(list)
         for record in self.records:
@@ -216,6 +221,21 @@ class DatasetManifest:
                     raise FileNotFoundError(f"Input file not found: {input_path}")
                 if not target_path.exists():
                     raise FileNotFoundError(f"Target file not found: {target_path}")
+
+        if require_splits:
+            present_splits = sorted({record.split for record in self.records})
+            for split in sorted(require_splits):
+                if split not in _VALID_SPLITS:
+                    raise ValueError(
+                        f"Invalid required split {split!r}; expected one of {sorted(_VALID_SPLITS)}"
+                    )
+                if len(self.filter_split(cast(Split, split)).records) == 0:
+                    raise ValueError(
+                        f"Manifest has no records for required split '{split}'. "
+                        f"Present splits: {present_splits}. "
+                        "Check that 'vs-prepare' completed successfully and that "
+                        "the correct manifest is being used."
+                    )
 
     def to_csv(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

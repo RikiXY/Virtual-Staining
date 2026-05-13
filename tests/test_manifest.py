@@ -399,6 +399,34 @@ def test_validate_sample_in_train_and_discarded_passes() -> None:
     manifest.validate()
 
 
+def test_validate_require_splits_raises_for_missing_split(tmp_path: Path) -> None:
+    manifest = DatasetManifest(records=(_make_record("a", "train"),), dataset_root=tmp_path)
+
+    with pytest.raises(ValueError, match="val"):
+        manifest.validate(require_splits={"train", "val"})
+
+
+def test_validate_require_splits_raises_for_missing_test_split(tmp_path: Path) -> None:
+    manifest = DatasetManifest(records=(_make_record("a", "train"),), dataset_root=tmp_path)
+
+    with pytest.raises(ValueError, match="test"):
+        manifest.validate(require_splits={"test"})
+
+
+def test_validate_require_splits_passes_when_all_present(tmp_path: Path) -> None:
+    records = (_make_record("a", "train"), _make_record("b", "val"))
+    manifest = DatasetManifest(records=records, dataset_root=tmp_path)
+
+    manifest.validate(require_splits={"train", "val"})
+
+
+def test_validate_check_files_exist_raises_for_missing_input_file(tmp_path: Path) -> None:
+    manifest = DatasetManifest(records=(_make_record("a", "train"),), dataset_root=tmp_path)
+
+    with pytest.raises(FileNotFoundError, match="Input file not found"):
+        manifest.validate(check_files_exist=True)
+
+
 def test_dataset_manifest_len() -> None:
     records = tuple(_make_record(str(i)) for i in range(5))
     manifest = DatasetManifest(records=records, dataset_root=Path("/tmp"))

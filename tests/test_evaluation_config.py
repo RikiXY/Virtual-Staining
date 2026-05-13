@@ -36,6 +36,11 @@ def _write_test_manifest(dataset_root: Path, sample_ids: list[str]) -> None:
     write_manifest_csv(dataset_root, records)
 
 
+def _write_eval_pair(directory: Path, sample_id: str) -> None:
+    Image.new("RGB", (16, 16)).save(directory / f"{sample_id}_source.png")
+    Image.new("RGB", (16, 16)).save(directory / f"{sample_id}_target.png")
+
+
 def test_evaluation_config_defaults_to_run_dirs(tmp_path: Path) -> None:
     yaml_content = textwrap.dedent(f"""\
         dataset_root: {tmp_path / "data"}
@@ -150,7 +155,7 @@ def test_evaluate_writes_stage_scoped_snapshot_files(tmp_path: Path) -> None:
     generated_dir.mkdir()
     _write_test_manifest(dataset_root, ["00000_00000"])
 
-    Image.new("RGB", (16, 16)).save(target_dir / "00000_00000_target.png")
+    _write_eval_pair(target_dir, "00000_00000")
     Image.new("RGB", (16, 16)).save(generated_dir / "00000_00000_target_generated.png")
 
     yaml_file = tmp_path / "evaluate.yaml"
@@ -188,7 +193,7 @@ def test_evaluate_preserves_existing_training_snapshot_files(tmp_path: Path) -> 
     generated_dir.mkdir()
     _write_test_manifest(dataset_root, ["00000_00000"])
 
-    Image.new("RGB", (16, 16)).save(target_dir / "00000_00000_target.png")
+    _write_eval_pair(target_dir, "00000_00000")
     Image.new("RGB", (16, 16)).save(generated_dir / "00000_00000_target_generated.png")
 
     yaml_file = tmp_path / "evaluate.yaml"
@@ -248,6 +253,51 @@ def test_evaluate_raises_if_manifest_missing(tmp_path: Path) -> None:
         evaluate(run_config, yaml_file)
 
 
+def test_evaluate_raises_if_required_test_split_missing(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "data"
+    target_dir = dataset_root / "dataset_test"
+    generated_dir = tmp_path / "generated"
+    target_dir.mkdir(parents=True)
+    generated_dir.mkdir()
+    _write_eval_pair(target_dir, "00000_00000")
+    write_manifest_csv(
+        dataset_root,
+        (
+            ManifestRecord(
+                sample_id="00000_00000",
+                split="val",
+                input_path=Path("dataset_test/00000_00000_source.png"),
+                target_path=Path("dataset_test/00000_00000_target.png"),
+                input_modality="label_free",
+                target_modality="stained",
+                x=0,
+                y=0,
+                width=256,
+                height=256,
+            ),
+        ),
+    )
+
+    yaml_file = tmp_path / "evaluate.yaml"
+    yaml_file.write_text(
+        textwrap.dedent(f"""\
+            dataset_root: {dataset_root}
+            results_path: {tmp_path / "results"}
+            run_name: eval_run
+            evaluation:
+              target_dir: {target_dir}
+              generated_dir: {generated_dir}
+              output_dir: {tmp_path / "results" / "eval_run" / "evaluation"}
+        """),
+        encoding="utf-8",
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+
+    with pytest.raises(ValueError, match="test"):
+        evaluate(run_config, yaml_file)
+
+
 def test_evaluate_pairs_from_manifest_test_split(tmp_path: Path) -> None:
     dataset_root = tmp_path / "data"
     target_dir = dataset_root / "dataset_test"
@@ -257,7 +307,7 @@ def test_evaluate_pairs_from_manifest_test_split(tmp_path: Path) -> None:
     _write_test_manifest(dataset_root, ["00000_00000", "00256_00000"])
 
     for sample_id in ["00000_00000", "00256_00000"]:
-        Image.new("RGB", (16, 16)).save(target_dir / f"{sample_id}_target.png")
+        _write_eval_pair(target_dir, sample_id)
         Image.new("RGB", (16, 16)).save(
             generated_dir / generated_filename_for_sample(sample_id, ".PNG")
         )

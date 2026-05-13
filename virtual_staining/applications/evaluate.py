@@ -51,6 +51,7 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
     save_graphs = eval_cfg.save_graphs if eval_cfg else False
 
     manifest = load_manifest_or_raise(project)
+    manifest.validate(check_files_exist=True, require_splits={"test"})
     test_records = manifest.filter_split("test").records
     pairs: list[tuple[Path, Path, str]] = []
     pairing_skipped: list[dict[str, str]] = []

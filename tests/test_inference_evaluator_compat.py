@@ -98,6 +98,24 @@ def _write_test_manifest(dataset_root: Path, test_dir: Path) -> None:
     write_manifest_csv(dataset_root, records)
 
 
+def _write_non_test_manifest(dataset_root: Path) -> None:
+    records = (
+        ManifestRecord(
+            sample_id=_SAMPLE_ID,
+            split="val",
+            input_path=Path(f"test/{_SAMPLE_ID}_source.png"),
+            target_path=Path(f"test/{_SAMPLE_ID}_target.png"),
+            input_modality="label_free",
+            target_modality="stained",
+            x=512,
+            y=9216,
+            width=256,
+            height=256,
+        ),
+    )
+    write_manifest_csv(dataset_root, records)
+
+
 def _run_inference(
     checkpoint_path: Path,
     test_folder: str,
@@ -151,6 +169,36 @@ inference:
     config = RunConfig.from_yaml(config_path)
 
     with pytest.raises(FileNotFoundError, match="Manifest not found"):
+        _run_inference_impl(config, config_path)
+
+
+def test_run_inference_raises_if_required_test_split_missing(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    checkpoint = tmp_path / "ep000.pth"
+
+    _write_pair(test_dir)
+    _write_non_test_manifest(tmp_path)
+    _save_checkpoint(checkpoint)
+
+    config_path = tmp_path / "infer.yaml"
+    config_path.write_text(
+        f"""
+dataset_root: {tmp_path}
+results_path: {tmp_path}
+run_name: test_run
+image_size: [{_IMAGE_SIZE[0]}, {_IMAGE_SIZE[1]}]
+inference:
+  checkpoint_path: {checkpoint}
+  output_dir: {output_dir}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    config = RunConfig.from_yaml(config_path)
+
+    with pytest.raises(ValueError, match="test"):
         _run_inference_impl(config, config_path)
 
 

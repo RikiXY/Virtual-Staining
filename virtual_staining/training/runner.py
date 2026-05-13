@@ -107,6 +107,7 @@ def run_training(
     val_dir = config.project.dataset_val_dir
 
     manifest = load_manifest_or_raise(config.project)
+    manifest.validate(check_files_exist=True, require_splits={"train", "val"})
     train_dataset = PairedManifestDataset(
         manifest.filter_split("train"),
         transform=transform,

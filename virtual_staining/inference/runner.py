@@ -107,6 +107,7 @@ def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
 
     output_dir = config.inference.output_dir or paths.output_test_dir
     manifest = load_manifest_or_raise(config.project)
+    manifest.validate(check_files_exist=True, require_splits={"test"})
     test_manifest = manifest.filter_split("test")
     dataset = PairedManifestDataset(test_manifest, transform=transform)
     logger.info("Loaded manifest: %s test samples", len(dataset))
