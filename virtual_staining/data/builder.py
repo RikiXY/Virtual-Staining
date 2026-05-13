@@ -4,6 +4,7 @@ import csv
 import dataclasses
 import datetime
 import json
+import logging
 import random
 from pathlib import Path
 from typing import Any, cast
@@ -25,6 +26,8 @@ from virtual_staining.data.preprocessing import (
     validate_image_filename,
 )
 from virtual_staining.data.results import DatasetBuildResult
+
+logger = logging.getLogger(__name__)
 
 
 def _build_manifest_metadata(records: list[ManifestRecord]) -> dict[str, Any]:
@@ -95,7 +98,7 @@ class DatasetBuilder:
                 f"'{self.config.target_name}' inside: {root}"
             )
 
-        print("Calculating masks...")
+        logger.info("Calculating masks...")
         self._source_mask = calculate_mask_with_multiple_parameters(
             self._source_image, MASK_PARAMETER_GRID
         )
@@ -123,7 +126,7 @@ class DatasetBuilder:
         ):
             raise RuntimeError("compute_masks() must be called before align()")
 
-        print("Aligning images...")
+        logger.info("Aligning images...")
         aligned_target, aligned_target_mask, _, metadata = align_from_scaled(
             self._source_image,
             self._target_image,
@@ -192,7 +195,7 @@ class DatasetBuilder:
                 f"target_patches={n_tgt}, target_masks={n_tgt_mask}"
             )
 
-        print(f"Extracted {len(source_images)} patch pairs")
+        logger.info("Extracted %s patch pairs", len(source_images))
         self._source_patches = source_images
         self._source_patch_masks = source_masks
         self._target_patches = target_images
@@ -408,9 +411,12 @@ class DatasetBuilder:
         with open(metadata_dir / "dataset_build.json", "w", encoding="utf-8") as f:
             json.dump(build_metadata, f, indent=2, default=str)
 
-        print(
-            f"Saved: train={len(split[0])}, val={len(split[1])}, "
-            f"test={len(split[2])}, discarded={len(self._discarded_source_images)}"
+        logger.info(
+            "Saved: train=%s, val=%s, test=%s, discarded=%s",
+            len(split[0]),
+            len(split[1]),
+            len(split[2]),
+            len(self._discarded_source_images),
         )
         return DatasetBuildResult(
             train_count=len(split[0]),
@@ -426,7 +432,7 @@ class DatasetBuilder:
         seed = self.config.seed if self.config.seed is not None else random.randint(0, 2**32 - 1)
         self._effective_seed = seed
         random.seed(seed)
-        print(f"Seed set to {seed}")
+        logger.info("Seed set to %s", seed)
 
         self.compute_masks()
         self.align()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -139,6 +140,23 @@ def test_run_all_result_counts_match_saved_files(
         assert len(files) == expected_file_count, (
             f"{split_name}: expected {expected_file_count} files, got {len(files)}"
         )
+
+
+def test_builder_logs_stage_progress(
+    builder_config: PreprocessingConfig, caplog: pytest.LogCaptureFixture
+) -> None:
+    with (
+        _patched_builder_dependencies(),
+        caplog.at_level(logging.INFO, logger="virtual_staining.data.builder"),
+    ):
+        DatasetBuilder(builder_config).run_all()
+
+    messages = [record.message for record in caplog.records]
+    assert any(message == "Seed set to 42" for message in messages)
+    assert any(message == "Calculating masks..." for message in messages)
+    assert any(message == "Aligning images..." for message in messages)
+    assert any("patch pairs" in message for message in messages)
+    assert any(message.startswith("Saved: train=") for message in messages)
 
 
 def test_run_all_discarded_log_is_written(builder_config: PreprocessingConfig) -> None:
