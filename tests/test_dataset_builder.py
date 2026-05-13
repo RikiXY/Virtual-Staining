@@ -188,37 +188,17 @@ def test_builder_logs_memory_after_stages(
     }
 
 
-def test_run_all_uses_streaming_finalize_not_old_stages(
+def test_dataset_builder_does_not_expose_old_patch_stage_methods(
     builder_config: PreprocessingConfig,
 ) -> None:
     builder = DatasetBuilder(builder_config)
-
-    with (
-        _patched_builder_dependencies(),
-        patch.object(
-            builder,
-            "extract_patches",
-            side_effect=AssertionError("run_all() should not call extract_patches()"),
-        ),
-        patch.object(
-            builder,
-            "filter_patches",
-            side_effect=AssertionError("run_all() should not call filter_patches()"),
-        ),
-        patch.object(
-            builder,
-            "split_and_save",
-            side_effect=AssertionError("run_all() should not call split_and_save()"),
-        ),
-    ):
-        result = builder.run_all()
-
-    assert result.train_count + result.val_count + result.test_count > 0
+    assert not hasattr(builder, "extract_patches")
+    assert not hasattr(builder, "filter_patches")
+    assert not hasattr(builder, "split_and_save")
 
 
 def test_run_all_produces_same_output_as_old_stages(tmp_path: Path) -> None:
     import csv as csv_module
-    import random
 
     def _make_config(dataset_root: Path) -> PreprocessingConfig:
         return PreprocessingConfig(
@@ -272,12 +252,10 @@ def test_run_all_produces_same_output_as_old_stages(tmp_path: Path) -> None:
     with _patched_builder_dependencies():
         legacy_builder._started_at = "2026-01-01T00:00:00+00:00"
         legacy_builder._effective_seed = legacy_builder.config.seed
-        random.seed(legacy_builder.config.seed)
         legacy_builder.compute_masks()
         legacy_builder.align()
-        legacy_builder.extract_patches()
-        legacy_builder.filter_patches()
-        legacy_result = legacy_builder.split_and_save()
+        valid_rows, discarded_rows = legacy_builder._stream_patches_to_disk()
+        legacy_result = legacy_builder._assign_splits_and_finalize(valid_rows, discarded_rows)
 
     assert streaming_result.train_count == legacy_result.train_count
     assert streaming_result.val_count == legacy_result.val_count
@@ -731,22 +709,24 @@ def test_align_requires_masks(builder_config: PreprocessingConfig) -> None:
         builder.align()
 
 
-def test_extract_patches_requires_align(builder_config: PreprocessingConfig) -> None:
+def test_stream_patches_to_disk_requires_align(builder_config: PreprocessingConfig) -> None:
     builder = DatasetBuilder(builder_config)
     with pytest.raises(RuntimeError, match="align"):
-        builder.extract_patches()
+        builder._stream_patches_to_disk()
 
 
-def test_filter_patches_requires_extract(builder_config: PreprocessingConfig) -> None:
+def test_assign_splits_and_finalize_accepts_empty_rows(
+    builder_config: PreprocessingConfig,
+) -> None:
     builder = DatasetBuilder(builder_config)
-    with pytest.raises(RuntimeError, match="extract_patches"):
-        builder.filter_patches()
+    builder._started_at = "2026-01-01T00:00:00+00:00"
+    builder._effective_seed = builder_config.seed
+    result = builder._assign_splits_and_finalize([], [])
 
-
-def test_split_and_save_requires_filter(builder_config: PreprocessingConfig) -> None:
-    builder = DatasetBuilder(builder_config)
-    with pytest.raises(RuntimeError, match="filter_patches"):
-        builder.split_and_save()
+    assert result.train_count == 0
+    assert result.val_count == 0
+    assert result.test_count == 0
+    assert result.skipped_count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -791,7 +771,7 @@ def test_run_all_saves_alignment_metadata(builder_config: PreprocessingConfig) -
 # ---------------------------------------------------------------------------
 
 
-def test_extract_patches_raises_on_count_mismatch(
+def test_stream_patches_to_disk_raises_on_count_mismatch(
     builder_config: PreprocessingConfig,
 ) -> None:
     builder = DatasetBuilder(builder_config)
@@ -808,4 +788,4 @@ def test_extract_patches_raises_on_count_mismatch(
             ),
             pytest.raises(RuntimeError, match="mismatch"),
         ):
-            builder.extract_patches()
+            builder._stream_patches_to_disk()
