@@ -33,6 +33,7 @@
               python
               pkgs.gnumake
               pkgs.git
+              pkgs.pre-commit
             ];
 
             UV_PYTHON = "${python}/bin/python";
