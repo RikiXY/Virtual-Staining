@@ -65,6 +65,23 @@ def _estimate_memory_gb(h: int, w: int) -> float:
     return estimated_bytes / (1024**3)
 
 
+def _read_image_size(path: Path) -> tuple[int, int]:
+    """
+    Read image size from metadata only.
+
+    Pillow's decompression-bomb guard can fire on legitimate whole-slide or
+    microscopy images even when reading only headers, so disable it briefly
+    for this metadata-only check and restore it immediately afterward.
+    """
+    original_max_image_pixels = Image.MAX_IMAGE_PIXELS
+    try:
+        Image.MAX_IMAGE_PIXELS = None
+        with Image.open(path) as img:
+            return img.size
+    finally:
+        Image.MAX_IMAGE_PIXELS = original_max_image_pixels
+
+
 class DatasetBuilder:
     """
     Orchestrates the full dataset preparation pipeline.
@@ -102,8 +119,7 @@ class DatasetBuilder:
         if not root.exists():
             raise FileNotFoundError(f"Dataset root not found: {root}")
 
-        with Image.open(root / self._source_file.name) as img:
-            source_w, source_h = img.size
+        source_w, source_h = _read_image_size(root / self._source_file.name)
 
         estimated_gb = _estimate_memory_gb(source_h, source_w)
         if self.config.max_memory_gb is not None and estimated_gb > self.config.max_memory_gb:

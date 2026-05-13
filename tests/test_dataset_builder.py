@@ -271,6 +271,29 @@ def test_compute_masks_warns_when_estimate_is_high_without_limit(
     assert any("mask_scale: 0.25" in message for message in caplog.messages)
 
 
+def test_read_image_size_disables_pillow_bomb_limit_temporarily() -> None:
+    original_max_image_pixels = builder_module.Image.MAX_IMAGE_PIXELS
+
+    class _DummyImage:
+        size = (123, 456)
+
+        def __enter__(self) -> _DummyImage:
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+    def _open_asserting_limit_disabled(_path: Path) -> _DummyImage:
+        assert builder_module.Image.MAX_IMAGE_PIXELS is None
+        return _DummyImage()
+
+    with patch("virtual_staining.data.builder.Image.open", side_effect=_open_asserting_limit_disabled):
+        size = builder_module._read_image_size(Path("/tmp/fake.tif"))
+
+    assert size == (123, 456)
+    assert builder_module.Image.MAX_IMAGE_PIXELS == original_max_image_pixels
+
+
 def test_builder_logs_memory_after_stages(
     builder_config: PreprocessingConfig, caplog: pytest.LogCaptureFixture
 ) -> None:
