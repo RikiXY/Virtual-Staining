@@ -10,6 +10,8 @@ generation of virtually stained images from label-free microscopy inputs (and vi
 | Command | Purpose |
 |---|---|
 | `vs-prepare` | Build the patch dataset from full-size image pairs |
+| `vs-complete-run` | Run prepare, train, infer, and evaluate in sequence |
+| `vs-run-queue` | Execute multiple full runs sequentially from a queue file |
 | `vs-train` | Train the Pix2Pix model |
 | `vs-infer` | Run inference on the test split |
 | `vs-evaluate` | Evaluate generated images with MAE, RMSE, PSNR, SSIM |
@@ -30,17 +32,8 @@ uv sync --frozen
 # 3. Copy and edit the example run config
 cp config/runs/example.yaml config/runs/local/my_run.yaml
 
-# 4. Prepare dataset
-vs-prepare --config config/runs/local/my_run.yaml
-
-# 5. Train
-vs-train --config config/runs/local/my_run.yaml
-
-# 6. Run inference
-vs-infer --config config/runs/local/my_run.yaml
-
-# 7. Evaluate
-vs-evaluate --config config/runs/local/my_run.yaml
+# 4. Run the full pipeline
+vs-complete-run --config config/runs/local/my_run.yaml
 ```
 
 ### Makefile shortcuts
@@ -50,15 +43,40 @@ make dataset        CONFIG=config/runs/local/my_run.yaml
 make train          CONFIG=config/runs/local/my_run.yaml
 make infer          CONFIG=config/runs/local/my_run.yaml
 make evaluate       CONFIG=config/runs/local/my_run.yaml
+make complete-run   CONFIG=config/runs/local/my_run.yaml
+make run-queue      QUEUE=config/queues/example.yaml
 make compare        CONFIG=config/runs/local/my_run.yaml
 make compare-panels CONFIG=config/runs/local/my_run.yaml
 ```
 
-Or run the full sequence in one command:
+Or call the CLI directly:
 
 ```bash
-make complete-run CONFIG=config/runs/local/my_run.yaml
+vs-complete-run --config config/runs/local/my_run.yaml
 ```
+
+Queue multiple full runs locally:
+
+```yaml
+# config/queues/nightly.yaml
+name: nightly
+continue_on_failure: true
+jobs:
+  - config_path: ../runs/local/run_a.yaml
+    label: baseline
+  - config_path: ../runs/local/run_b.yaml
+    notes: retry with lower lr
+```
+
+```bash
+vs-run-queue --queue config/queues/nightly.yaml
+```
+
+Queue definitions live under `config/queues/`. Personal queue YAMLs can live
+under `config/queues/local/`. Queue runtime state is written under
+`local_workspace/queues/`, separate from the committed queue definitions.
+State files are flat in that directory, for example
+`local_workspace/queues/nightly.state.json`.
 
 ## Configuration
 
@@ -134,6 +152,7 @@ See [`docs/architecture.md`](docs/architecture.md) for the full description and 
 ```text
 Virtual-Staining/
 ├── config/
+│   ├── queues/                 # queue YAML files (example.yaml template)
 │   └── runs/                   # run YAML files (example.yaml template)
 ├── docs/
 │   ├── assets/                 # qualitative result images
@@ -142,6 +161,7 @@ Virtual-Staining/
 ├── examples/                   # example input images
 ├── local_workspace/
 │   ├── datasets/               # input paired samples (gitignored)
+│   ├── queues/                 # queue state files (gitignored except .gitkeep)
 │   └── results/                # run outputs (gitignored)
 ├── tests/                      # pytest test suite
 ├── virtual_staining/           # installable package

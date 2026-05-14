@@ -9,11 +9,19 @@
 !/local_workspace/results/
 /local_workspace/results/*
 !/local_workspace/results/.gitkeep
+!/local_workspace/queues/
+/local_workspace/queues/*
+!/local_workspace/queues/.gitkeep
 
 # Local run configs (personal copies; the example.yaml is tracked)
 !config/runs/local/
 config/runs/local/*
 !config/runs/local/.gitkeep
+
+# Local queue configs
+!config/queues/local/
+config/queues/local/*
+!config/queues/local/.gitkeep
 
 # Python
 __pycache__/

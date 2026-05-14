@@ -168,6 +168,9 @@ preprocessing:
     metadata_dir = dataset_root / "metadata"
     run_data = json.loads((metadata_dir / "run.json").read_text(encoding="utf-8"))
     stage_data = json.loads((metadata_dir / "stages" / "prepare.json").read_text(encoding="utf-8"))
+    fingerprint_data = json.loads(
+        (metadata_dir / "dataset_fingerprint.json").read_text(encoding="utf-8")
+    )
     events = [
         json.loads(line)
         for line in (metadata_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
@@ -177,5 +180,9 @@ preprocessing:
     assert run_data["last_completed_stage"] == "prepare"
     assert stage_data["stage"] == "prepare"
     assert stage_data["status"] == "completed"
+    assert stage_data["reused"] is False
     assert stage_data["manifest_path"].endswith("manifests/manifest.csv")
+    assert fingerprint_data["fingerprint"].startswith("sha256:")
+    assert fingerprint_data["source"]["path"] == str((dataset_root / "source.png").resolve())
+    assert fingerprint_data["target"]["path"] == str((dataset_root / "target.png").resolve())
     assert [event["event_type"] for event in events] == ["stage_started", "stage_completed"]

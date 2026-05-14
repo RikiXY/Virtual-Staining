@@ -9,6 +9,8 @@ import yaml
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
+    build_dataset_fingerprint_metadata,
+    build_file_provenance,
     compute_manifest_hash,
     resolve_prepare_snapshot_paths,
     resolve_run_snapshot_paths,
@@ -154,3 +156,79 @@ def test_resolve_prepare_snapshot_paths_uses_dataset_root_canonical_layout(tmp_p
     assert resolved.resolved_config == dataset_root / "config" / "resolved.yaml"
     assert resolved.config_hash == dataset_root / "metadata" / "config_hash.txt"
     assert resolved.environment == dataset_root / "metadata" / "environment.json"
+
+
+def test_build_file_provenance_records_required_fields(tmp_path: Path) -> None:
+    image_path = tmp_path / "source.png"
+    image_path.write_bytes(b"source-image-bytes")
+
+    provenance = build_file_provenance(image_path)
+
+    assert provenance["path"] == str(image_path.resolve())
+    assert provenance["size"] == len(b"source-image-bytes")
+    assert isinstance(provenance["mtime_ns"], int)
+    assert provenance["sha256"].startswith("sha256:")
+
+
+def test_dataset_fingerprint_changes_with_preprocessing_fields(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "dataset"
+    dataset_root.mkdir()
+    source_path = dataset_root / "source.png"
+    target_path = dataset_root / "target.png"
+    source_path.write_bytes(b"source")
+    target_path.write_bytes(b"target")
+
+    first = build_dataset_fingerprint_metadata(
+        dataset_root=dataset_root,
+        preprocessing_config={
+            "dataset_root": str(dataset_root.resolve()),
+            "source_name": "source.png",
+            "target_name": "target.png",
+            "image_size": [64, 64],
+        },
+        source_path=source_path,
+        target_path=target_path,
+        prepared_at="2026-01-01T00:00:00+00:00",
+    )
+    second = build_dataset_fingerprint_metadata(
+        dataset_root=dataset_root,
+        preprocessing_config={
+            "dataset_root": str(dataset_root.resolve()),
+            "source_name": "source.png",
+            "target_name": "target.png",
+            "image_size": [128, 64],
+        },
+        source_path=source_path,
+        target_path=target_path,
+        prepared_at="2026-01-01T00:00:00+00:00",
+    )
+
+    assert first["fingerprint"] != second["fingerprint"]
+
+
+def test_dataset_fingerprint_changes_with_input_file_content(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "dataset"
+    dataset_root.mkdir()
+    source_path = dataset_root / "source.png"
+    target_path = dataset_root / "target.png"
+    source_path.write_bytes(b"source-v1")
+    target_path.write_bytes(b"target")
+
+    kwargs = {
+        "dataset_root": dataset_root,
+        "preprocessing_config": {
+            "dataset_root": str(dataset_root.resolve()),
+            "source_name": "source.png",
+            "target_name": "target.png",
+            "image_size": [64, 64],
+        },
+        "source_path": source_path,
+        "target_path": target_path,
+        "prepared_at": "2026-01-01T00:00:00+00:00",
+    }
+    first = build_dataset_fingerprint_metadata(**kwargs)
+    source_path.write_bytes(b"source-v2")
+    second = build_dataset_fingerprint_metadata(**kwargs)
+
+    assert first["source"]["sha256"] != second["source"]["sha256"]
+    assert first["fingerprint"] != second["fingerprint"]

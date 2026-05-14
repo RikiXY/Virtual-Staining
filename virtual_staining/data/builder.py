@@ -29,6 +29,11 @@ from virtual_staining.data.preprocessing import (
     validate_image_filename,
 )
 from virtual_staining.data.results import DatasetBuildResult
+from virtual_staining.experiment.snapshots import (
+    build_dataset_fingerprint_metadata,
+    save_dataset_fingerprint,
+    serialize_preprocessing_config,
+)
 
 logger = logging.getLogger(__name__)
 _MEMORY_WARNING_THRESHOLD_GB = 8.0
@@ -488,6 +493,15 @@ class DatasetBuilder:
         with open(metadata_dir / "dataset_build.json", "w", encoding="utf-8") as f:
             json.dump(build_metadata, f, indent=2, default=str)
 
+        fingerprint_metadata = build_dataset_fingerprint_metadata(
+            dataset_root=root,
+            preprocessing_config=serialize_preprocessing_config(self.config),
+            source_path=root / self._source_file.name,
+            target_path=root / self._target_file.name,
+            prepared_at=build_metadata["completed_at"],
+        )
+        save_dataset_fingerprint(fingerprint_metadata, metadata_dir / "dataset_fingerprint.json")
+
         logger.info(
             "Saved: train=%s, val=%s, test=%s, discarded=%s",
             len(split[0]),
@@ -502,6 +516,7 @@ class DatasetBuilder:
             test_count=len(split[2]),
             skipped_count=len(discarded_rows),
             output_root=root,
+            reused=False,
         )
 
     def run_all(self) -> DatasetBuildResult:

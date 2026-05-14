@@ -1,5 +1,40 @@
 # Run Output Format
 
+## Local Queues
+
+Queue definitions are stored as YAML files under `config/queues/`. Runtime
+queue state is written under `local_workspace/queues/`. Queue execution is
+explicitly local, sequential, and single-worker in v1.
+
+Example queue file:
+
+```yaml
+name: nightly
+continue_on_failure: true
+jobs:
+  - config_path: ../runs/local/run_a.yaml
+    label: baseline
+  - config_path: ../runs/local/run_b.yaml
+    notes: retry with lower lr
+```
+
+Example layout:
+
+```text
+config/queues/
+├── nightly.yaml
+└── local/
+    └── my_queue.yaml
+
+local_workspace/queues/
+├── nightly.state.json
+└── my_queue.state.json
+```
+
+Queue state is flattened under `local_workspace/queues/` by queue name. The
+state file records queue-level status plus per-job fields such as
+`status`, `started_at`, `completed_at`, and `error`.
+
 ## Directory Layout
 
 All outputs for a training run are written under:
