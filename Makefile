@@ -12,6 +12,7 @@ help:
 	@printf "  %-24s %s\n" "infer" "Run inference via vs-infer CLI from CONFIG"
 	@printf "  %-24s %s\n" "evaluate" "Evaluate outputs via vs-evaluate CLI from CONFIG"
 	@printf "  %-24s %s\n" "complete-run" "Run dataset, train, infer, evaluate from CONFIG"
+	@printf "  %-24s %s\n" "run-queue" "Run a queue YAML from QUEUE"
 	@printf "  %-24s %s\n" "compare" "Compare metric distributions from CONFIG"
 	@printf "  %-24s %s\n" "compare-panels" "Build comparison panels from CONFIG"
 	@printf "  %-24s %s\n" "evaluate-single" "Evaluate dataset image pairs from CONFIG"
@@ -36,11 +37,16 @@ help:
 	@printf "  make infer CONFIG=config/runs/local/my_run.yaml\n"
 	@printf "  make evaluate CONFIG=config/runs/local/my_run.yaml\n"
 	@printf "  make complete-run CONFIG=config/runs/local/my_run.yaml\n"
+	@printf "  make run-queue QUEUE=config/queues/example.yaml\n"
 	@printf "\n"
 
 require-config:
 	@test -n "$(CONFIG)" || (echo "CONFIG is required, e.g. CONFIG=config/runs/example.yaml"; exit 1)
 	@test -f "$(CONFIG)" || (echo "CONFIG file not found: $(CONFIG)"; exit 1)
+
+require-queue:
+	@test -n "$(QUEUE)" || (echo "QUEUE is required, e.g. QUEUE=config/queues/example.yaml"; exit 1)
+	@test -f "$(QUEUE)" || (echo "QUEUE file not found: $(QUEUE)"; exit 1)
 
 sync:
 	$(UV) sync --frozen
@@ -59,6 +65,9 @@ evaluate: require-config
 
 complete-run: require-config
 	$(UV) run vs-complete-run --config $(CONFIG)
+
+run-queue: require-queue
+	$(UV) run vs-run-queue --queue $(QUEUE)
 
 compare: require-config
 	$(UV) run vs-compare --config $(CONFIG)

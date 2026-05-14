@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import textwrap
@@ -12,6 +13,7 @@ import yaml
 from virtual_staining.applications.compare_panels import FromMetricsResult
 from virtual_staining.applications.complete_run import complete_run
 from virtual_staining.applications.evaluate_single import DatasetEvalResult
+from virtual_staining.applications.run_queue import load_local_run_queue, run_queue
 from virtual_staining.cli import compare as compare_cli
 from virtual_staining.cli import compare_panels as compare_panels_cli
 from virtual_staining.cli import complete_run as complete_run_cli
@@ -20,12 +22,19 @@ from virtual_staining.cli import evaluate_single as evaluate_single_cli
 from virtual_staining.cli import infer as infer_cli
 from virtual_staining.cli import organize as organize_cli
 from virtual_staining.cli import prepare_dataset as prepare_cli
+from virtual_staining.cli import run_queue as run_queue_cli
 from virtual_staining.cli import train as train_cli
 from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.statistics import PairedSummary
 
 UV = ("uv", "run")
-CLI_ENTRYPOINTS = ("vs-prepare", "vs-complete-run", "vs-train", "vs-infer", "vs-evaluate")
+CLI_ENTRYPOINTS = (
+    "vs-prepare",
+    "vs-complete-run",
+    "vs-train",
+    "vs-infer",
+    "vs-evaluate",
+)
 MAKE_EXPERIMENT_TARGETS = ("dataset", "train", "infer", "evaluate", "complete-run")
 
 
@@ -39,6 +48,7 @@ def _write_metrics_csv(run_path: Path) -> Path:
 
 def _write_config(tmp_path: Path, section_yaml: str) -> Path:
     config_path = tmp_path / "run.yaml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
     section = textwrap.dedent(section_yaml).strip()
     config_path.write_text(
         (
@@ -56,6 +66,21 @@ def _run_subprocess(
     *args: str, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, capture_output=True, text=True, env=env, check=False)
+
+
+def _write_queue(tmp_path: Path, jobs_yaml: str, *, continue_on_failure: bool = False) -> Path:
+    queue_path = tmp_path / "config" / "queues" / "nightly.yaml"
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    queue_path.write_text(
+        (
+            "name: nightly\n"
+            f"continue_on_failure: {'true' if continue_on_failure else 'false'}\n"
+            "jobs:\n"
+            f"{textwrap.dedent(jobs_yaml)}"
+        ),
+        encoding="utf-8",
+    )
+    return queue_path
 
 
 @pytest.mark.parametrize("cmd", CLI_ENTRYPOINTS)
@@ -98,11 +123,36 @@ def test_example_yaml_is_valid_mapping() -> None:
     assert isinstance(data, dict), "config/runs/example.yaml is not a YAML mapping"
 
 
+def test_example_queue_yaml_is_valid_mapping() -> None:
+    queue_path = Path("config/queues/example.yaml")
+    assert queue_path.exists(), "config/queues/example.yaml is missing"
+    data = yaml.safe_load(queue_path.read_text(encoding="utf-8"))
+    assert isinstance(data, dict), "config/queues/example.yaml is not a YAML mapping"
+
+
 def test_readme_examples_use_local_run_configs() -> None:
     readme = Path("README.md").read_text(encoding="utf-8")
     assert "config/runs/local/" in readme
     assert "ARGS=" not in readme
     assert "CONFIG=config/runs/example.yaml" not in readme
+    assert "QUEUE=config/queues/example.yaml" in readme
+
+
+def test_run_queue_help_includes_queue_flag() -> None:
+    result = _run_subprocess(*UV, "vs-run-queue", "--help")
+    assert result.returncode == 0, f"vs-run-queue --help failed: {result.stderr}"
+    assert "--queue" in result.stdout
+
+
+def test_run_queue_exits_nonzero_without_queue() -> None:
+    result = _run_subprocess(*UV, "vs-run-queue")
+    assert result.returncode != 0
+
+
+def test_make_run_queue_fails_without_queue() -> None:
+    env = {**os.environ, "QUEUE": ""}
+    result = _run_subprocess("make", "run-queue", env=env)
+    assert result.returncode != 0
 
 
 @pytest.mark.parametrize(
@@ -522,3 +572,212 @@ def test_complete_run_stops_on_first_failing_stage(
         complete_run(config, config_path)
 
     assert calls == ["prepare"]
+
+
+def test_run_queue_main_passes_queue_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """\
+        training:
+          epochs: 1
+        """,
+    )
+    queue_path = _write_queue(
+        tmp_path,
+        f"""\
+          - config_path: {config_path}
+        """,
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_run_queue(incoming_path: Path) -> object:
+        captured["queue_path"] = incoming_path
+        return SimpleNamespace(status="completed")
+
+    monkeypatch.setattr(run_queue_cli, "run_queue", _fake_run_queue)
+
+    run_queue_cli.main(["--queue", str(queue_path)])
+
+    assert captured["queue_path"] == queue_path.resolve()
+
+
+def test_load_local_run_queue_resolves_relative_job_paths(tmp_path: Path) -> None:
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    config_path = config_dir / "job.yaml"
+    config_path.write_text(
+        "dataset_root: /tmp/data\nresults_path: /tmp/results\nrun_name: demo\n",
+        encoding="utf-8",
+    )
+    queue_path = _write_queue(
+        tmp_path,
+        """\
+          - config_path: ../../configs/job.yaml
+            label: baseline
+            notes: first run
+        """,
+    )
+
+    queue = load_local_run_queue(queue_path)
+
+    assert queue.name == "nightly"
+    assert queue.continue_on_failure is False
+    assert queue.jobs[0].config_path == config_path.resolve()
+    assert queue.jobs[0].label == "baseline"
+    assert queue.jobs[0].notes == "first run"
+
+
+def test_load_local_run_queue_rejects_unknown_top_level_keys(tmp_path: Path) -> None:
+    queue_path = tmp_path / "config" / "queues" / "nightly.yaml"
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    queue_path.write_text(
+        (
+            "name: nightly\n"
+            "continue_on_failure: false\n"
+            "unexpected: true\n"
+            "jobs:\n"
+            "  - config_path: ../runs/local/run_a.yaml\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"Unknown key\(s\) in queue: unexpected"):
+        load_local_run_queue(queue_path)
+
+
+def test_load_local_run_queue_rejects_unknown_job_keys(tmp_path: Path) -> None:
+    queue_path = tmp_path / "config" / "queues" / "nightly.yaml"
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    queue_path.write_text(
+        (
+            "name: nightly\n"
+            "continue_on_failure: false\n"
+            "jobs:\n"
+            "  - config_path: ../runs/local/run_a.yaml\n"
+            "    unexpected: true\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"Unknown key\(s\) in queue\.jobs\[0\]: unexpected"):
+        load_local_run_queue(queue_path)
+
+
+def test_load_local_run_queue_requires_yaml_boolean_for_continue_on_failure(
+    tmp_path: Path,
+) -> None:
+    queue_path = tmp_path / "config" / "queues" / "nightly.yaml"
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    queue_path.write_text(
+        (
+            "name: nightly\n"
+            'continue_on_failure: "false"\n'
+            "jobs:\n"
+            "  - config_path: ../runs/local/run_a.yaml\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TypeError, match="continue_on_failure"):
+        load_local_run_queue(queue_path)
+
+
+def test_run_queue_executes_jobs_in_order_and_persists_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_a = _write_config(tmp_path / "a", "training:\n  epochs: 1\n")
+    config_b = _write_config(tmp_path / "b", "training:\n  epochs: 1\n")
+    queue_path = _write_queue(
+        tmp_path,
+        f"""\
+          - config_path: {config_a}
+            label: first
+          - config_path: {config_b}
+            label: second
+        """,
+        continue_on_failure=False,
+    )
+    calls: list[Path] = []
+
+    def _fake_complete_run(config: RunConfig, config_path: Path) -> None:
+        del config
+        calls.append(config_path)
+
+    monkeypatch.setattr("virtual_staining.applications.run_queue.complete_run", _fake_complete_run)
+
+    state = run_queue(queue_path)
+    state_path = tmp_path / "local_workspace" / "queues" / "nightly.state.json"
+    state_data = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert calls == [config_a.resolve(), config_b.resolve()]
+    assert state.status == "completed"
+    assert state_data["status"] == "completed"
+    assert [job["status"] for job in state_data["jobs"]] == ["completed", "completed"]
+    assert state_path.exists()
+
+
+def test_run_queue_stops_on_failure_when_continue_on_failure_is_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_a = _write_config(tmp_path / "a", "training:\n  epochs: 1\n")
+    config_b = _write_config(tmp_path / "b", "training:\n  epochs: 1\n")
+    queue_path = _write_queue(
+        tmp_path,
+        f"""\
+          - config_path: {config_a}
+          - config_path: {config_b}
+        """,
+        continue_on_failure=False,
+    )
+    calls: list[Path] = []
+
+    def _fake_complete_run(config: RunConfig, config_path: Path) -> None:
+        del config
+        calls.append(config_path)
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("virtual_staining.applications.run_queue.complete_run", _fake_complete_run)
+
+    state = run_queue(queue_path)
+    state_data = json.loads(
+        (tmp_path / "local_workspace" / "queues" / "nightly.state.json").read_text(encoding="utf-8")
+    )
+
+    assert calls == [config_a.resolve()]
+    assert state.status == "failed"
+    assert [job["status"] for job in state_data["jobs"]] == ["failed", "pending"]
+    assert state_data["jobs"][0]["error"] == "boom"
+
+
+def test_run_queue_continues_after_failure_when_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_a = _write_config(tmp_path / "a", "training:\n  epochs: 1\n")
+    config_b = _write_config(tmp_path / "b", "training:\n  epochs: 1\n")
+    queue_path = _write_queue(
+        tmp_path,
+        f"""\
+          - config_path: {config_a}
+          - config_path: {config_b}
+        """,
+        continue_on_failure=True,
+    )
+    calls: list[Path] = []
+
+    def _fake_complete_run(config: RunConfig, config_path: Path) -> None:
+        del config
+        calls.append(config_path)
+        if config_path == config_a.resolve():
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr("virtual_staining.applications.run_queue.complete_run", _fake_complete_run)
+
+    state = run_queue(queue_path)
+    state_data = json.loads(
+        (tmp_path / "local_workspace" / "queues" / "nightly.state.json").read_text(encoding="utf-8")
+    )
+
+    assert calls == [config_a.resolve(), config_b.resolve()]
+    assert state.status == "failed"
+    assert [job["status"] for job in state_data["jobs"]] == ["failed", "completed"]
+    assert state_data["continue_on_failure"] is True

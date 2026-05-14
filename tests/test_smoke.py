@@ -15,6 +15,7 @@ from virtual_staining.applications.complete_run import complete_run
 from virtual_staining.applications.evaluate import evaluate
 from virtual_staining.applications.infer import infer
 from virtual_staining.applications.prepare import prepare
+from virtual_staining.applications.run_queue import run_queue
 from virtual_staining.applications.train import train
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.preprocessing import AlignmentMetadata
@@ -90,13 +91,13 @@ def _patched_prepare_dependencies() -> Iterator[None]:
         yield
 
 
-def _write_smoke_config(tmp_path: Path, dataset_root: Path) -> Path:
-    config_path = tmp_path / "smoke.yaml"
+def _write_smoke_config(tmp_path: Path, dataset_root: Path, *, run_name: str = "smoke_run") -> Path:
+    config_path = tmp_path / f"{run_name}.yaml"
     config_path.write_text(
         f"""
 dataset_root: {dataset_root}
 results_path: {tmp_path / "runs"}
-run_name: smoke_run
+run_name: {run_name}
 image_size: [64, 64]
 
 preprocessing:
@@ -139,6 +140,27 @@ evaluation:
         encoding="utf-8",
     )
     return config_path
+
+
+def _write_queue_file(
+    tmp_path: Path,
+    config_paths: list[Path],
+    *,
+    continue_on_failure: bool,
+) -> Path:
+    queue_path = tmp_path / "config" / "queues" / "nightly.yaml"
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    jobs = "\n".join(f"  - config_path: {config_path}" for config_path in config_paths)
+    queue_path.write_text(
+        (
+            "name: nightly\n"
+            f"continue_on_failure: {'true' if continue_on_failure else 'false'}\n"
+            "jobs:\n"
+            f"{jobs}\n"
+        ),
+        encoding="utf-8",
+    )
+    return queue_path
 
 
 @pytest.mark.slow
@@ -232,3 +254,23 @@ def test_complete_run_smoke_reuses_cached_dataset(tmp_path: Path) -> None:
         (dataset_root / "metadata" / "stages" / "prepare.json").read_text(encoding="utf-8")
     )
     assert stage_data["reused"] is True
+
+
+@pytest.mark.slow
+def test_run_queue_smoke_executes_multiple_full_runs(tmp_path: Path) -> None:
+    dataset_a = _make_synthetic_dataset(tmp_path / "dataset_a")
+    dataset_b = _make_synthetic_dataset(tmp_path / "dataset_b")
+    config_a = _write_smoke_config(tmp_path, dataset_a, run_name="queue_run_a")
+    config_b = _write_smoke_config(tmp_path, dataset_b, run_name="queue_run_b")
+    queue_path = _write_queue_file(tmp_path, [config_a, config_b], continue_on_failure=False)
+
+    with _patched_prepare_dependencies():
+        state = run_queue(queue_path)
+
+    state_data = json.loads(
+        (tmp_path / "local_workspace" / "queues" / "nightly.state.json").read_text(encoding="utf-8")
+    )
+    assert state.status == "completed"
+    assert [job["status"] for job in state_data["jobs"]] == ["completed", "completed"]
+    assert (tmp_path / "runs" / "queue_run_a" / "evaluation" / "per_image_metrics.csv").exists()
+    assert (tmp_path / "runs" / "queue_run_b" / "evaluation" / "per_image_metrics.csv").exists()

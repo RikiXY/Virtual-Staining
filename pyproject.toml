@@ -20,6 +20,7 @@ dependencies = [
 [project.scripts]
 vs-prepare = "virtual_staining.cli.prepare_dataset:main"
 vs-complete-run = "virtual_staining.cli.complete_run:main"
+vs-run-queue = "virtual_staining.cli.run_queue:main"
 vs-train = "virtual_staining.cli.train:main"
 vs-infer = "virtual_staining.cli.infer:main"
 vs-evaluate = "virtual_staining.cli.evaluate:main"
