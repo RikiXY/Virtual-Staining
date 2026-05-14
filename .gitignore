@@ -26,3 +26,6 @@ notes/*
 # VSCode
 .vscode/
 **/.vscode/
+
+# Env
+.env
