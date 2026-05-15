@@ -78,6 +78,11 @@ def _estimate_memory_gb(h: int, w: int, *, mask_scale: float = 1.0) -> float:
     return estimated_bytes / (1024**3)
 
 
+def _modality_from_filename(path: Path) -> str:
+    """Derive a human-readable modality label from a configured image filename."""
+    return path.stem
+
+
 def _read_image_size(path: Path) -> tuple[int, int]:
     """
     Read image size from metadata only.
@@ -393,6 +398,8 @@ class DatasetBuilder:
             "val": splits_root / "val",
             "test": splits_root / "test",
         }
+        input_modality = _modality_from_filename(self._source_file)
+        target_modality = _modality_from_filename(self._target_file)
 
         manifest_records: list[ManifestRecord] = []
         for split_name, subset in zip(split_names, split, strict=True):
@@ -413,8 +420,8 @@ class DatasetBuilder:
                         split=split_name,
                         input_path=Path(f"splits/{split_name}/{src_name}"),
                         target_path=Path(f"splits/{split_name}/{tgt_name}"),
-                        input_modality="label_free",
-                        target_modality="stained",
+                        input_modality=input_modality,
+                        target_modality=target_modality,
                         x=x,
                         y=y,
                         width=self.config.image_size[0],
@@ -434,8 +441,8 @@ class DatasetBuilder:
                     split="discarded",
                     input_path=Path(f"discarded_patches/source/{src_name}"),
                     target_path=Path(f"discarded_patches/target/{tgt_name}"),
-                    input_modality="label_free",
-                    target_modality="stained",
+                    input_modality=input_modality,
+                    target_modality=target_modality,
                     x=x,
                     y=y,
                     width=self.config.image_size[0],

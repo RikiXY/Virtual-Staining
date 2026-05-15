@@ -14,6 +14,7 @@ generation of virtually stained images from label-free microscopy inputs (and vi
 | `vs-run-queue` | Execute multiple full runs sequentially from a queue file |
 | `vs-train` | Train the Pix2Pix model |
 | `vs-infer` | Run inference on the test split |
+| `vs-infer-images` | Run inference on one image file or a directory of images |
 | `vs-evaluate` | Evaluate generated images with MAE, RMSE, PSNR, SSIM |
 | `vs-compare` | Compare metric distributions across runs |
 | `vs-compare-panels` | Build source / generated / target comparison panels |
@@ -42,6 +43,7 @@ vs-complete-run --config config/runs/local/my_run.yaml
 make dataset        CONFIG=config/runs/local/my_run.yaml
 make train          CONFIG=config/runs/local/my_run.yaml
 make infer          CONFIG=config/runs/local/my_run.yaml
+make infer-images   CONFIG=config/runs/local/my_run.yaml INPUT_PATH=examples
 make evaluate       CONFIG=config/runs/local/my_run.yaml
 make complete-run   CONFIG=config/runs/local/my_run.yaml
 make run-queue      QUEUE=config/queues/example.yaml
@@ -54,6 +56,22 @@ Or call the CLI directly:
 ```bash
 vs-complete-run --config config/runs/local/my_run.yaml
 ```
+
+Run inference on one image or a directory:
+
+```bash
+vs-infer-images \
+  --config config/runs/local/my_run.yaml \
+  --input examples \
+  --output local_workspace/results/my_run/example_outputs
+```
+
+`vs-infer-images` accepts `.bmp`, `.jpg`, `.jpeg`, `.png`, `.tif`, and `.tiff`.
+It defaults to `--mode auto`: patch-sized inputs use the standard single-patch
+path, while larger images are processed tile-by-tile and saved at the original
+size. Use `--mode resize` to force the resizing of the whole input to
+`image_size`. Use `--output-format png` to force a common output format
+for directory batches.
 
 Queue multiple full runs locally:
 

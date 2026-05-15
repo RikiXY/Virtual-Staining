@@ -5,7 +5,9 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-VALID_IMAGE_EXTENSIONS: frozenset[str] = frozenset({".tif", ".tiff", ".png"})
+VALID_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
+    {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff"}
+)
 
 
 def open_rgb(path: str | Path) -> Image.Image:

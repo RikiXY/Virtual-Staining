@@ -19,6 +19,7 @@ from virtual_staining.cli import complete_run as complete_run_cli
 from virtual_staining.cli import evaluate as evaluate_cli
 from virtual_staining.cli import evaluate_single as evaluate_single_cli
 from virtual_staining.cli import infer as infer_cli
+from virtual_staining.cli import infer_images as infer_images_cli
 from virtual_staining.cli import organize as organize_cli
 from virtual_staining.cli import prepare_dataset as prepare_cli
 from virtual_staining.cli import run_queue as run_queue_cli
@@ -32,6 +33,7 @@ CLI_SCRIPTS = {
     "vs-run-queue": "virtual_staining.cli.run_queue:main",
     "vs-train": "virtual_staining.cli.train:main",
     "vs-infer": "virtual_staining.cli.infer:main",
+    "vs-infer-images": "virtual_staining.cli.infer_images:main",
     "vs-evaluate": "virtual_staining.cli.evaluate:main",
     "vs-compare": "virtual_staining.cli.compare:main",
     "vs-evaluate-single": "virtual_staining.cli.evaluate_single:main",
@@ -43,6 +45,7 @@ RUN_CONFIG_CLI_MODULES = (
     complete_run_cli,
     train_cli,
     infer_cli,
+    infer_images_cli,
     evaluate_cli,
 )
 MAKE_EXPERIMENT_TARGETS = ("dataset", "train", "infer", "evaluate", "complete-run")
@@ -90,6 +93,27 @@ def test_make_target_fails_without_config(target: str) -> None:
     assert result.returncode != 0, (
         f"make {target} succeeded without CONFIG; require-config guard is missing"
     )
+
+
+def test_make_infer_images_fails_without_input_path(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """\
+        inference:
+          checkpoint_path: /tmp/ep000.pth
+        """,
+    )
+    env = {**os.environ, "CONFIG": str(config_path), "INPUT_PATH": ""}
+    result = _run_command("make", "infer-images", env=env)
+
+    assert result.returncode != 0
+    assert "INPUT_PATH is required" in result.stdout + result.stderr
+
+
+def test_makefile_has_infer_images_target() -> None:
+    makefile = Path("Makefile").read_text(encoding="utf-8")
+    assert "infer-images: require-config require-input-path" in makefile
+    assert "$(UV) run vs-infer-images --config $(CONFIG) --input $(INPUT_PATH)" in makefile
 
 
 def test_makefile_has_no_args_variable() -> None:
@@ -390,6 +414,73 @@ def test_infer_main_passes_full_run_config_and_path(
 
     assert isinstance(captured["config"], RunConfig)
     assert captured["config_path"] == config_path.resolve()
+
+
+def test_infer_images_main_passes_path_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """\
+        inference:
+          checkpoint_path: /tmp/ep000.pth
+        """,
+    )
+    input_dir = tmp_path / "inputs"
+    output_dir = tmp_path / "outputs"
+    captured: dict[str, object] = {}
+
+    def _fake_infer_images(
+        config: RunConfig,
+        incoming_input: Path,
+        incoming_output: Path | None = None,
+        *,
+        recursive: bool = False,
+        mode: str = "auto",
+        tile_overlap: int = 16,
+        output_format: str = "same",
+    ) -> object:
+        captured["config"] = config
+        captured["input_path"] = incoming_input
+        captured["output_path"] = incoming_output
+        captured["recursive"] = recursive
+        captured["mode"] = mode
+        captured["tile_overlap"] = tile_overlap
+        captured["output_format"] = output_format
+        return SimpleNamespace(
+            input_path=incoming_input,
+            checkpoint_path=Path("/tmp/ep000.pth"),
+            output_path=incoming_output,
+            mode=mode,
+        )
+
+    monkeypatch.setattr(infer_images_cli, "infer_images", _fake_infer_images)
+
+    infer_images_cli.main(
+        [
+            "--config",
+            str(config_path),
+            "--input",
+            str(input_dir),
+            "--output",
+            str(output_dir),
+            "--recursive",
+            "--mode",
+            "tile",
+            "--tile-overlap",
+            "8",
+            "--output-format",
+            "png",
+        ]
+    )
+
+    assert isinstance(captured["config"], RunConfig)
+    assert captured["input_path"] == input_dir
+    assert captured["output_path"] == output_dir
+    assert captured["recursive"] is True
+    assert captured["mode"] == "tile"
+    assert captured["tile_overlap"] == 8
+    assert captured["output_format"] == "png"
 
 
 def test_evaluate_main_passes_full_run_config_and_path(

@@ -1,0 +1,34 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from virtual_staining.config.run import RunConfig
+from virtual_staining.inference.single import (
+    DEFAULT_TILE_OVERLAP,
+    DirectoryInferenceResult,
+    SingleInferenceMode,
+    SingleInferenceResult,
+    run_image_path_inference,
+)
+
+
+def infer_images(
+    config: RunConfig,
+    input_path: Path,
+    output_path: Path | None = None,
+    *,
+    recursive: bool = False,
+    mode: SingleInferenceMode = "auto",
+    tile_overlap: int = DEFAULT_TILE_OVERLAP,
+    output_format: str = "same",
+) -> SingleInferenceResult | DirectoryInferenceResult:
+    """Application-level image inference entry point for files or directories."""
+    return run_image_path_inference(
+        config,
+        input_path,
+        output_path,
+        recursive=recursive,
+        mode=mode,
+        tile_overlap=tile_overlap,
+        output_format=output_format,
+    )

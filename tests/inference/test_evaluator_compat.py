@@ -20,6 +20,12 @@ from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.io import collect_image_files, extract_single_sample_id
 from virtual_staining.evaluation.metrics import evaluate_pair
 from virtual_staining.inference.runner import run_inference as _run_inference_impl
+from virtual_staining.inference.single import (
+    SingleInferenceResult,
+    run_image_directory_inference,
+    run_image_path_inference,
+    run_single_image_inference,
+)
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.utils.dimensions import to_torchvision_hw
@@ -198,6 +204,147 @@ def test_run_inference_raises_if_required_test_split_missing(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="test"):
         _run_inference_impl(config, config_path)
+
+
+def test_single_image_inference_writes_default_output_without_manifest(tmp_path: Path) -> None:
+    input_path = tmp_path / "single_source.png"
+    output_dir = tmp_path / "single_output"
+    checkpoint = tmp_path / "ep000.pth"
+
+    write_rgb_image(input_path, size=(64, 64))
+    _save_checkpoint(checkpoint)
+    config_path = _write_inference_config(tmp_path, checkpoint, output_dir)
+    config = RunConfig.from_yaml(config_path)
+
+    result = run_single_image_inference(config, input_path)
+
+    expected_output = output_dir / "single_target_generated.png"
+    assert result.output_path == expected_output
+    assert result.mode == "tile"
+    assert expected_output.exists()
+    with Image.open(expected_output) as generated:
+        assert generated.size == (64, 64)
+
+
+def test_single_image_inference_resize_mode_writes_configured_size(tmp_path: Path) -> None:
+    input_path = tmp_path / "single_source.png"
+    output_dir = tmp_path / "single_output"
+    checkpoint = tmp_path / "ep000.pth"
+
+    write_rgb_image(input_path, size=(64, 64))
+    _save_checkpoint(checkpoint)
+    config_path = _write_inference_config(tmp_path, checkpoint, output_dir)
+    config = RunConfig.from_yaml(config_path)
+
+    result = run_single_image_inference(config, input_path, mode="resize")
+
+    assert result.mode == "resize"
+    with Image.open(result.output_path) as generated:
+        assert generated.size == _IMAGE_SIZE
+
+
+def test_single_image_inference_writes_explicit_output_path(tmp_path: Path) -> None:
+    input_path = tmp_path / "arbitrary.png"
+    output_path = tmp_path / "custom" / "generated.png"
+    checkpoint = tmp_path / "ep000.pth"
+
+    write_rgb_image(input_path, size=(64, 64))
+    _save_checkpoint(checkpoint)
+    config_path = _write_inference_config(tmp_path, checkpoint, tmp_path / "unused")
+    config = RunConfig.from_yaml(config_path)
+
+    result = run_single_image_inference(config, input_path, output_path)
+
+    assert result.output_path == output_path
+    assert output_path.exists()
+
+
+def test_image_path_inference_file_uses_images_default_dir(tmp_path: Path) -> None:
+    input_path = tmp_path / "single_source.png"
+    checkpoint = tmp_path / "ep000.pth"
+
+    write_rgb_image(input_path, size=_IMAGE_SIZE)
+    _save_checkpoint(checkpoint)
+    section = (
+        f"image_size: [{_IMAGE_SIZE[0]}, {_IMAGE_SIZE[1]}]\n"
+        "inference:\n"
+        f"  checkpoint_path: {checkpoint}\n"
+    )
+    config_path = write_run_config(
+        tmp_path,
+        section,
+        filename="infer.yaml",
+        dataset_root=tmp_path,
+        results_path=tmp_path / "results",
+        run_name="test_run",
+    )
+    config = RunConfig.from_yaml(config_path)
+
+    result = run_image_path_inference(config, input_path)
+
+    assert isinstance(result, SingleInferenceResult)
+    assert result.output_path == (
+        tmp_path
+        / "results"
+        / "test_run"
+        / "artifacts"
+        / "output_images"
+        / "single_target_generated.png"
+    )
+
+
+def test_directory_image_inference_handles_mixed_formats(tmp_path: Path) -> None:
+    input_dir = tmp_path / "inputs"
+    output_dir = tmp_path / "outputs"
+    checkpoint = tmp_path / "ep000.pth"
+
+    write_rgb_image(input_dir / "alpha_source.png", size=(64, 64))
+    write_rgb_image(input_dir / "beta.jpg", size=(64, 64))
+    write_rgb_image(input_dir / "gamma.bmp", size=(64, 64))
+    (input_dir / "notes.txt").write_text("skip me\n", encoding="utf-8")
+    _save_checkpoint(checkpoint)
+    config_path = _write_inference_config(tmp_path, checkpoint, tmp_path / "unused")
+    config = RunConfig.from_yaml(config_path)
+
+    result = run_image_directory_inference(config, input_dir, output_dir)
+
+    expected_outputs = {
+        output_dir / "alpha_target_generated.png",
+        output_dir / "beta_target_generated.jpg",
+        output_dir / "gamma_target_generated.bmp",
+    }
+    assert {item.output_path for item in result.results} == expected_outputs
+    assert result.output_dir == output_dir
+    assert len(result.results) == 3
+    for output_path in expected_outputs:
+        assert output_path.exists()
+        with Image.open(output_path) as generated:
+            assert generated.size == (64, 64)
+
+
+def test_directory_image_inference_can_force_output_format(tmp_path: Path) -> None:
+    input_dir = tmp_path / "inputs"
+    output_dir = tmp_path / "outputs"
+    checkpoint = tmp_path / "ep000.pth"
+
+    write_rgb_image(input_dir / "alpha_source.jpg", size=(64, 64))
+    write_rgb_image(input_dir / "nested" / "beta.bmp", size=(64, 64))
+    _save_checkpoint(checkpoint)
+    config_path = _write_inference_config(tmp_path, checkpoint, tmp_path / "unused")
+    config = RunConfig.from_yaml(config_path)
+
+    result = run_image_directory_inference(
+        config,
+        input_dir,
+        output_dir,
+        recursive=True,
+        output_format="png",
+    )
+
+    assert {
+        output_dir / "alpha_target_generated.png",
+        output_dir / "nested" / "beta_target_generated.png",
+    } == {item.output_path for item in result.results}
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import csv
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -1036,10 +1037,39 @@ def test_run_all_writes_manifest_columns_and_relative_paths(
         assert row["split"] in {"train", "val", "test"}
         assert row["input_path"].startswith(f"splits/{row['split']}/")
         assert row["target_path"].startswith(f"splits/{row['split']}/")
-        assert row["input_modality"] == "label_free"
-        assert row["target_modality"] == "stained"
+        assert row["input_modality"] == "source"
+        assert row["target_modality"] == "target"
         assert int(row["width"]) == builder_config.image_size[0]
         assert int(row["height"]) == builder_config.image_size[1]
+
+
+def test_run_all_manifest_modalities_follow_configured_filenames(tmp_path: Path) -> None:
+    root = tmp_path / "data"
+    root.mkdir()
+    cv2.imwrite(str(root / "stained.tif"), _make_synthetic_image(seed=0))
+    cv2.imwrite(str(root / "label_free.tif"), _make_synthetic_image(seed=1))
+    config = PreprocessingConfig(
+        dataset_root=root,
+        source_name="stained.tif",
+        target_name="label_free.tif",
+        image_size=(64, 64),
+        grid_movement=(64, 64),
+        margin=0,
+        seed=42,
+        min_foreground_ratio=0.0,
+        max_white_ratio=1.0,
+        max_largest_white_component_ratio=1.0,
+    )
+
+    with _patched_builder_dependencies():
+        DatasetBuilder(config).run_all()
+
+    manifest = root / "manifests" / "manifest.csv"
+    rows = list(csv.DictReader(manifest.open(encoding="utf-8", newline="")))
+
+    assert rows
+    assert {row["input_modality"] for row in rows} == {"stained"}
+    assert {row["target_modality"] for row in rows} == {"label_free"}
 
 
 def test_run_all_writes_dataset_build_metadata(builder_config: PreprocessingConfig) -> None:

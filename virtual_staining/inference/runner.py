@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import cast
 
 import torch
+import torch.nn as nn
 from torchvision import transforms
 
 from virtual_staining.config.run import RunConfig
@@ -41,6 +42,22 @@ def _is_amp_enabled(device: torch.device) -> bool:
     return device.type == "cuda"
 
 
+def resolve_inference_device() -> torch.device:
+    """Return the device used by inference entry points."""
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def build_inference_transform(image_size: tuple[int, int]) -> transforms.Compose:
+    """Build the image transform expected by the generator."""
+    return transforms.Compose(
+        [
+            transforms.Resize(to_torchvision_hw(image_size)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5] * 3, [0.5] * 3),
+        ]
+    )
+
+
 def _resolve_checkpoint(config: RunConfig, paths: RunPaths) -> Path:
     """Resolve the inference checkpoint path from RunConfig."""
     if config.inference is None:
@@ -71,31 +88,12 @@ def _resolve_checkpoint(config: RunConfig, paths: RunPaths) -> Path:
     )
 
 
-def _write_inference_stage_metadata(paths: RunPaths, payload: dict[str, object]) -> None:
-    stage_path = save_stage_metadata("infer", payload, paths.metadata_dir)
-    if stage_path is not None:
-        logger.info("Inference metadata written -> %s", stage_path)
-
-
-def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
-    """Load a checkpoint, run the generator on the test split, and write outputs."""
-    if config.inference is None:
-        raise ValueError("RunConfig.inference is required to run inference.")
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("Inference device: %s", device)
-
-    paths = RunPaths(config.project.run_root)
-    paths.create_directories()
-    snapshot_paths = resolve_run_snapshot_paths(stage="inference", run_paths=paths)
-    config_hash = save_stage_config_snapshots(
-        config,
-        config_path,
-        input_dest=snapshot_paths.input_config,
-        resolved_dest=snapshot_paths.resolved_config,
-        hash_dest=snapshot_paths.config_hash,
-    )
-    save_environment_snapshot(snapshot_paths.environment)
+def load_inference_generator(
+    config: RunConfig,
+    paths: RunPaths,
+    device: torch.device,
+) -> tuple[nn.Module, Path]:
+    """Load and validate the configured generator checkpoint."""
     checkpoint_path = _resolve_checkpoint(config, paths)
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
@@ -112,14 +110,36 @@ def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
     generator = build_generator(config.model.generator).to(device)
     _check_generator_arch(checkpoint_arch, generator)
     generator.load_state_dict(checkpoint["generator_state_dict"])
+    return generator, checkpoint_path
 
-    transform = transforms.Compose(
-        [
-            transforms.Resize(to_torchvision_hw(config.project.image_size)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5] * 3, [0.5] * 3),
-        ]
+
+def _write_inference_stage_metadata(paths: RunPaths, payload: dict[str, object]) -> None:
+    stage_path = save_stage_metadata("infer", payload, paths.metadata_dir)
+    if stage_path is not None:
+        logger.info("Inference metadata written -> %s", stage_path)
+
+
+def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
+    """Load a checkpoint, run the generator on the test split, and write outputs."""
+    if config.inference is None:
+        raise ValueError("RunConfig.inference is required to run inference.")
+
+    device = resolve_inference_device()
+    logger.info("Inference device: %s", device)
+
+    paths = RunPaths(config.project.run_root)
+    paths.create_directories()
+    snapshot_paths = resolve_run_snapshot_paths(stage="inference", run_paths=paths)
+    config_hash = save_stage_config_snapshots(
+        config,
+        config_path,
+        input_dest=snapshot_paths.input_config,
+        resolved_dest=snapshot_paths.resolved_config,
+        hash_dest=snapshot_paths.config_hash,
     )
+    save_environment_snapshot(snapshot_paths.environment)
+    generator, checkpoint_path = load_inference_generator(config, paths, device)
+    transform = build_inference_transform(config.project.image_size)
 
     output_dir = config.inference.output_dir or paths.output_test_dir
     manifest = load_manifest_or_raise(config.project)

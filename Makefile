@@ -10,6 +10,7 @@ help:
 	@printf "  %-24s %s\n" "dataset" "Build splits/train|val|test from CONFIG"
 	@printf "  %-24s %s\n" "train" "Train Pix2Pix from CONFIG"
 	@printf "  %-24s %s\n" "infer" "Run inference via vs-infer CLI from CONFIG"
+	@printf "  %-24s %s\n" "infer-images" "Run inference on INPUT_PATH file or directory"
 	@printf "  %-24s %s\n" "evaluate" "Evaluate outputs via vs-evaluate CLI from CONFIG"
 	@printf "  %-24s %s\n" "complete-run" "Run dataset, train, infer, evaluate from CONFIG"
 	@printf "  %-24s %s\n" "run-queue" "Run a queue YAML from QUEUE"
@@ -28,6 +29,11 @@ help:
 	@printf "  %-24s %s\n" "clean" "Remove local caches"
 	@printf "\nExperiment configuration policy:\n"
 	@printf "  %-24s %s\n" "CONFIG" "Required for experiment and utility targets"
+	@printf "  %-24s %s\n" "INPUT_PATH" "Required for infer-images"
+	@printf "  %-24s %s\n" "OUTPUT_PATH" "Optional for infer-images"
+	@printf "  %-24s %s\n" "MODE" "Optional image mode: auto|resize|tile"
+	@printf "  %-24s %s\n" "TILE_OVERLAP" "Optional tile overlap"
+	@printf "  %-24s %s\n" "OUTPUT_FORMAT" "Optional image output format"
 	@printf "  Put dataset paths, run names, image sizes, epochs, seeds,"
 	@printf " checkpoints, and evaluation paths in YAML.\n"
 	@printf "  Accepted patches are written under dataset_root/splits/<split>/.\n"
@@ -35,6 +41,7 @@ help:
 	@printf "  make dataset CONFIG=config/runs/local/my_run.yaml\n"
 	@printf "  make train CONFIG=config/runs/local/my_run.yaml\n"
 	@printf "  make infer CONFIG=config/runs/local/my_run.yaml\n"
+	@printf "  make infer-images CONFIG=config/runs/local/my_run.yaml INPUT_PATH=examples\n"
 	@printf "  make evaluate CONFIG=config/runs/local/my_run.yaml\n"
 	@printf "  make complete-run CONFIG=config/runs/local/my_run.yaml\n"
 	@printf "  make run-queue QUEUE=config/queues/example.yaml\n"
@@ -43,6 +50,10 @@ help:
 require-config:
 	@test -n "$(CONFIG)" || (echo "CONFIG is required, e.g. CONFIG=config/runs/example.yaml"; exit 1)
 	@test -f "$(CONFIG)" || (echo "CONFIG file not found: $(CONFIG)"; exit 1)
+
+require-input-path:
+	@test -n "$(INPUT_PATH)" || (echo "INPUT_PATH is required, e.g. INPUT_PATH=examples"; exit 1)
+	@test -e "$(INPUT_PATH)" || (echo "INPUT_PATH not found: $(INPUT_PATH)"; exit 1)
 
 require-queue:
 	@test -n "$(QUEUE)" || (echo "QUEUE is required, e.g. QUEUE=config/queues/example.yaml"; exit 1)
@@ -59,6 +70,9 @@ train: require-config
 
 infer: require-config
 	$(UV) run vs-infer --config $(CONFIG)
+
+infer-images: require-config require-input-path
+	$(UV) run vs-infer-images --config $(CONFIG) --input $(INPUT_PATH) $(if $(OUTPUT_PATH),--output $(OUTPUT_PATH),) $(if $(MODE),--mode $(MODE),) $(if $(TILE_OVERLAP),--tile-overlap $(TILE_OVERLAP),) $(if $(OUTPUT_FORMAT),--output-format $(OUTPUT_FORMAT),) $(if $(RECURSIVE),--recursive,)
 
 evaluate: require-config
 	$(UV) run vs-evaluate --config $(CONFIG)
