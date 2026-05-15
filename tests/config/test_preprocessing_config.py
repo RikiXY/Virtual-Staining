@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import argparse
-import textwrap
 from pathlib import Path
 
 import pytest
 
+from tests.config_helpers import write_yaml
 from virtual_staining.data.config import PreprocessingConfig, load_preprocessing_config
 from virtual_staining.utils.dimensions import to_torchvision_hw
 
@@ -79,7 +79,10 @@ def test_frozen() -> None:
 
 
 def test_from_yaml(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "preprocessing.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data/samples
         source_name: he.tif
         target_name: masson.tif
@@ -97,9 +100,8 @@ def test_from_yaml(tmp_path: Path) -> None:
         max_white_ratio: 0.6
         white_threshold: 240
         max_largest_white_component_ratio: 0.15
-    """)
-    yaml_file = tmp_path / "preprocessing.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
 
     config = load_preprocessing_config(yaml_file)
     assert config.dataset_root == Path("/data/samples")
@@ -172,13 +174,15 @@ def test_mask_scale_invalid_direct_init_raises() -> None:
 
 
 def test_from_yaml_defaults_for_optional_fields(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "minimal.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data/samples
         source_name: source.tif
         target_name: target.tif
-    """)
-    yaml_file = tmp_path / "minimal.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
 
     config = load_preprocessing_config(yaml_file)
     assert config.image_size == (256, 256)
@@ -198,7 +202,10 @@ def test_from_yaml_defaults_for_optional_fields(tmp_path: Path) -> None:
 
 
 def test_from_run_yaml_section(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "run.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data/samples
         image_size: [512, 512]
         preprocessing:
@@ -208,9 +215,8 @@ def test_from_run_yaml_section(tmp_path: Path) -> None:
           save_masks: true
           mask_scale: 0.5
           max_memory_gb: 4
-    """)
-    yaml_file = tmp_path / "run.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
 
     config = load_preprocessing_config(yaml_file)
     assert config.dataset_root == Path("/data/samples")
@@ -260,14 +266,16 @@ def test_non_square_image_size_from_args() -> None:
 
 def test_non_square_image_size_from_yaml(tmp_path: Path) -> None:
     """image_size: [320, 256] in YAML must parse as (width=320, height=256)."""
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "ns.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data/samples
         source_name: source.tif
         target_name: target.tif
         image_size: [320, 256]
-    """)
-    yaml_file = tmp_path / "ns.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
     config = load_preprocessing_config(yaml_file)
     assert config.image_size == (320, 256)
 
@@ -283,68 +291,78 @@ def test_to_torchvision_hw_preserves_square() -> None:
 
 
 def test_from_yaml_invalid_margin_raises_value_error(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "invalid.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data/samples
         source_name: source.tif
         target_name: target.tif
         margin: -1
-    """)
-    yaml_file = tmp_path / "invalid.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
 
     with pytest.raises(ValueError, match="margin"):
         load_preprocessing_config(yaml_file)
 
 
 def test_from_yaml_unknown_flat_key_raises(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "typo.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data/samples
         source_name: source.tif
         target_name: target.tif
         sav_masks: true
-    """)
-    yaml_file = tmp_path / "typo.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
     with pytest.raises(ValueError, match="sav_masks"):
         load_preprocessing_config(yaml_file)
 
 
 def test_from_yaml_unknown_section_key_raises(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "typo_section.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data/samples
         preprocessing:
           source_name: source.tif
           target_name: target.tif
           sav_masks: true
-    """)
-    yaml_file = tmp_path / "typo_section.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
     with pytest.raises(ValueError, match="sav_masks"):
         load_preprocessing_config(yaml_file)
 
 
 def test_from_yaml_unknown_top_level_key_raises(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "typo_top.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data/samples
         typo_field: oops
         preprocessing:
           source_name: source.tif
           target_name: target.tif
-    """)
-    yaml_file = tmp_path / "typo_top.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
     with pytest.raises(ValueError, match="typo_field"):
         load_preprocessing_config(yaml_file)
 
 
 def test_from_yaml_string_bool_save_masks_raises(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "str_bool.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data/samples
         source_name: source.tif
         target_name: target.tif
         save_masks: "false"
-    """)
-    yaml_file = tmp_path / "str_bool.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
     with pytest.raises(TypeError, match="save_masks"):
         load_preprocessing_config(yaml_file)

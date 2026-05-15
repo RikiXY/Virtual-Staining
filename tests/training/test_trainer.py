@@ -4,29 +4,22 @@ import csv
 import json
 from pathlib import Path
 
-import numpy as np
 import pytest
 import torch
-from PIL import Image
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
+from tests.image_helpers import write_rgb_pair
+from tests.manifest_helpers import make_manifest_record
 from virtual_staining.config.project import ProjectConfig
 from virtual_staining.data.dataset import PairedManifestDataset
-from virtual_staining.data.manifest import DatasetManifest, ManifestRecord, Split
+from virtual_staining.data.manifest import DatasetManifest, Split
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.models.config import ModelConfig
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.config import TrainingConfig
 from virtual_staining.training.trainer import Trainer
-
-
-def _write_rgb_pair(directory: Path, prefix: str = "00000_00000") -> None:
-    """Write a minimal 32x32 RGB source/target pair to *directory*."""
-    arr = np.zeros((32, 32, 3), dtype=np.uint8)
-    Image.fromarray(arr).save(directory / f"{prefix}_source.png")
-    Image.fromarray(arr).save(directory / f"{prefix}_target.png")
 
 
 def _make_project(dataset_root: Path, results_path: Path, run_name: str) -> ProjectConfig:
@@ -46,24 +39,10 @@ def _make_manifest_dataset(
 ) -> PairedManifestDataset:
     split_dir = dataset_root / "splits" / split
     split_dir.mkdir(parents=True, exist_ok=True)
-    records: list[ManifestRecord] = []
+    records = []
     for prefix in prefixes:
-        _write_rgb_pair(split_dir, prefix=prefix)
-        x_str, y_str = prefix.split("_", maxsplit=1)
-        records.append(
-            ManifestRecord(
-                sample_id=prefix,
-                split=split,  # type: ignore[arg-type]
-                input_path=Path(f"splits/{split}/{prefix}_source.png"),
-                target_path=Path(f"splits/{split}/{prefix}_target.png"),
-                input_modality="label_free",
-                target_modality="stained",
-                x=int(x_str),
-                y=int(y_str),
-                width=32,
-                height=32,
-            )
-        )
+        write_rgb_pair(split_dir, prefix, size=(32, 32))
+        records.append(make_manifest_record(prefix, split, ext=".png", width=32, height=32))
     manifest = DatasetManifest(records=tuple(records), dataset_root=dataset_root)
     return PairedManifestDataset(manifest.filter_split(split), transform=transform)
 

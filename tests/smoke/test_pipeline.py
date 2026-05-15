@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 import pytest
 
+from tests.config_helpers import write_queue_config, write_run_config
 from virtual_staining.applications.complete_run import complete_run
 from virtual_staining.applications.evaluate import evaluate
 from virtual_staining.applications.infer import infer
@@ -92,54 +93,52 @@ def _patched_prepare_dependencies() -> Iterator[None]:
 
 
 def _write_smoke_config(tmp_path: Path, dataset_root: Path, *, run_name: str = "smoke_run") -> Path:
-    config_path = tmp_path / f"{run_name}.yaml"
-    config_path.write_text(
-        f"""
-dataset_root: {dataset_root}
-results_path: {tmp_path / "runs"}
-run_name: {run_name}
-image_size: [64, 64]
+    return write_run_config(
+        tmp_path,
+        """\
+        image_size: [64, 64]
 
-preprocessing:
-  source_name: source.tif
-  target_name: target.tif
-  image_size: [64, 64]
-  grid_movement: [64, 64]
-  margin: 0
-  seed: 42
-  train_ratio: 0.6
-  val_ratio: 0.2
-  test_ratio: 0.2
-  min_foreground_ratio: 0.0
-  max_white_ratio: 1.0
-  white_threshold: 250
-  max_largest_white_component_ratio: 1.0
+        preprocessing:
+          source_name: source.tif
+          target_name: target.tif
+          image_size: [64, 64]
+          grid_movement: [64, 64]
+          margin: 0
+          seed: 42
+          train_ratio: 0.6
+          val_ratio: 0.2
+          test_ratio: 0.2
+          min_foreground_ratio: 0.0
+          max_white_ratio: 1.0
+          white_threshold: 250
+          max_largest_white_component_ratio: 1.0
 
-model:
-  generator:
-    base_channels: 16
-  discriminator:
-    ndf: 16
+        model:
+          generator:
+            base_channels: 16
+          discriminator:
+            ndf: 16
 
-training:
-  batch_size: 4
-  epochs: 1
-  seed: 42
-  num_workers: 0
-  validate_rate: 1
-  checkpoint_rate: 1
-  log_rate: 1
+        training:
+          batch_size: 4
+          epochs: 1
+          seed: 42
+          num_workers: 0
+          validate_rate: 1
+          checkpoint_rate: 1
+          log_rate: 1
 
-inference:
-  checkpoint_policy: latest
+        inference:
+          checkpoint_policy: latest
 
-evaluation:
-  save_graphs: false
-""".strip()
-        + "\n",
-        encoding="utf-8",
+        evaluation:
+          save_graphs: false
+        """,
+        filename=f"{run_name}.yaml",
+        dataset_root=dataset_root,
+        results_path=tmp_path / "runs",
+        run_name=run_name,
     )
-    return config_path
 
 
 def _write_queue_file(
@@ -148,19 +147,12 @@ def _write_queue_file(
     *,
     continue_on_failure: bool,
 ) -> Path:
-    queue_path = tmp_path / "config" / "queues" / "nightly.yaml"
-    queue_path.parent.mkdir(parents=True, exist_ok=True)
     jobs = "\n".join(f"  - config_path: {config_path}" for config_path in config_paths)
-    queue_path.write_text(
-        (
-            "name: nightly\n"
-            f"continue_on_failure: {'true' if continue_on_failure else 'false'}\n"
-            "jobs:\n"
-            f"{jobs}\n"
-        ),
-        encoding="utf-8",
+    return write_queue_config(
+        tmp_path,
+        jobs,
+        continue_on_failure=continue_on_failure,
     )
-    return queue_path
 
 
 @pytest.mark.slow

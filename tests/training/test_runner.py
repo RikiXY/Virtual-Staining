@@ -6,94 +6,48 @@ from pathlib import Path
 
 import pytest
 import yaml
-from PIL import Image
 
-from tests.manifest_helpers import write_manifest_csv
+from tests.config_helpers import write_run_config
+from tests.image_helpers import write_rgb_pair
+from tests.manifest_helpers import make_manifest_record, write_manifest_csv
 from virtual_staining.config.run import RunConfig
-from virtual_staining.data.manifest import ManifestRecord
 from virtual_staining.training.results import TrainingResult
 from virtual_staining.training.runner import run_training
 
 
-def _write_rgb_pair(directory: Path, prefix: str = "00000_00000") -> None:
-    Image.new("RGB", (32, 32)).save(directory / f"{prefix}_source.png")
-    Image.new("RGB", (32, 32)).save(directory / f"{prefix}_target.png")
+def _write_train_config(tmp_path: Path, dataset_root: Path) -> Path:
+    return write_run_config(
+        tmp_path,
+        """\
+        image_size: [32, 32]
+        training:
+          epochs: 1
+          num_workers: 0
+        """,
+        filename="train.yaml",
+        dataset_root=dataset_root,
+        results_path=tmp_path / "results",
+        run_name="smoke_run",
+    )
 
 
 def _write_training_manifest(dataset_root: Path) -> None:
     records = (
-        ManifestRecord(
-            sample_id="00000_00000",
-            split="train",
-            input_path=Path("splits/train/00000_00000_source.png"),
-            target_path=Path("splits/train/00000_00000_target.png"),
-            input_modality="label_free",
-            target_modality="stained",
-            x=0,
-            y=0,
-            width=256,
-            height=256,
-        ),
-        ManifestRecord(
-            sample_id="00256_00000",
-            split="val",
-            input_path=Path("splits/val/00256_00000_source.png"),
-            target_path=Path("splits/val/00256_00000_target.png"),
-            input_modality="label_free",
-            target_modality="stained",
-            x=256,
-            y=0,
-            width=256,
-            height=256,
-        ),
+        make_manifest_record("00000_00000", "train", ext=".png"),
+        make_manifest_record("00256_00000", "val", ext=".png"),
     )
     write_manifest_csv(dataset_root, records)
 
 
 def _write_val_only_manifest(dataset_root: Path) -> None:
-    records = (
-        ManifestRecord(
-            sample_id="00256_00000",
-            split="val",
-            input_path=Path("splits/val/00256_00000_source.png"),
-            target_path=Path("splits/val/00256_00000_target.png"),
-            input_modality="label_free",
-            target_modality="stained",
-            x=256,
-            y=0,
-            width=256,
-            height=256,
-        ),
-    )
+    records = (make_manifest_record("00256_00000", "val", ext=".png"),)
     write_manifest_csv(dataset_root, records)
 
 
 def _write_missing_file_manifest(dataset_root: Path) -> None:
     records = (
-        ManifestRecord(
-            sample_id="00000_00000",
-            split="train",
-            input_path=Path("splits/train/00000_00000_source.png"),
-            target_path=Path("splits/train/00000_00000_target.png"),
-            input_modality="label_free",
-            target_modality="stained",
-            x=0,
-            y=0,
-            width=256,
-            height=256,
-        ),
-        ManifestRecord(
-            sample_id="00256_00000",
-            split="val",
-            input_path=Path("splits/val/00256_00000_source.png"),
-            target_path=Path("splits/val/00256_00000_target.png"),
-            input_modality="label_free",
-            target_modality="stained",
-            x=256,
-            y=0,
-            width=256,
-            height=256,
-        ),
+        make_manifest_record("00000_00000", "train", ext=".png"),
+        make_manifest_record("00256_00000", "val", ext=".png"),
     )
     write_manifest_csv(dataset_root, records)
 
@@ -104,23 +58,10 @@ def test_run_training_raises_if_manifest_missing(tmp_path: Path) -> None:
     val_dir = dataset_root / "splits" / "val"
     train_dir.mkdir(parents=True)
     val_dir.mkdir(parents=True)
-    _write_rgb_pair(train_dir)
-    _write_rgb_pair(val_dir, prefix="00256_00000")
+    write_rgb_pair(train_dir, size=(32, 32))
+    write_rgb_pair(val_dir, "00256_00000", size=(32, 32))
 
-    config_path = tmp_path / "train.yaml"
-    config_path.write_text(
-        f"""
-dataset_root: {dataset_root}
-results_path: {tmp_path / "results"}
-run_name: smoke_run
-image_size: [32, 32]
-training:
-  epochs: 1
-  num_workers: 0
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
+    config_path = _write_train_config(tmp_path, dataset_root)
     config = RunConfig.from_yaml(config_path)
 
     with pytest.raises(FileNotFoundError, match="Manifest not found"):
@@ -131,23 +72,10 @@ def test_run_training_raises_if_required_train_split_missing(tmp_path: Path) -> 
     dataset_root = tmp_path / "dataset"
     val_dir = dataset_root / "splits" / "val"
     val_dir.mkdir(parents=True)
-    _write_rgb_pair(val_dir, prefix="00256_00000")
+    write_rgb_pair(val_dir, "00256_00000", size=(32, 32))
     _write_val_only_manifest(dataset_root)
 
-    config_path = tmp_path / "train.yaml"
-    config_path.write_text(
-        f"""
-dataset_root: {dataset_root}
-results_path: {tmp_path / "results"}
-run_name: smoke_run
-image_size: [32, 32]
-training:
-  epochs: 1
-  num_workers: 0
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
+    config_path = _write_train_config(tmp_path, dataset_root)
     config = RunConfig.from_yaml(config_path)
 
     with pytest.raises(ValueError, match="train"):
@@ -160,23 +88,10 @@ def test_run_training_raises_if_manifest_input_file_missing(tmp_path: Path) -> N
     val_dir = dataset_root / "splits" / "val"
     train_dir.mkdir(parents=True)
     val_dir.mkdir(parents=True)
-    _write_rgb_pair(val_dir, prefix="00256_00000")
+    write_rgb_pair(val_dir, "00256_00000", size=(32, 32))
     _write_missing_file_manifest(dataset_root)
 
-    config_path = tmp_path / "train.yaml"
-    config_path.write_text(
-        f"""
-dataset_root: {dataset_root}
-results_path: {tmp_path / "results"}
-run_name: smoke_run
-image_size: [32, 32]
-training:
-  epochs: 1
-  num_workers: 0
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
+    config_path = _write_train_config(tmp_path, dataset_root)
     config = RunConfig.from_yaml(config_path)
 
     with pytest.raises(FileNotFoundError, match="Input file not found"):
@@ -189,24 +104,11 @@ def test_run_training_writes_resolved_config_and_hash(tmp_path: Path, monkeypatc
     val_dir = dataset_root / "splits" / "val"
     train_dir.mkdir(parents=True)
     val_dir.mkdir(parents=True)
-    _write_rgb_pair(train_dir)
-    _write_rgb_pair(val_dir, prefix="00256_00000")
+    write_rgb_pair(train_dir, size=(32, 32))
+    write_rgb_pair(val_dir, "00256_00000", size=(32, 32))
     _write_training_manifest(dataset_root)
 
-    config_path = tmp_path / "train.yaml"
-    config_path.write_text(
-        f"""
-dataset_root: {dataset_root}
-results_path: {tmp_path / "results"}
-run_name: smoke_run
-image_size: [32, 32]
-training:
-  epochs: 1
-  num_workers: 0
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
+    config_path = _write_train_config(tmp_path, dataset_root)
     config = RunConfig.from_yaml(config_path)
 
     def _fake_train(self, seed: int, start_epoch: int = 0, reporter=None) -> TrainingResult:
@@ -265,24 +167,11 @@ def test_run_training_writes_failed_stage_metadata_and_events(tmp_path: Path, mo
     val_dir = dataset_root / "splits" / "val"
     train_dir.mkdir(parents=True)
     val_dir.mkdir(parents=True)
-    _write_rgb_pair(train_dir)
-    _write_rgb_pair(val_dir, prefix="00256_00000")
+    write_rgb_pair(train_dir, size=(32, 32))
+    write_rgb_pair(val_dir, "00256_00000", size=(32, 32))
     _write_training_manifest(dataset_root)
 
-    config_path = tmp_path / "train.yaml"
-    config_path.write_text(
-        f"""
-dataset_root: {dataset_root}
-results_path: {tmp_path / "results"}
-run_name: smoke_run
-image_size: [32, 32]
-training:
-  epochs: 1
-  num_workers: 0
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
+    config_path = _write_train_config(tmp_path, dataset_root)
     config = RunConfig.from_yaml(config_path)
 
     def _fail_train(self, seed: int, start_epoch: int = 0, reporter=None) -> TrainingResult:

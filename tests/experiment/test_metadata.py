@@ -9,6 +9,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
+from tests.config_helpers import write_run_config
 from virtual_staining.applications.prepare import prepare
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.preprocessing import AlignmentMetadata
@@ -135,30 +136,29 @@ def test_prepare_writes_stage_metadata_and_events(tmp_path: Path) -> None:
     cv2.imwrite(str(dataset_root / "source.png"), image)
     cv2.imwrite(str(dataset_root / "target.png"), image + 8)
 
-    config_path = tmp_path / "prepare.yaml"
-    config_path.write_text(
-        f"""
-dataset_root: {dataset_root}
-results_path: {tmp_path / "results"}
-run_name: prepare_run
-image_size: [64, 64]
-preprocessing:
-  source_name: source.png
-  target_name: target.png
-  image_size: [64, 64]
-  grid_movement: [64, 64]
-  margin: 0
-  seed: 42
-  train_ratio: 0.8
-  val_ratio: 0.1
-  test_ratio: 0.1
-  min_foreground_ratio: 0.0
-  max_white_ratio: 1.0
-  white_threshold: 250
-  max_largest_white_component_ratio: 1.0
-""".strip()
-        + "\n",
-        encoding="utf-8",
+    config_path = write_run_config(
+        tmp_path,
+        """\
+        image_size: [64, 64]
+        preprocessing:
+          source_name: source.png
+          target_name: target.png
+          image_size: [64, 64]
+          grid_movement: [64, 64]
+          margin: 0
+          seed: 42
+          train_ratio: 0.8
+          val_ratio: 0.1
+          test_ratio: 0.1
+          min_foreground_ratio: 0.0
+          max_white_ratio: 1.0
+          white_threshold: 250
+          max_largest_white_component_ratio: 1.0
+        """,
+        filename="prepare.yaml",
+        dataset_root=dataset_root,
+        results_path=tmp_path / "results",
+        run_name="prepare_run",
     )
     config = RunConfig.from_yaml(config_path)
 

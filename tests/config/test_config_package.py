@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.config_helpers import write_yaml
 from virtual_staining.config import (
     load_yaml_mapping,
     parse_bool_strict,
@@ -17,13 +18,13 @@ from virtual_staining.experiment.snapshots import compute_config_hash, save_reso
 
 def test_load_yaml_mapping_valid(tmp_path: Path) -> None:
     f = tmp_path / "test.yaml"
-    f.write_text("key: value\nnumber: 42\n")
+    write_yaml(f, "key: value\nnumber: 42")
     assert load_yaml_mapping(f) == {"key": "value", "number": 42}
 
 
 def test_load_yaml_mapping_non_mapping_raises(tmp_path: Path) -> None:
     f = tmp_path / "test.yaml"
-    f.write_text("- item1\n- item2\n")
+    write_yaml(f, "- item1\n- item2")
     with pytest.raises(ValueError, match="YAML mapping"):
         load_yaml_mapping(f)
 
@@ -76,7 +77,8 @@ def test_section_with_shared_fields_section_overrides_shared() -> None:
 
 def test_run_config_to_yaml_dict_includes_required_keys_and_omits_nones(tmp_path: Path) -> None:
     yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
+    write_yaml(
+        yaml_path,
         """
 dataset_root: /tmp/ds
 results_path: /tmp/results
@@ -84,9 +86,7 @@ run_name: test_run
 image_size: [256, 256]
 training:
   epochs: 10
-""".strip()
-        + "\n",
-        encoding="utf-8",
+""",
     )
 
     config = RunConfig.from_yaml(yaml_path)
@@ -107,15 +107,14 @@ training:
 
 def test_project_config_default_manifest_path(tmp_path: Path) -> None:
     yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
+    write_yaml(
+        yaml_path,
         """
 dataset_root: /tmp/ds
 results_path: /tmp/results
 run_name: t
 image_size: [256, 256]
-""".strip()
-        + "\n",
-        encoding="utf-8",
+""",
     )
 
     config = RunConfig.from_yaml(yaml_path)
@@ -125,16 +124,15 @@ image_size: [256, 256]
 
 def test_project_config_explicit_manifest_path(tmp_path: Path) -> None:
     yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
+    write_yaml(
+        yaml_path,
         """
 dataset_root: /tmp/ds
 results_path: /tmp/results
 run_name: t
 image_size: [256, 256]
 manifest_path: /tmp/ds/manifests/fold_0.csv
-""".strip()
-        + "\n",
-        encoding="utf-8",
+""",
     )
 
     config = RunConfig.from_yaml(yaml_path)
@@ -144,16 +142,15 @@ manifest_path: /tmp/ds/manifests/fold_0.csv
 
 def test_run_config_to_yaml_dict_includes_manifest_path_override(tmp_path: Path) -> None:
     yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
+    write_yaml(
+        yaml_path,
         """
 dataset_root: /tmp/ds
 results_path: /tmp/results
 run_name: t
 image_size: [256, 256]
 manifest_path: /tmp/ds/manifests/fold_0.csv
-""".strip()
-        + "\n",
-        encoding="utf-8",
+""",
     )
 
     config = RunConfig.from_yaml(yaml_path)
@@ -164,7 +161,8 @@ manifest_path: /tmp/ds/manifests/fold_0.csv
 
 def test_model_bilinear_string_false_raises(tmp_path: Path) -> None:
     yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
+    write_yaml(
+        yaml_path,
         """
 dataset_root: /tmp/ds
 results_path: /tmp/results
@@ -175,9 +173,7 @@ model:
     bilinear: "false"
 training:
   epochs: 1
-""".strip()
-        + "\n",
-        encoding="utf-8",
+""",
     )
 
     with pytest.raises(TypeError, match="bilinear"):
@@ -186,7 +182,8 @@ training:
 
 def test_model_use_sigmoid_string_true_raises(tmp_path: Path) -> None:
     yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
+    write_yaml(
+        yaml_path,
         """
 dataset_root: /tmp/ds
 results_path: /tmp/results
@@ -197,9 +194,7 @@ model:
     use_sigmoid: "true"
 training:
   epochs: 1
-""".strip()
-        + "\n",
-        encoding="utf-8",
+""",
     )
 
     with pytest.raises(TypeError, match="use_sigmoid"):
@@ -208,7 +203,8 @@ training:
 
 def test_model_bilinear_yaml_bool_false_parses(tmp_path: Path) -> None:
     yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
+    write_yaml(
+        yaml_path,
         """
 dataset_root: /tmp/ds
 results_path: /tmp/results
@@ -219,9 +215,7 @@ model:
     bilinear: false
 training:
   epochs: 1
-""".strip()
-        + "\n",
-        encoding="utf-8",
+""",
     )
 
     config = RunConfig.from_yaml(yaml_path)
@@ -231,7 +225,8 @@ training:
 
 def test_model_generator_dropout_string_true_raises(tmp_path: Path) -> None:
     yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
+    write_yaml(
+        yaml_path,
         """
 dataset_root: /tmp/ds
 results_path: /tmp/results
@@ -242,9 +237,7 @@ model:
     dropout: "true"
 training:
   epochs: 1
-""".strip()
-        + "\n",
-        encoding="utf-8",
+""",
     )
 
     with pytest.raises(TypeError, match="dropout"):
@@ -253,7 +246,8 @@ training:
 
 def test_model_generator_dropout_yaml_bool_true_parses(tmp_path: Path) -> None:
     yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
+    write_yaml(
+        yaml_path,
         """
 dataset_root: /tmp/ds
 results_path: /tmp/results
@@ -264,9 +258,7 @@ model:
     dropout: true
 training:
   epochs: 1
-""".strip()
-        + "\n",
-        encoding="utf-8",
+""",
     )
 
     config = RunConfig.from_yaml(yaml_path)
@@ -276,7 +268,8 @@ training:
 
 def test_model_bilinear_yaml_bool_true_raises(tmp_path: Path) -> None:
     yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
+    write_yaml(
+        yaml_path,
         """
 dataset_root: /tmp/ds
 results_path: /tmp/results
@@ -287,9 +280,7 @@ model:
     bilinear: true
 training:
   epochs: 1
-""".strip()
-        + "\n",
-        encoding="utf-8",
+""",
     )
 
     with pytest.raises(ValueError, match="bilinear"):
@@ -298,7 +289,8 @@ training:
 
 def test_model_use_sigmoid_yaml_bool_true_raises(tmp_path: Path) -> None:
     yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
+    write_yaml(
+        yaml_path,
         """
 dataset_root: /tmp/ds
 results_path: /tmp/results
@@ -309,9 +301,7 @@ model:
     use_sigmoid: true
 training:
   epochs: 1
-""".strip()
-        + "\n",
-        encoding="utf-8",
+""",
     )
 
     with pytest.raises(ValueError, match="BCEWithLogitsLoss"):
@@ -320,7 +310,8 @@ training:
 
 def test_model_use_sigmoid_yaml_bool_false_parses(tmp_path: Path) -> None:
     yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
+    write_yaml(
+        yaml_path,
         """
 dataset_root: /tmp/ds
 results_path: /tmp/results
@@ -331,9 +322,7 @@ model:
     use_sigmoid: false
 training:
   epochs: 1
-""".strip()
-        + "\n",
-        encoding="utf-8",
+""",
     )
 
     config = RunConfig.from_yaml(yaml_path)
@@ -343,7 +332,8 @@ training:
 
 def test_model_norm_and_loss_round_trip_are_preserved(tmp_path: Path) -> None:
     yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
+    write_yaml(
+        yaml_path,
         """
 dataset_root: /tmp/ds
 results_path: /tmp/results
@@ -361,9 +351,7 @@ model:
   gan_loss: bce
 training:
   epochs: 1
-""".strip()
-        + "\n",
-        encoding="utf-8",
+""",
     )
 
     config = RunConfig.from_yaml(yaml_path)
@@ -402,7 +390,8 @@ def test_model_top_level_choice_validation_rejects_invalid_values(
     tmp_path: Path, block: str, match: str
 ) -> None:
     yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
+    write_yaml(
+        yaml_path,
         f"""
 dataset_root: /tmp/ds
 results_path: /tmp/results
@@ -412,9 +401,7 @@ model:
   {block}
 training:
   epochs: 1
-""".strip()
-        + "\n",
-        encoding="utf-8",
+""",
     )
 
     with pytest.raises(ValueError, match=match):
@@ -434,7 +421,8 @@ def test_model_nested_choice_validation_rejects_invalid_values(
     tmp_path: Path, section: str, field: str, value: str
 ) -> None:
     yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
+    write_yaml(
+        yaml_path,
         f"""
 dataset_root: /tmp/ds
 results_path: /tmp/results
@@ -445,9 +433,7 @@ model:
     {field}: {value}
 training:
   epochs: 1
-""".strip()
-        + "\n",
-        encoding="utf-8",
+""",
     )
 
     with pytest.raises(ValueError, match=field):

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import yaml
 
+from tests.config_helpers import write_run_config
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
@@ -20,19 +21,19 @@ from virtual_staining.experiment.snapshots import (
 
 
 def _write_run_config(path: Path, *, run_name: str = "snapshots_run") -> RunConfig:
-    path.write_text(
-        f"""
-dataset_root: {path.parent / "dataset"}
-results_path: {path.parent / "results"}
-run_name: {run_name}
-image_size: [32, 32]
-training:
-  epochs: 1
-""".strip()
-        + "\n",
-        encoding="utf-8",
+    config_path = write_run_config(
+        path.parent,
+        """\
+        image_size: [32, 32]
+        training:
+          epochs: 1
+        """,
+        filename=path.name,
+        dataset_root=path.parent / "dataset",
+        results_path=path.parent / "results",
+        run_name=run_name,
     )
-    return RunConfig.from_yaml(path)
+    return RunConfig.from_yaml(config_path)
 
 
 def test_save_stage_config_snapshots_writes_input_resolved_and_hash(tmp_path: Path) -> None:

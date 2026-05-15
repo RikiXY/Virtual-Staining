@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 import pytest
 
+from tests.config_helpers import write_run_config, yaml_section
 from virtual_staining.applications.prepare import prepare
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data import builder as builder_module
@@ -28,6 +29,55 @@ def _make_synthetic_image(seed: int = 0) -> np.ndarray:
     """Return a 600x600 random-noise BGR image with no near-white pixels."""
     rng = np.random.default_rng(seed)
     return rng.integers(10, 200, (600, 600, 3), dtype=np.uint8)
+
+
+def _write_prepare_config(
+    builder_config: PreprocessingConfig,
+    *,
+    filename: str = "prepare.yaml",
+    preprocessing_image_size: tuple[int, int] | None = None,
+) -> Path:
+    preprocessing_lines = [
+        f"source_name: {builder_config.source_name}",
+        f"target_name: {builder_config.target_name}",
+    ]
+    if preprocessing_image_size is not None:
+        preprocessing_lines.append(
+            f"image_size: [{preprocessing_image_size[0]}, {preprocessing_image_size[1]}]"
+        )
+    preprocessing_lines.extend(
+        [
+            (
+                "grid_movement: "
+                f"[{builder_config.grid_movement[0]}, {builder_config.grid_movement[1]}]"
+            ),
+            f"margin: {builder_config.margin}",
+            f"seed: {builder_config.seed}",
+            "save_masks: false",
+            f"train_ratio: {builder_config.train_ratio}",
+            f"val_ratio: {builder_config.val_ratio}",
+            f"test_ratio: {builder_config.test_ratio}",
+            f"min_foreground_ratio: {builder_config.min_foreground_ratio}",
+            f"max_white_ratio: {builder_config.max_white_ratio}",
+            f"white_threshold: {builder_config.white_threshold}",
+            (
+                "max_largest_white_component_ratio: "
+                f"{builder_config.max_largest_white_component_ratio}"
+            ),
+        ]
+    )
+    section = (
+        f"image_size: [{builder_config.image_size[0]}, {builder_config.image_size[1]}]\n"
+        f"{yaml_section('preprocessing', chr(10).join(preprocessing_lines))}"
+    )
+    return write_run_config(
+        builder_config.dataset_root.parent,
+        section,
+        filename=filename,
+        dataset_root=builder_config.dataset_root,
+        results_path=builder_config.dataset_root.parent / "results",
+        run_name="prepare_run",
+    )
 
 
 def _white_mask(img: np.ndarray, _params: object) -> np.ndarray:
@@ -759,31 +809,7 @@ def test_run_all_preserves_bootstrapped_snapshot_files(
 def test_prepare_writes_canonical_snapshot_files(
     builder_config: PreprocessingConfig,
 ) -> None:
-    config_path = builder_config.dataset_root.parent / "prepare.yaml"
-    config_path.write_text(
-        f"""
-dataset_root: {builder_config.dataset_root}
-results_path: {builder_config.dataset_root.parent / "results"}
-run_name: prepare_run
-image_size: [{builder_config.image_size[0]}, {builder_config.image_size[1]}]
-preprocessing:
-  source_name: {builder_config.source_name}
-  target_name: {builder_config.target_name}
-  grid_movement: [{builder_config.grid_movement[0]}, {builder_config.grid_movement[1]}]
-  margin: {builder_config.margin}
-  seed: {builder_config.seed}
-  save_masks: false
-  train_ratio: {builder_config.train_ratio}
-  val_ratio: {builder_config.val_ratio}
-  test_ratio: {builder_config.test_ratio}
-  min_foreground_ratio: {builder_config.min_foreground_ratio}
-  max_white_ratio: {builder_config.max_white_ratio}
-  white_threshold: {builder_config.white_threshold}
-  max_largest_white_component_ratio: {builder_config.max_largest_white_component_ratio}
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
+    config_path = _write_prepare_config(builder_config)
     run_config = RunConfig.from_yaml(config_path)
 
     with _patched_builder_dependencies():
@@ -806,31 +832,7 @@ def test_prepare_reuses_existing_dataset_when_fingerprint_matches(
 ) -> None:
     import json
 
-    config_path = builder_config.dataset_root.parent / "prepare.yaml"
-    config_path.write_text(
-        f"""
-dataset_root: {builder_config.dataset_root}
-results_path: {builder_config.dataset_root.parent / "results"}
-run_name: prepare_run
-image_size: [{builder_config.image_size[0]}, {builder_config.image_size[1]}]
-preprocessing:
-  source_name: {builder_config.source_name}
-  target_name: {builder_config.target_name}
-  grid_movement: [{builder_config.grid_movement[0]}, {builder_config.grid_movement[1]}]
-  margin: {builder_config.margin}
-  seed: {builder_config.seed}
-  save_masks: false
-  train_ratio: {builder_config.train_ratio}
-  val_ratio: {builder_config.val_ratio}
-  test_ratio: {builder_config.test_ratio}
-  min_foreground_ratio: {builder_config.min_foreground_ratio}
-  max_white_ratio: {builder_config.max_white_ratio}
-  white_threshold: {builder_config.white_threshold}
-  max_largest_white_component_ratio: {builder_config.max_largest_white_component_ratio}
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
+    config_path = _write_prepare_config(builder_config)
     run_config = RunConfig.from_yaml(config_path)
 
     with _patched_builder_dependencies():
@@ -857,32 +859,7 @@ preprocessing:
 
 
 def test_prepare_rebuilds_when_preprocessing_changes(builder_config: PreprocessingConfig) -> None:
-    config_path = builder_config.dataset_root.parent / "prepare.yaml"
-    config_path.write_text(
-        f"""
-dataset_root: {builder_config.dataset_root}
-results_path: {builder_config.dataset_root.parent / "results"}
-run_name: prepare_run
-image_size: [{builder_config.image_size[0]}, {builder_config.image_size[1]}]
-preprocessing:
-  source_name: {builder_config.source_name}
-  target_name: {builder_config.target_name}
-  image_size: [32, 64]
-  grid_movement: [{builder_config.grid_movement[0]}, {builder_config.grid_movement[1]}]
-  margin: {builder_config.margin}
-  seed: {builder_config.seed}
-  save_masks: false
-  train_ratio: {builder_config.train_ratio}
-  val_ratio: {builder_config.val_ratio}
-  test_ratio: {builder_config.test_ratio}
-  min_foreground_ratio: {builder_config.min_foreground_ratio}
-  max_white_ratio: {builder_config.max_white_ratio}
-  white_threshold: {builder_config.white_threshold}
-  max_largest_white_component_ratio: {builder_config.max_largest_white_component_ratio}
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
+    config_path = _write_prepare_config(builder_config, preprocessing_image_size=(32, 64))
     original_config_path = builder_config.dataset_root.parent / "original.yaml"
     original_config_text = config_path.read_text(encoding="utf-8").replace(
         "image_size: [32, 64]",
@@ -915,31 +892,7 @@ preprocessing:
 
 
 def test_prepare_rebuilds_when_source_content_changes(builder_config: PreprocessingConfig) -> None:
-    config_path = builder_config.dataset_root.parent / "prepare.yaml"
-    config_path.write_text(
-        f"""
-dataset_root: {builder_config.dataset_root}
-results_path: {builder_config.dataset_root.parent / "results"}
-run_name: prepare_run
-image_size: [{builder_config.image_size[0]}, {builder_config.image_size[1]}]
-preprocessing:
-  source_name: {builder_config.source_name}
-  target_name: {builder_config.target_name}
-  grid_movement: [{builder_config.grid_movement[0]}, {builder_config.grid_movement[1]}]
-  margin: {builder_config.margin}
-  seed: {builder_config.seed}
-  save_masks: false
-  train_ratio: {builder_config.train_ratio}
-  val_ratio: {builder_config.val_ratio}
-  test_ratio: {builder_config.test_ratio}
-  min_foreground_ratio: {builder_config.min_foreground_ratio}
-  max_white_ratio: {builder_config.max_white_ratio}
-  white_threshold: {builder_config.white_threshold}
-  max_largest_white_component_ratio: {builder_config.max_largest_white_component_ratio}
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
+    config_path = _write_prepare_config(builder_config)
     run_config = RunConfig.from_yaml(config_path)
 
     with _patched_builder_dependencies():
@@ -966,31 +919,7 @@ preprocessing:
 
 
 def test_prepare_rebuilds_when_target_content_changes(builder_config: PreprocessingConfig) -> None:
-    config_path = builder_config.dataset_root.parent / "prepare.yaml"
-    config_path.write_text(
-        f"""
-dataset_root: {builder_config.dataset_root}
-results_path: {builder_config.dataset_root.parent / "results"}
-run_name: prepare_run
-image_size: [{builder_config.image_size[0]}, {builder_config.image_size[1]}]
-preprocessing:
-  source_name: {builder_config.source_name}
-  target_name: {builder_config.target_name}
-  grid_movement: [{builder_config.grid_movement[0]}, {builder_config.grid_movement[1]}]
-  margin: {builder_config.margin}
-  seed: {builder_config.seed}
-  save_masks: false
-  train_ratio: {builder_config.train_ratio}
-  val_ratio: {builder_config.val_ratio}
-  test_ratio: {builder_config.test_ratio}
-  min_foreground_ratio: {builder_config.min_foreground_ratio}
-  max_white_ratio: {builder_config.max_white_ratio}
-  white_threshold: {builder_config.white_threshold}
-  max_largest_white_component_ratio: {builder_config.max_largest_white_component_ratio}
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
+    config_path = _write_prepare_config(builder_config)
     run_config = RunConfig.from_yaml(config_path)
 
     with _patched_builder_dependencies():
@@ -1019,31 +948,7 @@ preprocessing:
 def test_prepare_rebuilds_when_required_outputs_are_missing(
     builder_config: PreprocessingConfig,
 ) -> None:
-    config_path = builder_config.dataset_root.parent / "prepare.yaml"
-    config_path.write_text(
-        f"""
-dataset_root: {builder_config.dataset_root}
-results_path: {builder_config.dataset_root.parent / "results"}
-run_name: prepare_run
-image_size: [{builder_config.image_size[0]}, {builder_config.image_size[1]}]
-preprocessing:
-  source_name: {builder_config.source_name}
-  target_name: {builder_config.target_name}
-  grid_movement: [{builder_config.grid_movement[0]}, {builder_config.grid_movement[1]}]
-  margin: {builder_config.margin}
-  seed: {builder_config.seed}
-  save_masks: false
-  train_ratio: {builder_config.train_ratio}
-  val_ratio: {builder_config.val_ratio}
-  test_ratio: {builder_config.test_ratio}
-  min_foreground_ratio: {builder_config.min_foreground_ratio}
-  max_white_ratio: {builder_config.max_white_ratio}
-  white_threshold: {builder_config.white_threshold}
-  max_largest_white_component_ratio: {builder_config.max_largest_white_component_ratio}
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
+    config_path = _write_prepare_config(builder_config)
     run_config = RunConfig.from_yaml(config_path)
 
     with _patched_builder_dependencies():

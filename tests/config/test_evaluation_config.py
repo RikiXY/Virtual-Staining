@@ -3,16 +3,15 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
-import textwrap
 from pathlib import Path
 
 import pytest
-from PIL import Image
 
-from tests.manifest_helpers import write_manifest_csv
+from tests.config_helpers import write_run_config, yaml_section
+from tests.image_helpers import write_rgb_image, write_rgb_pair
+from tests.manifest_helpers import make_manifest_record, write_manifest_csv
 from virtual_staining.applications.evaluate import evaluate
 from virtual_staining.config.run import RunConfig
-from virtual_staining.data.manifest import ManifestRecord
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.inference.outputs import (
     generated_filename_for_sample,
@@ -21,39 +20,35 @@ from virtual_staining.inference.outputs import (
 
 
 def _write_test_manifest(dataset_root: Path, sample_ids: list[str]) -> None:
-    records = tuple(
-        ManifestRecord(
-            sample_id=sample_id,
-            split="test",
-            input_path=Path(f"splits/test/{sample_id}_source.png"),
-            target_path=Path(f"splits/test/{sample_id}_target.png"),
-            input_modality="label_free",
-            target_modality="stained",
-            x=int(sample_id.split("_", maxsplit=1)[0]),
-            y=int(sample_id.split("_", maxsplit=1)[1]),
-            width=256,
-            height=256,
-        )
-        for sample_id in sample_ids
-    )
+    records = tuple(make_manifest_record(sample_id, "test", ext=".png") for sample_id in sample_ids)
     write_manifest_csv(dataset_root, records)
 
 
-def _write_eval_pair(directory: Path, sample_id: str) -> None:
-    Image.new("RGB", (16, 16)).save(directory / f"{sample_id}_source.png")
-    Image.new("RGB", (16, 16)).save(directory / f"{sample_id}_target.png")
+def _write_evaluate_config(
+    tmp_path: Path,
+    dataset_root: Path,
+    section_yaml: str,
+    *,
+    filename: str = "evaluate.yaml",
+) -> Path:
+    return write_run_config(
+        tmp_path,
+        yaml_section("evaluation", section_yaml),
+        filename=filename,
+        dataset_root=dataset_root,
+        results_path=tmp_path / "results",
+        run_name="eval_run",
+    )
 
 
 def test_evaluation_config_defaults_to_run_dirs(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent(f"""\
-        dataset_root: {tmp_path / "data"}
-        results_path: {tmp_path / "results"}
-        run_name: section_run
-        evaluation:
-          save_graphs: false
-    """)
-    yaml_file = tmp_path / "run.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    yaml_file = write_run_config(
+        tmp_path,
+        "evaluation:\n  save_graphs: false",
+        dataset_root=tmp_path / "data",
+        results_path=tmp_path / "results",
+        run_name="section_run",
+    )
 
     run_config = RunConfig.from_yaml(yaml_file)
     assert run_config.evaluation is not None
@@ -73,17 +68,18 @@ def test_evaluation_config_defaults_to_run_dirs(tmp_path: Path) -> None:
 
 
 def test_evaluation_config_accepts_explicit_dirs(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
-        dataset_root: /data
-        results_path: /results
-        run_name: section_run
+    yaml_file = write_run_config(
+        tmp_path,
+        """\
         evaluation:
           target_dir: /custom/targets
           generated_dir: /custom/generated
           output_dir: /custom/evaluation
-    """)
-    yaml_file = tmp_path / "run.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+        """,
+        dataset_root=Path("/data"),
+        results_path=Path("/results"),
+        run_name="section_run",
+    )
 
     run_config = RunConfig.from_yaml(yaml_file)
     assert run_config.evaluation is not None
@@ -94,58 +90,57 @@ def test_evaluation_config_accepts_explicit_dirs(tmp_path: Path) -> None:
 
 
 def test_evaluation_from_yaml_unknown_section_key_raises(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent(f"""\
-        dataset_root: {tmp_path / "data"}
-        results_path: {tmp_path / "results"}
-        run_name: section_run
-        evaluation:
-          save_graph: false
-    """)
-    yaml_file = tmp_path / "typo.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    yaml_file = write_run_config(
+        tmp_path,
+        "evaluation:\n  save_graph: false",
+        filename="typo.yaml",
+        dataset_root=tmp_path / "data",
+        results_path=tmp_path / "results",
+        run_name="section_run",
+    )
     with pytest.raises(ValueError, match="save_graph"):
         RunConfig.from_yaml(yaml_file)
 
 
 def test_evaluation_from_yaml_unknown_top_level_key_raises(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent(f"""\
-        dataset_root: {tmp_path / "data"}
-        results_path: {tmp_path / "results"}
-        run_name: section_run
+    yaml_file = write_run_config(
+        tmp_path,
+        """
         typo_field: oops
         evaluation:
           save_graphs: false
-    """)
-    yaml_file = tmp_path / "typo_top.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+        """,
+        filename="typo_top.yaml",
+        dataset_root=tmp_path / "data",
+        results_path=tmp_path / "results",
+        run_name="section_run",
+    )
     with pytest.raises(ValueError, match="typo_field"):
         RunConfig.from_yaml(yaml_file)
 
 
 def test_evaluation_from_yaml_string_bool_save_graphs_raises(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent(f"""\
-        dataset_root: {tmp_path / "data"}
-        results_path: {tmp_path / "results"}
-        run_name: section_run
-        evaluation:
-          save_graphs: "false"
-    """)
-    yaml_file = tmp_path / "str_bool.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    yaml_file = write_run_config(
+        tmp_path,
+        'evaluation:\n  save_graphs: "false"',
+        filename="str_bool.yaml",
+        dataset_root=tmp_path / "data",
+        results_path=tmp_path / "results",
+        run_name="section_run",
+    )
     with pytest.raises(TypeError, match="save_graphs"):
         RunConfig.from_yaml(yaml_file)
 
 
 def test_evaluation_from_yaml_string_bool_hide_graphs_path_raises(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent(f"""\
-        dataset_root: {tmp_path / "data"}
-        results_path: {tmp_path / "results"}
-        run_name: section_run
-        evaluation:
-          hide_graphs_path: "false"
-    """)
-    yaml_file = tmp_path / "str_bool2.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    yaml_file = write_run_config(
+        tmp_path,
+        'evaluation:\n  hide_graphs_path: "false"',
+        filename="str_bool2.yaml",
+        dataset_root=tmp_path / "data",
+        results_path=tmp_path / "results",
+        run_name="section_run",
+    )
     with pytest.raises(ValueError, match="hide_graphs_path"):
         RunConfig.from_yaml(yaml_file)
 
@@ -158,21 +153,17 @@ def test_evaluate_writes_stage_scoped_snapshot_files(tmp_path: Path) -> None:
     generated_dir.mkdir()
     _write_test_manifest(dataset_root, ["00000_00000"])
 
-    _write_eval_pair(target_dir, "00000_00000")
-    Image.new("RGB", (16, 16)).save(generated_dir / "00000_00000_target_generated.png")
+    write_rgb_pair(target_dir, "00000_00000")
+    write_rgb_image(generated_dir / "00000_00000_target_generated.png")
 
-    yaml_file = tmp_path / "evaluate.yaml"
-    yaml_file.write_text(
-        textwrap.dedent(f"""\
-            dataset_root: {dataset_root}
-            results_path: {tmp_path / "results"}
-            run_name: eval_run
-            evaluation:
-              target_dir: {target_dir}
-              generated_dir: {generated_dir}
-              output_dir: {tmp_path / "results" / "eval_run" / "evaluation"}
-        """),
-        encoding="utf-8",
+    yaml_file = _write_evaluate_config(
+        tmp_path,
+        dataset_root,
+        f"""\
+          target_dir: {target_dir}
+          generated_dir: {generated_dir}
+          output_dir: {tmp_path / "results" / "eval_run" / "evaluation"}
+        """,
     )
 
     run_config = RunConfig.from_yaml(yaml_file)
@@ -196,21 +187,17 @@ def test_evaluate_preserves_existing_training_snapshot_files(tmp_path: Path) -> 
     generated_dir.mkdir()
     _write_test_manifest(dataset_root, ["00000_00000"])
 
-    _write_eval_pair(target_dir, "00000_00000")
-    Image.new("RGB", (16, 16)).save(generated_dir / "00000_00000_target_generated.png")
+    write_rgb_pair(target_dir, "00000_00000")
+    write_rgb_image(generated_dir / "00000_00000_target_generated.png")
 
-    yaml_file = tmp_path / "evaluate.yaml"
-    yaml_file.write_text(
-        textwrap.dedent(f"""\
-            dataset_root: {dataset_root}
-            results_path: {tmp_path / "results"}
-            run_name: eval_run
-            evaluation:
-              target_dir: {target_dir}
-              generated_dir: {generated_dir}
-              output_dir: {tmp_path / "results" / "eval_run" / "evaluation"}
-        """),
-        encoding="utf-8",
+    yaml_file = _write_evaluate_config(
+        tmp_path,
+        dataset_root,
+        f"""\
+          target_dir: {target_dir}
+          generated_dir: {generated_dir}
+          output_dir: {tmp_path / "results" / "eval_run" / "evaluation"}
+        """,
     )
     run_root = tmp_path / "results" / "eval_run"
     config_dir = run_root / "config"
@@ -236,18 +223,14 @@ def test_evaluate_raises_if_manifest_missing(tmp_path: Path) -> None:
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
 
-    yaml_file = tmp_path / "evaluate.yaml"
-    yaml_file.write_text(
-        textwrap.dedent(f"""\
-            dataset_root: {dataset_root}
-            results_path: {tmp_path / "results"}
-            run_name: eval_run
-            evaluation:
-              target_dir: {target_dir}
-              generated_dir: {generated_dir}
-              output_dir: {tmp_path / "results" / "eval_run" / "evaluation"}
-        """),
-        encoding="utf-8",
+    yaml_file = _write_evaluate_config(
+        tmp_path,
+        dataset_root,
+        f"""\
+          target_dir: {target_dir}
+          generated_dir: {generated_dir}
+          output_dir: {tmp_path / "results" / "eval_run" / "evaluation"}
+        """,
     )
 
     run_config = RunConfig.from_yaml(yaml_file)
@@ -262,37 +245,28 @@ def test_evaluate_raises_if_required_test_split_missing(tmp_path: Path) -> None:
     generated_dir = tmp_path / "generated"
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
-    _write_eval_pair(target_dir, "00000_00000")
+    write_rgb_pair(target_dir, "00000_00000")
     write_manifest_csv(
         dataset_root,
         (
-            ManifestRecord(
-                sample_id="00000_00000",
-                split="val",
+            make_manifest_record(
+                "00000_00000",
+                "val",
+                ext=".png",
                 input_path=Path("splits/test/00000_00000_source.png"),
                 target_path=Path("splits/test/00000_00000_target.png"),
-                input_modality="label_free",
-                target_modality="stained",
-                x=0,
-                y=0,
-                width=256,
-                height=256,
             ),
         ),
     )
 
-    yaml_file = tmp_path / "evaluate.yaml"
-    yaml_file.write_text(
-        textwrap.dedent(f"""\
-            dataset_root: {dataset_root}
-            results_path: {tmp_path / "results"}
-            run_name: eval_run
-            evaluation:
-              target_dir: {target_dir}
-              generated_dir: {generated_dir}
-              output_dir: {tmp_path / "results" / "eval_run" / "evaluation"}
-        """),
-        encoding="utf-8",
+    yaml_file = _write_evaluate_config(
+        tmp_path,
+        dataset_root,
+        f"""\
+          target_dir: {target_dir}
+          generated_dir: {generated_dir}
+          output_dir: {tmp_path / "results" / "eval_run" / "evaluation"}
+        """,
     )
 
     run_config = RunConfig.from_yaml(yaml_file)
@@ -310,24 +284,18 @@ def test_evaluate_pairs_from_manifest_test_split(tmp_path: Path) -> None:
     _write_test_manifest(dataset_root, ["00000_00000", "00256_00000"])
 
     for sample_id in ["00000_00000", "00256_00000"]:
-        _write_eval_pair(target_dir, sample_id)
-        Image.new("RGB", (16, 16)).save(
-            generated_dir / generated_filename_for_sample(sample_id, ".PNG")
-        )
-    Image.new("RGB", (16, 16)).save(generated_dir / "99999_99999_target_generated.png")
+        write_rgb_pair(target_dir, sample_id)
+        write_rgb_image(generated_dir / generated_filename_for_sample(sample_id, ".PNG"))
+    write_rgb_image(generated_dir / "99999_99999_target_generated.png")
 
-    yaml_file = tmp_path / "evaluate.yaml"
     output_dir = tmp_path / "results" / "eval_run" / "evaluation"
-    yaml_file.write_text(
-        textwrap.dedent(f"""\
-            dataset_root: {dataset_root}
-            results_path: {tmp_path / "results"}
-            run_name: eval_run
-            evaluation:
-              generated_dir: {generated_dir}
-              output_dir: {output_dir}
-        """),
-        encoding="utf-8",
+    yaml_file = _write_evaluate_config(
+        tmp_path,
+        dataset_root,
+        f"""\
+          generated_dir: {generated_dir}
+          output_dir: {output_dir}
+        """,
     )
 
     run_config = RunConfig.from_yaml(yaml_file)
@@ -347,21 +315,17 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
     _write_test_manifest(dataset_root, ["00000_00000"])
-    _write_eval_pair(target_dir, "00000_00000")
-    Image.new("RGB", (16, 16)).save(generated_dir / "00000_00000_target_generated.png")
+    write_rgb_pair(target_dir, "00000_00000")
+    write_rgb_image(generated_dir / "00000_00000_target_generated.png")
 
-    yaml_file = tmp_path / "evaluate.yaml"
     output_dir = tmp_path / "results" / "eval_run" / "evaluation"
-    yaml_file.write_text(
-        textwrap.dedent(f"""\
-            dataset_root: {dataset_root}
-            results_path: {tmp_path / "results"}
-            run_name: eval_run
-            evaluation:
-              generated_dir: {generated_dir}
-              output_dir: {output_dir}
-        """),
-        encoding="utf-8",
+    yaml_file = _write_evaluate_config(
+        tmp_path,
+        dataset_root,
+        f"""\
+          generated_dir: {generated_dir}
+          output_dir: {output_dir}
+        """,
     )
 
     run_config = RunConfig.from_yaml(yaml_file)
@@ -403,20 +367,16 @@ def test_evaluate_writes_skipped_csv_for_missing_generated(tmp_path: Path) -> No
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
     _write_test_manifest(dataset_root, ["00000_00000"])
-    _write_eval_pair(target_dir, "00000_00000")
+    write_rgb_pair(target_dir, "00000_00000")
 
-    yaml_file = tmp_path / "evaluate.yaml"
     output_dir = tmp_path / "results" / "eval_run" / "evaluation"
-    yaml_file.write_text(
-        textwrap.dedent(f"""\
-            dataset_root: {dataset_root}
-            results_path: {tmp_path / "results"}
-            run_name: eval_run
-            evaluation:
-              generated_dir: {generated_dir}
-              output_dir: {output_dir}
-        """),
-        encoding="utf-8",
+    yaml_file = _write_evaluate_config(
+        tmp_path,
+        dataset_root,
+        f"""\
+          generated_dir: {generated_dir}
+          output_dir: {output_dir}
+        """,
     )
 
     run_config = RunConfig.from_yaml(yaml_file)
@@ -434,20 +394,16 @@ def test_evaluate_skipped_csv_has_correct_columns(tmp_path: Path) -> None:
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
     _write_test_manifest(dataset_root, ["00000_00000"])
-    _write_eval_pair(target_dir, "00000_00000")
+    write_rgb_pair(target_dir, "00000_00000")
 
-    yaml_file = tmp_path / "evaluate.yaml"
     output_dir = tmp_path / "results" / "eval_run" / "evaluation"
-    yaml_file.write_text(
-        textwrap.dedent(f"""\
-            dataset_root: {dataset_root}
-            results_path: {tmp_path / "results"}
-            run_name: eval_run
-            evaluation:
-              generated_dir: {generated_dir}
-              output_dir: {output_dir}
-        """),
-        encoding="utf-8",
+    yaml_file = _write_evaluate_config(
+        tmp_path,
+        dataset_root,
+        f"""\
+          generated_dir: {generated_dir}
+          output_dir: {output_dir}
+        """,
     )
 
     run_config = RunConfig.from_yaml(yaml_file)
@@ -466,18 +422,7 @@ def test_generated_filename_for_sample() -> None:
 
 
 def test_generated_path_for_record_uses_sample_id(tmp_path: Path) -> None:
-    record = ManifestRecord(
-        sample_id="00512_09216",
-        split="test",
-        input_path=Path("splits/test/00512_09216_source.tif"),
-        target_path=Path("splits/test/00512_09216_target.tif"),
-        input_modality="label_free",
-        target_modality="stained",
-        x=512,
-        y=9216,
-        width=256,
-        height=256,
-    )
+    record = make_manifest_record("00512_09216", "test")
 
     result = generated_path_for_record(record, tmp_path)
 

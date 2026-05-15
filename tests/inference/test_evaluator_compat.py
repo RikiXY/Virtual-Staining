@@ -13,9 +13,10 @@ import torch
 from PIL import Image
 from torchvision import transforms
 
-from tests.manifest_helpers import write_manifest_csv
+from tests.config_helpers import write_run_config, yaml_section
+from tests.image_helpers import make_rgb_image, write_rgb_image, write_rgb_pair
+from tests.manifest_helpers import make_manifest_record, write_manifest_csv
 from virtual_staining.config.run import RunConfig
-from virtual_staining.data.manifest import ManifestRecord
 from virtual_staining.evaluation.io import collect_image_files, extract_single_sample_id
 from virtual_staining.evaluation.metrics import evaluate_pair
 from virtual_staining.inference.runner import run_inference as _run_inference_impl
@@ -37,9 +38,7 @@ _SAMPLE_ID = "00512_09216"
 
 
 def _write_pair(directory: Path, prefix: str = _SAMPLE_ID, ext: str = ".png") -> None:
-    arr = np.zeros((*_IMAGE_SIZE, 3), dtype=np.uint8)
-    Image.fromarray(arr).save(directory / f"{prefix}_source{ext}")
-    Image.fromarray(arr).save(directory / f"{prefix}_target{ext}")
+    write_rgb_pair(directory, prefix, size=_IMAGE_SIZE, ext=ext)
 
 
 def _save_checkpoint(path: Path, image_size: tuple[int, int] = _IMAGE_SIZE) -> None:
@@ -82,25 +81,19 @@ def _save_checkpoint(path: Path, image_size: tuple[int, int] = _IMAGE_SIZE) -> N
 
 
 def _write_test_manifest(dataset_root: Path, test_dir: Path) -> None:
-    records: list[ManifestRecord] = []
+    records = []
     for source_path in sorted(test_dir.glob("*_source.*")):
         sample_id = source_path.stem[: -len("_source")]
         target_path = test_dir / f"{sample_id}_target{source_path.suffix}"
         if not target_path.exists():
             continue
-        x_str, y_str = sample_id.split("_", maxsplit=1)
         records.append(
-            ManifestRecord(
-                sample_id=sample_id,
-                split="test",
+            make_manifest_record(
+                sample_id,
+                "test",
+                ext=source_path.suffix,
                 input_path=source_path.relative_to(dataset_root),
                 target_path=target_path.relative_to(dataset_root),
-                input_modality="label_free",
-                target_modality="stained",
-                x=int(x_str),
-                y=int(y_str),
-                width=256,
-                height=256,
             )
         )
     write_manifest_csv(dataset_root, records)
@@ -108,17 +101,12 @@ def _write_test_manifest(dataset_root: Path, test_dir: Path) -> None:
 
 def _write_non_test_manifest(dataset_root: Path) -> None:
     records = (
-        ManifestRecord(
-            sample_id=_SAMPLE_ID,
-            split="val",
+        make_manifest_record(
+            _SAMPLE_ID,
+            "val",
+            ext=".png",
             input_path=Path(f"test/{_SAMPLE_ID}_source.png"),
             target_path=Path(f"test/{_SAMPLE_ID}_target.png"),
-            input_modality="label_free",
-            target_modality="stained",
-            x=512,
-            y=9216,
-            width=256,
-            height=256,
         ),
     )
     write_manifest_csv(dataset_root, records)
@@ -133,28 +121,50 @@ def _run_inference(
 ) -> RunConfig:
     dataset_root = Path(test_folder).parent
     _write_test_manifest(dataset_root, Path(test_folder))
-    config_path = Path(output_folder).parent / "infer.yaml"
     inference_lines = []
     if checkpoint_path is not None:
-        inference_lines.append(f"  checkpoint_path: {checkpoint_path}")
+        inference_lines.append(f"checkpoint_path: {checkpoint_path}")
     if checkpoint_policy is not None:
-        inference_lines.append(f"  checkpoint_policy: {checkpoint_policy}")
-    inference_lines.append(f"  output_dir: {Path(output_folder)}")
-    config_path.write_text(
-        f"""
-dataset_root: {dataset_root}
-results_path: {Path(output_folder).parent}
-run_name: test_run
-image_size: [{image_size[0]}, {image_size[1]}]
-inference:
-{chr(10).join(inference_lines)}
-""".strip()
-        + "\n",
-        encoding="utf-8",
+        inference_lines.append(f"checkpoint_policy: {checkpoint_policy}")
+    inference_lines.append(f"output_dir: {Path(output_folder)}")
+    section = (
+        f"image_size: [{image_size[0]}, {image_size[1]}]\n"
+        f"{yaml_section('inference', chr(10).join(inference_lines))}"
+    )
+    config_path = write_run_config(
+        Path(output_folder).parent,
+        section,
+        filename="infer.yaml",
+        dataset_root=dataset_root,
+        results_path=Path(output_folder).parent,
+        run_name="test_run",
     )
     config = RunConfig.from_yaml(config_path)
     _run_inference_impl(config, config_path)
     return config
+
+
+def _write_inference_config(
+    tmp_path: Path,
+    checkpoint: Path,
+    output_dir: Path,
+    *,
+    dataset_root: Path | None = None,
+) -> Path:
+    dataset_root = tmp_path if dataset_root is None else dataset_root
+    inference_yaml = f"checkpoint_path: {checkpoint}\noutput_dir: {output_dir}"
+    section = (
+        f"image_size: [{_IMAGE_SIZE[0]}, {_IMAGE_SIZE[1]}]\n"
+        f"{yaml_section('inference', inference_yaml)}"
+    )
+    return write_run_config(
+        tmp_path,
+        section,
+        filename="infer.yaml",
+        dataset_root=dataset_root,
+        results_path=tmp_path,
+        run_name="test_run",
+    )
 
 
 def test_run_inference_raises_if_manifest_missing(tmp_path: Path) -> None:
@@ -166,20 +176,7 @@ def test_run_inference_raises_if_manifest_missing(tmp_path: Path) -> None:
     _write_pair(test_dir)
     _save_checkpoint(checkpoint)
 
-    config_path = tmp_path / "infer.yaml"
-    config_path.write_text(
-        f"""
-dataset_root: {tmp_path}
-results_path: {tmp_path}
-run_name: test_run
-image_size: [{_IMAGE_SIZE[0]}, {_IMAGE_SIZE[1]}]
-inference:
-  checkpoint_path: {checkpoint}
-  output_dir: {output_dir}
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
+    config_path = _write_inference_config(tmp_path, checkpoint, output_dir)
     config = RunConfig.from_yaml(config_path)
 
     with pytest.raises(FileNotFoundError, match="Manifest not found"):
@@ -196,20 +193,7 @@ def test_run_inference_raises_if_required_test_split_missing(tmp_path: Path) -> 
     _write_non_test_manifest(tmp_path)
     _save_checkpoint(checkpoint)
 
-    config_path = tmp_path / "infer.yaml"
-    config_path.write_text(
-        f"""
-dataset_root: {tmp_path}
-results_path: {tmp_path}
-run_name: test_run
-image_size: [{_IMAGE_SIZE[0]}, {_IMAGE_SIZE[1]}]
-inference:
-  checkpoint_path: {checkpoint}
-  output_dir: {output_dir}
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
+    config_path = _write_inference_config(tmp_path, checkpoint, output_dir)
     config = RunConfig.from_yaml(config_path)
 
     with pytest.raises(ValueError, match="test"):
@@ -482,8 +466,8 @@ def test_evaluate_pair_raises_on_shape_mismatch(tmp_path: Path) -> None:
     target_path = tmp_path / f"{_SAMPLE_ID}_target.png"
     generated_path = tmp_path / f"{_SAMPLE_ID}_target_generated.png"
 
-    Image.fromarray(np.zeros((32, 32, 3), dtype=np.uint8)).save(target_path)
-    Image.fromarray(np.zeros((64, 64, 3), dtype=np.uint8)).save(generated_path)
+    write_rgb_image(target_path, size=(32, 32))
+    write_rgb_image(generated_path, size=(64, 64))
 
     with pytest.raises(ValueError, match="same shape"):
         evaluate_pair(target_path, generated_path)
@@ -567,7 +551,7 @@ def test_to_torchvision_hw_produces_correct_tensor_shape() -> None:
     wh = (width, height)
     resize = transforms.Resize(to_torchvision_hw(wh))
 
-    img = Image.fromarray(np.zeros((64, 64, 3), dtype=np.uint8))
+    img = make_rgb_image(size=(64, 64))
     tensor = transforms.ToTensor()(resize(img))
 
     assert tensor.shape == (3, height, width), (
@@ -585,9 +569,7 @@ def test_inference_non_square_produces_correct_output_shape(tmp_path: Path) -> N
     output_dir = tmp_path / "output"
     checkpoint = tmp_path / "ep000.pth"
 
-    arr = np.zeros((64, 64, 3), dtype=np.uint8)
-    Image.fromarray(arr).save(test_dir / f"{_SAMPLE_ID}_source.png")
-    Image.fromarray(arr).save(test_dir / f"{_SAMPLE_ID}_target.png")
+    write_rgb_pair(test_dir, _SAMPLE_ID, size=(64, 64))
     _save_checkpoint(checkpoint, image_size=image_size)
 
     _run_inference(

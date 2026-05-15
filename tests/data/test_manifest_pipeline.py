@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from PIL import Image
-
+from tests.image_helpers import write_rgb_image
 from virtual_staining.data.dataset import PairedManifestDataset
 from virtual_staining.data.manifest import DatasetManifest
 from virtual_staining.inference.outputs import generated_path_for_record
@@ -56,8 +55,8 @@ def test_manifest_evaluation_view_uses_only_test_records(manifest_dataset) -> No
 def test_extra_files_in_directory_are_not_in_manifest(manifest_dataset) -> None:
     stray_source = manifest_dataset.root / "splits" / "test" / "stray_source.tif"
     stray_target = manifest_dataset.root / "splits" / "test" / "stray_target.tif"
-    Image.new("RGB", (3, 3)).save(stray_source)
-    Image.new("RGB", (3, 3)).save(stray_target)
+    write_rgb_image(stray_source, size=(3, 3))
+    write_rgb_image(stray_target, size=(3, 3))
 
     manifest = DatasetManifest.from_csv(
         manifest_dataset.manifest_path,

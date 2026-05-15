@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.config_helpers import write_yaml
 from virtual_staining.config import RunConfig
 from virtual_staining.config.project import ProjectConfig
 from virtual_staining.models.config import ModelConfig
@@ -68,7 +69,10 @@ def test_frozen() -> None:
 
 
 def test_run_config_from_yaml(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "train.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data
         results_path: /results
         run_name: yaml_run
@@ -77,9 +81,8 @@ def test_run_config_from_yaml(tmp_path: Path) -> None:
           epochs: 20
           batch_size: 4
           seed: 7
-    """)
-    yaml_file = tmp_path / "train.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
 
     run_config = RunConfig.from_yaml(yaml_file)
     assert run_config.project.dataset_root == Path("/data")
@@ -93,7 +96,10 @@ def test_run_config_from_yaml(tmp_path: Path) -> None:
 
 
 def test_run_config_model_explicit_contract_parses(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "train.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data
         results_path: /results
         run_name: yaml_run
@@ -117,9 +123,8 @@ def test_run_config_model_explicit_contract_parses(tmp_path: Path) -> None:
           gan_loss: bce
         training:
           epochs: 1
-    """)
-    yaml_file = tmp_path / "train.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
 
     run_config = RunConfig.from_yaml(yaml_file)
     assert run_config.model.name == "pix2pix"
@@ -130,15 +135,17 @@ def test_run_config_model_explicit_contract_parses(tmp_path: Path) -> None:
 
 
 def test_training_from_run_yaml_defaults(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "minimal.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data
         results_path: /results
         run_name: minimal_run
         training:
           epochs: 10
-    """)
-    yaml_file = tmp_path / "minimal.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
 
     run_config = RunConfig.from_yaml(yaml_file)
     assert run_config.training is not None
@@ -151,7 +158,10 @@ def test_training_from_run_yaml_defaults(tmp_path: Path) -> None:
 
 
 def test_training_from_run_yaml_section(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "run.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data
         results_path: /results
         run_name: section_run
@@ -160,9 +170,8 @@ def test_training_from_run_yaml_section(tmp_path: Path) -> None:
           epochs: 30
           batch_size: 2
           l1_weight: 50
-    """)
-    yaml_file = tmp_path / "run.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
 
     run_config = RunConfig.from_yaml(yaml_file)
     assert run_config.project.dataset_root == Path("/data")
@@ -175,7 +184,10 @@ def test_training_from_run_yaml_section(tmp_path: Path) -> None:
 
 
 def test_inference_from_run_yaml_section(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "run.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data
         results_path: /results
         run_name: section_run
@@ -185,9 +197,8 @@ def test_inference_from_run_yaml_section(tmp_path: Path) -> None:
         inference:
           checkpoint_path: checkpoints/ep030.pth
           output_dir: /results/section_run/custom_output
-    """)
-    yaml_file = tmp_path / "run.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
 
     run_config = RunConfig.from_yaml(yaml_file)
     assert run_config.inference is not None
@@ -197,7 +208,10 @@ def test_inference_from_run_yaml_section(tmp_path: Path) -> None:
 
 
 def test_training_yaml_rejects_legacy_train_dir_and_val_dir(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "run.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data
         results_path: /results
         run_name: section_run
@@ -206,16 +220,18 @@ def test_training_yaml_rejects_legacy_train_dir_and_val_dir(tmp_path: Path) -> N
           epochs: 30
           train_dir: /custom/train
           val_dir: /custom/val
-    """)
-    yaml_file = tmp_path / "run.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
 
     with pytest.raises(ValueError, match="Unknown key\\(s\\) in training: train_dir, val_dir"):
         RunConfig.from_yaml(yaml_file)
 
 
 def test_inference_yaml_rejects_legacy_test_dir(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "run.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data
         results_path: /results
         run_name: section_run
@@ -225,16 +241,18 @@ def test_inference_yaml_rejects_legacy_test_dir(tmp_path: Path) -> None:
         inference:
           checkpoint_path: checkpoints/ep030.pth
           test_dir: /custom/test
-    """)
-    yaml_file = tmp_path / "run.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
 
     with pytest.raises(ValueError, match="Unknown key\\(s\\) in inference: test_dir"):
         RunConfig.from_yaml(yaml_file)
 
 
 def test_inference_latest_checkpoint_policy(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent(f"""\
+    yaml_file = tmp_path / "run.yaml"
+    write_yaml(
+        yaml_file,
+        f"""\
         dataset_root: {tmp_path / "data"}
         results_path: {tmp_path / "results"}
         run_name: section_run
@@ -243,9 +261,8 @@ def test_inference_latest_checkpoint_policy(tmp_path: Path) -> None:
           epochs: 30
         inference:
           checkpoint_policy: latest
-    """)
-    yaml_file = tmp_path / "run.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
 
     run_config = RunConfig.from_yaml(yaml_file)
     assert run_config.inference is not None
@@ -256,7 +273,10 @@ def test_inference_latest_checkpoint_policy(tmp_path: Path) -> None:
 
 
 def test_inference_best_val_loss_checkpoint_policy(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent(f"""\
+    yaml_file = tmp_path / "run.yaml"
+    write_yaml(
+        yaml_file,
+        f"""\
         dataset_root: {tmp_path / "data"}
         results_path: {tmp_path / "results"}
         run_name: section_run
@@ -265,9 +285,8 @@ def test_inference_best_val_loss_checkpoint_policy(tmp_path: Path) -> None:
           epochs: 30
         inference:
           checkpoint_policy: best_val_loss
-    """)
-    yaml_file = tmp_path / "run.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
 
     run_config = RunConfig.from_yaml(yaml_file)
     assert run_config.inference is not None
@@ -275,15 +294,17 @@ def test_inference_best_val_loss_checkpoint_policy(tmp_path: Path) -> None:
 
 
 def test_inference_unknown_checkpoint_policy_raises(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "bad_policy.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data
         results_path: /results
         run_name: my_run
         inference:
           checkpoint_policy: best_ssim
-    """)
-    yaml_file = tmp_path / "bad_policy.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
 
     with pytest.raises(ValueError, match="Supported values"):
         RunConfig.from_yaml(yaml_file)
@@ -315,7 +336,7 @@ def test_training_invalid_values_raise_value_error(
 def test_project_config_rejects_empty_run_name(tmp_path: Path) -> None:
     yaml_content = "dataset_root: /data\nresults_path: /results\nrun_name: ''\n"
     yaml_file = tmp_path / "bad.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    write_yaml(yaml_file, yaml_content)
     with pytest.raises(ValueError, match="run_name"):
         RunConfig.from_yaml(yaml_file)
 
@@ -325,95 +346,107 @@ def test_project_config_rejects_invalid_image_size(tmp_path: Path) -> None:
         "dataset_root: /data\nresults_path: /results\nrun_name: run\nimage_size: [0, 256]\n"
     )
     yaml_file = tmp_path / "bad.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    write_yaml(yaml_file, yaml_content)
     with pytest.raises(ValueError, match="image_size"):
         RunConfig.from_yaml(yaml_file)
 
 
 def test_non_square_image_size_training_from_yaml(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "ns_train.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data
         results_path: /results
         run_name: ns_run
         image_size: [320, 256]
         training:
           epochs: 5
-    """)
-    yaml_file = tmp_path / "ns_train.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
     run_config = RunConfig.from_yaml(yaml_file)
     assert run_config.project.image_size == (320, 256)
 
 
 def test_non_square_image_size_inference_from_yaml(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "ns_infer.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data
         results_path: /results
         run_name: ns_run
         image_size: [320, 256]
         inference:
           checkpoint_path: checkpoints/ep010.pth
-    """)
-    yaml_file = tmp_path / "ns_infer.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
     run_config = RunConfig.from_yaml(yaml_file)
     assert run_config.project.image_size == (320, 256)
 
 
 def test_training_from_yaml_unknown_section_key_raises(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "typo.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data
         results_path: /results
         run_name: my_run
         training:
           epochs: 10
           bathc_size: 4
-    """)
-    yaml_file = tmp_path / "typo.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
     with pytest.raises(ValueError, match="bathc_size"):
         RunConfig.from_yaml(yaml_file)
 
 
 def test_training_from_yaml_unknown_top_level_key_raises(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "typo_top.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data
         results_path: /results
         run_name: my_run
         typo_field: oops
         training:
           epochs: 10
-    """)
-    yaml_file = tmp_path / "typo_top.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
     with pytest.raises(ValueError, match="typo_field"):
         RunConfig.from_yaml(yaml_file)
 
 
 def test_inference_from_yaml_unknown_section_key_raises(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "typo_inf.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data
         results_path: /results
         run_name: my_run
         inference:
           checkpoint_path: checkpoints/ep010.pth
           checkpont_policy: latest
-    """)
-    yaml_file = tmp_path / "typo_inf.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
     with pytest.raises(ValueError, match="checkpont_policy"):
         RunConfig.from_yaml(yaml_file)
 
 
 def test_training_from_yaml_invalid_image_size_raises_value_error(tmp_path: Path) -> None:
-    yaml_content = textwrap.dedent("""\
+    yaml_file = tmp_path / "bad_training.yaml"
+    write_yaml(
+        yaml_file,
+        """\
         dataset_root: /data
         results_path: /results
         run_name: bad_training
         image_size: [256, -1]
-    """)
-    yaml_file = tmp_path / "bad_training.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    """,
+    )
     with pytest.raises(ValueError, match="image_size"):
         RunConfig.from_yaml(yaml_file)
 
@@ -437,6 +470,6 @@ def test_inference_from_yaml_invalid_values_raise_value_error(
         f"{textwrap.indent(inference_yaml, '  ')}\n"
     )
     yaml_file = tmp_path / "bad_inference.yaml"
-    yaml_file.write_text(yaml_content, encoding="utf-8")
+    write_yaml(yaml_file, yaml_content)
     with pytest.raises(ValueError, match=field):
         RunConfig.from_yaml(yaml_file)

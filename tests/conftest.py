@@ -4,8 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from PIL import Image
 
+from tests.image_helpers import write_rgb_image
+from tests.manifest_helpers import make_manifest_record
 from virtual_staining.data.manifest import DatasetManifest, ManifestRecord
 
 
@@ -21,8 +22,7 @@ class ManifestDataset:
 
 def _write_tiny_image(path: Path) -> None:
     """Write a minimal valid RGB TIFF."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    Image.new("RGB", (3, 3)).save(path)
+    write_rgb_image(path, size=(3, 3))
 
 
 @pytest.fixture
@@ -41,17 +41,13 @@ def manifest_dataset(tmp_path: Path) -> ManifestDataset:
         _write_tiny_image(tmp_path / input_path)
         _write_tiny_image(tmp_path / target_path)
         records.append(
-            ManifestRecord(
-                sample_id=sample_id,
-                split=split,  # type: ignore[arg-type]
+            make_manifest_record(
+                sample_id,
+                split,
                 input_path=input_path,
                 target_path=target_path,
-                input_modality="label_free",
-                target_modality="stained",
                 x=int(x_str),
                 y=int(y_str),
-                width=256,
-                height=256,
             )
         )
 
