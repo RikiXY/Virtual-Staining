@@ -181,7 +181,17 @@ Virtual-Staining/
 │   ├── datasets/               # input paired samples (gitignored)
 │   ├── queues/                 # queue state files (gitignored except .gitkeep)
 │   └── results/                # run outputs (gitignored)
-├── tests/                      # pytest test suite
+├── tests/                      # pytest suite grouped by subsystem
+│   ├── cli/
+│   ├── config/
+│   ├── data/
+│   ├── evaluation/
+│   ├── experiment/
+│   ├── inference/
+│   ├── models/
+│   ├── smoke/
+│   ├── training/
+│   └── utils/
 ├── virtual_staining/           # installable package
 │   ├── applications/           # use-case orchestrators
 │   ├── cli/                    # argparse entry points
@@ -211,6 +221,8 @@ uv run ruff format --check .
 uv run pyright
 uv run --group dev pytest
 ```
+
+The test layout is documented in [`tests/README.md`](tests/README.md).
 
 ### Pre-commit hooks
 
