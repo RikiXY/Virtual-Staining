@@ -72,7 +72,7 @@ These constraints are enforced by convention and checked in code review:
 | User experiment config | YAML | `config/runs/example.yaml` |
 | Run metadata (provenance + aggregate stage summary) | JSON | `results/<run>/metadata/run.json` |
 | Environment provenance | JSON | `results/<run>/metadata/environment.json` |
-| Per-epoch training losses | CSV | `results/<run>/metrics/train.csv` |
+| Per-epoch training losses | CSV | `results/<run>/metrics/metrics.csv` |
 | Per-image evaluation metrics | CSV | `results/<run>/evaluation/per_image_metrics.csv` |
 | Dataset manifest | CSV | `datasets/<name>/manifests/manifest.csv` |
 

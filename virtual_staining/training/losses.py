@@ -172,8 +172,13 @@ class SsimLoss(nn.Module):
                 f"window_size={self.window_size}"
             )
 
-        prediction_01 = (prediction + 1.0) * 0.5
-        target_01 = (target + 1.0) * 0.5
+        compute_dtype = (
+            torch.float32
+            if prediction.dtype in {torch.float16, torch.bfloat16}
+            else prediction.dtype
+        )
+        prediction_01 = (prediction.to(dtype=compute_dtype) + 1.0) * 0.5
+        target_01 = (target.to(dtype=compute_dtype) + 1.0) * 0.5
         if self.channel_mode == "gray":
             prediction_01 = _rgb_to_gray_tensor(prediction_01)
             target_01 = _rgb_to_gray_tensor(target_01)

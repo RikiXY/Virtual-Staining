@@ -459,7 +459,7 @@ class Trainer:
                 )
             }
 
-            metrics_path = self._run_paths.root / "metrics.csv"
+            metrics_path = self._run_paths.metrics_dir / "metrics.csv"
             best_checkpoint_path: Path | None = None
             best_val_loss: float | None = None
             loss_names = _configured_loss_names(self.losses)
