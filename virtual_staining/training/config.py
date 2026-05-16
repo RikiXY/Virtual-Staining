@@ -27,7 +27,7 @@ _LOSS_CONFIG_KEYS: frozenset[str] = frozenset({"generator", "discriminator"})
 _LOSS_TERM_KEYS: frozenset[str] = frozenset({"name", "weight", "enabled", "params", "schedule"})
 _LOSS_SCHEDULE_KEYS: frozenset[str] = frozenset({"type"})
 _SSIM_PARAM_KEYS: frozenset[str] = frozenset(
-    {"data_range", "window_size", "channel_mode", "reduction"}
+    {"data_range", "window_size", "sigma", "channel_mode", "reduction"}
 )
 
 LossName = Literal["ssim"]
@@ -64,6 +64,7 @@ class LossTermConfig:
             raise ValueError(f"loss '{self.name}' weight must be greater than or equal to 0")
         self.schedule.validate()
         reject_unknown_keys(self.params, _SSIM_PARAM_KEYS, f"loss '{self.name}' params")
+        _validate_ssim_params(self.params)
 
     @property
     def is_active(self) -> bool:
@@ -183,6 +184,28 @@ def _validate_unique_loss_names(terms: tuple[LossTermConfig, ...], role: str) ->
     if duplicates:
         joined = ", ".join(sorted(duplicates))
         raise ValueError(f"Duplicate loss name(s) in losses.{role}: {joined}")
+
+
+def _validate_ssim_params(params: dict[str, Any]) -> None:
+    data_range = float(params.get("data_range", 1.0))
+    if data_range <= 0:
+        raise ValueError("loss 'ssim' params.data_range must be greater than 0")
+
+    window_size = int(params.get("window_size", 11))
+    if window_size <= 0 or window_size % 2 == 0:
+        raise ValueError("loss 'ssim' params.window_size must be a positive odd integer")
+
+    sigma = float(params.get("sigma", 1.5))
+    if sigma <= 0:
+        raise ValueError("loss 'ssim' params.sigma must be greater than 0")
+
+    channel_mode = params.get("channel_mode", "rgb")
+    if channel_mode not in {"rgb", "gray"}:
+        raise ValueError("loss 'ssim' params.channel_mode must be one of ['gray', 'rgb']")
+
+    reduction = params.get("reduction", "mean")
+    if reduction not in {"mean", "sum", "none"}:
+        raise ValueError("loss 'ssim' params.reduction must be one of ['mean', 'none', 'sum']")
 
 
 @dataclass(frozen=True)

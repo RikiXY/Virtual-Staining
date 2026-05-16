@@ -106,6 +106,7 @@ training:
 #       params:
 #         data_range: 1.0
 #         window_size: 11
+#         sigma: 1.5
 #         channel_mode: rgb
 #         reduction: mean
 #       schedule:

@@ -103,12 +103,18 @@ losses:
       params:
         data_range: 1.0
         window_size: 11
+        sigma: 1.5
         channel_mode: rgb
         reduction: mean
       schedule:
         type: constant
   discriminator: []
 ```
+
+The training SSIM implementation is differentiable PyTorch code. It maps
+current training tensors from `[-1, 1]` to `[0, 1]` before computing SSIM, and
+uses `ssim_loss = 1 - SSIM(prediction, target)`. MS-SSIM and other structural
+losses are not supported by this registry yet.
 
 If `losses` is omitted, the training loop keeps the legacy Pix2Pix objective
 defined by `model.gan_loss: bce` and `training.l1_weight`.

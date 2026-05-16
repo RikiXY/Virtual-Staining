@@ -186,6 +186,7 @@ def test_run_config_from_yaml_parses_explicit_ssim_loss(tmp_path: Path) -> None:
               params:
                 data_range: 1.0
                 window_size: 11
+                sigma: 1.5
                 channel_mode: rgb
                 reduction: mean
               schedule:
@@ -204,6 +205,7 @@ def test_run_config_from_yaml_parses_explicit_ssim_loss(tmp_path: Path) -> None:
     assert term.enabled is True
     assert term.is_active is True
     assert term.params["window_size"] == 11
+    assert term.params["sigma"] == pytest.approx(1.5)
     assert term.schedule.type == "constant"
     assert run_config.losses.active_generator == (term,)
     assert run_config.losses.discriminator == ()
@@ -305,6 +307,12 @@ def test_loss_config_to_yaml_dict_preserves_explicit_losses(tmp_path: Path) -> N
         ("name: ssim\n  weight: 1.0\n  typo: true", "typo"),
         ("name: ssim\n  weight: 1.0\n  schedule: {type: linear}", "schedule"),
         ("name: ssim\n  weight: 1.0\n  enabled: 'true'", "enabled"),
+        ("name: ssim\n  weight: 1.0\n  params: {window_size: 4}", "window_size"),
+        ("name: ssim\n  weight: 1.0\n  params: {data_range: 0.0}", "data_range"),
+        ("name: ssim\n  weight: 1.0\n  params: {sigma: 0.0}", "sigma"),
+        ("name: ssim\n  weight: 1.0\n  params: {channel_mode: lab}", "channel_mode"),
+        ("name: ssim\n  weight: 1.0\n  params: {reduction: median}", "reduction"),
+        ("name: ms_ssim\n  weight: 1.0", "losses.generator\\[0\\].name"),
     ],
 )
 def test_loss_config_rejects_invalid_generator_terms(
