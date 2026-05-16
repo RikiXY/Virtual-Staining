@@ -1,0 +1,7 @@
+name: example
+continue_on_failure: false
+jobs:
+  - config_path: ../runs/local/run_a.yaml
+    label: baseline
+  - config_path: ../runs/local/run_b.yaml
+    notes: retry with lower learning rate

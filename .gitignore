@@ -9,23 +9,70 @@
 !/local_workspace/results/
 /local_workspace/results/*
 !/local_workspace/results/.gitkeep
+!/local_workspace/queues/
+/local_workspace/queues/*
+!/local_workspace/queues/.gitkeep
+
+# Local run configs (personal copies; the example.yaml is tracked)
+!config/runs/local/
+config/runs/local/*
+!config/runs/local/.gitkeep
+
+# Local queue configs
+!config/queues/local/
+config/queues/local/*
+!config/queues/local/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Python virtual environment
+.venv/
+
+# Build artifacts
+dist/
+*.egg-info/
+build/
 
 # Jupyter
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
 
-# Python
-__pycache__/
-*.py[cod]
+# Pytest
+.pytest_tmp/
+.pytest_cache/
+
+# Ruff
+.ruff_cache/
+
+# Type checkers
+.mypy_cache/
+.pyright/
+pyrightconfig.json
+
+# Nix
+result
+result-*
+.direnv/
+
+# Editor / IDE
+.vscode/
+**/.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
 
 # Obsidian
 .obsidian/
 **/.obsidian/
 notes/*
 
-# VSCode
-.vscode/
-**/.vscode/
-
-# Env
+# Local env files
 .env
+.env.make

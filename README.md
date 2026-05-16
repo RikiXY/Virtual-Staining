@@ -1,165 +1,276 @@
-# Virtual-Staining
+# Virtual Staining
 
-Paired virtual staining pipeline for histopathological image experiments.
+Research portfolio project for virtual staining of histopathology images using a Pix2Pix conditional GAN.
 
-This repository prepares aligned source/target patch datasets, trains a Pix2Pix-style model, runs test inference, evaluates generated images, and produces qualitative and run-to-run comparison outputs. The learning pipeline currently uses a U-Net generator with a PatchGAN discriminator.
+The pipeline trains a paired image-to-image translation model on aligned histology patch pairs, enabling
+generation of virtually stained images from label-free microscopy inputs (and vice versa).
 
-The current dataset split is patch-level as implemented in `src/prepare_dataset.py`; it is not a slide-level or patient-level split.
+## CLI Commands
 
-<!-- Future documentation image placeholders:
-- docs/assets/pipeline_overview.png
-- docs/assets/example_comparison.png
--->
-From Label free to H&E staining.
-![Qualitative results](docs/assets/LabelFree-to-Stained_qualitative_result_2.png)
-
-From H&E staining to Label free.
-![Qualitative results](docs/assets/Stained-to-LabelFree_qualitative_result_2.png)
-
-## Workflow
-
-1. Prepare a paired patch dataset from full-size source and target images.
-2. Train Pix2Pix on `dataset_train/` and validate on `dataset_val/`.
-3. Run inference on `dataset_test/`.
-4. Evaluate generated images against real targets.
-5. Generate comparison panels or compare metric distributions across runs.
-
-## Repository Layout
-
-```text
-Virtual-Staining/
-├── src/
-│   ├── prepare_dataset.py
-│   └── pix2pix.py
-├── tools/
-│   ├── evaluate_generation.py
-│   ├── make_comparison.py
-│   ├── compare_distributions.py
-│   └── organize_by_metrics.py
-├── docs/
-├── examples/
-├── local_workspace/
-│   ├── datasets/
-│   └── results/
-└── requirements.txt
-```
-
-`archive/` contains historical material and is not part of the current workflow.
-
-## Installation
-
-```bash
-python -m venv .venv
-.\.venv\Scripts\activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-Use a CUDA-enabled PyTorch build for GPU training.
-
-## Expected Data Layout
-
-Input dataset directory:
-
-```text
-local_workspace/datasets/YOUR_DATASET/
-├── source.tif
-└── target.tif
-```
-
-Prepared dataset:
-
-```text
-local_workspace/datasets/YOUR_DATASET/
-├── dataset_train/
-├── dataset_val/
-├── dataset_test/
-└── discarded_patches/
-```
-
-Run directory:
-
-```text
-local_workspace/results/YOUR_RUN/
-├── run_config.json
-├── logs/
-├── checkpoints/
-├── output_val/
-├── output_test/
-├── evaluation/
-└── comparisons/
-```
-
-Patch naming conventions:
-
-```text
-<sample_id>_source.tif
-<sample_id>_target.tif
-<sample_id>_target_generated.tif
-```
+| Command | Purpose |
+|---|---|
+| `vs-prepare` | Build the patch dataset from full-size image pairs |
+| `vs-complete-run` | Run prepare, train, infer, and evaluate in sequence |
+| `vs-run-queue` | Execute multiple full runs sequentially from a queue file |
+| `vs-train` | Train the Pix2Pix model |
+| `vs-infer` | Run inference on the test split |
+| `vs-infer-images` | Run inference on one image file or a directory of images |
+| `vs-evaluate` | Evaluate generated images with MAE, RMSE, PSNR, SSIM |
+| `vs-compare` | Compare metric distributions across runs |
+| `vs-compare-panels` | Build source / generated / target comparison panels |
+| `vs-evaluate-single` | Evaluate a single image pair |
+| `vs-organize` | Organise run outputs |
 
 ## Quick Start
 
-Prepare the dataset:
-
 ```bash
-python src/prepare_dataset.py --path local_workspace/datasets/your_dataset --source-name source.tif --target-name target.tif
+# 1. Enter the Nix environment
+nix develop
+
+# 2. Install dependencies
+uv sync --frozen
+
+# 3. Copy and edit the example run config
+cp config/runs/example.yaml config/runs/local/my_run.yaml
+
+# 4. Run the full pipeline
+vs-complete-run --config config/runs/local/my_run.yaml
 ```
 
-Train:
+### Makefile shortcuts
 
 ```bash
-python src/pix2pix.py train --dataset-root local_workspace/datasets/your_dataset --run-name your_run --epochs 100
+make dataset        CONFIG=config/runs/local/my_run.yaml
+make train          CONFIG=config/runs/local/my_run.yaml
+make infer          CONFIG=config/runs/local/my_run.yaml
+make infer-images   CONFIG=config/runs/local/my_run.yaml INPUT_PATH=examples
+make evaluate       CONFIG=config/runs/local/my_run.yaml
+make complete-run   CONFIG=config/runs/local/my_run.yaml
+make run-queue      QUEUE=config/queues/example.yaml
+make compare        CONFIG=config/runs/local/my_run.yaml
+make compare-panels CONFIG=config/runs/local/my_run.yaml
 ```
 
-Run test inference:
+Or call the CLI directly:
 
 ```bash
-python src/pix2pix.py test --dataset-root local_workspace/datasets/your_dataset --run-path local_workspace/results/your_run --checkpoint local_workspace/results/your_run/checkpoints/ep099.pth
+vs-complete-run --config config/runs/local/my_run.yaml
 ```
 
-Evaluate:
+Run inference on one image or a directory:
 
 ```bash
-python tools/evaluate_generation.py dataset --target-dir local_workspace/datasets/your_dataset/dataset_test --generated-dir local_workspace/results/your_run/output_test
+vs-infer-images \
+  --config config/runs/local/my_run.yaml \
+  --input examples \
+  --output local_workspace/results/my_run/example_outputs
 ```
 
-Create representative comparison panels:
+`vs-infer-images` accepts `.bmp`, `.jpg`, `.jpeg`, `.png`, `.tif`, and `.tiff`.
+It defaults to `--mode auto`: patch-sized inputs use the standard single-patch
+path, while larger images are processed tile-by-tile and saved at the original
+size. Use `--mode resize` to force the resizing of the whole input to
+`image_size`. Use `--output-format png` to force a common output format
+for directory batches.
+
+Queue multiple full runs locally:
+
+```yaml
+# config/queues/nightly.yaml
+name: nightly
+continue_on_failure: true
+jobs:
+  - config_path: ../runs/local/run_a.yaml
+    label: baseline
+  - config_path: ../runs/local/run_b.yaml
+    notes: retry with lower lr
+```
 
 ```bash
-python tools/make_comparison.py from-metrics --run-path local_workspace/results/your_run
+vs-run-queue --queue config/queues/nightly.yaml
 ```
 
-See [workflow examples](workflow_examples.md) for longer command recipes and optional arguments.
+Queue definitions live under `config/queues/`. Personal queue YAMLs can live
+under `config/queues/local/`. Queue runtime state is written under
+`local_workspace/queues/`, separate from the committed queue definitions.
+State files are flat in that directory, for example
+`local_workspace/queues/nightly.state.json`.
 
-## Tools
+## Configuration
 
-- `src/prepare_dataset.py`: masks, registration, patch extraction, patch-level train/val/test split.
-- `src/pix2pix.py`: Pix2Pix training and test inference.
-- `tools/evaluate_generation.py`: per-image metrics, summary statistics, skipped sample report, optional plots.
-- `tools/make_comparison.py`: single-case and metric-selected comparison panels.
-- `tools/compare_distributions.py`: paired or unpaired comparison of metric CSVs across runs.
-- `tools/organize_by_metrics.py`: best/worst folders ranked by metric values.
+All experiment parameters live in a single YAML file. Copy
+[`config/runs/example.yaml`](config/runs/example.yaml) and edit it:
 
-Evaluation metrics include `mae`, `mse`, `rmse`, `psnr`, `ssim`, `pcc_gray`, and `pcc_rgb_mean`.
+```yaml
+dataset_root: local_workspace/datasets/your_sample
+results_path: local_workspace/results
+run_name: your_run_name
 
-## Reproducibility Notes
+# [width, height] - e.g. [320, 256] means 320 px wide, 256 px tall
+image_size: [256, 256]
 
-- Use `--seed` for dataset preparation and training.
-- Training stores key run metadata in `run_config.json`.
-- For rigorous comparisons, keep the dataset, checkpoint, code version, CLI arguments, and evaluation CSVs together.
-- CUDA, PyTorch, OpenCV, and multiprocessing behavior may still vary across environments.
+preprocessing:
+  source_name: label_free.tif
+  target_name: stained.tif
+  # For very large local TIFF/PNG/JPEG/BMP inputs, read previews and patch
+  # regions on demand instead of keeping full-resolution images resident.
+  # tiled_io: true
+  # mask_scale: 0.25
+  train_ratio: 0.80
+  val_ratio: 0.05
+  test_ratio: 0.15
+  min_foreground_ratio: 0.25
+  save_discarded_patches: false
+  seed: 42
 
-## CLI Help
+training:
+  batch_size: 8
+  epochs: 100
+  lr_g: 0.0002
+  l1_weight: 25.0
+  seed: 42
 
-Use `-h` or `--help` for complete options:
+inference:
+  checkpoint_policy: latest   # or: checkpoint_path: checkpoints/ep099.pth
+
+evaluation:
+  save_graphs: true
+```
+
+The `CONFIG` variable is the only Make argument accepted for experiment targets.
+Put dataset paths, run names, image sizes, epochs, seeds, and checkpoint selection
+in the YAML - not in Make variables.
+
+See [`docs/architecture.md`](docs/architecture.md) for the full config schema and
+[`docs/run_format.md`](docs/run_format.md) for run output layout.
+
+## Qualitative Results
+
+Each panel compares source patch, generated target, and real target.
+
+From label-free to H&E staining:
+![Qualitative results](docs/assets/LabelFree-to-Stained_qualitative_result_2.png)
+
+From H&E staining to label-free:
+![Qualitative results](docs/assets/Stained-to-LabelFree_qualitative_result_2.png)
+
+## Package Structure
+
+- `utils/` - shared primitives: dimensions, image I/O, metrics helpers
+- `config/` - YAML loading, validation, typed config sections
+- `experiment/` - run concept: RunPaths, RunContext, RunMetadata, environment snapshots
+- `reporting/` - Reporter protocol with Null, Logging, and Console implementations
+- `models/` - UNetGenerator, PatchGANDiscriminator, factory, model config
+- `data/` - dataset, manifest, builder, preprocessing pipeline
+- `training/` - Trainer, runner, steps, losses, checkpoint management
+- `inference/` - Predictor, runner, output writers
+- `evaluation/` - metrics, evaluator, summaries, panels, ranking
+- `applications/` - use-case orchestrators (no argparse)
+- `cli/` - thin argparse entrypoints delegating to `applications/`
+
+See [`docs/architecture.md`](docs/architecture.md) for the full description and layer boundaries.
+
+## Repository Structure
+
+```text
+Virtual-Staining/
+├── config/
+│   ├── queues/                 # queue YAML files (example.yaml template)
+│   └── runs/                   # run YAML files (example.yaml template)
+├── docs/
+│   ├── assets/                 # qualitative result images
+│   ├── notebooks/
+│   └── reports/
+├── examples/                   # example input images
+├── local_workspace/
+│   ├── datasets/               # input paired samples (gitignored)
+│   ├── queues/                 # queue state files (gitignored except .gitkeep)
+│   └── results/                # run outputs (gitignored)
+├── tests/                      # pytest suite grouped by subsystem
+│   ├── cli/
+│   ├── config/
+│   ├── data/
+│   ├── evaluation/
+│   ├── experiment/
+│   ├── inference/
+│   ├── models/
+│   ├── smoke/
+│   ├── training/
+│   └── utils/
+├── virtual_staining/           # installable package
+│   ├── applications/           # use-case orchestrators
+│   ├── cli/                    # argparse entry points
+│   ├── config/
+│   ├── data/
+│   ├── evaluation/
+│   ├── experiment/
+│   ├── inference/
+│   ├── models/
+│   ├── reporting/
+│   ├── training/
+│   └── utils/
+├── Makefile
+├── flake.nix
+├── pyproject.toml
+└── uv.lock
+```
+
+## Development
 
 ```bash
-python src/prepare_dataset.py --help
-python src/pix2pix.py train --help
-python src/pix2pix.py test --help
-python tools/evaluate_generation.py --help
-python tools/make_comparison.py --help
-python tools/compare_distributions.py --help
-python tools/organize_by_metrics.py --help
+# Inside nix develop shell:
+make qa
+# Equivalent to:
+uv run ruff check .
+uv run ruff format --check .
+uv run pyright
+uv run --group dev pytest
 ```
+
+The test layout is documented in [`tests/README.md`](tests/README.md).
+
+### Pre-commit hooks
+
+Install the hooks once per clone:
+
+```bash
+nix develop -c pre-commit install
+```
+
+Run them manually across the repository:
+
+```bash
+nix develop -c pre-commit run --all-files
+```
+
+Other useful commands:
+
+```bash
+make format       # apply ruff formatting
+make lint         # ruff lint check
+make check-types  # pyright only
+make test         # pytest only
+make sync         # reinstall from uv.lock
+uv lock           # re-resolve dependencies
+```
+
+## Data Split Caveat
+
+The default split is **patch-level**: train, validation, and test patches are all drawn
+from the same slide. Metrics on `splits/test/` measure same-slide internal validation,
+not independent generalization. For generalizability evidence, use a slide-level,
+patient-level, or spatial-block split strategy - the current pipeline does not implement
+these.
+
+## Method
+
+- **Preprocessing** - tissue masking, feature-based affine alignment of target to source,
+  patch extraction with foreground and white-area quality filters.
+- **Model** - Pix2Pix conditional GAN: U-Net generator with skip connections and
+  PatchGAN discriminator, trained with adversarial loss + L1 reconstruction loss.
+- **Evaluation** - per-image MAE, RMSE, PSNR, SSIM; summary statistics; optional
+  comparison panels with difference maps.
+
+## License
+
+Released under the **MIT License**. See [`LICENSE`](./LICENSE) for details.
