@@ -25,8 +25,9 @@ def test_valid_extensions_contains_expected() -> None:
     assert ".tiff" in VALID_IMAGE_EXTENSIONS
 
 
-def test_valid_extensions_excludes_jpg() -> None:
-    assert ".jpg" not in VALID_IMAGE_EXTENSIONS
+def test_valid_extensions_contains_jpg() -> None:
+    assert ".jpg" in VALID_IMAGE_EXTENSIONS
+    assert ".jpeg" in VALID_IMAGE_EXTENSIONS
 
 
 # ---------------------------------------------------------------------------
