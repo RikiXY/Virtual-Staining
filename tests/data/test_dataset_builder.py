@@ -492,35 +492,35 @@ def test_run_all_produces_same_output_as_old_stages(tmp_path: Path) -> None:
             )
 
     streaming_root = tmp_path / "streaming"
-    legacy_root = tmp_path / "legacy"
+    staged_root = tmp_path / "staged"
     _write_pair(streaming_root)
-    _write_pair(legacy_root)
+    _write_pair(staged_root)
 
     streaming_builder = DatasetBuilder(_make_config(streaming_root))
-    legacy_builder = DatasetBuilder(_make_config(legacy_root))
+    staged_builder = DatasetBuilder(_make_config(staged_root))
 
     with _patched_builder_dependencies():
         streaming_result = streaming_builder.run_all()
 
     with _patched_builder_dependencies():
-        legacy_builder._started_at = "2026-01-01T00:00:00+00:00"
-        legacy_builder._effective_seed = legacy_builder.config.seed
-        legacy_builder.compute_masks()
-        legacy_builder.align()
-        valid_rows, discarded_rows = legacy_builder._stream_patches_to_disk()
-        legacy_result = legacy_builder._assign_splits_and_finalize(valid_rows, discarded_rows)
+        staged_builder._started_at = "2026-01-01T00:00:00+00:00"
+        staged_builder._effective_seed = staged_builder.config.seed
+        staged_builder.compute_masks()
+        staged_builder.align()
+        valid_rows, discarded_rows = staged_builder._stream_patches_to_disk()
+        staged_result = staged_builder._assign_splits_and_finalize(valid_rows, discarded_rows)
 
-    assert streaming_result.train_count == legacy_result.train_count
-    assert streaming_result.val_count == legacy_result.val_count
-    assert streaming_result.test_count == legacy_result.test_count
-    assert streaming_result.skipped_count == legacy_result.skipped_count
-    assert _manifest_rows(streaming_root) == _manifest_rows(legacy_root)
+    assert streaming_result.train_count == staged_result.train_count
+    assert streaming_result.val_count == staged_result.val_count
+    assert streaming_result.test_count == staged_result.test_count
+    assert streaming_result.skipped_count == staged_result.skipped_count
+    assert _manifest_rows(streaming_root) == _manifest_rows(staged_root)
     for split in ("train", "val", "test"):
         streaming_files = sorted(
             path.name for path in (streaming_root / "splits" / split).iterdir()
         )
-        legacy_files = sorted(path.name for path in (legacy_root / "splits" / split).iterdir())
-        assert streaming_files == legacy_files
+        staged_files = sorted(path.name for path in (staged_root / "splits" / split).iterdir())
+        assert streaming_files == staged_files
 
 
 def test_stream_patches_to_disk_writes_valid_patches_to_final_splits(
@@ -550,6 +550,35 @@ def test_stream_patches_to_disk_writes_valid_patches_to_final_splits(
     assert not (root / "processed").exists()
     assert not (root / "discarded_patches" / "source").exists()
     assert not (root / "discarded_patches" / "target").exists()
+
+
+def test_stream_patches_to_disk_writes_foreground_masks_when_enabled(
+    builder_config: PreprocessingConfig,
+) -> None:
+    config = dataclasses.replace(builder_config, save_masks=True)
+    builder = DatasetBuilder(config)
+
+    with _patched_builder_dependencies():
+        builder.compute_masks()
+        builder.align()
+        valid_rows, discarded_rows = builder._stream_patches_to_disk()
+
+    assert len(valid_rows) == 81
+    assert discarded_rows == []
+
+    root = config.dataset_root
+    split_files = [
+        path for split in ("train", "val", "test") for path in (root / "splits" / split).iterdir()
+    ]
+    assert len(split_files) == len(valid_rows) * 3
+    for row in valid_rows:
+        split = row["split"]
+        sample_id = row["sample_id"]
+        mask_path = root / "splits" / split / f"{sample_id}_foreground_mask.png"
+        assert mask_path.exists()
+        mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+        assert mask is not None
+        assert mask.shape == config.image_size[::-1]
 
 
 def test_stream_patches_to_disk_uses_min_foreground_ratio_for_source_prefilter(

@@ -38,12 +38,10 @@ def _make_arch_metadata(
     discriminator: nn.Module,
     *,
     model_name: str | None = None,
-    gan_loss: str | None = None,
 ) -> dict[str, Any]:
     """Build the architecture dict saved inside every checkpoint."""
     return {
         "name": model_name,
-        "gan_loss": gan_loss,
         "generator": {
             "class": type(generator).__name__,
             "in_channels": getattr(generator, "in_channels", None),
@@ -70,8 +68,7 @@ def _validate_checkpoint_metadata(checkpoint: dict[str, Any], path: Path) -> dic
     if ckpt_version != CHECKPOINT_FORMAT_VERSION:
         raise ValueError(
             f"Checkpoint format version {ckpt_version!r} does not match current version "
-            f"{CHECKPOINT_FORMAT_VERSION}. This checkpoint was saved with an older version "
-            "of the code. Re-train from scratch or use a compatible code version."
+            f"{CHECKPOINT_FORMAT_VERSION}. Re-train from scratch with the current code."
         )
 
     arch = checkpoint.get("architecture")
@@ -98,7 +95,7 @@ def _validate_checkpoint_metadata(checkpoint: dict[str, Any], path: Path) -> dic
     if normalization_contract != NORMALIZATION_CONTRACT:
         raise ValueError(
             "Checkpoint normalization_contract "
-            f"{normalization_contract!r} is incompatible with current code."
+            f"{normalization_contract!r} does not match current code."
         )
 
     return arch
@@ -169,8 +166,6 @@ class CheckpointManager:
         device: torch.device,
         *,
         model_name: str | None = None,
-        gan_loss: str | None = None,
-        l1_weight: float | None = None,
         lr_g: float | None = None,
         lr_d: float | None = None,
         beta1: float | None = None,
@@ -189,8 +184,6 @@ class CheckpointManager:
         self.image_size = image_size
         self.device = device
         self.model_name = model_name
-        self.gan_loss = gan_loss
-        self.l1_weight = l1_weight
         self.lr_g = lr_g
         self.lr_d = lr_d
         self.beta1 = beta1
@@ -214,7 +207,6 @@ class CheckpointManager:
                 self.generator,
                 self.discriminator,
                 model_name=self.model_name,
-                gan_loss=self.gan_loss,
             ),
             "normalization_contract": NORMALIZATION_CONTRACT,
             "generator_state_dict": self.generator.state_dict(),
@@ -223,7 +215,6 @@ class CheckpointManager:
             "optimizerD_state_dict": self.opt_D.state_dict(),
             "scalerG_state_dict": self.scaler_G.state_dict(),
             "scalerD_state_dict": self.scaler_D.state_dict(),
-            "l1_weight": self.l1_weight,
             "lr_g": self.lr_g,
             "lr_d": self.lr_d,
             "beta1": self.beta1,

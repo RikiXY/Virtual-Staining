@@ -92,7 +92,7 @@ def test_split_items_no_duplicates_no_missing() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _legacy_calculate_mask_with_grid(
+def _reference_calculate_mask_with_grid(
     img: np.ndarray, sub_shape: tuple[int, int], grid: int
 ) -> np.ndarray:
     mask = np.ones((img.shape[0], img.shape[1]), dtype=np.uint8) * 255
@@ -107,14 +107,14 @@ def _legacy_calculate_mask_with_grid(
     return mask
 
 
-def test_calculate_mask_with_grid_matches_legacy_behavior() -> None:
+def test_calculate_mask_with_grid_matches_reference_behavior() -> None:
     rng = np.random.default_rng(0)
     img = rng.integers(0, 255, size=(64, 64, 3), dtype=np.uint8)
 
     mask = calculate_mask_with_grid(img, sub_shape=(16, 16), grid=4)
-    legacy_mask = _legacy_calculate_mask_with_grid(img, sub_shape=(16, 16), grid=4)
+    reference_mask = _reference_calculate_mask_with_grid(img, sub_shape=(16, 16), grid=4)
 
-    assert np.array_equal(mask, legacy_mask)
+    assert np.array_equal(mask, reference_mask)
 
 
 def test_calculate_mask_with_grid_returns_expected_shape_and_dtype() -> None:

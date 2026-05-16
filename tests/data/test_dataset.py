@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from PIL import Image
+from torchvision import transforms
 
 from tests.image_helpers import write_rgb_pair
 from tests.manifest_helpers import make_manifest_record
@@ -89,3 +91,51 @@ def test_paired_manifest_dataset_sample_ids_ordered(tmp_path: Path) -> None:
     )
     manifest = DatasetManifest(records=records, dataset_root=tmp_path)
     assert PairedManifestDataset(manifest).sample_ids == ["c", "a", "b"]
+
+
+def test_paired_manifest_dataset_can_return_foreground_mask(tmp_path: Path) -> None:
+    split_dir = tmp_path / "splits" / "train"
+    split_dir.mkdir(parents=True)
+    write_rgb_pair(split_dir, "00000_00000", size=(16, 16), ext=".png")
+    Image.new("L", (16, 16), color=255).save(split_dir / "00000_00000_foreground_mask.png")
+    record = make_manifest_record(
+        "00000_00000",
+        "train",
+        ext=".png",
+        x=0,
+        y=0,
+        width=16,
+        height=16,
+    )
+    manifest = DatasetManifest(records=(record,), dataset_root=tmp_path)
+    dataset = PairedManifestDataset(
+        manifest,
+        transform=transforms.ToTensor(),
+        mask_transform=transforms.ToTensor(),
+        include_foreground_mask=True,
+    )
+
+    source, target, masks = dataset[0]
+
+    assert source.shape == target.shape
+    assert masks["foreground_mask"].shape == (1, 16, 16)
+
+
+def test_paired_manifest_dataset_missing_foreground_mask_raises(tmp_path: Path) -> None:
+    split_dir = tmp_path / "splits" / "train"
+    split_dir.mkdir(parents=True)
+    write_rgb_pair(split_dir, "00000_00000", size=(16, 16), ext=".png")
+    record = make_manifest_record(
+        "00000_00000",
+        "train",
+        ext=".png",
+        x=0,
+        y=0,
+        width=16,
+        height=16,
+    )
+    manifest = DatasetManifest(records=(record,), dataset_root=tmp_path)
+    dataset = PairedManifestDataset(manifest, include_foreground_mask=True)
+
+    with pytest.raises(FileNotFoundError, match="Foreground mask"):
+        dataset[0]

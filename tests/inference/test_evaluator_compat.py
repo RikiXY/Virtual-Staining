@@ -1,4 +1,4 @@
-"""Tests verifying that inference output naming and shapes are compatible with the evaluator."""
+"""Tests verifying that inference output naming and shapes match evaluator expectations."""
 
 from __future__ import annotations
 
@@ -62,7 +62,6 @@ def _save_checkpoint(path: Path, image_size: tuple[int, int] = _IMAGE_SIZE) -> N
             },
             "architecture": {
                 "name": "pix2pix",
-                "gan_loss": "bce",
                 "generator": {
                     "class": "UNetGenerator",
                     "in_channels": G.in_channels,
@@ -734,7 +733,7 @@ def test_inference_non_square_produces_correct_output_shape(tmp_path: Path) -> N
 
 
 # ---------------------------------------------------------------------------
-# Architecture metadata: inference compatibility
+# Architecture metadata: inference contract
 # ---------------------------------------------------------------------------
 
 
@@ -783,7 +782,6 @@ def test_inference_raises_on_architecture_mismatch(tmp_path: Path) -> None:
             },
             "architecture": {
                 "name": "pix2pix",
-                "gan_loss": "bce",
                 "generator": {
                     "class": "UNetGenerator",
                     "in_channels": G.in_channels,

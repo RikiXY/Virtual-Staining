@@ -17,8 +17,11 @@ from torchvision.utils import save_image
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.models.config import ModelConfig
 from virtual_staining.training.checkpoints import BEST_CHECKPOINT_POLICY, CheckpointManager
-from virtual_staining.training.config import TrainingConfig
-from virtual_staining.training.losses import build_gan_loss
+from virtual_staining.training.config import LossConfig, TrainingConfig
+from virtual_staining.training.losses import (
+    ConfiguredLossEvaluator,
+    LossEvaluationContext,
+)
 from virtual_staining.training.results import EpochMetrics, TrainingResult
 from virtual_staining.training.steps import Pix2PixTrainingStep
 
@@ -72,6 +75,101 @@ def _get_first_pair_size(dataset: torch.utils.data.Dataset | None) -> dict | Non
         "source_path": str(source_path),
         "target_path": str(target_path),
     }
+
+
+def _unpack_batch(
+    batch: object,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor] | None]:
+    if not isinstance(batch, (tuple, list)) or len(batch) not in {2, 3}:
+        raise TypeError("training batches must contain (source, target) or (source, target, masks)")
+    x = batch[0]
+    y = batch[1]
+    if not isinstance(x, torch.Tensor) or not isinstance(y, torch.Tensor):
+        raise TypeError("training batch source and target must be tensors")
+    masks = None
+    if len(batch) == 3:
+        raw_masks = batch[2]
+        if not isinstance(raw_masks, dict):
+            raise TypeError("training batch masks must be a mapping")
+        masks = {}
+        for name, value in raw_masks.items():
+            if not isinstance(value, torch.Tensor):
+                raise TypeError(f"training batch mask {name!r} must be a tensor")
+            masks[str(name)] = value.to(device)
+    return x.to(device), y.to(device), masks
+
+
+def _configured_loss_names(losses: LossConfig | None) -> list[str]:
+    if losses is None:
+        return []
+    names = [f"generator_{term.name}" for term in losses.generator]
+    names.extend(f"discriminator_{term.name}" for term in losses.discriminator)
+    return names
+
+
+def _metrics_fieldnames(loss_names: list[str]) -> list[str]:
+    fields = [
+        "epoch",
+        "loss_G_train",
+        "loss_D_train",
+        "loss_G_val",
+        "loss_D_val",
+    ]
+    if loss_names:
+        fields.extend(
+            [
+                "loss_train_total_generator",
+                "loss_train_total_discriminator",
+                "loss_val_total_generator",
+                "loss_val_total_discriminator",
+            ]
+        )
+    for stage in ("train", "val"):
+        for term_name in loss_names:
+            fields.extend(
+                [
+                    f"loss_{stage}_raw_{term_name}",
+                    f"loss_{stage}_weighted_{term_name}",
+                    f"loss_{stage}_current_weight_{term_name}",
+                ]
+            )
+    return fields
+
+
+def _component_metric_row(stage: str, metrics: EpochMetrics | None) -> dict[str, str]:
+    if metrics is None:
+        return {}
+    if not metrics.raw and not metrics.weighted and not metrics.current_weight:
+        return {}
+    row = {
+        f"loss_{stage}_total_generator": f"{metrics.loss_G:.6f}",
+        f"loss_{stage}_total_discriminator": f"{metrics.loss_D:.6f}",
+    }
+    for term_name in sorted(metrics.raw):
+        row[f"loss_{stage}_raw_{term_name}"] = f"{metrics.raw[term_name]:.6f}"
+    for term_name in sorted(metrics.weighted):
+        row[f"loss_{stage}_weighted_{term_name}"] = f"{metrics.weighted[term_name]:.6f}"
+    for term_name in sorted(metrics.current_weight):
+        row[f"loss_{stage}_current_weight_{term_name}"] = f"{metrics.current_weight[term_name]:.6f}"
+    return row
+
+
+def _average_components(
+    totals: dict[str, float],
+    count: int,
+    loss_names: list[str],
+) -> dict[str, float]:
+    if count == 0:
+        return {}
+    return {name: totals.get(name, 0.0) / count for name in loss_names}
+
+
+def _accumulate_components(totals: dict[str, float], values: dict[str, float] | None) -> None:
+    if values is None:
+        return
+    for name, value in values.items():
+        totals[name] = totals.get(name, 0.0) + value
 
 
 def _format_duration(seconds: float | None) -> str:
@@ -210,6 +308,7 @@ class Trainer:
         image_size: tuple[int, int],
         train_dir: Path,
         val_dir: Path,
+        losses: LossConfig | None = None,
     ) -> None:
         self.config = config
         self.model_config = model_config
@@ -222,6 +321,7 @@ class Trainer:
         self._image_size = image_size
         self._train_dir = train_dir
         self._val_dir = val_dir
+        self.losses = losses
 
         self._amp_enabled = _is_amp_enabled(device)
 
@@ -237,7 +337,12 @@ class Trainer:
         )
         self._scaler_G = GradScaler(enabled=self._amp_enabled)
         self._scaler_D = GradScaler(enabled=self._amp_enabled)
-        self._loss_fn = build_gan_loss(model_config.gan_loss, l1_weight=config.l1_weight)
+        generator_loss_terms = losses.generator if losses is not None else ()
+        discriminator_loss_terms = losses.discriminator if losses is not None else ()
+        self._loss_evaluator = ConfiguredLossEvaluator(
+            generator_terms=generator_loss_terms,
+            discriminator_terms=discriminator_loss_terms,
+        )
         self._step = Pix2PixTrainingStep(
             generator=generator,
             discriminator=discriminator,
@@ -245,9 +350,10 @@ class Trainer:
             opt_D=self._opt_D,
             scaler_G=self._scaler_G,
             scaler_D=self._scaler_D,
-            loss_fn=self._loss_fn,
             device=device,
             amp_enabled=self._amp_enabled,
+            generator_loss_terms=generator_loss_terms,
+            discriminator_loss_terms=discriminator_loss_terms,
         )
 
         self._logs_dir = run_paths.logs_dir
@@ -265,8 +371,6 @@ class Trainer:
             image_size=image_size,
             device=device,
             model_name=model_config.name,
-            gan_loss=model_config.gan_loss,
-            l1_weight=config.l1_weight,
             lr_g=config.lr_g,
             lr_d=config.lr_d,
             beta1=config.beta1,
@@ -342,8 +446,7 @@ class Trainer:
             progress_tracker.start()
 
             logger.info(
-                "Hyperparameters | l1_weight=%s | lr_g=%s | lr_d=%s | beta1=%s | beta2=%s",
-                self.config.l1_weight,
+                "Hyperparameters | lr_g=%s | lr_d=%s | beta1=%s | beta2=%s",
                 self.config.lr_g,
                 self.config.lr_d,
                 self.config.beta1,
@@ -359,16 +462,11 @@ class Trainer:
             metrics_path = self._run_paths.root / "metrics.csv"
             best_checkpoint_path: Path | None = None
             best_val_loss: float | None = None
+            loss_names = _configured_loss_names(self.losses)
             with open(metrics_path, "w", newline="", encoding="utf-8") as metrics_file:
                 metrics_writer = csv.DictWriter(
                     metrics_file,
-                    fieldnames=[
-                        "epoch",
-                        "loss_G_train",
-                        "loss_D_train",
-                        "loss_G_val",
-                        "loss_D_val",
-                    ],
+                    fieldnames=_metrics_fieldnames(loss_names),
                 )
                 metrics_writer.writeheader()
 
@@ -428,15 +526,16 @@ class Trainer:
                             best_val_loss = val_metrics.loss_G
                             best_checkpoint_path = checkpoint_path_for_epoch
 
-                    metrics_writer.writerow(
-                        {
-                            "epoch": epoch,
-                            "loss_G_train": f"{epoch_metrics.loss_G:.6f}",
-                            "loss_D_train": f"{epoch_metrics.loss_D:.6f}",
-                            "loss_G_val": f"{val_metrics.loss_G:.6f}" if val_metrics else "",
-                            "loss_D_val": f"{val_metrics.loss_D:.6f}" if val_metrics else "",
-                        }
-                    )
+                    row = {
+                        "epoch": epoch,
+                        "loss_G_train": f"{epoch_metrics.loss_G:.6f}",
+                        "loss_D_train": f"{epoch_metrics.loss_D:.6f}",
+                        "loss_G_val": f"{val_metrics.loss_G:.6f}" if val_metrics else "",
+                        "loss_D_val": f"{val_metrics.loss_D:.6f}" if val_metrics else "",
+                    }
+                    row.update(_component_metric_row("train", epoch_metrics))
+                    row.update(_component_metric_row("val", val_metrics))
+                    metrics_writer.writerow(row)
                     metrics_file.flush()
                     if reporter is not None:
                         reporter.on_epoch_completed(epoch_metrics)
@@ -487,13 +586,26 @@ class Trainer:
 
         total_loss_G = 0.0
         total_loss_D = 0.0
+        raw_totals: dict[str, float] = {}
+        weighted_totals: dict[str, float] = {}
+        current_weight_totals: dict[str, float] = {}
+        loss_names = _configured_loss_names(self.losses)
         num_batches = 0
 
-        for i, (x, y) in enumerate(self.train_loader):
-            x, y = x.to(self.device), y.to(self.device)
-            step_losses = self._step.step(x, y)
+        for i, batch in enumerate(self.train_loader):
+            x, y, masks = _unpack_batch(batch, self.device)
+            step_losses = self._step.step(
+                x,
+                y,
+                epoch=epoch,
+                global_step=epoch * len(self.train_loader) + i,
+                masks=masks,
+            )
             total_loss_G += step_losses.loss_G
             total_loss_D += step_losses.loss_D
+            _accumulate_components(raw_totals, step_losses.raw)
+            _accumulate_components(weighted_totals, step_losses.weighted)
+            _accumulate_components(current_weight_totals, step_losses.current_weight)
             num_batches += 1
 
             progress, elapsed, eta, end_time = progress_tracker.calculate_progress(epoch, i)
@@ -538,7 +650,13 @@ class Trainer:
 
         if num_batches == 0:
             raise RuntimeError("Training loader was empty; cannot compute epoch metrics.")
-        return EpochMetrics(loss_G=total_loss_G / num_batches, loss_D=total_loss_D / num_batches)
+        return EpochMetrics(
+            loss_G=total_loss_G / num_batches,
+            loss_D=total_loss_D / num_batches,
+            raw=_average_components(raw_totals, num_batches, loss_names),
+            weighted=_average_components(weighted_totals, num_batches, loss_names),
+            current_weight=_average_components(current_weight_totals, num_batches, loss_names),
+        )
 
     def _validate(self, epoch: int, log_file: Path) -> EpochMetrics:
         self.generator.eval()
@@ -548,18 +666,43 @@ class Trainer:
 
         total_loss_G = 0.0
         total_loss_D = 0.0
+        raw_totals: dict[str, float] = {}
+        weighted_totals: dict[str, float] = {}
+        current_weight_totals: dict[str, float] = {}
+        loss_names = _configured_loss_names(self.losses)
         count = 0
 
         with torch.no_grad():
-            for i, (x, y) in enumerate(self.val_loader):
-                x, y = x.to(self.device), y.to(self.device)
+            for i, batch in enumerate(self.val_loader):
+                x, y, masks = _unpack_batch(batch, self.device)
 
                 with autocast(device_type=self.device.type, enabled=self._amp_enabled):
                     fake = self.generator(x)
                     D_real = self.discriminator(x, y)
                     D_fake = self.discriminator(x, fake)
-                    loss_D = self._loss_fn.discriminator_loss(D_real, D_fake)
-                    loss_G = self._loss_fn.generator_loss(D_fake, fake, y)
+                    context = LossEvaluationContext(epoch=epoch, masks=masks)
+                    discriminator_loss = self._loss_evaluator.discriminator_total(
+                        discriminator_real=D_real,
+                        discriminator_fake=D_fake,
+                        context=context,
+                    )
+                    generator_loss = self._loss_evaluator.generator_total(
+                        prediction=fake,
+                        target=y,
+                        discriminator_fake=D_fake,
+                        context=context,
+                    )
+                    loss_D = discriminator_loss.total
+                    loss_G = generator_loss.total
+                    _accumulate_components(raw_totals, discriminator_loss.raw)
+                    _accumulate_components(weighted_totals, discriminator_loss.weighted)
+                    _accumulate_components(
+                        current_weight_totals,
+                        discriminator_loss.current_weight,
+                    )
+                    _accumulate_components(raw_totals, generator_loss.raw)
+                    _accumulate_components(weighted_totals, generator_loss.weighted)
+                    _accumulate_components(current_weight_totals, generator_loss.current_weight)
 
                 total_loss_D += loss_D.item()
                 total_loss_G += loss_G.item()
@@ -578,4 +721,10 @@ class Trainer:
             avg_loss_D,
         )
 
-        return EpochMetrics(loss_G=avg_loss_G, loss_D=avg_loss_D)
+        return EpochMetrics(
+            loss_G=avg_loss_G,
+            loss_D=avg_loss_D,
+            raw=_average_components(raw_totals, count, loss_names),
+            weighted=_average_components(weighted_totals, count, loss_names),
+            current_weight=_average_components(current_weight_totals, count, loss_names),
+        )

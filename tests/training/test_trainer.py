@@ -18,7 +18,7 @@ from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.models.config import ModelConfig
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
-from virtual_staining.training.config import TrainingConfig
+from virtual_staining.training.config import LossConfig, LossTermConfig, TrainingConfig
 from virtual_staining.training.trainer import Trainer
 
 
@@ -28,6 +28,16 @@ def _make_project(dataset_root: Path, results_path: Path, run_name: str) -> Proj
         results_path=results_path,
         run_name=run_name,
         image_size=(32, 32),
+    )
+
+
+def _pix2pix_losses() -> LossConfig:
+    return LossConfig(
+        generator=(
+            LossTermConfig(name="adversarial_bce", weight=1.0),
+            LossTermConfig(name="l1", weight=25.0),
+        ),
+        discriminator=(LossTermConfig(name="adversarial_bce", weight=1.0),),
     )
 
 
@@ -104,6 +114,7 @@ def _make_resume_trainer(
         image_size=project.image_size,
         train_dir=project.dataset_root / "splits" / "train",
         val_dir=project.dataset_root / "splits" / "val",
+        losses=_pix2pix_losses(),
     )
 
 
@@ -120,7 +131,6 @@ def _make_trainer(
         lr_d=2e-4,
         beta1=0.5,
         beta2=0.999,
-        l1_weight=25.0,
         seed=42,
         num_workers=0,
         validate_rate=1,
@@ -150,6 +160,7 @@ def _make_trainer(
             image_size=project.image_size,
             train_dir=dataset_root / "splits" / "train",
             val_dir=dataset_root / "splits" / "val",
+            losses=_pix2pix_losses(),
         ),
         config,
         run_paths,
@@ -196,13 +207,13 @@ def test_trainer_metrics_csv_structure(
         rows = list(csv.DictReader(metrics_file))
 
     assert len(rows) == config.epochs
-    assert set(rows[0].keys()) == {
+    assert {
         "epoch",
         "loss_G_train",
         "loss_D_train",
         "loss_G_val",
         "loss_D_val",
-    }
+    } <= set(rows[0].keys())
     for row in rows:
         assert row["loss_G_val"] != ""
         assert row["loss_D_val"] != ""
@@ -221,7 +232,6 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
         lr_d=2e-4,
         beta1=0.5,
         beta2=0.999,
-        l1_weight=25.0,
         seed=0,
         num_workers=0,
         validate_rate=1,
@@ -250,6 +260,7 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
         image_size=project.image_size,
         train_dir=dataset_root / "splits" / "train",
         val_dir=dataset_root / "splits" / "val",
+        losses=_pix2pix_losses(),
     )
     trainer.train(seed=0)
 
@@ -260,6 +271,75 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
     assert len(rows) == 1
     assert float(rows[0]["loss_G_train"]) > 0
     assert float(rows[0]["loss_D_train"]) > 0
+
+
+def test_trainer_metrics_csv_includes_configured_loss_components(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "dataset"
+    project = _make_project(dataset_root, tmp_path / "results", "loss_component_run")
+    config = TrainingConfig(
+        batch_size=1,
+        epochs=1,
+        lr_g=2e-4,
+        lr_d=2e-4,
+        beta1=0.5,
+        beta2=0.999,
+        seed=0,
+        num_workers=0,
+        validate_rate=1,
+        checkpoint_rate=2,
+        log_rate=1,
+    )
+    train_loader, val_loader = _make_train_val_loaders(
+        dataset_root,
+        project,
+        train_prefixes=["00000_00000"],
+        val_prefixes=["00256_00000"],
+    )
+    run_paths = RunPaths(project.run_root)
+    run_paths.create_directories()
+    losses = LossConfig(
+        generator=(
+            LossTermConfig(name="adversarial_bce", weight=1.0),
+            LossTermConfig(name="l1", weight=25.0),
+            LossTermConfig(name="ssim", weight=1.0, params={"window_size": 3}),
+        ),
+        discriminator=(LossTermConfig(name="adversarial_bce", weight=1.0),),
+    )
+
+    trainer = Trainer(
+        config=config,
+        model_config=ModelConfig(),
+        run_paths=run_paths,
+        generator=UNetGenerator().to("cpu"),
+        discriminator=PatchGANDiscriminator().to("cpu"),
+        train_loader=train_loader,
+        val_loader=val_loader,
+        device=torch.device("cpu"),
+        image_size=project.image_size,
+        train_dir=dataset_root / "splits" / "train",
+        val_dir=dataset_root / "splits" / "val",
+        losses=losses,
+    )
+    trainer.train(seed=0)
+
+    with (run_paths.root / "metrics.csv").open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+
+    row = rows[0]
+    assert "loss_train_raw_generator_ssim" in row
+    assert "loss_train_weighted_generator_ssim" in row
+    assert "loss_train_current_weight_generator_ssim" in row
+    assert "loss_val_raw_generator_ssim" in row
+    assert "loss_val_weighted_generator_ssim" in row
+    assert "loss_val_current_weight_generator_ssim" in row
+    assert "loss_train_raw_discriminator_adversarial_bce" in row
+    assert "loss_train_total_generator" in row
+    assert "loss_val_total_generator" in row
+    assert float(row["loss_train_raw_generator_ssim"]) >= 0.0
+    assert float(row["loss_train_weighted_generator_ssim"]) >= 0.0
+    assert float(row["loss_train_current_weight_generator_ssim"]) == pytest.approx(1.0)
+    assert row["loss_G_train"] == row["loss_train_total_generator"]
+    assert row["loss_G_val"] == row["loss_val_total_generator"]
 
 
 def test_trainer_checkpoint_round_trip(
@@ -289,6 +369,7 @@ def test_trainer_checkpoint_round_trip(
         image_size=project.image_size,
         train_dir=project.dataset_root / "splits" / "train",
         val_dir=project.dataset_root / "splits" / "val",
+        losses=_pix2pix_losses(),
     )
 
     start_epoch = trainer_2._checkpoint_manager.load(checkpoint_path)
@@ -315,7 +396,6 @@ def test_checkpoint_architecture_metadata_present(
     assert gen["bilinear"] is False
     assert gen["output_activation"] == "tanh"
     assert ck["architecture"]["name"] == "pix2pix"
-    assert ck["architecture"]["gan_loss"] == "bce"
     assert ck["format_version"] == 2
     assert ck["normalization_contract"] == {
         "input_range": "[-1, 1]",
@@ -401,7 +481,6 @@ def test_checkpoint_rate_creates_multiple_files(tmp_path: Path) -> None:
         lr_d=2e-4,
         beta1=0.5,
         beta2=0.999,
-        l1_weight=25.0,
         seed=42,
         num_workers=0,
         validate_rate=1,
@@ -428,6 +507,7 @@ def test_checkpoint_rate_creates_multiple_files(tmp_path: Path) -> None:
         image_size=project.image_size,
         train_dir=dataset_root / "splits" / "train",
         val_dir=dataset_root / "splits" / "val",
+        losses=_pix2pix_losses(),
     )
     trainer.train(seed=42)
 
@@ -447,11 +527,11 @@ def test_load_checkpoint_raises_on_missing_architecture(
     checkpoint_path = next(run_paths.checkpoints_dir.glob("*.pth"))
     ck = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     ck.pop("architecture")
-    legacy_path = tmp_path / "no_arch.pth"
-    torch.save(ck, legacy_path)
+    no_arch_path = tmp_path / "no_arch.pth"
+    torch.save(ck, no_arch_path)
 
     trainer_2 = _make_resume_trainer(
         config, run_paths, project, UNetGenerator(), PatchGANDiscriminator()
     )
     with pytest.raises(ValueError, match="architecture metadata"):
-        trainer_2._checkpoint_manager.load(legacy_path)
+        trainer_2._checkpoint_manager.load(no_arch_path)

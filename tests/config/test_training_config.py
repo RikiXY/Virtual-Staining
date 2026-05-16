@@ -9,7 +9,7 @@ from tests.config_helpers import write_yaml
 from virtual_staining.config import RunConfig
 from virtual_staining.config.project import ProjectConfig
 from virtual_staining.models.config import ModelConfig
-from virtual_staining.training.config import TrainingConfig
+from virtual_staining.training.config import LossConfig, LossScheduleConfig, TrainingConfig
 
 
 def _make_project(**overrides: object) -> ProjectConfig:
@@ -36,7 +36,6 @@ def _make_training_config(**overrides: object) -> TrainingConfig:
         "lr_d": 2e-4,
         "beta1": 0.5,
         "beta2": 0.999,
-        "l1_weight": 25.0,
         "seed": 42,
         "num_workers": 4,
         "validate_rate": 10,
@@ -52,7 +51,6 @@ def _make_training_config(**overrides: object) -> TrainingConfig:
         lr_d=defaults["lr_d"],  # type: ignore[arg-type]
         beta1=defaults["beta1"],  # type: ignore[arg-type]
         beta2=defaults["beta2"],  # type: ignore[arg-type]
-        l1_weight=defaults["l1_weight"],  # type: ignore[arg-type]
         seed=defaults["seed"],  # type: ignore[arg-type]
         num_workers=defaults["num_workers"],  # type: ignore[arg-type]
         validate_rate=defaults["validate_rate"],  # type: ignore[arg-type]
@@ -120,7 +118,6 @@ def test_run_config_model_explicit_contract_parses(tmp_path: Path) -> None:
             ndf: 32
             norm: batch
             use_sigmoid: false
-          gan_loss: bce
         training:
           epochs: 1
     """,
@@ -131,7 +128,6 @@ def test_run_config_model_explicit_contract_parses(tmp_path: Path) -> None:
     assert run_config.model.generator.norm == "instance"
     assert run_config.model.generator.dropout is True
     assert run_config.model.discriminator.norm == "batch"
-    assert run_config.model.gan_loss == "bce"
 
 
 def test_training_from_run_yaml_defaults(tmp_path: Path) -> None:
@@ -152,9 +148,314 @@ def test_training_from_run_yaml_defaults(tmp_path: Path) -> None:
     config = run_config.training
     assert config.batch_size == 8
     assert config.lr_g == pytest.approx(2e-4)
-    assert config.l1_weight == pytest.approx(25.0)
     assert config.log_rate == 15
     assert config.resume is None
+    assert run_config.losses is None
+
+
+def test_loss_config_defaults_to_empty_lists() -> None:
+    config = LossConfig()
+
+    assert config.generator == ()
+    assert config.discriminator == ()
+    assert config.active_generator == ()
+    assert config.active_discriminator == ()
+    assert config.to_yaml_dict() == {"generator": [], "discriminator": []}
+
+
+def test_run_config_from_yaml_parses_explicit_ssim_loss(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "losses.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: ssim_run
+        training:
+          epochs: 1
+        losses:
+          generator:
+            - name: ssim
+              weight: 1.0
+              enabled: true
+              params:
+                data_range: 1.0
+                window_size: 11
+                sigma: 1.5
+                channel_mode: rgb
+                reduction: mean
+              schedule:
+                type: constant
+          discriminator: []
+    """,
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+
+    assert run_config.losses is not None
+    assert len(run_config.losses.generator) == 1
+    term = run_config.losses.generator[0]
+    assert term.name == "ssim"
+    assert term.weight == pytest.approx(1.0)
+    assert term.enabled is True
+    assert term.is_active is True
+    assert term.params["window_size"] == 11
+    assert term.params["sigma"] == pytest.approx(1.5)
+    assert term.schedule.type == "constant"
+    assert run_config.losses.active_generator == (term,)
+    assert run_config.losses.discriminator == ()
+
+
+def test_run_config_from_yaml_parses_scheduled_masked_ssim_loss(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "losses.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: ssim_run
+        training:
+          epochs: 1
+        losses:
+          generator:
+            - name: ssim
+              weight: 1.0
+              params:
+                mask:
+                  enabled: true
+                  source: foreground_mask
+                  foreground_weight: 1.0
+                  background_weight: 0.25
+                  ignore_empty_mask: true
+              schedule:
+                type: linear_warmup
+                start_epoch: 0
+                end_epoch: 4
+          discriminator: []
+    """,
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+
+    assert run_config.losses is not None
+    term = run_config.losses.generator[0]
+    assert term.requires_mask is True
+    assert term.mask.background_weight == pytest.approx(0.25)
+    assert term.current_weight(epoch=0) == pytest.approx(0.0)
+    assert term.current_weight(epoch=2) == pytest.approx(0.5)
+    assert term.current_weight(epoch=4) == pytest.approx(1.0)
+
+
+def test_run_config_from_yaml_requires_explicit_loss_weight(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "losses_minimal.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: ssim_run
+        training:
+          epochs: 1
+        losses:
+          generator:
+            - name: ssim
+    """,
+    )
+
+    with pytest.raises(ValueError, match="weight is required"):
+        RunConfig.from_yaml(yaml_file)
+
+
+def test_zero_weight_and_disabled_losses_are_inactive(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "inactive_losses.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: inactive_losses
+        training:
+          epochs: 1
+        losses:
+          generator:
+            - name: ssim
+              weight: 0.0
+              enabled: true
+    """,
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+
+    assert run_config.losses is not None
+    term = run_config.losses.generator[0]
+    assert term.enabled is True
+    assert term.weight == pytest.approx(0.0)
+    assert term.is_active is False
+    assert run_config.losses.active_generator == ()
+
+
+def test_loss_config_to_yaml_dict_preserves_explicit_losses(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "losses_round_trip.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: ssim_run
+        training:
+          epochs: 1
+        losses:
+          generator:
+            - name: ssim
+              weight: 1.0
+              enabled: false
+              params:
+                reduction: mean
+          discriminator: []
+    """,
+    )
+
+    data = RunConfig.from_yaml(yaml_file).to_yaml_dict()
+
+    assert data["losses"] == {
+        "generator": [
+            {
+                "name": "ssim",
+                "weight": 1.0,
+                "enabled": False,
+                "params": {"reduction": "mean"},
+                "schedule": {"type": "constant"},
+            }
+        ],
+        "discriminator": [],
+    }
+
+
+@pytest.mark.parametrize(
+    ("loss_yaml", "match"),
+    [
+        ("name: mse\n  weight: 1.0", "losses.generator\\[0\\].name"),
+        ("name: ssim\n  weight: -1.0", "weight"),
+        ("weight: 1.0", "name is required"),
+        ("name: ssim", "weight is required"),
+        ("name: ssim\n  weight: 1.0\n  target: image", "target"),
+        ("name: ssim\n  weight: 1.0\n  typo: true", "typo"),
+        ("name: ssim\n  weight: 1.0\n  schedule: {type: linear}", "schedule"),
+        ("name: ssim\n  weight: 1.0\n  schedule: {type: linear_warmup}", "end_epoch"),
+        ("name: ssim\n  weight: 1.0\n  schedule: {type: step}", "epoch"),
+        ("name: ssim\n  weight: 1.0\n  enabled: 'true'", "enabled"),
+        ("name: ssim\n  weight: 1.0\n  params: {window_size: 4}", "window_size"),
+        ("name: ssim\n  weight: 1.0\n  params: {data_range: 0.0}", "data_range"),
+        ("name: ssim\n  weight: 1.0\n  params: {sigma: 0.0}", "sigma"),
+        ("name: ssim\n  weight: 1.0\n  params: {channel_mode: lab}", "channel_mode"),
+        ("name: ssim\n  weight: 1.0\n  params: {reduction: median}", "reduction"),
+        ("name: ssim\n  weight: 1.0\n  params: {mask: {source: target_mask}}", "source"),
+        (
+            "name: ssim\n  weight: 1.0\n  params: {mask: {foreground_weight: -1.0}}",
+            "foreground_weight",
+        ),
+        ("name: ms_ssim\n  weight: 1.0", "losses.generator\\[0\\].name"),
+    ],
+)
+def test_loss_config_rejects_invalid_generator_terms(
+    tmp_path: Path, loss_yaml: str, match: str
+) -> None:
+    yaml_file = tmp_path / "bad_losses.yaml"
+    loss_body = textwrap.dedent(loss_yaml).strip()
+    loss_lines = [line.strip() for line in loss_body.splitlines()]
+    list_item = "- " + "\n  ".join(loss_lines)
+    indented_loss_yaml = textwrap.indent(list_item, "            ")
+    write_yaml(
+        yaml_file,
+        f"""\
+        dataset_root: /data
+        results_path: /results
+        run_name: bad_losses
+        training:
+          epochs: 1
+        losses:
+          generator:
+{indented_loss_yaml}
+    """,
+    )
+
+    with pytest.raises((TypeError, ValueError), match=match):
+        RunConfig.from_yaml(yaml_file)
+
+
+def test_loss_config_rejects_ssim_discriminator_term(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "bad_discriminator_loss.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: bad_losses
+        training:
+          epochs: 1
+        losses:
+          discriminator:
+            - name: ssim
+              weight: 1.0
+    """,
+    )
+
+    with pytest.raises(ValueError, match="losses.generator"):
+        RunConfig.from_yaml(yaml_file)
+
+
+def test_loss_config_rejects_duplicate_loss_names(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "duplicate_losses.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: duplicate_losses
+        training:
+          epochs: 1
+        losses:
+          generator:
+            - name: ssim
+              weight: 1.0
+            - name: ssim
+              weight: 0.5
+    """,
+    )
+
+    with pytest.raises(ValueError, match="Duplicate loss"):
+        RunConfig.from_yaml(yaml_file)
+
+
+@pytest.mark.parametrize(
+    ("schedule", "expected"),
+    [
+        (LossScheduleConfig(type="constant"), {0: 1.0, 5: 1.0}),
+        (
+            LossScheduleConfig(type="linear_warmup", start_epoch=0, end_epoch=4),
+            {0: 0.0, 2: 0.5, 4: 1.0},
+        ),
+        (
+            LossScheduleConfig(type="linear_decay", start_epoch=0, end_epoch=4),
+            {0: 1.0, 2: 0.5, 4: 0.0},
+        ),
+        (LossScheduleConfig(type="step", epoch=3, factor=0.25), {2: 1.0, 3: 0.25}),
+        (LossScheduleConfig(type="turn_on_after_epoch", epoch=3), {2: 0.0, 3: 1.0}),
+        (LossScheduleConfig(type="turn_off_after_epoch", epoch=3), {2: 1.0, 3: 0.0}),
+    ],
+)
+def test_loss_schedule_multiplier_values(
+    schedule: LossScheduleConfig, expected: dict[int, float]
+) -> None:
+    schedule.validate()
+    for epoch, value in expected.items():
+        assert schedule.multiplier(epoch=epoch) == pytest.approx(value)
+
+
+def test_cosine_loss_schedule_boundaries() -> None:
+    schedule = LossScheduleConfig(type="cosine", start_epoch=0, end_epoch=4)
+    assert schedule.multiplier(epoch=0) == pytest.approx(1.0)
+    assert schedule.multiplier(epoch=4) == pytest.approx(0.0)
 
 
 def test_training_from_run_yaml_section(tmp_path: Path) -> None:
@@ -169,7 +470,7 @@ def test_training_from_run_yaml_section(tmp_path: Path) -> None:
         training:
           epochs: 30
           batch_size: 2
-          l1_weight: 50
+          log_rate: 3
     """,
     )
 
@@ -180,7 +481,7 @@ def test_training_from_run_yaml_section(tmp_path: Path) -> None:
     assert run_config.training is not None
     assert run_config.training.epochs == 30
     assert run_config.training.batch_size == 2
-    assert run_config.training.l1_weight == pytest.approx(50)
+    assert run_config.training.log_rate == 3
 
 
 def test_inference_from_run_yaml_section(tmp_path: Path) -> None:
@@ -207,7 +508,7 @@ def test_inference_from_run_yaml_section(tmp_path: Path) -> None:
     assert config.checkpoint_path == Path("checkpoints/ep030.pth")
 
 
-def test_training_yaml_rejects_legacy_train_dir_and_val_dir(tmp_path: Path) -> None:
+def test_training_yaml_rejects_train_dir_and_val_dir(tmp_path: Path) -> None:
     yaml_file = tmp_path / "run.yaml"
     write_yaml(
         yaml_file,
@@ -227,7 +528,7 @@ def test_training_yaml_rejects_legacy_train_dir_and_val_dir(tmp_path: Path) -> N
         RunConfig.from_yaml(yaml_file)
 
 
-def test_inference_yaml_rejects_legacy_test_dir(tmp_path: Path) -> None:
+def test_inference_yaml_rejects_test_dir(tmp_path: Path) -> None:
     yaml_file = tmp_path / "run.yaml"
     write_yaml(
         yaml_file,
@@ -319,7 +620,6 @@ def test_inference_unknown_checkpoint_policy_raises(tmp_path: Path) -> None:
         ({"lr_d": -0.1}, "lr_d"),
         ({"beta1": -0.1}, "beta1"),
         ({"beta2": 1.0}, "beta2"),
-        ({"l1_weight": -1.0}, "l1_weight"),
         ({"num_workers": -1}, "num_workers"),
         ({"validate_rate": 0}, "validate_rate"),
         ({"checkpoint_rate": 0}, "checkpoint_rate"),

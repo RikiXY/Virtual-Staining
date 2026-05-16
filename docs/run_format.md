@@ -86,6 +86,106 @@ The fully expanded effective configuration after all defaults have been applied
 and all derived paths resolved. Differences from `input.yaml` reflect default
 values that were not explicitly set by the user.
 
+Training losses are recorded under top-level `losses.generator` and
+`losses.discriminator` lists. Training requires explicit loss terms. Registered
+losses have a default weight of `0.0`; a term is active only when it is
+explicitly listed, `enabled` is `true`, and its scheduled current weight is
+nonzero. Explicitly listed terms must declare `weight`; unlisted registry
+entries remain absent and inactive.
+
+Accepted loss names are:
+
+- `adversarial_bce`: generator or discriminator BCE-with-logits adversarial loss.
+- `l1`: generator image reconstruction loss.
+- `ssim`: generator image structural similarity loss.
+
+```yaml
+losses:
+  generator:
+    - name: adversarial_bce
+      weight: 1.0
+      enabled: true
+      schedule:
+        type: constant
+    - name: l1
+      weight: 25.0
+      enabled: true
+      params:
+        reduction: mean
+      schedule:
+        type: constant
+    - name: ssim
+      weight: 0.0
+      enabled: false
+      params:
+        data_range: 1.0
+        window_size: 11
+        sigma: 1.5
+        channel_mode: rgb
+        reduction: mean
+        mask:
+          enabled: false
+          source: foreground_mask
+          foreground_weight: 1.0
+          background_weight: 0.25
+          ignore_empty_mask: true
+      schedule:
+        type: linear_warmup
+        start_epoch: 0
+        end_epoch: 5
+  discriminator:
+    - name: adversarial_bce
+      weight: 1.0
+      enabled: true
+      schedule:
+        type: constant
+```
+
+The baseline objective uses generator `adversarial_bce` with weight `1.0`,
+generator `l1` with weight `25.0`, and discriminator `adversarial_bce` with
+weight `1.0`.
+
+The training SSIM implementation is differentiable PyTorch code. It maps
+current training tensors from `[-1, 1]` to `[0, 1]` before computing SSIM, and
+uses `ssim_loss = 1 - SSIM(prediction, target)`. MS-SSIM and other structural
+losses are not supported by this registry yet.
+
+Supported schedule types are `constant`, `linear_warmup`, `linear_decay`,
+`step`, `cosine`, `turn_on_after_epoch`, and `turn_off_after_epoch`.
+`linear_warmup`, `linear_decay`, and `cosine` use `start_epoch` and
+`end_epoch`. `step`, `turn_on_after_epoch`, and `turn_off_after_epoch` use
+`epoch`; `step` also uses `factor`.
+
+Mask weighting is optional. When `params.mask.enabled` is `true`, the training
+dataset must provide a `foreground_mask` tensor for every batch. Missing masks
+raise an error instead of being treated as all-foreground. Current datasets look
+for sidecar patch masks named `<sample_id>_foreground_mask<ext>` in the same
+split directory. `vs-prepare` writes those sidecar masks for accepted patches
+when `preprocessing.save_masks: true`; the sidecar mask is the aligned target
+foreground mask for that patch.
+
+When configured loss terms are present, `metrics.csv` keeps the existing
+aggregate columns and adds deterministic component columns using normalized
+names:
+
+```text
+loss_train_total_generator
+loss_train_total_discriminator
+loss_train_raw_<role>_<loss_name>
+loss_train_weighted_<role>_<loss_name>
+loss_train_current_weight_<role>_<loss_name>
+loss_val_total_generator
+loss_val_total_discriminator
+loss_val_raw_<role>_<loss_name>
+loss_val_weighted_<role>_<loss_name>
+loss_val_current_weight_<role>_<loss_name>
+```
+
+For example, configured SSIM writes `loss_train_raw_generator_ssim`,
+`loss_train_weighted_generator_ssim`, and
+`loss_train_current_weight_generator_ssim`, plus matching validation columns
+when validation runs.
+
 ### `metadata/run.json`
 
 Stable run-level provenance and aggregate summary. It identifies what the run is

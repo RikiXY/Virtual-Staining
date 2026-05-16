@@ -23,6 +23,15 @@ def _write_train_config(tmp_path: Path, dataset_root: Path) -> Path:
         training:
           epochs: 1
           num_workers: 0
+        losses:
+          generator:
+            - name: adversarial_bce
+              weight: 1.0
+            - name: l1
+              weight: 25.0
+          discriminator:
+            - name: adversarial_bce
+              weight: 1.0
         """,
         filename="train.yaml",
         dataset_root=dataset_root,

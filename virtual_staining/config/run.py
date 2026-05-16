@@ -24,7 +24,6 @@ from virtual_staining.config.validation import (
 from virtual_staining.evaluation.config import _EVALUATION_KEYS, EvaluationConfig
 from virtual_staining.models.config import (
     DiscriminatorConfig,
-    GanLossName,
     GeneratorConfig,
     ModelConfig,
     ModelName,
@@ -32,7 +31,7 @@ from virtual_staining.models.config import (
 )
 from virtual_staining.utils.dimensions import parse_wh_size_from_aliases
 
-_MODEL_KEYS: frozenset[str] = frozenset({"name", "generator", "discriminator", "gan_loss"})
+_MODEL_KEYS: frozenset[str] = frozenset({"name", "generator", "discriminator"})
 
 _GENERATOR_KEYS: frozenset[str] = frozenset(
     {"name", "in_channels", "out_channels", "base_channels", "norm", "dropout", "bilinear"}
@@ -54,7 +53,7 @@ _FLAT_EVALUATION_KEYS: frozenset[str] = frozenset(
 if TYPE_CHECKING:
     from virtual_staining.data.config import PreprocessingConfig
     from virtual_staining.inference.config import InferenceConfig
-    from virtual_staining.training.config import TrainingConfig
+    from virtual_staining.training.config import LossConfig, TrainingConfig
 
 
 @dataclass(frozen=True)
@@ -62,6 +61,7 @@ class RunConfig:
     project: ProjectConfig
     model: ModelConfig
     training: TrainingConfig | None
+    losses: LossConfig | None
     inference: InferenceConfig | None
     preprocessing: PreprocessingConfig | None
     evaluation: EvaluationConfig | None
@@ -76,6 +76,7 @@ class RunConfig:
             key in raw
             for key in (
                 "training",
+                "losses",
                 "inference",
                 "model",
                 "evaluation",
@@ -90,6 +91,7 @@ class RunConfig:
         project = _parse_project(raw)
         model = _parse_model(raw.get("model", {}))
         training = _parse_training(raw) if "training" in raw else None
+        losses = _parse_losses(raw["losses"]) if "losses" in raw else None
         inference = _parse_inference(raw) if "inference" in raw else None
         preprocessing = (
             _parse_preprocessing(raw)
@@ -109,6 +111,7 @@ class RunConfig:
             project=project,
             model=model,
             training=training,
+            losses=losses,
             inference=inference,
             preprocessing=preprocessing,
             evaluation=evaluation,
@@ -142,7 +145,6 @@ class RunConfig:
                     "norm": self.model.discriminator.norm,
                     "use_sigmoid": self.model.discriminator.use_sigmoid,
                 },
-                "gan_loss": self.model.gan_loss,
             },
         }
 
@@ -157,7 +159,6 @@ class RunConfig:
                 "lr_d": self.training.lr_d,
                 "beta1": self.training.beta1,
                 "beta2": self.training.beta2,
-                "l1_weight": self.training.l1_weight,
                 "seed": self.training.seed,
                 "num_workers": self.training.num_workers,
                 "validate_rate": self.training.validate_rate,
@@ -165,6 +166,9 @@ class RunConfig:
                 "log_rate": self.training.log_rate,
                 "resume": self.training.resume,
             }
+
+        if self.losses is not None:
+            data["losses"] = self.losses.to_yaml_dict()
 
         if self.inference is not None:
             data["inference"] = {
@@ -358,16 +362,12 @@ def _parse_model(model_raw: dict[str, Any]) -> ModelConfig:
     )
     if use_sigmoid:
         raise ValueError(
-            "model.discriminator.use_sigmoid=True is incompatible with "
+            "model.discriminator.use_sigmoid=True cannot be used with "
             "BCEWithLogitsLoss. BCEWithLogitsLoss applies sigmoid internally; "
             "adding a second sigmoid in the discriminator saturates gradients "
             "and breaks training. Set 'use_sigmoid: false' (the default) or "
             "implement explicit loss switching."
         )
-    gan_loss = cast(
-        GanLossName,
-        _parse_supported_choice(model_raw.get("gan_loss", "bce"), "model.gan_loss", {"bce"}),
-    )
     return ModelConfig(
         name=model_name,
         generator=GeneratorConfig(
@@ -386,7 +386,6 @@ def _parse_model(model_raw: dict[str, Any]) -> ModelConfig:
             norm=discriminator_norm,
             use_sigmoid=use_sigmoid,
         ),
-        gan_loss=gan_loss,
     )
 
 
@@ -411,7 +410,6 @@ def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
         lr_d=float(data.get("lr_d", 2e-4)),
         beta1=float(data.get("beta1", 0.5)),
         beta2=float(data.get("beta2", 0.999)),
-        l1_weight=float(data.get("l1_weight", 25.0)),
         seed=data.get("seed"),
         num_workers=int(data.get("num_workers", min(4, os.cpu_count() or 1))),
         validate_rate=int(data.get("validate_rate", 10)),
@@ -421,6 +419,12 @@ def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
     )
     config.validate()
     return config
+
+
+def _parse_losses(raw: Any) -> LossConfig:
+    from virtual_staining.training.config import parse_loss_config
+
+    return parse_loss_config(raw)
 
 
 def _parse_inference(raw: dict[str, Any]) -> InferenceConfig:
