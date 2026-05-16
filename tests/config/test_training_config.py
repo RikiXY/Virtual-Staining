@@ -9,7 +9,7 @@ from tests.config_helpers import write_yaml
 from virtual_staining.config import RunConfig
 from virtual_staining.config.project import ProjectConfig
 from virtual_staining.models.config import ModelConfig
-from virtual_staining.training.config import TrainingConfig
+from virtual_staining.training.config import LossConfig, TrainingConfig
 
 
 def _make_project(**overrides: object) -> ProjectConfig:
@@ -155,6 +155,203 @@ def test_training_from_run_yaml_defaults(tmp_path: Path) -> None:
     assert config.l1_weight == pytest.approx(25.0)
     assert config.log_rate == 15
     assert config.resume is None
+    assert run_config.losses is None
+
+
+def test_loss_config_defaults_to_empty_lists() -> None:
+    config = LossConfig()
+
+    assert config.generator == ()
+    assert config.discriminator == ()
+    assert config.to_yaml_dict() == {"generator": [], "discriminator": []}
+
+
+def test_run_config_from_yaml_parses_explicit_ssim_loss(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "losses.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: ssim_run
+        training:
+          epochs: 1
+        losses:
+          generator:
+            - name: ssim
+              weight: 1.0
+              enabled: true
+              target: image
+              params:
+                data_range: 1.0
+                window_size: 11
+                channel_mode: rgb
+                reduction: mean
+              schedule:
+                type: constant
+          discriminator: []
+    """,
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+
+    assert run_config.losses is not None
+    assert len(run_config.losses.generator) == 1
+    term = run_config.losses.generator[0]
+    assert term.name == "ssim"
+    assert term.weight == pytest.approx(1.0)
+    assert term.enabled is True
+    assert term.target == "image"
+    assert term.params["window_size"] == 11
+    assert term.schedule.type == "constant"
+    assert run_config.losses.discriminator == ()
+
+
+def test_run_config_from_yaml_parses_minimal_ssim_loss_defaults(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "losses_minimal.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: ssim_run
+        training:
+          epochs: 1
+        losses:
+          generator:
+            - name: ssim
+              weight: 0.5
+    """,
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+
+    assert run_config.losses is not None
+    assert run_config.losses.generator[0].enabled is True
+    assert run_config.losses.generator[0].target == "image"
+    assert run_config.losses.generator[0].params == {}
+    assert run_config.losses.generator[0].schedule.type == "constant"
+    assert run_config.losses.discriminator == ()
+
+
+def test_loss_config_to_yaml_dict_preserves_explicit_losses(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "losses_round_trip.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: ssim_run
+        training:
+          epochs: 1
+        losses:
+          generator:
+            - name: ssim
+              weight: 1.0
+              enabled: false
+              params:
+                reduction: mean
+          discriminator: []
+    """,
+    )
+
+    data = RunConfig.from_yaml(yaml_file).to_yaml_dict()
+
+    assert data["losses"] == {
+        "generator": [
+            {
+                "name": "ssim",
+                "weight": 1.0,
+                "enabled": False,
+                "target": "image",
+                "params": {"reduction": "mean"},
+                "schedule": {"type": "constant"},
+            }
+        ],
+        "discriminator": [],
+    }
+
+
+@pytest.mark.parametrize(
+    ("loss_yaml", "match"),
+    [
+        ("name: mse\n  weight: 1.0", "losses.generator\\[0\\].name"),
+        ("name: ssim\n  weight: -1.0", "weight"),
+        ("weight: 1.0", "name is required"),
+        ("name: ssim", "weight is required"),
+        ("name: ssim\n  weight: 1.0\n  typo: true", "typo"),
+        ("name: ssim\n  weight: 1.0\n  schedule: {type: linear}", "schedule"),
+        ("name: ssim\n  weight: 1.0\n  enabled: 'true'", "enabled"),
+    ],
+)
+def test_loss_config_rejects_invalid_generator_terms(
+    tmp_path: Path, loss_yaml: str, match: str
+) -> None:
+    yaml_file = tmp_path / "bad_losses.yaml"
+    loss_body = textwrap.dedent(loss_yaml).strip()
+    loss_lines = [line.strip() for line in loss_body.splitlines()]
+    list_item = "- " + "\n  ".join(loss_lines)
+    indented_loss_yaml = textwrap.indent(list_item, "            ")
+    write_yaml(
+        yaml_file,
+        f"""\
+        dataset_root: /data
+        results_path: /results
+        run_name: bad_losses
+        training:
+          epochs: 1
+        losses:
+          generator:
+{indented_loss_yaml}
+    """,
+    )
+
+    with pytest.raises((TypeError, ValueError), match=match):
+        RunConfig.from_yaml(yaml_file)
+
+
+def test_loss_config_rejects_ssim_discriminator_term(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "bad_discriminator_loss.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: bad_losses
+        training:
+          epochs: 1
+        losses:
+          discriminator:
+            - name: ssim
+              weight: 1.0
+    """,
+    )
+
+    with pytest.raises(ValueError, match="losses.generator"):
+        RunConfig.from_yaml(yaml_file)
+
+
+def test_loss_config_rejects_duplicate_loss_names(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "duplicate_losses.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: duplicate_losses
+        training:
+          epochs: 1
+        losses:
+          generator:
+            - name: ssim
+              weight: 1.0
+            - name: ssim
+              weight: 0.5
+    """,
+    )
+
+    with pytest.raises(ValueError, match="Duplicate loss"):
+        RunConfig.from_yaml(yaml_file)
 
 
 def test_training_from_run_yaml_section(tmp_path: Path) -> None:

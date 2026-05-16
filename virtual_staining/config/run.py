@@ -54,7 +54,7 @@ _FLAT_EVALUATION_KEYS: frozenset[str] = frozenset(
 if TYPE_CHECKING:
     from virtual_staining.data.config import PreprocessingConfig
     from virtual_staining.inference.config import InferenceConfig
-    from virtual_staining.training.config import TrainingConfig
+    from virtual_staining.training.config import LossConfig, TrainingConfig
 
 
 @dataclass(frozen=True)
@@ -62,6 +62,7 @@ class RunConfig:
     project: ProjectConfig
     model: ModelConfig
     training: TrainingConfig | None
+    losses: LossConfig | None
     inference: InferenceConfig | None
     preprocessing: PreprocessingConfig | None
     evaluation: EvaluationConfig | None
@@ -76,6 +77,7 @@ class RunConfig:
             key in raw
             for key in (
                 "training",
+                "losses",
                 "inference",
                 "model",
                 "evaluation",
@@ -90,6 +92,7 @@ class RunConfig:
         project = _parse_project(raw)
         model = _parse_model(raw.get("model", {}))
         training = _parse_training(raw) if "training" in raw else None
+        losses = _parse_losses(raw["losses"]) if "losses" in raw else None
         inference = _parse_inference(raw) if "inference" in raw else None
         preprocessing = (
             _parse_preprocessing(raw)
@@ -109,6 +112,7 @@ class RunConfig:
             project=project,
             model=model,
             training=training,
+            losses=losses,
             inference=inference,
             preprocessing=preprocessing,
             evaluation=evaluation,
@@ -165,6 +169,9 @@ class RunConfig:
                 "log_rate": self.training.log_rate,
                 "resume": self.training.resume,
             }
+
+        if self.losses is not None:
+            data["losses"] = self.losses.to_yaml_dict()
 
         if self.inference is not None:
             data["inference"] = {
@@ -421,6 +428,12 @@ def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
     )
     config.validate()
     return config
+
+
+def _parse_losses(raw: Any) -> LossConfig:
+    from virtual_staining.training.config import parse_loss_config
+
+    return parse_loss_config(raw)
 
 
 def _parse_inference(raw: dict[str, Any]) -> InferenceConfig:

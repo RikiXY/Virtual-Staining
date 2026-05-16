@@ -86,6 +86,31 @@ The fully expanded effective configuration after all defaults have been applied
 and all derived paths resolved. Differences from `input.yaml` reflect default
 values that were not explicitly set by the user.
 
+Optional composable losses are recorded under top-level `losses.generator` and
+`losses.discriminator` lists. In the current registry contract, `ssim` is the
+only accepted explicit loss term, it is generator-side only, and its schedule
+type is `constant`.
+
+```yaml
+losses:
+  generator:
+    - name: ssim
+      weight: 1.0
+      enabled: true
+      target: image
+      params:
+        data_range: 1.0
+        window_size: 11
+        channel_mode: rgb
+        reduction: mean
+      schedule:
+        type: constant
+  discriminator: []
+```
+
+If `losses` is omitted, the training loop keeps the legacy Pix2Pix objective
+defined by `model.gan_loss: bce` and `training.l1_weight`.
+
 ### `metadata/run.json`
 
 Stable run-level provenance and aggregate summary. It identifies what the run is

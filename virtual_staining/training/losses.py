@@ -7,6 +7,18 @@ import torch
 import torch.nn as nn
 
 
+@dataclass(frozen=True)
+class LossRegistryEntry:
+    name: str
+    roles: tuple[Literal["generator", "discriminator"], ...]
+    targets: tuple[Literal["image"], ...]
+
+
+LOSS_REGISTRY: dict[str, LossRegistryEntry] = {
+    "ssim": LossRegistryEntry(name="ssim", roles=("generator",), targets=("image",)),
+}
+
+
 @dataclass
 class StepLosses:
     loss_G: float

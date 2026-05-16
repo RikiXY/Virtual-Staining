@@ -93,6 +93,24 @@ training:
   log_rate: 15
   resume: null
 
+# Optional composable loss registry. When omitted, training keeps the legacy
+# Pix2Pix BCE adversarial + training.l1_weight reconstruction path.
+#
+# losses:
+#   generator:
+#     - name: ssim
+#       weight: 1.0
+#       enabled: true
+#       target: image
+#       params:
+#         data_range: 1.0
+#         window_size: 11
+#         channel_mode: rgb
+#         reduction: mean
+#       schedule:
+#         type: constant
+#   discriminator: []
+
 inference:
   # Supported policies:
   # - latest: newest ep*.pth file in results_path/run_name/checkpoints

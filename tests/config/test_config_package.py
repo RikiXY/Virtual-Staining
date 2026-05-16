@@ -103,6 +103,7 @@ training:
     assert data["training"]["epochs"] == 10
     assert "seed" not in data["training"]
     assert "resume" not in data["training"]
+    assert "losses" not in data
 
 
 def test_project_config_default_manifest_path(tmp_path: Path) -> None:
