@@ -11,8 +11,9 @@ from torch.amp import GradScaler
 from virtual_staining.training.config import LossScheduleConfig, LossTermConfig
 from virtual_staining.training.losses import (
     LOSS_REGISTRY,
+    ConfiguredLossEvaluator,
+    LossEvaluationContext,
     LossTermResult,
-    Pix2PixLoss,
     SsimLoss,
     StepLosses,
     evaluate_loss_term,
@@ -49,9 +50,13 @@ def _make_step() -> Pix2PixTrainingStep:
         opt_D=optim.Adam(disc.parameters(), lr=1e-4),
         scaler_G=GradScaler(enabled=False),
         scaler_D=GradScaler(enabled=False),
-        loss_fn=Pix2PixLoss(l1_weight=25.0),
         device=torch.device("cpu"),
         amp_enabled=False,
+        generator_loss_terms=(
+            LossTermConfig(name="adversarial_bce", weight=1.0),
+            LossTermConfig(name="l1", weight=25.0),
+        ),
+        discriminator_loss_terms=(LossTermConfig(name="adversarial_bce", weight=1.0),),
     )
 
 
@@ -65,7 +70,6 @@ def _make_configured_step(term: LossTermConfig) -> Pix2PixTrainingStep:
         opt_D=optim.Adam(disc.parameters(), lr=1e-4),
         scaler_G=GradScaler(enabled=False),
         scaler_D=GradScaler(enabled=False),
-        loss_fn=Pix2PixLoss(l1_weight=0.0),
         device=torch.device("cpu"),
         amp_enabled=False,
         generator_loss_terms=(term,),
@@ -73,39 +77,20 @@ def _make_configured_step(term: LossTermConfig) -> Pix2PixTrainingStep:
 
 
 # ---------------------------------------------------------------------------
-# Pix2PixLoss
+# Registry losses
 # ---------------------------------------------------------------------------
 
 
-def test_discriminator_loss_non_negative() -> None:
-    loss = Pix2PixLoss(l1_weight=25.0)
-    val = loss.discriminator_loss(torch.zeros(2, 1, 1, 1), torch.zeros(2, 1, 1, 1))
-    assert val.item() >= 0.0
-
-
-def test_generator_loss_non_negative() -> None:
-    loss = Pix2PixLoss(l1_weight=25.0)
-    D_fake = torch.zeros(2, 1, 1, 1)
-    val = loss.generator_loss(D_fake, torch.zeros(2, 3, 8, 8), torch.zeros(2, 3, 8, 8))
-    assert val.item() >= 0.0
-
-
-def test_l1_weight_scales_generator_loss() -> None:
-    D_fake = torch.zeros(2, 1, 1, 1)
+def test_l1_registry_weight_scales_generator_loss() -> None:
     fake = torch.ones(2, 3, 8, 8)
     real = torch.zeros(2, 3, 8, 8)
-    loss_0 = Pix2PixLoss(l1_weight=0.0).generator_loss(D_fake, fake, real)
-    loss_25 = Pix2PixLoss(l1_weight=25.0).generator_loss(D_fake, fake, real)
-    assert loss_25.item() > loss_0.item()
+    term_0 = LossTermConfig(name="l1", weight=0.0)
+    term_25 = LossTermConfig(name="l1", weight=25.0)
 
+    loss_0 = evaluate_loss_term(term_0, fake, real)
+    loss_25 = evaluate_loss_term(term_25, fake, real)
 
-def test_legacy_l1_weight_zero_removes_l1_contribution() -> None:
-    D_fake = torch.zeros(2, 1, 1, 1)
-    fake = torch.ones(2, 3, 8, 8)
-    real = torch.zeros(2, 3, 8, 8)
-    with_mismatch = Pix2PixLoss(l1_weight=0.0).generator_loss(D_fake, fake, real)
-    without_mismatch = Pix2PixLoss(l1_weight=0.0).generator_loss(D_fake, real, real)
-    assert with_mismatch.item() == without_mismatch.item()
+    assert loss_25.weighted.item() > loss_0.weighted.item()
 
 
 def test_listed_zero_weight_registry_loss_is_inactive() -> None:
@@ -126,6 +111,47 @@ def test_disabled_nonzero_weight_registry_loss_is_inactive() -> None:
 def test_loss_registry_entries_default_to_zero_weight() -> None:
     assert LOSS_REGISTRY
     assert all(entry.default_weight == 0.0 for entry in LOSS_REGISTRY.values())
+
+
+def test_configured_loss_evaluator_returns_generator_component_maps() -> None:
+    evaluator = ConfiguredLossEvaluator(
+        generator_terms=(LossTermConfig(name="l1", weight=2.0),),
+    )
+    prediction = torch.ones(1, 3, 8, 8)
+    target = torch.zeros(1, 3, 8, 8)
+    discriminator_fake = torch.zeros(1, 1, 1, 1)
+
+    result = evaluator.generator_total(
+        prediction=prediction,
+        target=target,
+        discriminator_fake=discriminator_fake,
+        context=LossEvaluationContext(epoch=0),
+    )
+
+    assert result.total.item() == pytest.approx(2.0)
+    assert result.raw == {"generator_l1": pytest.approx(1.0)}
+    assert result.weighted == {"generator_l1": pytest.approx(2.0)}
+    assert result.current_weight == {"generator_l1": pytest.approx(2.0)}
+
+
+def test_configured_loss_evaluator_returns_discriminator_component_maps() -> None:
+    evaluator = ConfiguredLossEvaluator(
+        discriminator_terms=(LossTermConfig(name="adversarial_bce", weight=1.0),),
+    )
+    discriminator_real = torch.zeros(1, 1, 1, 1)
+    discriminator_fake = torch.zeros(1, 1, 1, 1)
+
+    result = evaluator.discriminator_total(
+        discriminator_real=discriminator_real,
+        discriminator_fake=discriminator_fake,
+        context=LossEvaluationContext(epoch=0),
+    )
+
+    expected = math.log(2.0) * 2.0
+    assert result.total.item() == pytest.approx(expected)
+    assert result.raw == {"discriminator_adversarial_bce": pytest.approx(expected)}
+    assert result.weighted == {"discriminator_adversarial_bce": pytest.approx(expected)}
+    assert result.current_weight == {"discriminator_adversarial_bce": pytest.approx(1.0)}
 
 
 # ---------------------------------------------------------------------------
@@ -320,16 +346,7 @@ def test_training_step_applies_configured_ssim_loss() -> None:
 
     result = step.step(torch.zeros(1, 3, 8, 8), torch.ones(1, 3, 8, 8) * 0.5, epoch=0)
 
-    assert (
-        result.loss_G
-        > Pix2PixLoss(l1_weight=0.0)
-        .generator_loss(
-            torch.zeros(1, 1, 1, 1),
-            torch.zeros(1, 3, 8, 8),
-            torch.ones(1, 3, 8, 8) * 0.5,
-        )
-        .item()
-    )
+    assert result.loss_G > 0.0
 
 
 def test_training_step_returns_component_maps() -> None:
@@ -341,6 +358,6 @@ def test_training_step_returns_component_maps() -> None:
     assert result.raw is not None
     assert result.weighted is not None
     assert result.current_weight is not None
-    assert result.raw["ssim"] > 0
-    assert result.weighted["ssim"] == pytest.approx(result.raw["ssim"] * 2.0)
-    assert result.current_weight["ssim"] == pytest.approx(2.0)
+    assert result.raw["generator_ssim"] > 0
+    assert result.weighted["generator_ssim"] == pytest.approx(result.raw["generator_ssim"] * 2.0)
+    assert result.current_weight["generator_ssim"] == pytest.approx(2.0)

@@ -6,7 +6,11 @@ import torch.optim as optim
 from torch.amp import GradScaler, autocast
 
 from virtual_staining.training.config import LossTermConfig
-from virtual_staining.training.losses import Pix2PixLoss, StepLosses, evaluate_loss_term
+from virtual_staining.training.losses import (
+    ConfiguredLossEvaluator,
+    LossEvaluationContext,
+    StepLosses,
+)
 
 
 class Pix2PixTrainingStep:
@@ -20,10 +24,10 @@ class Pix2PixTrainingStep:
         opt_D: optim.Optimizer,
         scaler_G: GradScaler,
         scaler_D: GradScaler,
-        loss_fn: Pix2PixLoss,
         device: torch.device,
         amp_enabled: bool,
         generator_loss_terms: tuple[LossTermConfig, ...] = (),
+        discriminator_loss_terms: tuple[LossTermConfig, ...] = (),
     ) -> None:
         self.generator = generator
         self.discriminator = discriminator
@@ -31,10 +35,14 @@ class Pix2PixTrainingStep:
         self.opt_D = opt_D
         self.scaler_G = scaler_G
         self.scaler_D = scaler_D
-        self.loss_fn = loss_fn
         self.device = device
         self.amp_enabled = amp_enabled
         self.generator_loss_terms = generator_loss_terms
+        self.discriminator_loss_terms = discriminator_loss_terms
+        self.loss_evaluator = ConfiguredLossEvaluator(
+            generator_terms=generator_loss_terms,
+            discriminator_terms=discriminator_loss_terms,
+        )
 
     def step(
         self,
@@ -51,7 +59,16 @@ class Pix2PixTrainingStep:
             fake = self.generator(x).detach()
             D_real = self.discriminator(x, y)
             D_fake = self.discriminator(x, fake)
-            loss_D = self.loss_fn.discriminator_loss(D_real, D_fake)
+            context = LossEvaluationContext(epoch=epoch, global_step=global_step)
+            discriminator_loss = self.loss_evaluator.discriminator_total(
+                discriminator_real=D_real,
+                discriminator_fake=D_fake,
+                context=context,
+            )
+            loss_D = discriminator_loss.total
+            component_raw = dict(discriminator_loss.raw)
+            component_weighted = dict(discriminator_loss.weighted)
+            component_current_weight = dict(discriminator_loss.current_weight)
 
         self.opt_D.zero_grad()
         self.scaler_D.scale(loss_D).backward()
@@ -61,23 +78,17 @@ class Pix2PixTrainingStep:
         with autocast(device_type=self.device.type, enabled=self.amp_enabled):
             fake = self.generator(x)
             D_fake = self.discriminator(x, fake)
-            loss_G = self.loss_fn.generator_loss(D_fake, fake, y)
-            component_raw: dict[str, float] = {}
-            component_weighted: dict[str, float] = {}
-            component_current_weight: dict[str, float] = {}
-            for term in self.generator_loss_terms:
-                result = evaluate_loss_term(
-                    term,
-                    fake,
-                    y,
-                    epoch=epoch,
-                    global_step=global_step,
-                    masks=masks,
-                )
-                loss_G = loss_G + result.weighted
-                component_raw[result.name] = float(result.raw.detach().item())
-                component_weighted[result.name] = float(result.weighted.detach().item())
-                component_current_weight[result.name] = result.current_weight
+            context = LossEvaluationContext(epoch=epoch, global_step=global_step, masks=masks)
+            generator_loss = self.loss_evaluator.generator_total(
+                prediction=fake,
+                target=y,
+                discriminator_fake=D_fake,
+                context=context,
+            )
+            loss_G = generator_loss.total
+            component_raw.update(generator_loss.raw)
+            component_weighted.update(generator_loss.weighted)
+            component_current_weight.update(generator_loss.current_weight)
 
         self.opt_G.zero_grad()
         self.scaler_G.scale(loss_G).backward()

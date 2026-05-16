@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 ModelName = Literal["pix2pix"]
-GanLossName = Literal["bce"]
 NormName = Literal["batch", "instance"]
 
 
@@ -33,4 +32,3 @@ class ModelConfig:
     name: ModelName = "pix2pix"
     generator: GeneratorConfig = field(default_factory=GeneratorConfig)
     discriminator: DiscriminatorConfig = field(default_factory=DiscriminatorConfig)
-    gan_loss: GanLossName = "bce"

@@ -36,7 +36,6 @@ def _make_training_config(**overrides: object) -> TrainingConfig:
         "lr_d": 2e-4,
         "beta1": 0.5,
         "beta2": 0.999,
-        "l1_weight": 25.0,
         "seed": 42,
         "num_workers": 4,
         "validate_rate": 10,
@@ -52,7 +51,6 @@ def _make_training_config(**overrides: object) -> TrainingConfig:
         lr_d=defaults["lr_d"],  # type: ignore[arg-type]
         beta1=defaults["beta1"],  # type: ignore[arg-type]
         beta2=defaults["beta2"],  # type: ignore[arg-type]
-        l1_weight=defaults["l1_weight"],  # type: ignore[arg-type]
         seed=defaults["seed"],  # type: ignore[arg-type]
         num_workers=defaults["num_workers"],  # type: ignore[arg-type]
         validate_rate=defaults["validate_rate"],  # type: ignore[arg-type]
@@ -120,7 +118,6 @@ def test_run_config_model_explicit_contract_parses(tmp_path: Path) -> None:
             ndf: 32
             norm: batch
             use_sigmoid: false
-          gan_loss: bce
         training:
           epochs: 1
     """,
@@ -131,7 +128,6 @@ def test_run_config_model_explicit_contract_parses(tmp_path: Path) -> None:
     assert run_config.model.generator.norm == "instance"
     assert run_config.model.generator.dropout is True
     assert run_config.model.discriminator.norm == "batch"
-    assert run_config.model.gan_loss == "bce"
 
 
 def test_training_from_run_yaml_defaults(tmp_path: Path) -> None:
@@ -152,7 +148,6 @@ def test_training_from_run_yaml_defaults(tmp_path: Path) -> None:
     config = run_config.training
     assert config.batch_size == 8
     assert config.lr_g == pytest.approx(2e-4)
-    assert config.l1_weight == pytest.approx(25.0)
     assert config.log_rate == 15
     assert config.resume is None
     assert run_config.losses is None
@@ -475,7 +470,7 @@ def test_training_from_run_yaml_section(tmp_path: Path) -> None:
         training:
           epochs: 30
           batch_size: 2
-          l1_weight: 50
+          log_rate: 3
     """,
     )
 
@@ -486,7 +481,7 @@ def test_training_from_run_yaml_section(tmp_path: Path) -> None:
     assert run_config.training is not None
     assert run_config.training.epochs == 30
     assert run_config.training.batch_size == 2
-    assert run_config.training.l1_weight == pytest.approx(50)
+    assert run_config.training.log_rate == 3
 
 
 def test_inference_from_run_yaml_section(tmp_path: Path) -> None:
@@ -513,7 +508,7 @@ def test_inference_from_run_yaml_section(tmp_path: Path) -> None:
     assert config.checkpoint_path == Path("checkpoints/ep030.pth")
 
 
-def test_training_yaml_rejects_legacy_train_dir_and_val_dir(tmp_path: Path) -> None:
+def test_training_yaml_rejects_train_dir_and_val_dir(tmp_path: Path) -> None:
     yaml_file = tmp_path / "run.yaml"
     write_yaml(
         yaml_file,
@@ -533,7 +528,7 @@ def test_training_yaml_rejects_legacy_train_dir_and_val_dir(tmp_path: Path) -> N
         RunConfig.from_yaml(yaml_file)
 
 
-def test_inference_yaml_rejects_legacy_test_dir(tmp_path: Path) -> None:
+def test_inference_yaml_rejects_test_dir(tmp_path: Path) -> None:
     yaml_file = tmp_path / "run.yaml"
     write_yaml(
         yaml_file,
@@ -625,7 +620,6 @@ def test_inference_unknown_checkpoint_policy_raises(tmp_path: Path) -> None:
         ({"lr_d": -0.1}, "lr_d"),
         ({"beta1": -0.1}, "beta1"),
         ({"beta2": 1.0}, "beta2"),
-        ({"l1_weight": -1.0}, "l1_weight"),
         ({"num_workers": -1}, "num_workers"),
         ({"validate_rate": 0}, "validate_rate"),
         ({"checkpoint_rate": 0}, "checkpoint_rate"),

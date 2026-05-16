@@ -14,11 +14,17 @@ from virtual_staining.training.config import LossMaskConfig, LossTermConfig
 class LossRegistryEntry:
     name: str
     roles: tuple[Literal["generator", "discriminator"], ...]
-    targets: tuple[Literal["image"], ...]
+    targets: tuple[str, ...]
     default_weight: float = 0.0
 
 
 LOSS_REGISTRY: dict[str, LossRegistryEntry] = {
+    "adversarial_bce": LossRegistryEntry(
+        name="adversarial_bce",
+        roles=("generator", "discriminator"),
+        targets=("discriminator_logits",),
+    ),
+    "l1": LossRegistryEntry(name="l1", roles=("generator",), targets=("image",)),
     "ssim": LossRegistryEntry(name="ssim", roles=("generator",), targets=("image",)),
 }
 
@@ -39,6 +45,83 @@ class LossTermResult:
     weighted: torch.Tensor
     current_weight: float
     stage: Literal["generator", "discriminator"] = "generator"
+
+    @property
+    def component_key(self) -> str:
+        return f"{self.stage}_{self.name}"
+
+
+@dataclass(frozen=True)
+class LossEvaluationContext:
+    epoch: int = 0
+    global_step: int | None = None
+    masks: dict[str, torch.Tensor] | None = None
+
+
+@dataclass
+class LossAggregate:
+    total: torch.Tensor
+    raw: dict[str, float]
+    weighted: dict[str, float]
+    current_weight: dict[str, float]
+
+
+class ConfiguredLossEvaluator:
+    """Evaluates configured loss terms for training and validation."""
+
+    def __init__(
+        self,
+        *,
+        generator_terms: tuple[LossTermConfig, ...] = (),
+        discriminator_terms: tuple[LossTermConfig, ...] = (),
+    ) -> None:
+        self.generator_terms = generator_terms
+        self.discriminator_terms = discriminator_terms
+
+    def generator_total(
+        self,
+        *,
+        prediction: torch.Tensor,
+        target: torch.Tensor,
+        discriminator_fake: torch.Tensor,
+        context: LossEvaluationContext,
+    ) -> LossAggregate:
+        total = discriminator_fake.sum() * 0.0
+        results: list[LossTermResult] = []
+        for term in self.generator_terms:
+            result = evaluate_generator_loss_term(
+                term,
+                prediction,
+                target,
+                discriminator_fake=discriminator_fake,
+                epoch=context.epoch,
+                global_step=context.global_step,
+                masks=context.masks,
+            )
+            total = total + result.weighted
+            results.append(result)
+        return _aggregate_loss_results(total, results)
+
+    def discriminator_total(
+        self,
+        *,
+        discriminator_real: torch.Tensor,
+        discriminator_fake: torch.Tensor,
+        context: LossEvaluationContext,
+    ) -> LossAggregate:
+        total = discriminator_real.sum() * 0.0
+        results: list[LossTermResult] = []
+        for term in self.discriminator_terms:
+            result = evaluate_discriminator_loss_term(
+                term,
+                discriminator_real,
+                discriminator_fake,
+                epoch=context.epoch,
+                global_step=context.global_step,
+            )
+            total = total + result.weighted
+            results.append(result)
+        return _aggregate_loss_results(total, results)
 
 
 class SsimLoss(nn.Module):
@@ -161,6 +244,15 @@ def build_ssim_loss(params: dict[str, Any] | None = None) -> SsimLoss:
     )
 
 
+def build_l1_loss(params: dict[str, Any] | None = None) -> nn.L1Loss:
+    params = {} if params is None else params
+    reduction = cast(
+        Literal["mean", "sum", "none"],
+        _ssim_choice(params.get("reduction", "mean"), "reduction", {"mean", "sum", "none"}),
+    )
+    return nn.L1Loss(reduction=reduction)
+
+
 def evaluate_loss_term(
     term: LossTermConfig,
     prediction: torch.Tensor,
@@ -169,17 +261,70 @@ def evaluate_loss_term(
     epoch: int = 0,
     global_step: int | None = None,
     masks: dict[str, torch.Tensor] | None = None,
+    discriminator_fake: torch.Tensor | None = None,
+) -> LossTermResult:
+    return evaluate_generator_loss_term(
+        term,
+        prediction,
+        target,
+        discriminator_fake=discriminator_fake,
+        epoch=epoch,
+        global_step=global_step,
+        masks=masks,
+    )
+
+
+def evaluate_generator_loss_term(
+    term: LossTermConfig,
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    discriminator_fake: torch.Tensor | None = None,
+    epoch: int = 0,
+    global_step: int | None = None,
+    masks: dict[str, torch.Tensor] | None = None,
 ) -> LossTermResult:
     current_weight = term.current_weight(epoch=epoch, global_step=global_step)
     if term.name == "ssim":
-        raw = _evaluate_ssim_term(term, prediction, target, masks=masks)
+        raw = _ensure_scalar(_evaluate_ssim_term(term, prediction, target, masks=masks))
+    elif term.name == "l1":
+        raw = _ensure_scalar(_evaluate_l1_term(term, prediction, target, masks=masks))
+    elif term.name == "adversarial_bce":
+        if discriminator_fake is None:
+            raise ValueError("generator adversarial_bce loss requires discriminator_fake logits")
+        raw = _bce_with_logits(discriminator_fake, torch.ones_like(discriminator_fake))
+    else:
+        raise ValueError(f"Unsupported generator loss term: {term.name!r}")
+    return LossTermResult(
+        name=term.name,
+        raw=raw,
+        weighted=raw * current_weight,
+        current_weight=current_weight,
+        stage="generator",
+    )
+
+
+def evaluate_discriminator_loss_term(
+    term: LossTermConfig,
+    discriminator_real: torch.Tensor,
+    discriminator_fake: torch.Tensor,
+    *,
+    epoch: int = 0,
+    global_step: int | None = None,
+) -> LossTermResult:
+    current_weight = term.current_weight(epoch=epoch, global_step=global_step)
+    if term.name == "adversarial_bce":
+        raw = _bce_with_logits(
+            discriminator_real, torch.ones_like(discriminator_real)
+        ) + _bce_with_logits(discriminator_fake, torch.zeros_like(discriminator_fake))
         return LossTermResult(
             name=term.name,
             raw=raw,
             weighted=raw * current_weight,
             current_weight=current_weight,
+            stage="discriminator",
         )
-    raise ValueError(f"Unsupported loss term: {term.name!r}")
+    raise ValueError(f"Unsupported discriminator loss term: {term.name!r}")
 
 
 def _evaluate_ssim_term(
@@ -204,6 +349,63 @@ def _evaluate_ssim_term(
         masks[mask_config.source],
         mask_config=mask_config,
         reduction=cast(Literal["mean", "sum", "none"], loss.reduction),
+    )
+
+
+def _evaluate_l1_term(
+    term: LossTermConfig,
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    masks: dict[str, torch.Tensor] | None,
+) -> torch.Tensor:
+    mask_config = term.mask
+    if not mask_config.enabled:
+        return build_l1_loss(term.params)(prediction, target)
+    if masks is None or mask_config.source not in masks:
+        raise ValueError(
+            f"loss '{term.name}' requires batch mask '{mask_config.source}', "
+            "but the training batch did not provide it"
+        )
+    loss_map = torch.abs(prediction - target)
+    reduction = cast(
+        Literal["mean", "sum", "none"],
+        _ssim_choice(term.params.get("reduction", "mean"), "reduction", {"mean", "sum", "none"}),
+    )
+    return reduce_masked_loss(
+        loss_map,
+        masks[mask_config.source],
+        mask_config=mask_config,
+        reduction=reduction,
+    )
+
+
+def _bce_with_logits(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    return F.binary_cross_entropy_with_logits(logits, labels)
+
+
+def _ensure_scalar(value: torch.Tensor) -> torch.Tensor:
+    if value.ndim == 0:
+        return value
+    return value.mean()
+
+
+def _aggregate_loss_results(
+    total: torch.Tensor,
+    results: list[LossTermResult],
+) -> LossAggregate:
+    raw: dict[str, float] = {}
+    weighted: dict[str, float] = {}
+    current_weight: dict[str, float] = {}
+    for result in results:
+        raw[result.component_key] = float(result.raw.detach().item())
+        weighted[result.component_key] = float(result.weighted.detach().item())
+        current_weight[result.component_key] = result.current_weight
+    return LossAggregate(
+        total=total,
+        raw=raw,
+        weighted=weighted,
+        current_weight=current_weight,
     )
 
 
@@ -284,36 +486,3 @@ def _rgb_to_gray_tensor(tensor: torch.Tensor) -> torch.Tensor:
         raise ValueError("gray channel_mode requires either 1 or at least 3 channels")
     weights = tensor.new_tensor([0.299, 0.587, 0.114]).view(1, 3, 1, 1)
     return (tensor[:, :3] * weights).sum(dim=1, keepdim=True)
-
-
-class Pix2PixLoss:
-    """Computes Pix2Pix discriminator and generator losses."""
-
-    def __init__(self, l1_weight: float = 25.0) -> None:
-        self.l1_weight = l1_weight
-        self._bce = nn.BCEWithLogitsLoss()
-        self._l1 = nn.L1Loss()
-
-    def discriminator_loss(
-        self,
-        D_real: torch.Tensor,
-        D_fake: torch.Tensor,
-    ) -> torch.Tensor:
-        real_label = torch.ones_like(D_real)
-        fake_label = torch.zeros_like(D_fake)
-        return self._bce(D_real, real_label) + self._bce(D_fake, fake_label)
-
-    def generator_loss(
-        self,
-        D_fake: torch.Tensor,
-        fake: torch.Tensor,
-        real: torch.Tensor,
-    ) -> torch.Tensor:
-        real_label = torch.ones_like(D_fake)
-        return self._bce(D_fake, real_label) + self._l1(fake, real) * self.l1_weight
-
-
-def build_gan_loss(name: Literal["bce"], l1_weight: float = 25.0) -> Pix2PixLoss:
-    if name == "bce":
-        return Pix2PixLoss(l1_weight=l1_weight)
-    raise ValueError(f"Unsupported gan_loss: {name!r}")

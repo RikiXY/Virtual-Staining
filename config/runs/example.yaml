@@ -30,10 +30,9 @@ model:
     in_channels: 6
     ndf: 64
     norm: instance
-    # Must stay false with the current training loss.
-    # BCEWithLogitsLoss applies sigmoid internally.
+    # Must stay false when using adversarial_bce loss terms.
+    # BCE-with-logits applies sigmoid internally.
     use_sigmoid: false
-  gan_loss: bce
 
 preprocessing:
   # Full-size paired input files inside dataset_root.
@@ -83,7 +82,6 @@ training:
   lr_d: 0.0002
   beta1: 0.5
   beta2: 0.999
-  l1_weight: 25.0
 
   seed: 42
   num_workers: 4
@@ -93,31 +91,33 @@ training:
   log_rate: 15
   resume: null
 
-# Optional composable loss registry. When omitted, training keeps the legacy
-# Pix2Pix BCE adversarial + training.l1_weight reconstruction path.
-# Explicitly listed terms must declare weight. Unlisted registry losses are
-# absent and inactive.
-#
-# losses:
-#   generator:
-#     - name: ssim
-#       weight: 1.0
-#       enabled: true
-#       params:
-#         data_range: 1.0
-#         window_size: 11
-#         sigma: 1.5
-#         channel_mode: rgb
-#         reduction: mean
-#         mask:
-#           enabled: false
-#           source: foreground_mask
-#           foreground_weight: 1.0
-#           background_weight: 0.25
-#           ignore_empty_mask: true
-#       schedule:
-#         type: constant
-#   discriminator: []
+losses:
+  generator:
+    - name: adversarial_bce
+      weight: 1.0
+    - name: l1
+      weight: 25.0
+    # Optional SSIM term. Leave disabled or set a nonzero weight intentionally.
+    - name: ssim
+      weight: 0.0
+      enabled: false
+      params:
+        data_range: 1.0
+        window_size: 11
+        sigma: 1.5
+        channel_mode: rgb
+        reduction: mean
+        mask:
+          enabled: false
+          source: foreground_mask
+          foreground_weight: 1.0
+          background_weight: 0.25
+          ignore_empty_mask: true
+      schedule:
+        type: constant
+  discriminator:
+    - name: adversarial_bce
+      weight: 1.0
 
 inference:
   # Supported policies:

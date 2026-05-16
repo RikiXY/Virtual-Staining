@@ -7,7 +7,7 @@ Tests are grouped by the subsystem they exercise:
 - `data/`: manifests, preprocessing, datasets, and dataset build outputs.
 - `evaluation/`: metrics, summaries, plotting, ranking, and comparisons.
 - `experiment/`: metadata, environment snapshots, and reproducibility artifacts.
-- `inference/`: inference outputs and inference/evaluation compatibility.
+- `inference/`: inference outputs and inference/evaluation contracts.
 - `models/`: model configuration and factory behavior.
 - `smoke/`: end-to-end pipeline smoke tests.
 - `training/`: checkpoints, runners, trainer behavior, and training result contracts.

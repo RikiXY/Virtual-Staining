@@ -14,7 +14,6 @@ _TRAINING_KEYS: frozenset[str] = frozenset(
         "lr_d",
         "beta1",
         "beta2",
-        "l1_weight",
         "seed",
         "num_workers",
         "validate_rate",
@@ -35,8 +34,10 @@ _LOSS_MASK_KEYS: frozenset[str] = frozenset(
 _SSIM_PARAM_KEYS: frozenset[str] = frozenset(
     {"data_range", "window_size", "sigma", "channel_mode", "reduction", "mask"}
 )
+_L1_PARAM_KEYS: frozenset[str] = frozenset({"reduction", "mask"})
+_ADVERSARIAL_BCE_PARAM_KEYS: frozenset[str] = frozenset()
 
-LossName = Literal["ssim"]
+LossName = Literal["adversarial_bce", "l1", "ssim"]
 LossScheduleType = Literal[
     "constant",
     "linear_warmup",
@@ -171,15 +172,25 @@ class LossTermConfig:
     schedule: LossScheduleConfig = field(default_factory=LossScheduleConfig)
 
     def validate(self, role: LossRole) -> None:
-        if self.name != "ssim":
-            raise ValueError("loss name must be one of ['ssim']")
-        if role != "generator":
+        if self.name not in {"adversarial_bce", "l1", "ssim"}:
+            raise ValueError("loss name must be one of ['adversarial_bce', 'l1', 'ssim']")
+        if self.name in {"l1", "ssim"} and role != "generator":
+            raise ValueError(f"loss '{self.name}' is supported only in losses.generator")
+        if self.name == "ssim" and role != "generator":
             raise ValueError("loss 'ssim' is supported only in losses.generator")
         if self.weight < 0:
             raise ValueError(f"loss '{self.name}' weight must be greater than or equal to 0")
         self.schedule.validate()
-        reject_unknown_keys(self.params, _SSIM_PARAM_KEYS, f"loss '{self.name}' params")
-        _validate_ssim_params(self.params)
+        if self.name == "ssim":
+            reject_unknown_keys(self.params, _SSIM_PARAM_KEYS, f"loss '{self.name}' params")
+            _validate_ssim_params(self.params)
+        elif self.name == "l1":
+            reject_unknown_keys(self.params, _L1_PARAM_KEYS, f"loss '{self.name}' params")
+            _validate_l1_params(self.params)
+        else:
+            reject_unknown_keys(
+                self.params, _ADVERSARIAL_BCE_PARAM_KEYS, f"loss '{self.name}' params"
+            )
 
     @property
     def is_active(self) -> bool:
@@ -267,7 +278,7 @@ def _parse_loss_term(raw: Any, context: str) -> LossTermConfig:
     if "weight" not in raw:
         raise ValueError(f"{context}.weight is required")
 
-    name = _parse_choice(raw["name"], f"{context}.name", {"ssim"})
+    name = _parse_choice(raw["name"], f"{context}.name", {"adversarial_bce", "l1", "ssim"})
     params = raw.get("params", {})
     if params is None:
         params = {}
@@ -382,6 +393,14 @@ def _validate_ssim_params(params: dict[str, Any]) -> None:
     parse_loss_mask_config(params.get("mask"), "loss 'ssim' params.mask")
 
 
+def _validate_l1_params(params: dict[str, Any]) -> None:
+    reduction = params.get("reduction", "mean")
+    if reduction not in {"mean", "sum", "none"}:
+        raise ValueError("loss 'l1' params.reduction must be one of ['mean', 'none', 'sum']")
+
+    parse_loss_mask_config(params.get("mask"), "loss 'l1' params.mask")
+
+
 @dataclass(frozen=True)
 class TrainingConfig:
     batch_size: int
@@ -390,7 +409,6 @@ class TrainingConfig:
     lr_d: float
     beta1: float
     beta2: float
-    l1_weight: float
     seed: int | None
     num_workers: int
     validate_rate: int
@@ -416,5 +434,3 @@ class TrainingConfig:
         for field_name, value in (("beta1", self.beta1), ("beta2", self.beta2)):
             if not (0.0 <= value < 1.0):
                 raise ValueError(f"{field_name} must be in [0, 1)")
-        if self.l1_weight < 0:
-            raise ValueError("l1_weight must be greater than or equal to 0")

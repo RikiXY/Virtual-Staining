@@ -62,6 +62,8 @@ def run_training(
     """Build all training components, persist provenance, and execute training."""
     if config.training is None:
         raise ValueError("RunConfig.training must be present for run_training().")
+    if config.losses is None:
+        raise ValueError("RunConfig.losses must be present for run_training().")
 
     if reporter is None:
         reporter = NullReporter()
@@ -337,7 +339,6 @@ def _resume_from_checkpoint(
         scaler_D=trainer._scaler_D,
         image_size=image_size,
         device=device,
-        l1_weight=trainer.config.l1_weight,
         lr_g=trainer.config.lr_g,
         lr_d=trainer.config.lr_d,
         beta1=trainer.config.beta1,

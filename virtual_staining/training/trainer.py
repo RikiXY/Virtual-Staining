@@ -18,7 +18,10 @@ from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.models.config import ModelConfig
 from virtual_staining.training.checkpoints import BEST_CHECKPOINT_POLICY, CheckpointManager
 from virtual_staining.training.config import LossConfig, TrainingConfig
-from virtual_staining.training.losses import build_gan_loss, evaluate_loss_term
+from virtual_staining.training.losses import (
+    ConfiguredLossEvaluator,
+    LossEvaluationContext,
+)
 from virtual_staining.training.results import EpochMetrics, TrainingResult
 from virtual_staining.training.steps import Pix2PixTrainingStep
 
@@ -100,7 +103,9 @@ def _unpack_batch(
 def _configured_loss_names(losses: LossConfig | None) -> list[str]:
     if losses is None:
         return []
-    return [term.name for term in losses.generator]
+    names = [f"generator_{term.name}" for term in losses.generator]
+    names.extend(f"discriminator_{term.name}" for term in losses.discriminator)
+    return names
 
 
 def _metrics_fieldnames(loss_names: list[str]) -> list[str]:
@@ -332,8 +337,12 @@ class Trainer:
         )
         self._scaler_G = GradScaler(enabled=self._amp_enabled)
         self._scaler_D = GradScaler(enabled=self._amp_enabled)
-        self._loss_fn = build_gan_loss(model_config.gan_loss, l1_weight=config.l1_weight)
         generator_loss_terms = losses.generator if losses is not None else ()
+        discriminator_loss_terms = losses.discriminator if losses is not None else ()
+        self._loss_evaluator = ConfiguredLossEvaluator(
+            generator_terms=generator_loss_terms,
+            discriminator_terms=discriminator_loss_terms,
+        )
         self._step = Pix2PixTrainingStep(
             generator=generator,
             discriminator=discriminator,
@@ -341,10 +350,10 @@ class Trainer:
             opt_D=self._opt_D,
             scaler_G=self._scaler_G,
             scaler_D=self._scaler_D,
-            loss_fn=self._loss_fn,
             device=device,
             amp_enabled=self._amp_enabled,
             generator_loss_terms=generator_loss_terms,
+            discriminator_loss_terms=discriminator_loss_terms,
         )
 
         self._logs_dir = run_paths.logs_dir
@@ -362,8 +371,6 @@ class Trainer:
             image_size=image_size,
             device=device,
             model_name=model_config.name,
-            gan_loss=model_config.gan_loss,
-            l1_weight=config.l1_weight,
             lr_g=config.lr_g,
             lr_d=config.lr_d,
             beta1=config.beta1,
@@ -439,8 +446,7 @@ class Trainer:
             progress_tracker.start()
 
             logger.info(
-                "Hyperparameters | l1_weight=%s | lr_g=%s | lr_d=%s | beta1=%s | beta2=%s",
-                self.config.l1_weight,
+                "Hyperparameters | lr_g=%s | lr_d=%s | beta1=%s | beta2=%s",
                 self.config.lr_g,
                 self.config.lr_d,
                 self.config.beta1,
@@ -674,28 +680,29 @@ class Trainer:
                     fake = self.generator(x)
                     D_real = self.discriminator(x, y)
                     D_fake = self.discriminator(x, fake)
-                    loss_D = self._loss_fn.discriminator_loss(D_real, D_fake)
-                    loss_G = self._loss_fn.generator_loss(D_fake, fake, y)
-                    if self.losses is not None:
-                        for term in self.losses.generator:
-                            result = evaluate_loss_term(
-                                term,
-                                fake,
-                                y,
-                                epoch=epoch,
-                                global_step=None,
-                                masks=masks,
-                            )
-                            loss_G = loss_G + result.weighted
-                            raw_totals[result.name] = raw_totals.get(result.name, 0.0) + float(
-                                result.raw.detach().item()
-                            )
-                            weighted_totals[result.name] = weighted_totals.get(
-                                result.name, 0.0
-                            ) + float(result.weighted.detach().item())
-                            current_weight_totals[result.name] = (
-                                current_weight_totals.get(result.name, 0.0) + result.current_weight
-                            )
+                    context = LossEvaluationContext(epoch=epoch, masks=masks)
+                    discriminator_loss = self._loss_evaluator.discriminator_total(
+                        discriminator_real=D_real,
+                        discriminator_fake=D_fake,
+                        context=context,
+                    )
+                    generator_loss = self._loss_evaluator.generator_total(
+                        prediction=fake,
+                        target=y,
+                        discriminator_fake=D_fake,
+                        context=context,
+                    )
+                    loss_D = discriminator_loss.total
+                    loss_G = generator_loss.total
+                    _accumulate_components(raw_totals, discriminator_loss.raw)
+                    _accumulate_components(weighted_totals, discriminator_loss.weighted)
+                    _accumulate_components(
+                        current_weight_totals,
+                        discriminator_loss.current_weight,
+                    )
+                    _accumulate_components(raw_totals, generator_loss.raw)
+                    _accumulate_components(weighted_totals, generator_loss.weighted)
+                    _accumulate_components(current_weight_totals, generator_loss.current_weight)
 
                 total_loss_D += loss_D.item()
                 total_loss_G += loss_G.item()

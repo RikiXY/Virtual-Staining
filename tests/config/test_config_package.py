@@ -99,7 +99,6 @@ training:
     assert data["model"]["generator"]["norm"] == "batch"
     assert data["model"]["generator"]["dropout"] is False
     assert data["model"]["discriminator"]["norm"] == "instance"
-    assert data["model"]["gan_loss"] == "bce"
     assert data["training"]["epochs"] == 10
     assert "seed" not in data["training"]
     assert "resume" not in data["training"]
@@ -371,7 +370,6 @@ model:
   discriminator:
     norm: batch
     use_sigmoid: false
-  gan_loss: bce
 training:
   epochs: 1
 """,
@@ -398,7 +396,6 @@ training:
             "norm": "batch",
             "use_sigmoid": False,
         },
-        "gan_loss": "bce",
     }
 
 
@@ -406,7 +403,7 @@ training:
     ("block", "match"),
     [
         ("name: cyclegan", "model.name"),
-        ("gan_loss: hinge", "model.gan_loss"),
+        ("unexpected_model_key: hinge", "unexpected_model_key"),
     ],
 )
 def test_model_top_level_choice_validation_rejects_invalid_values(
