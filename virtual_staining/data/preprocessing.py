@@ -15,7 +15,7 @@ import numpy as np
 # Only the N largest connected components are considered; smaller ones are noise.
 N_TOP_COMPONENTS = 10
 # Components whose ROI std dev is below this are uniform (background) and are masked out.
-MIN_STD_DEV = 10
+MIN_STD_DEV = 15
 
 # Each (divisor, grid) pair controls one mask pass: the image is divided into a grid of
 # (grid x grid) tiles, each of size (H/divisor x W/divisor). Using multiple passes at
