@@ -12,6 +12,7 @@ class LossRegistryEntry:
     name: str
     roles: tuple[Literal["generator", "discriminator"], ...]
     targets: tuple[Literal["image"], ...]
+    default_weight: float = 0.0
 
 
 LOSS_REGISTRY: dict[str, LossRegistryEntry] = {

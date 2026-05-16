@@ -106,6 +106,28 @@ training:
     assert "losses" not in data
 
 
+def test_run_config_to_yaml_dict_serializes_explicit_zero_loss_weight(tmp_path: Path) -> None:
+    yaml_path = tmp_path / "run.yaml"
+    write_yaml(
+        yaml_path,
+        """
+dataset_root: /tmp/ds
+results_path: /tmp/results
+run_name: test_run
+training:
+  epochs: 10
+losses:
+  generator:
+    - name: ssim
+      weight: 0.0
+""",
+    )
+
+    data = RunConfig.from_yaml(yaml_path).to_yaml_dict()
+
+    assert data["losses"]["generator"][0]["weight"] == 0.0
+
+
 def test_project_config_default_manifest_path(tmp_path: Path) -> None:
     yaml_path = tmp_path / "run.yaml"
     write_yaml(

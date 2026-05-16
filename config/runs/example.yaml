@@ -95,6 +95,8 @@ training:
 
 # Optional composable loss registry. When omitted, training keeps the legacy
 # Pix2Pix BCE adversarial + training.l1_weight reconstruction path.
+# Explicitly listed terms must declare weight. Unlisted registry losses are
+# absent and inactive.
 #
 # losses:
 #   generator:

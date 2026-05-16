@@ -163,6 +163,8 @@ def test_loss_config_defaults_to_empty_lists() -> None:
 
     assert config.generator == ()
     assert config.discriminator == ()
+    assert config.active_generator == ()
+    assert config.active_discriminator == ()
     assert config.to_yaml_dict() == {"generator": [], "discriminator": []}
 
 
@@ -201,13 +203,15 @@ def test_run_config_from_yaml_parses_explicit_ssim_loss(tmp_path: Path) -> None:
     assert term.name == "ssim"
     assert term.weight == pytest.approx(1.0)
     assert term.enabled is True
+    assert term.is_active is True
     assert term.target == "image"
     assert term.params["window_size"] == 11
     assert term.schedule.type == "constant"
+    assert run_config.losses.active_generator == (term,)
     assert run_config.losses.discriminator == ()
 
 
-def test_run_config_from_yaml_parses_minimal_ssim_loss_defaults(tmp_path: Path) -> None:
+def test_run_config_from_yaml_requires_explicit_loss_weight(tmp_path: Path) -> None:
     yaml_file = tmp_path / "losses_minimal.yaml"
     write_yaml(
         yaml_file,
@@ -220,18 +224,39 @@ def test_run_config_from_yaml_parses_minimal_ssim_loss_defaults(tmp_path: Path) 
         losses:
           generator:
             - name: ssim
-              weight: 0.5
+    """,
+    )
+
+    with pytest.raises(ValueError, match="weight is required"):
+        RunConfig.from_yaml(yaml_file)
+
+
+def test_zero_weight_and_disabled_losses_are_inactive(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "inactive_losses.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: inactive_losses
+        training:
+          epochs: 1
+        losses:
+          generator:
+            - name: ssim
+              weight: 0.0
+              enabled: true
     """,
     )
 
     run_config = RunConfig.from_yaml(yaml_file)
 
     assert run_config.losses is not None
-    assert run_config.losses.generator[0].enabled is True
-    assert run_config.losses.generator[0].target == "image"
-    assert run_config.losses.generator[0].params == {}
-    assert run_config.losses.generator[0].schedule.type == "constant"
-    assert run_config.losses.discriminator == ()
+    term = run_config.losses.generator[0]
+    assert term.enabled is True
+    assert term.weight == pytest.approx(0.0)
+    assert term.is_active is False
+    assert run_config.losses.active_generator == ()
 
 
 def test_loss_config_to_yaml_dict_preserves_explicit_losses(tmp_path: Path) -> None:

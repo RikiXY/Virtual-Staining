@@ -89,7 +89,10 @@ values that were not explicitly set by the user.
 Optional composable losses are recorded under top-level `losses.generator` and
 `losses.discriminator` lists. In the current registry contract, `ssim` is the
 only accepted explicit loss term, it is generator-side only, and its schedule
-type is `constant`.
+type is `constant`. Registered losses have a default weight of `0.0`; a term is
+active only when it is explicitly listed, `enabled` is `true`, and its current
+weight is nonzero. Explicitly listed terms must declare `weight`; unlisted
+registry entries remain absent and inactive.
 
 ```yaml
 losses:

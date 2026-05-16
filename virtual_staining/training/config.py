@@ -71,6 +71,10 @@ class LossTermConfig:
         self.schedule.validate()
         reject_unknown_keys(self.params, _SSIM_PARAM_KEYS, f"loss '{self.name}' params")
 
+    @property
+    def is_active(self) -> bool:
+        return self.enabled and self.weight != 0.0
+
     def to_yaml_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -94,6 +98,14 @@ class LossConfig:
             term.validate("generator")
         for term in self.discriminator:
             term.validate("discriminator")
+
+    @property
+    def active_generator(self) -> tuple[LossTermConfig, ...]:
+        return tuple(term for term in self.generator if term.is_active)
+
+    @property
+    def active_discriminator(self) -> tuple[LossTermConfig, ...]:
+        return tuple(term for term in self.discriminator if term.is_active)
 
     def to_yaml_dict(self) -> dict[str, Any]:
         return {
