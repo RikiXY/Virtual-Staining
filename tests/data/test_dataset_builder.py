@@ -552,6 +552,35 @@ def test_stream_patches_to_disk_writes_valid_patches_to_final_splits(
     assert not (root / "discarded_patches" / "target").exists()
 
 
+def test_stream_patches_to_disk_writes_foreground_masks_when_enabled(
+    builder_config: PreprocessingConfig,
+) -> None:
+    config = dataclasses.replace(builder_config, save_masks=True)
+    builder = DatasetBuilder(config)
+
+    with _patched_builder_dependencies():
+        builder.compute_masks()
+        builder.align()
+        valid_rows, discarded_rows = builder._stream_patches_to_disk()
+
+    assert len(valid_rows) == 81
+    assert discarded_rows == []
+
+    root = config.dataset_root
+    split_files = [
+        path for split in ("train", "val", "test") for path in (root / "splits" / split).iterdir()
+    ]
+    assert len(split_files) == len(valid_rows) * 3
+    for row in valid_rows:
+        split = row["split"]
+        sample_id = row["sample_id"]
+        mask_path = root / "splits" / split / f"{sample_id}_foreground_mask.png"
+        assert mask_path.exists()
+        mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+        assert mask is not None
+        assert mask.shape == config.image_size[::-1]
+
+
 def test_stream_patches_to_disk_uses_min_foreground_ratio_for_source_prefilter(
     builder_config: PreprocessingConfig,
 ) -> None:

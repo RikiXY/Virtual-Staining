@@ -134,7 +134,9 @@ Mask weighting is optional. When `params.mask.enabled` is `true`, the training
 dataset must provide a `foreground_mask` tensor for every batch. Missing masks
 raise an error instead of being treated as all-foreground. Current datasets look
 for sidecar patch masks named `<sample_id>_foreground_mask<ext>` in the same
-split directory.
+split directory. `vs-prepare` writes those sidecar masks for accepted patches
+when `preprocessing.save_masks: true`; the sidecar mask is the aligned target
+foreground mask for that patch.
 
 If `losses` is omitted, the training loop keeps the legacy Pix2Pix objective
 defined by `model.gan_loss: bce` and `training.l1_weight`.

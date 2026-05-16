@@ -96,6 +96,10 @@ def _modality_from_filename(path: Path) -> str:
     return path.stem
 
 
+def _foreground_mask_patch_name(sample_id: str, suffix: str) -> str:
+    return f"{sample_id}_foreground_mask{suffix}"
+
+
 def _read_image_size(path: Path) -> tuple[int, int]:
     """
     Read image size from metadata only.
@@ -558,6 +562,7 @@ class DatasetBuilder:
             sample_id = f"{x:05}_{y:05}"
             patch_source_name = f"{x:05}_{y:05}_source{self._source_suffix}"
             patch_target_name = f"{x:05}_{y:05}_target{self._target_suffix}"
+            patch_mask_name = _foreground_mask_patch_name(sample_id, self._target_suffix)
 
             is_valid, debug_info = is_valid_patch_pair(
                 source_img=src,
@@ -581,6 +586,8 @@ class DatasetBuilder:
                 split_dir = split_dirs[split_name]
                 cv2.imwrite(str(split_dir / patch_source_name), src)
                 cv2.imwrite(str(split_dir / patch_target_name), tgt)
+                if self.config.save_masks:
+                    cv2.imwrite(str(split_dir / patch_mask_name), tgt_mask)
                 valid_rows.append(
                     {
                         "sample_id": sample_id,
