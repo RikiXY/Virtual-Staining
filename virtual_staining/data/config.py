@@ -31,6 +31,7 @@ _PREPROCESSING_KEYS: frozenset[str] = frozenset(
         "margin",
         "seed",
         "save_masks",
+        "save_discarded_patches",
         "mask_scale",
         "max_memory_gb",
         "train_ratio",
@@ -66,6 +67,7 @@ class PreprocessingConfig:
     margin: int = 200
     seed: int | None = None
     save_masks: bool = False
+    save_discarded_patches: bool = False
     mask_scale: float = 1.0
     max_memory_gb: float | None = None
     train_ratio: float = 0.8
@@ -140,6 +142,7 @@ class PreprocessingConfig:
             margin=getattr(args, "margin", 200),
             seed=getattr(args, "seed", None),
             save_masks=getattr(args, "save_masks", False),
+            save_discarded_patches=getattr(args, "save_discarded_patches", False),
             mask_scale=getattr(args, "mask_scale", 1.0),
             max_memory_gb=getattr(args, "max_memory_gb", None),
             train_ratio=getattr(args, "train_ratio", 0.8),
@@ -166,6 +169,7 @@ class PreprocessingConfig:
             "margin": self.margin,
             "seed": self.seed,
             "save_masks": self.save_masks,
+            "save_discarded_patches": self.save_discarded_patches,
             "mask_scale": self.mask_scale,
             "max_memory_gb": self.max_memory_gb,
             "train_ratio": self.train_ratio,
@@ -198,6 +202,10 @@ def load_preprocessing_config(path: str | Path) -> PreprocessingConfig:
         margin=int(data.get("margin", 200)),
         seed=data.get("seed"),
         save_masks=parse_bool_strict(data.get("save_masks", False), "save_masks"),
+        save_discarded_patches=parse_bool_strict(
+            data.get("save_discarded_patches", False),
+            "save_discarded_patches",
+        ),
         mask_scale=float(data.get("mask_scale", 1.0)),
         max_memory_gb=None if raw_max_memory_gb is None else float(raw_max_memory_gb),
         train_ratio=float(data.get("train_ratio", 0.8)),

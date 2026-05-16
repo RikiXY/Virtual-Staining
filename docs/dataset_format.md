@@ -14,8 +14,8 @@ local_workspace/datasets/<name>/
 │   ├── val/                    # accepted validation-split patch pairs
 │   └── test/                   # accepted test-split patch pairs
 ├── discarded_patches/
-│   ├── source/                 # source patches that failed quality filters
-│   ├── target/                 # corresponding target patches
+│   ├── source/                 # optional discarded source patch images
+│   ├── target/                 # optional discarded target patch images
 │   └── discarded_log.csv       # per-patch filter diagnostics
 ├── manifests/
 │   ├── manifest.csv            # all accepted patches with split assignment
@@ -113,6 +113,10 @@ The same columns as `manifest.csv` apply.
 
 Detailed per-patch filter diagnostics (foreground ratio, white ratio, component
 ratio, and failure reasons) are written to `discarded_patches/discarded_log.csv`.
+This CSV is the canonical audit trail for discarded patches and is always
+written. Discarded patch image files are written only when
+`preprocessing.save_discarded_patches: true`; otherwise the `source/` and
+`target/` subdirectories under `discarded_patches/` may be absent.
 
 ## dataset_build.json Fields
 

@@ -59,6 +59,8 @@ of the target image to the source reference frame.
 7. **Manifest writing**: writes accepted-patch records to `manifests/manifest.csv`
    and discarded-patch records to `manifests/discarded_manifest.csv`, with
    per-patch filter diagnostics in `discarded_patches/discarded_log.csv`.
+   Discarded patch images are saved only when `save_discarded_patches` is
+   enabled in preprocessing config.
 
 ## Splits
 

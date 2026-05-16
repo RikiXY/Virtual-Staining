@@ -17,6 +17,7 @@ def _make_namespace(**overrides: object) -> argparse.Namespace:
         target_name="target.tif",
         seed=None,
         save_masks=False,
+        save_discarded_patches=False,
         image_size=[256, 256],
         grid_movement=[256, 256],
         margin=200,
@@ -41,6 +42,7 @@ def test_from_args_basic() -> None:
     assert config.margin == 200
     assert config.seed is None
     assert config.save_masks is False
+    assert config.save_discarded_patches is False
     assert config.mask_scale == pytest.approx(1.0)
     assert config.max_memory_gb is None
 
@@ -91,6 +93,7 @@ def test_from_yaml(tmp_path: Path) -> None:
         margin: 100
         seed: 7
         save_masks: true
+        save_discarded_patches: true
         mask_scale: 0.25
         max_memory_gb: 6.5
         train_ratio: 0.7
@@ -111,6 +114,7 @@ def test_from_yaml(tmp_path: Path) -> None:
     assert config.margin == 100
     assert config.seed == 7
     assert config.save_masks is True
+    assert config.save_discarded_patches is True
     assert config.mask_scale == pytest.approx(0.25)
     assert config.max_memory_gb == pytest.approx(6.5)
     assert config.train_ratio == pytest.approx(0.7)
@@ -129,6 +133,7 @@ def test_from_args_partial_namespace() -> None:
     assert config.margin == 200
     assert config.seed is None
     assert config.save_masks is False
+    assert config.save_discarded_patches is False
     assert config.mask_scale == pytest.approx(1.0)
     assert config.max_memory_gb is None
     assert config.train_ratio == pytest.approx(0.8)
@@ -146,6 +151,7 @@ def test_to_yaml_round_trip(tmp_path: Path) -> None:
         margin=100,
         seed=7,
         save_masks=True,
+        save_discarded_patches=True,
         mask_scale=0.25,
         max_memory_gb=6.5,
         train_ratio=0.7,
@@ -190,6 +196,7 @@ def test_from_yaml_defaults_for_optional_fields(tmp_path: Path) -> None:
     assert config.margin == 200
     assert config.seed is None
     assert config.save_masks is False
+    assert config.save_discarded_patches is False
     assert config.mask_scale == pytest.approx(1.0)
     assert config.max_memory_gb is None
     assert config.train_ratio == pytest.approx(0.8)
@@ -213,6 +220,7 @@ def test_from_run_yaml_section(tmp_path: Path) -> None:
           target_name: he.tif
           grid_movement: [512, 512]
           save_masks: true
+          save_discarded_patches: true
           mask_scale: 0.5
           max_memory_gb: 4
     """,
@@ -225,6 +233,7 @@ def test_from_run_yaml_section(tmp_path: Path) -> None:
     assert config.image_size == (512, 512)
     assert config.grid_movement == (512, 512)
     assert config.save_masks is True
+    assert config.save_discarded_patches is True
     assert config.mask_scale == pytest.approx(0.5)
     assert config.max_memory_gb == pytest.approx(4.0)
 
@@ -365,4 +374,19 @@ def test_from_yaml_string_bool_save_masks_raises(tmp_path: Path) -> None:
     """,
     )
     with pytest.raises(TypeError, match="save_masks"):
+        load_preprocessing_config(yaml_file)
+
+
+def test_from_yaml_string_bool_save_discarded_patches_raises(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "str_bool_discarded.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data/samples
+        source_name: source.tif
+        target_name: target.tif
+        save_discarded_patches: "false"
+    """,
+    )
+    with pytest.raises(TypeError, match="save_discarded_patches"):
         load_preprocessing_config(yaml_file)

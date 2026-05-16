@@ -116,6 +116,7 @@ preprocessing:
   val_ratio: 0.05
   test_ratio: 0.15
   min_foreground_ratio: 0.25
+  save_discarded_patches: false
   seed: 42
 
 training:

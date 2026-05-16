@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import csv
+import dataclasses
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -492,12 +493,10 @@ def test_stream_patches_to_disk_writes_valid_patch_staging(
     root = builder_config.dataset_root
     valid_source_files = list((root / "processed" / "valid" / "source").iterdir())
     valid_target_files = list((root / "processed" / "valid" / "target").iterdir())
-    discarded_source_files = list((root / "discarded_patches" / "source").iterdir())
-    discarded_target_files = list((root / "discarded_patches" / "target").iterdir())
     assert len(valid_source_files) == 81
     assert len(valid_target_files) == 81
-    assert discarded_source_files == []
-    assert discarded_target_files == []
+    assert not (root / "discarded_patches" / "source").exists()
+    assert not (root / "discarded_patches" / "target").exists()
 
 
 def test_stream_patches_to_disk_uses_min_foreground_ratio_for_source_prefilter(
@@ -517,7 +516,7 @@ def test_stream_patches_to_disk_uses_min_foreground_ratio_for_source_prefilter(
     assert mock_iter.call_args.kwargs["max_mask_percentage"] == builder_config.min_foreground_ratio
 
 
-def test_stream_patches_to_disk_writes_discarded_patch_staging(
+def test_stream_patches_to_disk_records_discarded_rows_without_images_by_default(
     builder_config: PreprocessingConfig,
 ) -> None:
     builder = DatasetBuilder(builder_config)
@@ -573,12 +572,49 @@ def test_stream_patches_to_disk_writes_discarded_patch_staging(
     root = builder_config.dataset_root
     valid_source_files = list((root / "processed" / "valid" / "source").iterdir())
     valid_target_files = list((root / "processed" / "valid" / "target").iterdir())
-    discarded_source_files = list((root / "discarded_patches" / "source").iterdir())
-    discarded_target_files = list((root / "discarded_patches" / "target").iterdir())
     assert len(valid_source_files) == len(valid_rows)
     assert len(valid_target_files) == len(valid_rows)
-    assert len(discarded_source_files) == len(discarded_rows)
-    assert len(discarded_target_files) == len(discarded_rows)
+    assert not (root / "discarded_patches" / "source").exists()
+    assert not (root / "discarded_patches" / "target").exists()
+
+
+def test_stream_patches_to_disk_writes_discarded_patch_images_when_enabled(
+    builder_config: PreprocessingConfig,
+) -> None:
+    config = dataclasses.replace(builder_config, save_discarded_patches=True)
+    builder = DatasetBuilder(config)
+    validation_results = [
+        (
+            index % 2 == 0,
+            {
+                "source_foreground_ratio": 1.0,
+                "target_foreground_ratio": 1.0,
+                "source_white_ratio": 0.0,
+                "target_white_ratio": 0.0,
+                "source_largest_white_component_ratio": 0.0,
+                "target_largest_white_component_ratio": 0.0,
+                "reasons": [] if index % 2 == 0 else ["synthetic_rejection"],
+            },
+        )
+        for index in range(81)
+    ]
+
+    with (
+        _patched_builder_dependencies(),
+        patch(
+            "virtual_staining.data.builder.is_valid_patch_pair",
+            side_effect=validation_results,
+        ),
+    ):
+        builder.compute_masks()
+        builder.align()
+        valid_rows, discarded_rows = builder._stream_patches_to_disk()
+
+    root = config.dataset_root
+    assert valid_rows
+    assert discarded_rows
+    assert len(list((root / "discarded_patches" / "source").iterdir())) == len(discarded_rows)
+    assert len(list((root / "discarded_patches" / "target").iterdir())) == len(discarded_rows)
 
 
 def test_assign_splits_and_finalize_moves_staged_files_and_writes_manifest(
@@ -649,7 +685,8 @@ def test_assign_splits_and_finalize_moves_staged_files_and_writes_manifest(
 def test_assign_splits_and_finalize_preserves_discarded_patch_files(
     builder_config: PreprocessingConfig,
 ) -> None:
-    builder = DatasetBuilder(builder_config)
+    config = dataclasses.replace(builder_config, save_discarded_patches=True)
+    builder = DatasetBuilder(config)
     validation_results = [
         (
             False,
@@ -676,11 +713,11 @@ def test_assign_splits_and_finalize_preserves_discarded_patch_files(
         builder.compute_masks()
         builder.align()
         builder._started_at = "2026-01-01T00:00:00+00:00"
-        builder._effective_seed = builder_config.seed
+        builder._effective_seed = config.seed
         valid_rows, discarded_rows = builder._stream_patches_to_disk()
         builder._assign_splits_and_finalize(valid_rows, discarded_rows)
 
-    root = builder_config.dataset_root
+    root = config.dataset_root
     assert len(list((root / "discarded_patches" / "source").iterdir())) == len(discarded_rows)
     assert len(list((root / "discarded_patches" / "target").iterdir())) == len(discarded_rows)
 

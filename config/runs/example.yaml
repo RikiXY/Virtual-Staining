@@ -61,6 +61,8 @@ preprocessing:
   white_threshold: 250
   max_largest_white_component_ratio: 0.20
 
+  # Save rejected patch images for debugging. The discard CSV is always written.
+  save_discarded_patches: false
   save_masks: false
   seed: 42
 

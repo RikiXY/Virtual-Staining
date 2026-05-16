@@ -256,8 +256,11 @@ class DatasetBuilder:
         valid_tgt_dir = root / "processed" / "valid" / "target"
         discarded_src_dir = root / "discarded_patches" / "source"
         discarded_tgt_dir = root / "discarded_patches" / "target"
-        for path in [valid_src_dir, valid_tgt_dir, discarded_src_dir, discarded_tgt_dir]:
+        for path in [valid_src_dir, valid_tgt_dir]:
             ensure_clean_directory(path)
+        if self.config.save_discarded_patches:
+            for path in [discarded_src_dir, discarded_tgt_dir]:
+                ensure_clean_directory(path)
 
         m = self.config.margin
 
@@ -339,8 +342,9 @@ class DatasetBuilder:
                     }
                 )
             else:
-                cv2.imwrite(str(discarded_src_dir / patch_source_name), src)
-                cv2.imwrite(str(discarded_tgt_dir / patch_target_name), tgt)
+                if self.config.save_discarded_patches:
+                    cv2.imwrite(str(discarded_src_dir / patch_source_name), src)
+                    cv2.imwrite(str(discarded_tgt_dir / patch_target_name), tgt)
                 discarded_rows.append(
                     {
                         "sample_id": f"{x:05}_{y:05}",
