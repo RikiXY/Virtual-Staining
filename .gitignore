@@ -18,6 +18,11 @@
 config/runs/local/*
 !config/runs/local/.gitkeep
 
+# Local dataset configs (personal copies; the example.yaml is tracked)
+!config/datasets/local/
+config/datasets/local/*
+!config/datasets/local/.gitkeep
+
 # Local queue configs
 !config/queues/local/
 config/queues/local/*
