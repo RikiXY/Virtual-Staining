@@ -354,8 +354,21 @@ def _resume_from_checkpoint(
                 f"resume='latest' but no checkpoints found in {paths.checkpoints_dir}"
             )
     else:
-        checkpoint_path = Path(resume)
-        if not checkpoint_path.is_absolute():
-            checkpoint_path = paths.checkpoints_dir / checkpoint_path
+        checkpoint_path = _resolve_resume_checkpoint_path(resume, paths)
 
     return ckpt_manager.load(checkpoint_path)
+
+
+def _resolve_resume_checkpoint_path(resume: str, paths: RunPaths) -> Path:
+    """Resolve and preflight an explicit resume checkpoint path."""
+    checkpoint_path = Path(resume)
+    if not checkpoint_path.is_absolute():
+        checkpoint_path = paths.checkpoints_dir / checkpoint_path
+    checkpoint_path = checkpoint_path.resolve()
+
+    if checkpoint_path.suffix != ".pth":
+        raise ValueError(f"resume checkpoint path must end with '.pth'; got {checkpoint_path}")
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"resume checkpoint not found: {checkpoint_path}")
+
+    return checkpoint_path
