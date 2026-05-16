@@ -193,6 +193,19 @@ def test_ssim_loss_gradients_flow_to_prediction() -> None:
     assert prediction.grad.abs().sum().item() > 0.0
 
 
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_ssim_loss_low_precision_inputs_use_stable_float32_math(dtype: torch.dtype) -> None:
+    loss = SsimLoss(window_size=5)
+    prediction = torch.linspace(-1.0, 1.0, 16).view(1, 1, 1, 16).expand(1, 3, 16, 16)
+    target = -prediction
+
+    expected = loss(prediction, target)
+    value = loss(prediction.to(dtype=dtype), target.to(dtype=dtype))
+
+    assert value.dtype == torch.float32
+    assert value.item() == pytest.approx(expected.item(), abs=2e-3)
+
+
 def test_ssim_loss_gray_mode_accepts_rgb_inputs() -> None:
     loss = SsimLoss(window_size=5, channel_mode="gray")
     x = torch.rand(1, 3, 16, 16) * 2.0 - 1.0
