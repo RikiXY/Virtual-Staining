@@ -112,10 +112,15 @@ image_size: [256, 256]
 preprocessing:
   source_name: label_free.tif
   target_name: stained.tif
+  # For very large local TIFF/PNG/JPEG/BMP inputs, read previews and patch
+  # regions on demand instead of keeping full-resolution images resident.
+  # tiled_io: true
+  # mask_scale: 0.25
   train_ratio: 0.80
   val_ratio: 0.05
   test_ratio: 0.15
   min_foreground_ratio: 0.25
+  save_discarded_patches: false
   seed: 42
 
 training:

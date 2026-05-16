@@ -50,16 +50,13 @@ def _white_mask(img: np.ndarray, _params: object) -> np.ndarray:
 def _identity_align(
     _src: np.ndarray,
     tgt: np.ndarray,
-    mask1: np.ndarray | None = None,
-    mask2: np.ndarray | None = None,
+    mask_1: np.ndarray | None = None,
+    mask_2: np.ndarray | None = None,
     scale: float = 0.5,
     **_kwargs: object,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, AlignmentMetadata]:
-    """Keep the target unchanged while returning valid alignment metadata."""
-    del mask1, scale
-    aligned_mask = (
-        mask2.copy() if mask2 is not None else np.full(tgt.shape[:2], 255, dtype=np.uint8)
-    )
+) -> tuple[np.ndarray, AlignmentMetadata]:
+    """Return an identity matrix with valid alignment metadata."""
+    del _src, tgt, mask_1, mask_2, scale
     eye = np.eye(2, 3, dtype=np.float64)
     metadata = AlignmentMetadata(
         n_keypoints_src=100,
@@ -74,7 +71,7 @@ def _identity_align(
         translation_y=0.0,
         warp_matrix=eye.tolist(),
     )
-    return tgt.copy(), aligned_mask, eye, metadata
+    return eye, metadata
 
 
 @contextmanager
@@ -85,7 +82,7 @@ def _patched_prepare_dependencies() -> Iterator[None]:
             side_effect=_white_mask,
         ),
         patch(
-            "virtual_staining.data.builder.align_from_scaled",
+            "virtual_staining.data.builder.estimate_affine_from_scaled",
             side_effect=_identity_align,
         ),
     ):

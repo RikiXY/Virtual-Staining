@@ -9,7 +9,9 @@ from PIL import Image
 from tests.image_helpers import make_rgb_image, write_rgb_image
 from virtual_staining.utils.image_io import (
     VALID_IMAGE_EXTENSIONS,
+    PillowRegionImageReader,
     load_rgb_image,
+    open_image_reader,
     open_rgb,
     to_float01,
 )
@@ -25,8 +27,9 @@ def test_valid_extensions_contains_expected() -> None:
     assert ".tiff" in VALID_IMAGE_EXTENSIONS
 
 
-def test_valid_extensions_excludes_jpg() -> None:
-    assert ".jpg" not in VALID_IMAGE_EXTENSIONS
+def test_valid_extensions_contains_jpg() -> None:
+    assert ".jpg" in VALID_IMAGE_EXTENSIONS
+    assert ".jpeg" in VALID_IMAGE_EXTENSIONS
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +74,64 @@ def test_load_rgb_image_correct_pixel_values(tmp_path: Path) -> None:
 def test_load_rgb_image_raises_on_missing_file(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         load_rgb_image(tmp_path / "nonexistent.png")
+
+
+# ---------------------------------------------------------------------------
+# RegionImageReader
+# ---------------------------------------------------------------------------
+
+
+def test_region_image_reader_reports_metadata(tmp_path: Path) -> None:
+    image_path = tmp_path / "img.png"
+    write_rgb_image(image_path, size=(8, 6), color=(10, 20, 30))
+
+    reader = PillowRegionImageReader(image_path)
+
+    assert reader.size == (8, 6)
+    assert reader.metadata.width == 8
+    assert reader.metadata.height == 6
+
+
+def test_open_image_reader_returns_default_region_reader(tmp_path: Path) -> None:
+    image_path = tmp_path / "img.png"
+    write_rgb_image(image_path, size=(8, 6), color=(10, 20, 30))
+
+    reader = open_image_reader(image_path)
+
+    assert reader.size == (8, 6)
+
+
+def test_region_image_reader_reads_bgr_region(tmp_path: Path) -> None:
+    image_path = tmp_path / "img.png"
+    write_rgb_image(image_path, size=(8, 6), color=(10, 20, 30))
+
+    reader = PillowRegionImageReader(image_path)
+    region = reader.read_region(2, 1, 3, 2)
+
+    assert region.shape == (2, 3, 3)
+    np.testing.assert_array_equal(region[0, 0], np.array([30, 20, 10], dtype=np.uint8))
+
+
+def test_region_image_reader_pads_out_of_bounds_with_white(tmp_path: Path) -> None:
+    image_path = tmp_path / "img.png"
+    write_rgb_image(image_path, size=(4, 4), color=(10, 20, 30))
+
+    reader = PillowRegionImageReader(image_path)
+    region = reader.read_region(-1, -1, 3, 3)
+
+    assert region.shape == (3, 3, 3)
+    np.testing.assert_array_equal(region[0, 0], np.array([255, 255, 255], dtype=np.uint8))
+    np.testing.assert_array_equal(region[1, 1], np.array([30, 20, 10], dtype=np.uint8))
+
+
+def test_region_image_reader_reads_scaled_preview(tmp_path: Path) -> None:
+    image_path = tmp_path / "img.png"
+    write_rgb_image(image_path, size=(8, 6), color=(10, 20, 30))
+
+    reader = PillowRegionImageReader(image_path)
+    preview = reader.read_preview(0.5)
+
+    assert preview.shape == (3, 4, 3)
 
 
 # ---------------------------------------------------------------------------

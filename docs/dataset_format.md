@@ -8,14 +8,13 @@
 ```
 local_workspace/datasets/<name>/
 ├── raw/                        # (reserved for future use)
-├── processed/                  # intermediate aligned images
 ├── splits/
 │   ├── train/                  # accepted train-split patch pairs
 │   ├── val/                    # accepted validation-split patch pairs
 │   └── test/                   # accepted test-split patch pairs
 ├── discarded_patches/
-│   ├── source/                 # source patches that failed quality filters
-│   ├── target/                 # corresponding target patches
+│   ├── source/                 # optional discarded source patch images
+│   ├── target/                 # optional discarded target patch images
 │   └── discarded_log.csv       # per-patch filter diagnostics
 ├── manifests/
 │   ├── manifest.csv            # all accepted patches with split assignment
@@ -29,6 +28,19 @@ local_workspace/datasets/<name>/
     ├── dataset_fingerprint.json # cache identity for prepare reuse decisions
     └── environment.json        # runtime environment snapshot
 ```
+
+## Alignment Outputs
+
+`vs-prepare` writes `alignment_metadata.json` in the dataset root. This file
+contains the affine warp matrix and alignment diagnostics used to pair source
+and target patches.
+
+The full-resolution aligned target image is not materialized or saved, and
+there is currently no config option that enables this preview artifact. During
+patch preparation, target patches are warped on demand from the original target
+image or from target regions when `preprocessing.tiled_io: true`. This keeps the
+canonical dataset outputs at patch level and avoids retaining a full aligned
+target frame solely for preview/debug purposes.
 
 ## Manifest as Pipeline Contract
 
@@ -62,6 +74,11 @@ directory named by the manifest `split` value. Example manifest row:
 ```csv
 00512_09216,train,splits/train/00512_09216_source.tif,splits/train/00512_09216_target.tif,label_free,stained,512,9216,256,256
 ```
+
+Split assignment is deterministic for a fixed `seed` and `sample_id`: each
+accepted patch is assigned by a stable hash and written directly to its final
+`splits/<split>/` directory during preparation. Configured split ratios are
+therefore approximate, not exact-count guarantees.
 
 | Column | Type | Description |
 |---|---|---|
@@ -113,6 +130,54 @@ The same columns as `manifest.csv` apply.
 
 Detailed per-patch filter diagnostics (foreground ratio, white ratio, component
 ratio, and failure reasons) are written to `discarded_patches/discarded_log.csv`.
+This CSV is the canonical audit trail for discarded patches and is always
+written. Discarded patch image files are written only when
+`preprocessing.save_discarded_patches: true`; otherwise the `source/` and
+`target/` subdirectories under `discarded_patches/` may be absent.
+
+## Tissue Mask Strategies
+
+`preprocessing.mask_strategy` controls how tissue foreground masks are
+generated. The default is `connected_components`, which preserves the historical
+multi-scale bright-component heuristic. The alternative `hsv` strategy marks
+pixels as tissue when they are sufficiently saturated or darker than bright
+background, then applies morphology cleanup to remove small speckles and fill
+small holes.
+
+Use `preprocessing.source_mask_strategy` and
+`preprocessing.target_mask_strategy` to override the global strategy for one
+modality. Valid values are `connected_components` and `hsv`. The HSV strategy is
+faster and useful for stained or visibly colored tissue, but it can be less
+appropriate for very pale or low-saturation label-free inputs.
+
+## Low-Resolution Mask Filtering
+
+When `preprocessing.mask_scale < 1.0`, masks are computed on downsampled image
+copies. By default, those masks are resized back to full image resolution before
+patch filtering, preserving the historical pixel-space behavior.
+
+Set `preprocessing.lowres_mask_filtering: true` to keep those masks in their
+downsampled mask space during patch admission. Source patch windows are mapped
+from full-resolution image coordinates into mask coordinates, and target mask
+patches are warped from mask space on demand. This reduces long-lived mask
+memory, but foreground ratios are approximate near mask boundaries because they
+are measured on fewer mask pixels. The saved patch images, manifest coordinates,
+split paths, and discarded log schema are unchanged.
+
+## Region-Based Image I/O
+
+Set `preprocessing.tiled_io: true` to use the region-reader preparation path.
+This path opens source and target images through the shared image-reader
+abstraction, reads low-resolution previews for mask generation and global
+alignment, and reads only the source and target regions required for each patch
+during streaming. It supports the local image formats handled by Pillow,
+including PNG, JPEG, TIFF, and BMP files.
+
+For whole-slide-scale inputs, pair `tiled_io: true` with `mask_scale < 1.0`;
+the preview scale is controlled by `mask_scale`. In tiled mode, foreground
+filtering uses mask-space patch windows even when `lowres_mask_filtering` is not
+set explicitly. The affine model is still global and rigid/affine; non-rigid
+whole-slide registration and cloud/object-store streaming are not implemented.
 
 ## dataset_build.json Fields
 

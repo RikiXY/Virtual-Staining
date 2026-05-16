@@ -45,8 +45,17 @@ preprocessing:
 
   grid_movement: [256, 256]
   margin: 200
+  # Tissue mask strategy: connected_components (default) or hsv.
+  mask_strategy: connected_components
+  # Optional modality-specific overrides.
+  # source_mask_strategy: connected_components
+  # target_mask_strategy: hsv
   # Optional: compute tissue masks at reduced resolution to save memory.
   # mask_scale: 0.25
+  # Optional: keep reduced-resolution masks for patch foreground filtering.
+  # lowres_mask_filtering: true
+  # Optional: read previews and patch regions through the region-reader path.
+  # tiled_io: true
   # Optional: fail early if the estimated working set would exceed this limit.
   # max_memory_gb: 8.0
 
@@ -61,6 +70,8 @@ preprocessing:
   white_threshold: 250
   max_largest_white_component_ratio: 0.20
 
+  # Save rejected patch images for debugging. The discard CSV is always written.
+  save_discarded_patches: false
   save_masks: false
   seed: 42
 

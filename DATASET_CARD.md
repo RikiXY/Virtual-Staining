@@ -47,7 +47,8 @@ of the target image to the source reference frame.
    passes across multiple scales.
 3. **Affine registration**: aligns the target image to the source image using
    mask-constrained SIFT feature matching and `cv2.estimateAffinePartial2D`.
-   The repository writes `aligned_<target>` and `alignment_metadata.json`.
+   The repository writes `alignment_metadata.json` and warps target patches on
+   demand during extraction.
 4. **Patch extraction**: crops by the configured `margin`, extracts patches at
    `image_size`, and steps the extraction grid using `grid_movement`.
 5. **Quality filtering**: rejects patch pairs when foreground coverage is too
@@ -58,6 +59,8 @@ of the target image to the source reference frame.
 7. **Manifest writing**: writes accepted-patch records to `manifests/manifest.csv`
    and discarded-patch records to `manifests/discarded_manifest.csv`, with
    per-patch filter diagnostics in `discarded_patches/discarded_log.csv`.
+   Discarded patch images are saved only when `save_discarded_patches` is
+   enabled in preprocessing config.
 
 ## Splits
 

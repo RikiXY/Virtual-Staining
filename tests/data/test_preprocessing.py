@@ -9,13 +9,24 @@ import pytest
 
 from virtual_staining.data.preprocessing import (
     AlignmentMetadata,
+    _aligned_mask_iou,
+    _ratio_test_matches,
     align_from_scaled,
     align_images,
+    apply_mask_morphology,
+    calculate_hsv_tissue_mask,
     calculate_mask,
+    calculate_mask_by_strategy,
     calculate_mask_with_grid,
+    estimate_affine_transform,
+    foreground_ratio_for_patch,
     is_valid_patch_pair,
+    mask_window_for_patch,
     pad_image,
     split_items,
+    warp_aligned_image,
+    warp_aligned_mask_patch_from_mask_space,
+    warp_aligned_patch,
 )
 
 # ---------------------------------------------------------------------------
@@ -136,6 +147,50 @@ def test_calculate_mask_with_grid_handles_grid_larger_than_image() -> None:
     assert mask.dtype == np.uint8
 
 
+def test_calculate_mask_by_strategy_preserves_connected_components_default() -> None:
+    img = np.full((128, 128, 3), 255, dtype=np.uint8)
+    cv2.rectangle(img, (32, 32), (95, 95), (80, 80, 80), thickness=-1)
+
+    direct = calculate_mask_by_strategy(
+        img,
+        strategy="connected_components",
+        parameters=[(2, 2)],
+    )
+    expected = calculate_mask_with_grid(img, (64, 64), 2)
+
+    assert np.array_equal(direct, expected)
+
+
+def test_calculate_hsv_tissue_mask_detects_saturated_tissue_on_white_background() -> None:
+    img = np.full((80, 80, 3), 255, dtype=np.uint8)
+    cv2.rectangle(img, (20, 20), (59, 59), (120, 40, 180), thickness=-1)
+
+    mask = calculate_hsv_tissue_mask(img, min_saturation=20, max_value=245)
+
+    assert mask[40, 40] == 255
+    assert mask[5, 5] == 0
+    assert set(np.unique(mask)).issubset({0, 255})
+
+
+def test_apply_mask_morphology_removes_small_speckles_and_fills_holes() -> None:
+    mask = np.zeros((64, 64), dtype=np.uint8)
+    cv2.rectangle(mask, (16, 16), (47, 47), 255, thickness=-1)
+    cv2.rectangle(mask, (28, 28), (35, 35), 0, thickness=-1)
+    mask[2, 2] = 255
+
+    cleaned = apply_mask_morphology(mask, kernel_size=9)
+
+    assert cleaned[2, 2] == 0
+    assert cleaned[32, 32] == 255
+
+
+def test_calculate_mask_by_strategy_rejects_unknown_strategy() -> None:
+    img = np.full((16, 16, 3), 255, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="Unknown mask strategy"):
+        calculate_mask_by_strategy(img, strategy="unknown")
+
+
 # ---------------------------------------------------------------------------
 # is_valid_patch_pair helpers
 # ---------------------------------------------------------------------------
@@ -253,6 +308,201 @@ def _textured_image(seed: int = 0) -> np.ndarray:
     return rng.integers(10, 200, (300, 300, 3), dtype=np.uint8)
 
 
+def _dmatch(query_idx: int, train_idx: int, distance: float) -> cv2.DMatch:
+    return cv2.DMatch(_queryIdx=query_idx, _trainIdx=train_idx, _distance=distance)
+
+
+def _keypoints(count: int) -> list[cv2.KeyPoint]:
+    return [cv2.KeyPoint(float(index), float(index * 2), 1.0) for index in range(count)]
+
+
+def _descriptors(count: int) -> np.ndarray:
+    return np.arange(count * 128, dtype=np.float32).reshape(count, 128)
+
+
+class _FakeSift:
+    def __init__(
+        self,
+        keypoints_1: list[cv2.KeyPoint],
+        descriptors_1: np.ndarray | None,
+        keypoints_2: list[cv2.KeyPoint],
+        descriptors_2: np.ndarray | None,
+    ) -> None:
+        self._results = iter(
+            [
+                (keypoints_1, descriptors_1),
+                (keypoints_2, descriptors_2),
+            ]
+        )
+
+    def detectAndCompute(
+        self, _img: np.ndarray, _mask: np.ndarray | None
+    ) -> tuple[list[cv2.KeyPoint], np.ndarray | None]:
+        return next(self._results)
+
+
+class _FakeMatcher:
+    def __init__(self, knn_matches: list[list[cv2.DMatch]]) -> None:
+        self.knn_matches = knn_matches
+        self.calls: list[tuple[np.ndarray, np.ndarray, int]] = []
+
+    def knnMatch(
+        self, descriptors_1: np.ndarray, descriptors_2: np.ndarray, k: int
+    ) -> list[list[cv2.DMatch]]:
+        self.calls.append((descriptors_1, descriptors_2, k))
+        return self.knn_matches
+
+
+def test_ratio_test_matches_keeps_only_distinct_best_descriptor_matches() -> None:
+    matches = _ratio_test_matches(
+        [
+            [_dmatch(0, 0, 10.0), _dmatch(0, 1, 20.0)],
+            [_dmatch(1, 1, 18.0), _dmatch(1, 2, 20.0)],
+            [_dmatch(2, 2, 1.0)],
+        ],
+        ratio_threshold=0.75,
+    )
+
+    assert [(match.queryIdx, match.trainIdx) for match in matches] == [(0, 0)]
+
+
+def test_estimate_affine_transform_uses_ratio_test_and_explicit_ransac() -> None:
+    matcher = _FakeMatcher(
+        [
+            *[
+                [_dmatch(index, index, 10.0), _dmatch(index, index + 1, 20.0)]
+                for index in range(12)
+            ],
+            [_dmatch(12, 12, 19.0), _dmatch(12, 13, 20.0)],
+        ]
+    )
+    eye = np.eye(2, 3, dtype=np.float64)
+    inliers = np.ones((12, 1), dtype=np.uint8)
+
+    def _bf_matcher(norm: int, **kwargs: Any) -> _FakeMatcher:
+        assert norm == cv2.NORM_L2
+        assert "crossCheck" not in kwargs
+        return matcher
+
+    with (
+        patch(
+            "virtual_staining.data.preprocessing.cv2.SIFT_create",
+            return_value=_FakeSift(
+                _keypoints(14),
+                _descriptors(14),
+                _keypoints(14),
+                _descriptors(14),
+            ),
+        ),
+        patch("virtual_staining.data.preprocessing.cv2.BFMatcher", side_effect=_bf_matcher),
+        patch(
+            "virtual_staining.data.preprocessing.cv2.estimateAffinePartial2D",
+            return_value=(eye, inliers),
+        ) as estimate_affine,
+    ):
+        mask = np.ones((300, 300), dtype=np.uint8) * 255
+        _, metadata = estimate_affine_transform(
+            _textured_image(),
+            _textured_image(1),
+            mask_1=mask,
+            mask_2=mask,
+            ratio_threshold=0.75,
+        )
+
+    assert metadata.n_matches == 12
+    assert metadata.n_inliers == 12
+    assert metadata.inlier_ratio == pytest.approx(1.0)
+    assert metadata.mask_iou == pytest.approx(1.0)
+    assert matcher.calls[0][2] == 2
+    assert estimate_affine.call_args.kwargs == {
+        "method": cv2.RANSAC,
+        "ransacReprojThreshold": 5.0,
+        "maxIters": 2000,
+        "confidence": 0.99,
+        "refineIters": 10,
+    }
+
+
+def test_estimate_affine_transform_raises_on_low_feature_count() -> None:
+    with (
+        patch(
+            "virtual_staining.data.preprocessing.cv2.SIFT_create",
+            return_value=_FakeSift(_keypoints(3), _descriptors(3), _keypoints(4), _descriptors(4)),
+        ),
+        pytest.raises(ValueError, match="Not enough features"),
+    ):
+        estimate_affine_transform(_textured_image(), _textured_image(1))
+
+
+def test_estimate_affine_transform_raises_on_low_ratio_test_match_count() -> None:
+    matcher = _FakeMatcher(
+        [
+            [_dmatch(0, 0, 19.0), _dmatch(0, 1, 20.0)],
+            [_dmatch(1, 1, 19.0), _dmatch(1, 2, 20.0)],
+            [_dmatch(2, 2, 19.0), _dmatch(2, 3, 20.0)],
+            [_dmatch(3, 3, 10.0), _dmatch(3, 4, 20.0)],
+        ]
+    )
+
+    with (
+        patch(
+            "virtual_staining.data.preprocessing.cv2.SIFT_create",
+            return_value=_FakeSift(_keypoints(4), _descriptors(4), _keypoints(5), _descriptors(5)),
+        ),
+        patch("virtual_staining.data.preprocessing.cv2.BFMatcher", return_value=matcher),
+        pytest.raises(ValueError, match="Not enough good descriptor matches"),
+    ):
+        estimate_affine_transform(_textured_image(), _textured_image(1))
+
+
+def test_estimate_affine_transform_raises_on_low_inlier_ratio() -> None:
+    match_count = 200
+    matcher = _FakeMatcher(
+        [
+            [_dmatch(index, index, 10.0), _dmatch(index, index + 1, 20.0)]
+            for index in range(match_count)
+        ]
+    )
+    eye = np.eye(2, 3, dtype=np.float64)
+    low_ratio_inliers = np.zeros((match_count, 1), dtype=np.uint8)
+    low_ratio_inliers[:12] = 1
+
+    with (
+        patch(
+            "virtual_staining.data.preprocessing.cv2.SIFT_create",
+            return_value=_FakeSift(
+                _keypoints(match_count + 1),
+                _descriptors(match_count + 1),
+                _keypoints(match_count + 1),
+                _descriptors(match_count + 1),
+            ),
+        ),
+        patch("virtual_staining.data.preprocessing.cv2.BFMatcher", return_value=matcher),
+        patch(
+            "virtual_staining.data.preprocessing.cv2.estimateAffinePartial2D",
+            return_value=(eye, low_ratio_inliers),
+        ),
+        pytest.raises(ValueError, match="inlier ratio"),
+    ):
+        estimate_affine_transform(_textured_image(), _textured_image(1))
+
+
+def test_aligned_mask_iou_returns_overlap_diagnostic() -> None:
+    mask_1 = np.zeros((8, 8), dtype=np.uint8)
+    mask_2 = np.zeros((8, 8), dtype=np.uint8)
+    mask_1[2:6, 2:6] = 255
+    mask_2[2:6, 2:6] = 255
+
+    iou = _aligned_mask_iou(
+        mask_1,
+        mask_2,
+        np.eye(2, 3, dtype=np.float64),
+        (8, 8),
+    )
+
+    assert iou == pytest.approx(1.0)
+
+
 def test_align_images_raises_when_warp_matrix_is_none() -> None:
     img = _textured_image()
     with (
@@ -297,12 +547,14 @@ def test_alignment_metadata_has_expected_fields() -> None:
         translation_x=0.0,
         translation_y=0.0,
         warp_matrix=eye.tolist(),
+        mask_iou=0.75,
     )
     assert meta.n_keypoints_src == 200
     assert meta.n_keypoints_tgt == 180
     assert meta.n_matches == 60
     assert meta.n_inliers == 50
     assert meta.inlier_ratio == 50 / 60
+    assert meta.mask_iou == pytest.approx(0.75)
     assert len(meta.warp_matrix) == 2
     assert len(meta.warp_matrix[0]) == 3
 
@@ -338,6 +590,114 @@ def test_align_from_scaled_uses_nearest_neighbor_for_scaled_masks() -> None:
             return_value=(np.eye(2, 3, dtype=np.float64), metadata),
         ),
     ):
-        align_from_scaled(img, img, scale=0.5, mask1=mask, mask2=mask)
+        align_from_scaled(img, img, scale=0.5, mask_1=mask, mask_2=mask)
 
     assert any(call.get("interpolation") == cv2.INTER_NEAREST for call in resize_calls[2:4])
+
+
+def test_warp_aligned_patch_matches_full_frame_warp_crop() -> None:
+    rng = np.random.default_rng(4)
+    img = rng.integers(0, 255, size=(96, 112, 3), dtype=np.uint8)
+    warp_matrix = np.array(
+        [
+            [0.998, -0.035, 7.4],
+            [0.035, 0.998, -5.2],
+        ],
+        dtype=np.float64,
+    )
+
+    full = warp_aligned_image(
+        img,
+        warp_matrix,
+        (90, 80),
+        is_mask=False,
+    )
+    patch = warp_aligned_patch(
+        img,
+        warp_matrix,
+        x=13,
+        y=17,
+        output_size=(32, 24),
+        is_mask=False,
+    )
+
+    assert np.allclose(patch, full[17 : 17 + 24, 13 : 13 + 32], atol=8)
+
+
+def test_warp_aligned_patch_uses_nearest_neighbor_for_masks() -> None:
+    mask = np.zeros((32, 32), dtype=np.uint8)
+    mask[:, 16:] = 255
+    warp_matrix = np.array(
+        [
+            [1.0, 0.0, 0.4],
+            [0.0, 1.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+
+    patch = warp_aligned_patch(
+        mask,
+        warp_matrix,
+        x=0,
+        y=0,
+        output_size=(32, 32),
+        is_mask=True,
+    )
+
+    assert set(np.unique(patch)).issubset({0, 255})
+
+
+def test_mask_window_for_patch_maps_full_resolution_patch_to_mask_space() -> None:
+    mask = np.zeros((5, 10), dtype=np.uint8)
+    mask[1:4, 2:7] = 255
+
+    window = mask_window_for_patch(
+        mask,
+        (20, 40, 3),
+        x=8,
+        y=4,
+        width=12,
+        height=8,
+    )
+
+    assert window.shape == (2, 3)
+    assert np.all(window == 255)
+
+
+def test_foreground_ratio_for_patch_uses_mask_space_window() -> None:
+    mask = np.array(
+        [
+            [255, 0],
+            [255, 255],
+        ],
+        dtype=np.uint8,
+    )
+
+    ratio = foreground_ratio_for_patch(mask, (8, 8, 3), x=0, y=0, width=8, height=8)
+
+    assert ratio == pytest.approx(0.75)
+
+
+def test_warp_aligned_mask_patch_from_mask_space_scales_affine_columns() -> None:
+    mask = np.zeros((16, 16), dtype=np.uint8)
+    mask[4:12, 4:12] = 255
+    warp_matrix = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+
+    patch = warp_aligned_mask_patch_from_mask_space(
+        mask,
+        warp_matrix,
+        (32, 32, 3),
+        x=8,
+        y=8,
+        output_size=(16, 16),
+    )
+
+    assert patch.shape == (16, 16)
+    assert set(np.unique(patch)).issubset({0, 255})
+    assert cv2.countNonZero(patch) > 0

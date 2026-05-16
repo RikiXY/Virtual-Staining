@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import csv
+import dataclasses
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -18,7 +19,7 @@ from virtual_staining.config.run import RunConfig
 from virtual_staining.data import builder as builder_module
 from virtual_staining.data.builder import DatasetBuilder
 from virtual_staining.data.config import PreprocessingConfig
-from virtual_staining.data.preprocessing import AlignmentMetadata
+from virtual_staining.data.preprocessing import AlignmentMetadata, assign_split_by_hash
 from virtual_staining.data.results import DatasetBuildResult
 
 # ---------------------------------------------------------------------------
@@ -89,15 +90,13 @@ def _white_mask(img: np.ndarray, _params: object) -> np.ndarray:
 def _identity_align(
     src: np.ndarray,
     tgt: np.ndarray,
-    mask1: np.ndarray | None = None,
-    mask2: np.ndarray | None = None,
+    mask_1: np.ndarray | None = None,
+    mask_2: np.ndarray | None = None,
     scale: float = 0.5,
     **_kwargs,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, AlignmentMetadata]:
-    """Return target unchanged - simulates a perfect identity alignment."""
-    aligned_mask = (
-        mask2.copy() if mask2 is not None else np.full(tgt.shape[:2], 255, dtype=np.uint8)
-    )
+) -> tuple[np.ndarray, AlignmentMetadata]:
+    """Return an identity matrix - simulates a perfect identity alignment."""
+    del src, tgt, mask_1, mask_2, scale
     eye = np.eye(2, 3, dtype=np.float64)
     metadata = AlignmentMetadata(
         n_keypoints_src=100,
@@ -112,7 +111,7 @@ def _identity_align(
         translation_y=0.0,
         warp_matrix=eye.tolist(),
     )
-    return tgt.copy(), aligned_mask, eye, metadata
+    return eye, metadata
 
 
 @contextmanager
@@ -123,7 +122,7 @@ def _patched_builder_dependencies() -> Iterator[None]:
             side_effect=_white_mask,
         ),
         patch(
-            "virtual_staining.data.builder.align_from_scaled",
+            "virtual_staining.data.builder.estimate_affine_from_scaled",
             side_effect=_identity_align,
         ),
     ):
@@ -278,6 +277,56 @@ def test_compute_masks_with_mask_scale(
     assert builder._target_mask is not None
     assert builder._source_mask.shape == builder._source_image.shape[:2]
     assert builder._target_mask.shape == builder._target_image.shape[:2]
+
+
+def test_compute_masks_with_lowres_mask_filtering_keeps_scaled_masks(
+    builder_scaled_config: PreprocessingConfig,
+) -> None:
+    config = dataclasses.replace(builder_scaled_config, lowres_mask_filtering=True)
+    builder = DatasetBuilder(config)
+
+    with patch(
+        "virtual_staining.data.builder.calculate_mask_with_multiple_parameters",
+        return_value=np.full((150, 150), 255, dtype=np.uint8),
+    ):
+        builder.compute_masks()
+
+    assert builder._source_image is not None
+    assert builder._target_image is not None
+    assert builder._source_mask is not None
+    assert builder._target_mask is not None
+    assert builder._source_mask.shape == (150, 150)
+    assert builder._target_mask.shape == (150, 150)
+    assert builder._source_mask.shape != builder._source_image.shape[:2]
+    assert builder._target_mask.shape != builder._target_image.shape[:2]
+
+
+def test_compute_masks_allows_source_and_target_mask_strategy_overrides(
+    builder_config: PreprocessingConfig,
+) -> None:
+    config = dataclasses.replace(
+        builder_config,
+        mask_strategy="connected_components",
+        source_mask_strategy="hsv",
+        target_mask_strategy="connected_components",
+    )
+    builder = DatasetBuilder(config)
+
+    with (
+        patch(
+            "virtual_staining.data.builder.calculate_mask_by_strategy",
+            return_value=np.full((600, 600), 255, dtype=np.uint8),
+        ) as mock_strategy,
+        patch(
+            "virtual_staining.data.builder.calculate_mask_with_multiple_parameters",
+            return_value=np.full((600, 600), 255, dtype=np.uint8),
+        ) as mock_connected_components,
+    ):
+        builder.compute_masks()
+
+    assert mock_strategy.call_count == 1
+    assert mock_strategy.call_args.kwargs["strategy"] == "hsv"
+    assert mock_connected_components.call_count == 1
 
 
 def test_compute_masks_raises_if_estimated_memory_exceeds_limit(
@@ -474,7 +523,7 @@ def test_run_all_produces_same_output_as_old_stages(tmp_path: Path) -> None:
         assert streaming_files == legacy_files
 
 
-def test_stream_patches_to_disk_writes_valid_patch_staging(
+def test_stream_patches_to_disk_writes_valid_patches_to_final_splits(
     builder_config: PreprocessingConfig,
 ) -> None:
     builder = DatasetBuilder(builder_config)
@@ -486,20 +535,21 @@ def test_stream_patches_to_disk_writes_valid_patch_staging(
 
     assert len(valid_rows) == 81
     assert discarded_rows == []
-    assert all(set(row) == {"x", "y", "source", "target"} for row in valid_rows)
+    assert all(
+        set(row) == {"sample_id", "split", "x", "y", "source", "target"} for row in valid_rows
+    )
     assert all(
         not any(isinstance(value, np.ndarray) for value in row.values()) for row in valid_rows
     )
 
     root = builder_config.dataset_root
-    valid_source_files = list((root / "processed" / "valid" / "source").iterdir())
-    valid_target_files = list((root / "processed" / "valid" / "target").iterdir())
-    discarded_source_files = list((root / "discarded_patches" / "source").iterdir())
-    discarded_target_files = list((root / "discarded_patches" / "target").iterdir())
-    assert len(valid_source_files) == 81
-    assert len(valid_target_files) == 81
-    assert discarded_source_files == []
-    assert discarded_target_files == []
+    split_files = [
+        path for split in ("train", "val", "test") for path in (root / "splits" / split).iterdir()
+    ]
+    assert len(split_files) == len(valid_rows) * 2
+    assert not (root / "processed").exists()
+    assert not (root / "discarded_patches" / "source").exists()
+    assert not (root / "discarded_patches" / "target").exists()
 
 
 def test_stream_patches_to_disk_uses_min_foreground_ratio_for_source_prefilter(
@@ -519,7 +569,69 @@ def test_stream_patches_to_disk_uses_min_foreground_ratio_for_source_prefilter(
     assert mock_iter.call_args.kwargs["max_mask_percentage"] == builder_config.min_foreground_ratio
 
 
-def test_stream_patches_to_disk_writes_discarded_patch_staging(
+def test_stream_patches_to_disk_lowres_mask_filtering_keeps_mask_out_of_iterator(
+    builder_scaled_config: PreprocessingConfig,
+) -> None:
+    config = dataclasses.replace(builder_scaled_config, lowres_mask_filtering=True)
+    builder = DatasetBuilder(config)
+
+    with (
+        _patched_builder_dependencies(),
+        patch("virtual_staining.data.builder.iter_image_with_grid") as mock_iter,
+    ):
+        mock_iter.return_value = iter(())
+        builder.compute_masks()
+        builder.align()
+        builder._stream_patches_to_disk()
+
+    assert mock_iter.call_args.args[3] is None
+
+
+def test_run_all_with_lowres_mask_filtering_writes_patches(
+    builder_scaled_config: PreprocessingConfig,
+) -> None:
+    config = dataclasses.replace(builder_scaled_config, lowres_mask_filtering=True)
+    builder = DatasetBuilder(config)
+
+    with _patched_builder_dependencies():
+        result = builder.run_all()
+
+    assert builder._source_mask is not None
+    assert builder._target_mask is not None
+    assert builder._source_mask.shape == (150, 150)
+    assert builder._target_mask.shape == (150, 150)
+    assert result.train_count + result.val_count + result.test_count > 0
+
+
+def test_run_all_with_tiled_io_uses_region_readers_without_cv2_imread(
+    builder_scaled_config: PreprocessingConfig,
+) -> None:
+    config = dataclasses.replace(
+        builder_scaled_config,
+        tiled_io=True,
+        lowres_mask_filtering=True,
+    )
+    builder = DatasetBuilder(config)
+
+    with (
+        _patched_builder_dependencies(),
+        patch(
+            "virtual_staining.data.builder.cv2.imread",
+            side_effect=AssertionError("tiled_io should not call cv2.imread"),
+        ),
+    ):
+        result = builder.run_all()
+
+    assert builder._source_reader is not None
+    assert builder._target_reader is not None
+    assert builder._source_image is not None
+    assert builder._target_image is not None
+    assert builder._source_image.shape[:2] == (150, 150)
+    assert builder._target_image.shape[:2] == (150, 150)
+    assert result.train_count + result.val_count + result.test_count > 0
+
+
+def test_stream_patches_to_disk_records_discarded_rows_without_images_by_default(
     builder_config: PreprocessingConfig,
 ) -> None:
     builder = DatasetBuilder(builder_config)
@@ -553,7 +665,9 @@ def test_stream_patches_to_disk_writes_discarded_patch_staging(
     assert len(valid_rows) + len(discarded_rows) == 81
     assert valid_rows
     assert discarded_rows
-    assert all(set(row) == {"x", "y", "source", "target"} for row in valid_rows)
+    assert all(
+        set(row) == {"sample_id", "split", "x", "y", "source", "target"} for row in valid_rows
+    )
     assert all("reasons" in row for row in discarded_rows)
     assert all(
         {
@@ -573,17 +687,54 @@ def test_stream_patches_to_disk_writes_discarded_patch_staging(
     )
 
     root = builder_config.dataset_root
-    valid_source_files = list((root / "processed" / "valid" / "source").iterdir())
-    valid_target_files = list((root / "processed" / "valid" / "target").iterdir())
-    discarded_source_files = list((root / "discarded_patches" / "source").iterdir())
-    discarded_target_files = list((root / "discarded_patches" / "target").iterdir())
-    assert len(valid_source_files) == len(valid_rows)
-    assert len(valid_target_files) == len(valid_rows)
-    assert len(discarded_source_files) == len(discarded_rows)
-    assert len(discarded_target_files) == len(discarded_rows)
+    split_files = [
+        path for split in ("train", "val", "test") for path in (root / "splits" / split).iterdir()
+    ]
+    assert len(split_files) == len(valid_rows) * 2
+    assert not (root / "discarded_patches" / "source").exists()
+    assert not (root / "discarded_patches" / "target").exists()
 
 
-def test_assign_splits_and_finalize_moves_staged_files_and_writes_manifest(
+def test_stream_patches_to_disk_writes_discarded_patch_images_when_enabled(
+    builder_config: PreprocessingConfig,
+) -> None:
+    config = dataclasses.replace(builder_config, save_discarded_patches=True)
+    builder = DatasetBuilder(config)
+    validation_results = [
+        (
+            index % 2 == 0,
+            {
+                "source_foreground_ratio": 1.0,
+                "target_foreground_ratio": 1.0,
+                "source_white_ratio": 0.0,
+                "target_white_ratio": 0.0,
+                "source_largest_white_component_ratio": 0.0,
+                "target_largest_white_component_ratio": 0.0,
+                "reasons": [] if index % 2 == 0 else ["synthetic_rejection"],
+            },
+        )
+        for index in range(81)
+    ]
+
+    with (
+        _patched_builder_dependencies(),
+        patch(
+            "virtual_staining.data.builder.is_valid_patch_pair",
+            side_effect=validation_results,
+        ),
+    ):
+        builder.compute_masks()
+        builder.align()
+        valid_rows, discarded_rows = builder._stream_patches_to_disk()
+
+    root = config.dataset_root
+    assert valid_rows
+    assert discarded_rows
+    assert len(list((root / "discarded_patches" / "source").iterdir())) == len(discarded_rows)
+    assert len(list((root / "discarded_patches" / "target").iterdir())) == len(discarded_rows)
+
+
+def test_assign_splits_and_finalize_writes_manifest_for_streamed_split_files(
     builder_config: PreprocessingConfig,
 ) -> None:
     builder = DatasetBuilder(builder_config)
@@ -621,8 +772,7 @@ def test_assign_splits_and_finalize_moves_staged_files_and_writes_manifest(
     assert result.skipped_count == len(discarded_rows)
 
     root = builder_config.dataset_root
-    assert list((root / "processed" / "valid" / "source").iterdir()) == []
-    assert list((root / "processed" / "valid" / "target").iterdir()) == []
+    assert not (root / "processed").exists()
 
     train_files = list((root / "splits" / "train").iterdir())
     val_files = list((root / "splits" / "val").iterdir())
@@ -651,7 +801,8 @@ def test_assign_splits_and_finalize_moves_staged_files_and_writes_manifest(
 def test_assign_splits_and_finalize_preserves_discarded_patch_files(
     builder_config: PreprocessingConfig,
 ) -> None:
-    builder = DatasetBuilder(builder_config)
+    config = dataclasses.replace(builder_config, save_discarded_patches=True)
+    builder = DatasetBuilder(config)
     validation_results = [
         (
             False,
@@ -678,11 +829,11 @@ def test_assign_splits_and_finalize_preserves_discarded_patch_files(
         builder.compute_masks()
         builder.align()
         builder._started_at = "2026-01-01T00:00:00+00:00"
-        builder._effective_seed = builder_config.seed
+        builder._effective_seed = config.seed
         valid_rows, discarded_rows = builder._stream_patches_to_disk()
         builder._assign_splits_and_finalize(valid_rows, discarded_rows)
 
-    root = builder_config.dataset_root
+    root = config.dataset_root
     assert len(list((root / "discarded_patches" / "source").iterdir())) == len(discarded_rows)
     assert len(list((root / "discarded_patches" / "target").iterdir())) == len(discarded_rows)
 
@@ -732,6 +883,28 @@ def test_assign_splits_and_finalize_is_deterministic_for_fixed_seed(
     second_assignment = _run_finalize(tmp_path / "run_two")
 
     assert first_assignment == second_assignment
+
+
+def test_hash_split_assignment_is_stable_and_approximately_matches_ratios() -> None:
+    ratios = (0.7, 0.2, 0.1)
+
+    first = [
+        assign_split_by_hash(seed=42, sample_id=f"{index:05}_00000", ratios=ratios)
+        for index in range(10_000)
+    ]
+    second = [
+        assign_split_by_hash(seed=42, sample_id=f"{index:05}_00000", ratios=ratios)
+        for index in range(10_000)
+    ]
+
+    assert first == second
+    assert first != [
+        assign_split_by_hash(seed=43, sample_id=f"{index:05}_00000", ratios=ratios)
+        for index in range(10_000)
+    ]
+    assert first.count("train") / len(first) == pytest.approx(0.7, abs=0.03)
+    assert first.count("val") / len(first) == pytest.approx(0.2, abs=0.03)
+    assert first.count("test") / len(first) == pytest.approx(0.1, abs=0.03)
 
 
 def test_log_memory_handles_missing_resource(caplog: pytest.LogCaptureFixture) -> None:
@@ -981,7 +1154,7 @@ def test_run_all_saves_manifest_layout_and_resolved_config(
         result = DatasetBuilder(builder_config).run_all()
 
     root = builder_config.dataset_root
-    assert (root / "processed").exists()
+    assert not (root / "processed").exists()
     assert (root / "splits").exists()
     assert (root / "manifests" / "manifest.csv").exists()
     assert (root / "manifests" / "discarded_manifest.csv").exists()
@@ -992,7 +1165,9 @@ def test_run_all_saves_manifest_layout_and_resolved_config(
     assert len(manifest.filter_split("train")) == result.train_count
 
 
-def test_align_releases_original_target_arrays(builder_config: PreprocessingConfig) -> None:
+def test_align_keeps_warp_matrix_without_materializing_aligned_target(
+    builder_config: PreprocessingConfig,
+) -> None:
     builder = DatasetBuilder(builder_config)
 
     with _patched_builder_dependencies():
@@ -1001,10 +1176,11 @@ def test_align_releases_original_target_arrays(builder_config: PreprocessingConf
         assert builder._target_mask is not None
         builder.align()
 
-    assert builder._aligned_target is not None
-    assert builder._aligned_target_mask is not None
-    assert builder._target_image is None
-    assert builder._target_mask is None
+    assert builder._warp_matrix is not None
+    assert not hasattr(builder, "_aligned_target")
+    assert not hasattr(builder, "_aligned_target_mask")
+    assert builder._target_image is not None
+    assert builder._target_mask is not None
 
 
 def test_run_all_writes_manifest_columns_and_relative_paths(
@@ -1208,6 +1384,8 @@ def test_run_all_saves_alignment_metadata(builder_config: PreprocessingConfig) -
         "n_keypoints_tgt",
         "n_matches",
         "n_inliers",
+        "inlier_ratio",
+        "mask_iou",
         "warp_matrix",
     }
 
@@ -1230,7 +1408,7 @@ def test_stream_patches_to_disk_raises_on_count_mismatch(
 
         with (
             patch(
-                "virtual_staining.data.builder.extract_image",
+                "virtual_staining.data.builder.warp_aligned_patch",
                 side_effect=[dummy, dummy_mask[:32, :32]],
             ),
             pytest.raises(RuntimeError, match="mismatch"),
