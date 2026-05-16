@@ -5,7 +5,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.amp import GradScaler, autocast
 
-from virtual_staining.training.losses import Pix2PixLoss, StepLosses
+from virtual_staining.training.config import LossTermConfig
+from virtual_staining.training.losses import Pix2PixLoss, StepLosses, evaluate_loss_term
 
 
 class Pix2PixTrainingStep:
@@ -22,6 +23,7 @@ class Pix2PixTrainingStep:
         loss_fn: Pix2PixLoss,
         device: torch.device,
         amp_enabled: bool,
+        generator_loss_terms: tuple[LossTermConfig, ...] = (),
     ) -> None:
         self.generator = generator
         self.discriminator = discriminator
@@ -32,8 +34,17 @@ class Pix2PixTrainingStep:
         self.loss_fn = loss_fn
         self.device = device
         self.amp_enabled = amp_enabled
+        self.generator_loss_terms = generator_loss_terms
 
-    def step(self, x: torch.Tensor, y: torch.Tensor) -> StepLosses:
+    def step(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        *,
+        epoch: int = 0,
+        global_step: int | None = None,
+        masks: dict[str, torch.Tensor] | None = None,
+    ) -> StepLosses:
         """Run one discriminator step and one generator step. Returns scalar losses."""
         with autocast(device_type=self.device.type, enabled=self.amp_enabled):
             # .detach() prevents gradients flowing back into G during D's update.
@@ -51,6 +62,16 @@ class Pix2PixTrainingStep:
             fake = self.generator(x)
             D_fake = self.discriminator(x, fake)
             loss_G = self.loss_fn.generator_loss(D_fake, fake, y)
+            for term in self.generator_loss_terms:
+                result = evaluate_loss_term(
+                    term,
+                    fake,
+                    y,
+                    epoch=epoch,
+                    global_step=global_step,
+                    masks=masks,
+                )
+                loss_G = loss_G + result.weighted
 
         self.opt_G.zero_grad()
         self.scaler_G.scale(loss_G).backward()

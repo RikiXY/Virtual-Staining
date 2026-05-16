@@ -17,8 +17,8 @@ from torchvision.utils import save_image
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.models.config import ModelConfig
 from virtual_staining.training.checkpoints import BEST_CHECKPOINT_POLICY, CheckpointManager
-from virtual_staining.training.config import TrainingConfig
-from virtual_staining.training.losses import build_gan_loss
+from virtual_staining.training.config import LossConfig, TrainingConfig
+from virtual_staining.training.losses import build_gan_loss, evaluate_loss_term
 from virtual_staining.training.results import EpochMetrics, TrainingResult
 from virtual_staining.training.steps import Pix2PixTrainingStep
 
@@ -72,6 +72,29 @@ def _get_first_pair_size(dataset: torch.utils.data.Dataset | None) -> dict | Non
         "source_path": str(source_path),
         "target_path": str(target_path),
     }
+
+
+def _unpack_batch(
+    batch: object,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor] | None]:
+    if not isinstance(batch, (tuple, list)) or len(batch) not in {2, 3}:
+        raise TypeError("training batches must contain (source, target) or (source, target, masks)")
+    x = batch[0]
+    y = batch[1]
+    if not isinstance(x, torch.Tensor) or not isinstance(y, torch.Tensor):
+        raise TypeError("training batch source and target must be tensors")
+    masks = None
+    if len(batch) == 3:
+        raw_masks = batch[2]
+        if not isinstance(raw_masks, dict):
+            raise TypeError("training batch masks must be a mapping")
+        masks = {}
+        for name, value in raw_masks.items():
+            if not isinstance(value, torch.Tensor):
+                raise TypeError(f"training batch mask {name!r} must be a tensor")
+            masks[str(name)] = value.to(device)
+    return x.to(device), y.to(device), masks
 
 
 def _format_duration(seconds: float | None) -> str:
@@ -210,6 +233,7 @@ class Trainer:
         image_size: tuple[int, int],
         train_dir: Path,
         val_dir: Path,
+        losses: LossConfig | None = None,
     ) -> None:
         self.config = config
         self.model_config = model_config
@@ -222,6 +246,7 @@ class Trainer:
         self._image_size = image_size
         self._train_dir = train_dir
         self._val_dir = val_dir
+        self.losses = losses
 
         self._amp_enabled = _is_amp_enabled(device)
 
@@ -238,6 +263,7 @@ class Trainer:
         self._scaler_G = GradScaler(enabled=self._amp_enabled)
         self._scaler_D = GradScaler(enabled=self._amp_enabled)
         self._loss_fn = build_gan_loss(model_config.gan_loss, l1_weight=config.l1_weight)
+        generator_loss_terms = losses.generator if losses is not None else ()
         self._step = Pix2PixTrainingStep(
             generator=generator,
             discriminator=discriminator,
@@ -248,6 +274,7 @@ class Trainer:
             loss_fn=self._loss_fn,
             device=device,
             amp_enabled=self._amp_enabled,
+            generator_loss_terms=generator_loss_terms,
         )
 
         self._logs_dir = run_paths.logs_dir
@@ -489,9 +516,15 @@ class Trainer:
         total_loss_D = 0.0
         num_batches = 0
 
-        for i, (x, y) in enumerate(self.train_loader):
-            x, y = x.to(self.device), y.to(self.device)
-            step_losses = self._step.step(x, y)
+        for i, batch in enumerate(self.train_loader):
+            x, y, masks = _unpack_batch(batch, self.device)
+            step_losses = self._step.step(
+                x,
+                y,
+                epoch=epoch,
+                global_step=epoch * len(self.train_loader) + i,
+                masks=masks,
+            )
             total_loss_G += step_losses.loss_G
             total_loss_D += step_losses.loss_D
             num_batches += 1
@@ -551,8 +584,8 @@ class Trainer:
         count = 0
 
         with torch.no_grad():
-            for i, (x, y) in enumerate(self.val_loader):
-                x, y = x.to(self.device), y.to(self.device)
+            for i, batch in enumerate(self.val_loader):
+                x, y, masks = _unpack_batch(batch, self.device)
 
                 with autocast(device_type=self.device.type, enabled=self._amp_enabled):
                     fake = self.generator(x)
@@ -560,6 +593,17 @@ class Trainer:
                     D_fake = self.discriminator(x, fake)
                     loss_D = self._loss_fn.discriminator_loss(D_real, D_fake)
                     loss_G = self._loss_fn.generator_loss(D_fake, fake, y)
+                    if self.losses is not None:
+                        for term in self.losses.generator:
+                            result = evaluate_loss_term(
+                                term,
+                                fake,
+                                y,
+                                epoch=epoch,
+                                global_step=None,
+                                masks=masks,
+                            )
+                            loss_G = loss_G + result.weighted
 
                 total_loss_D += loss_D.item()
                 total_loss_G += loss_G.item()

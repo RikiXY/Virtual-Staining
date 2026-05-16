@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
@@ -25,26 +26,140 @@ _TRAINING_KEYS: frozenset[str] = frozenset(
 
 _LOSS_CONFIG_KEYS: frozenset[str] = frozenset({"generator", "discriminator"})
 _LOSS_TERM_KEYS: frozenset[str] = frozenset({"name", "weight", "enabled", "params", "schedule"})
-_LOSS_SCHEDULE_KEYS: frozenset[str] = frozenset({"type"})
+_LOSS_SCHEDULE_KEYS: frozenset[str] = frozenset(
+    {"type", "start_epoch", "end_epoch", "epoch", "factor"}
+)
+_LOSS_MASK_KEYS: frozenset[str] = frozenset(
+    {"enabled", "source", "foreground_weight", "background_weight", "ignore_empty_mask"}
+)
 _SSIM_PARAM_KEYS: frozenset[str] = frozenset(
-    {"data_range", "window_size", "sigma", "channel_mode", "reduction"}
+    {"data_range", "window_size", "sigma", "channel_mode", "reduction", "mask"}
 )
 
 LossName = Literal["ssim"]
-LossScheduleType = Literal["constant"]
+LossScheduleType = Literal[
+    "constant",
+    "linear_warmup",
+    "linear_decay",
+    "step",
+    "cosine",
+    "turn_on_after_epoch",
+    "turn_off_after_epoch",
+]
 LossRole = Literal["generator", "discriminator"]
+LossMaskSource = Literal["foreground_mask"]
 
 
 @dataclass(frozen=True)
 class LossScheduleConfig:
     type: LossScheduleType = "constant"
+    start_epoch: int = 0
+    end_epoch: int | None = None
+    epoch: int | None = None
+    factor: float = 0.0
 
     def validate(self) -> None:
-        if self.type != "constant":
-            raise ValueError("loss schedule type must be one of ['constant']")
+        valid = [
+            "constant",
+            "cosine",
+            "linear_decay",
+            "linear_warmup",
+            "step",
+            "turn_off_after_epoch",
+            "turn_on_after_epoch",
+        ]
+        if self.type not in valid:
+            raise ValueError(f"loss schedule type must be one of {valid}")
+        if self.start_epoch < 0:
+            raise ValueError("loss schedule start_epoch must be greater than or equal to 0")
+        if self.end_epoch is not None and self.end_epoch < self.start_epoch:
+            raise ValueError("loss schedule end_epoch must be greater than or equal to start_epoch")
+        if self.epoch is not None and self.epoch < 0:
+            raise ValueError("loss schedule epoch must be greater than or equal to 0")
+        if self.factor < 0:
+            raise ValueError("loss schedule factor must be greater than or equal to 0")
+        if self.type in {"linear_warmup", "linear_decay", "cosine"} and self.end_epoch is None:
+            raise ValueError(f"loss schedule '{self.type}' requires end_epoch")
+        if self.type in {"step", "turn_on_after_epoch", "turn_off_after_epoch"} and (
+            self.epoch is None
+        ):
+            raise ValueError(f"loss schedule '{self.type}' requires epoch")
 
-    def to_yaml_dict(self) -> dict[str, str]:
-        return {"type": self.type}
+    def multiplier(self, *, epoch: int, global_step: int | None = None) -> float:
+        del global_step
+        if self.type == "constant":
+            return 1.0
+        if self.type == "turn_on_after_epoch":
+            assert self.epoch is not None
+            return 1.0 if epoch >= self.epoch else 0.0
+        if self.type == "turn_off_after_epoch":
+            assert self.epoch is not None
+            return 0.0 if epoch >= self.epoch else 1.0
+        if self.type == "step":
+            assert self.epoch is not None
+            return self.factor if epoch >= self.epoch else 1.0
+
+        assert self.end_epoch is not None
+        if epoch <= self.start_epoch:
+            progress = 0.0
+        elif epoch >= self.end_epoch:
+            progress = 1.0
+        else:
+            span = max(1, self.end_epoch - self.start_epoch)
+            progress = (epoch - self.start_epoch) / span
+        if self.type == "linear_warmup":
+            return progress
+        if self.type == "linear_decay":
+            return 1.0 - progress
+        if self.type == "cosine":
+            return 0.5 * (1.0 + math.cos(math.pi * progress))
+        raise ValueError(f"Unsupported loss schedule type: {self.type!r}")
+
+    def current_weight(
+        self,
+        base_weight: float,
+        *,
+        epoch: int,
+        global_step: int | None = None,
+    ) -> float:
+        return base_weight * self.multiplier(epoch=epoch, global_step=global_step)
+
+    def to_yaml_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {"type": self.type}
+        if self.type in {"linear_warmup", "linear_decay", "cosine"}:
+            data["start_epoch"] = self.start_epoch
+            data["end_epoch"] = self.end_epoch
+        if self.type in {"step", "turn_on_after_epoch", "turn_off_after_epoch"}:
+            data["epoch"] = self.epoch
+        if self.type == "step":
+            data["factor"] = self.factor
+        return data
+
+
+@dataclass(frozen=True)
+class LossMaskConfig:
+    enabled: bool = False
+    source: LossMaskSource = "foreground_mask"
+    foreground_weight: float = 1.0
+    background_weight: float = 1.0
+    ignore_empty_mask: bool = True
+
+    def validate(self) -> None:
+        if self.source != "foreground_mask":
+            raise ValueError("loss mask source must be one of ['foreground_mask']")
+        if self.foreground_weight < 0:
+            raise ValueError("loss mask foreground_weight must be greater than or equal to 0")
+        if self.background_weight < 0:
+            raise ValueError("loss mask background_weight must be greater than or equal to 0")
+
+    def to_yaml_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "source": self.source,
+            "foreground_weight": self.foreground_weight,
+            "background_weight": self.background_weight,
+            "ignore_empty_mask": self.ignore_empty_mask,
+        }
 
 
 @dataclass(frozen=True)
@@ -69,6 +184,19 @@ class LossTermConfig:
     @property
     def is_active(self) -> bool:
         return self.enabled and self.weight != 0.0
+
+    def current_weight(self, *, epoch: int, global_step: int | None = None) -> float:
+        if not self.enabled:
+            return 0.0
+        return self.schedule.current_weight(self.weight, epoch=epoch, global_step=global_step)
+
+    @property
+    def mask(self) -> LossMaskConfig:
+        return parse_loss_mask_config(self.params.get("mask"), f"loss '{self.name}' params.mask")
+
+    @property
+    def requires_mask(self) -> bool:
+        return self.mask.enabled
 
     def to_yaml_dict(self) -> dict[str, Any]:
         return {
@@ -162,8 +290,52 @@ def _parse_loss_schedule(raw: Any, context: str) -> LossScheduleConfig:
     if not isinstance(raw, dict):
         raise TypeError(f"{context} must be a YAML mapping")
     reject_unknown_keys(raw, _LOSS_SCHEDULE_KEYS, context)
-    schedule_type = _parse_choice(raw.get("type", "constant"), f"{context}.type", {"constant"})
-    return LossScheduleConfig(type=cast(LossScheduleType, schedule_type))
+    schedule_type = _parse_choice(
+        raw.get("type", "constant"),
+        f"{context}.type",
+        {
+            "constant",
+            "linear_warmup",
+            "linear_decay",
+            "step",
+            "cosine",
+            "turn_on_after_epoch",
+            "turn_off_after_epoch",
+        },
+    )
+    config = LossScheduleConfig(
+        type=cast(LossScheduleType, schedule_type),
+        start_epoch=int(raw.get("start_epoch", 0)),
+        end_epoch=int(raw["end_epoch"]) if raw.get("end_epoch") is not None else None,
+        epoch=int(raw["epoch"]) if raw.get("epoch") is not None else None,
+        factor=float(raw.get("factor", 0.0)),
+    )
+    config.validate()
+    return config
+
+
+def parse_loss_mask_config(raw: Any, context: str = "loss mask") -> LossMaskConfig:
+    if raw is None:
+        return LossMaskConfig()
+    if not isinstance(raw, dict):
+        raise TypeError(f"{context} must be a YAML mapping")
+    reject_unknown_keys(raw, _LOSS_MASK_KEYS, context)
+    source = _parse_choice(
+        raw.get("source", "foreground_mask"),
+        f"{context}.source",
+        {"foreground_mask"},
+    )
+    config = LossMaskConfig(
+        enabled=parse_bool_strict(raw.get("enabled", False), f"{context}.enabled"),
+        source=cast(LossMaskSource, source),
+        foreground_weight=float(raw.get("foreground_weight", 1.0)),
+        background_weight=float(raw.get("background_weight", 1.0)),
+        ignore_empty_mask=parse_bool_strict(
+            raw.get("ignore_empty_mask", True), f"{context}.ignore_empty_mask"
+        ),
+    )
+    config.validate()
+    return config
 
 
 def _parse_choice(raw: Any, field_name: str, choices: set[str]) -> str:
@@ -206,6 +378,8 @@ def _validate_ssim_params(params: dict[str, Any]) -> None:
     reduction = params.get("reduction", "mean")
     if reduction not in {"mean", "sum", "none"}:
         raise ValueError("loss 'ssim' params.reduction must be one of ['mean', 'none', 'sum']")
+
+    parse_loss_mask_config(params.get("mask"), "loss 'ssim' params.mask")
 
 
 @dataclass(frozen=True)

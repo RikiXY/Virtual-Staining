@@ -9,7 +9,7 @@ from tests.config_helpers import write_yaml
 from virtual_staining.config import RunConfig
 from virtual_staining.config.project import ProjectConfig
 from virtual_staining.models.config import ModelConfig
-from virtual_staining.training.config import LossConfig, TrainingConfig
+from virtual_staining.training.config import LossConfig, LossScheduleConfig, TrainingConfig
 
 
 def _make_project(**overrides: object) -> ProjectConfig:
@@ -211,6 +211,46 @@ def test_run_config_from_yaml_parses_explicit_ssim_loss(tmp_path: Path) -> None:
     assert run_config.losses.discriminator == ()
 
 
+def test_run_config_from_yaml_parses_scheduled_masked_ssim_loss(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "losses.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: ssim_run
+        training:
+          epochs: 1
+        losses:
+          generator:
+            - name: ssim
+              weight: 1.0
+              params:
+                mask:
+                  enabled: true
+                  source: foreground_mask
+                  foreground_weight: 1.0
+                  background_weight: 0.25
+                  ignore_empty_mask: true
+              schedule:
+                type: linear_warmup
+                start_epoch: 0
+                end_epoch: 4
+          discriminator: []
+    """,
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+
+    assert run_config.losses is not None
+    term = run_config.losses.generator[0]
+    assert term.requires_mask is True
+    assert term.mask.background_weight == pytest.approx(0.25)
+    assert term.current_weight(epoch=0) == pytest.approx(0.0)
+    assert term.current_weight(epoch=2) == pytest.approx(0.5)
+    assert term.current_weight(epoch=4) == pytest.approx(1.0)
+
+
 def test_run_config_from_yaml_requires_explicit_loss_weight(tmp_path: Path) -> None:
     yaml_file = tmp_path / "losses_minimal.yaml"
     write_yaml(
@@ -306,12 +346,19 @@ def test_loss_config_to_yaml_dict_preserves_explicit_losses(tmp_path: Path) -> N
         ("name: ssim\n  weight: 1.0\n  target: image", "target"),
         ("name: ssim\n  weight: 1.0\n  typo: true", "typo"),
         ("name: ssim\n  weight: 1.0\n  schedule: {type: linear}", "schedule"),
+        ("name: ssim\n  weight: 1.0\n  schedule: {type: linear_warmup}", "end_epoch"),
+        ("name: ssim\n  weight: 1.0\n  schedule: {type: step}", "epoch"),
         ("name: ssim\n  weight: 1.0\n  enabled: 'true'", "enabled"),
         ("name: ssim\n  weight: 1.0\n  params: {window_size: 4}", "window_size"),
         ("name: ssim\n  weight: 1.0\n  params: {data_range: 0.0}", "data_range"),
         ("name: ssim\n  weight: 1.0\n  params: {sigma: 0.0}", "sigma"),
         ("name: ssim\n  weight: 1.0\n  params: {channel_mode: lab}", "channel_mode"),
         ("name: ssim\n  weight: 1.0\n  params: {reduction: median}", "reduction"),
+        ("name: ssim\n  weight: 1.0\n  params: {mask: {source: target_mask}}", "source"),
+        (
+            "name: ssim\n  weight: 1.0\n  params: {mask: {foreground_weight: -1.0}}",
+            "foreground_weight",
+        ),
         ("name: ms_ssim\n  weight: 1.0", "losses.generator\\[0\\].name"),
     ],
 )
@@ -383,6 +430,37 @@ def test_loss_config_rejects_duplicate_loss_names(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Duplicate loss"):
         RunConfig.from_yaml(yaml_file)
+
+
+@pytest.mark.parametrize(
+    ("schedule", "expected"),
+    [
+        (LossScheduleConfig(type="constant"), {0: 1.0, 5: 1.0}),
+        (
+            LossScheduleConfig(type="linear_warmup", start_epoch=0, end_epoch=4),
+            {0: 0.0, 2: 0.5, 4: 1.0},
+        ),
+        (
+            LossScheduleConfig(type="linear_decay", start_epoch=0, end_epoch=4),
+            {0: 1.0, 2: 0.5, 4: 0.0},
+        ),
+        (LossScheduleConfig(type="step", epoch=3, factor=0.25), {2: 1.0, 3: 0.25}),
+        (LossScheduleConfig(type="turn_on_after_epoch", epoch=3), {2: 0.0, 3: 1.0}),
+        (LossScheduleConfig(type="turn_off_after_epoch", epoch=3), {2: 1.0, 3: 0.0}),
+    ],
+)
+def test_loss_schedule_multiplier_values(
+    schedule: LossScheduleConfig, expected: dict[int, float]
+) -> None:
+    schedule.validate()
+    for epoch, value in expected.items():
+        assert schedule.multiplier(epoch=epoch) == pytest.approx(value)
+
+
+def test_cosine_loss_schedule_boundaries() -> None:
+    schedule = LossScheduleConfig(type="cosine", start_epoch=0, end_epoch=4)
+    assert schedule.multiplier(epoch=0) == pytest.approx(1.0)
+    assert schedule.multiplier(epoch=4) == pytest.approx(0.0)
 
 
 def test_training_from_run_yaml_section(tmp_path: Path) -> None:

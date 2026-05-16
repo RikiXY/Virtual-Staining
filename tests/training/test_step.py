@@ -8,13 +8,15 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.amp import GradScaler
 
-from virtual_staining.training.config import LossTermConfig
+from virtual_staining.training.config import LossScheduleConfig, LossTermConfig
 from virtual_staining.training.losses import (
     LOSS_REGISTRY,
+    LossTermResult,
     Pix2PixLoss,
     SsimLoss,
     StepLosses,
     evaluate_loss_term,
+    reduce_masked_loss,
 )
 from virtual_staining.training.steps import Pix2PixTrainingStep
 
@@ -50,6 +52,23 @@ def _make_step() -> Pix2PixTrainingStep:
         loss_fn=Pix2PixLoss(l1_weight=25.0),
         device=torch.device("cpu"),
         amp_enabled=False,
+    )
+
+
+def _make_configured_step(term: LossTermConfig) -> Pix2PixTrainingStep:
+    gen = _TinyGen()
+    disc = _TinyDisc()
+    return Pix2PixTrainingStep(
+        generator=gen,
+        discriminator=disc,
+        opt_G=optim.Adam(gen.parameters(), lr=1e-4),
+        opt_D=optim.Adam(disc.parameters(), lr=1e-4),
+        scaler_G=GradScaler(enabled=False),
+        scaler_D=GradScaler(enabled=False),
+        loss_fn=Pix2PixLoss(l1_weight=0.0),
+        device=torch.device("cpu"),
+        amp_enabled=False,
+        generator_loss_terms=(term,),
     )
 
 
@@ -203,6 +222,76 @@ def test_evaluate_loss_term_returns_raw_and_weighted_ssim_values() -> None:
 
     assert result.name == "ssim"
     assert result.weighted.item() == pytest.approx(result.raw.item() * 2.0)
+    assert result.current_weight == pytest.approx(2.0)
+
+
+def test_scheduled_loss_term_uses_current_weight() -> None:
+    term = LossTermConfig(
+        name="ssim",
+        weight=2.0,
+        params={"window_size": 5},
+        schedule=LossScheduleConfig(type="constant"),
+    )
+    prediction = torch.zeros(1, 3, 16, 16)
+    target = torch.ones(1, 3, 16, 16) * 0.25
+
+    result = evaluate_loss_term(term, prediction, target, epoch=3)
+
+    assert isinstance(result, LossTermResult)
+    assert result.current_weight == pytest.approx(2.0)
+
+
+def test_masked_loss_reduction_weights_foreground_and_background() -> None:
+    loss_map = torch.tensor([[[[1.0, 1.0], [3.0, 3.0]]]])
+    mask = torch.tensor([[[[1.0, 0.0], [1.0, 0.0]]]])
+    mask_config = LossTermConfig(
+        name="ssim",
+        weight=1.0,
+        params={
+            "mask": {
+                "enabled": True,
+                "foreground_weight": 1.0,
+                "background_weight": 0.0,
+            }
+        },
+    ).mask
+
+    value = reduce_masked_loss(loss_map, mask, mask_config=mask_config)
+
+    assert value.item() == pytest.approx(2.0)
+
+
+def test_empty_mask_can_be_ignored_without_creating_loss() -> None:
+    loss_map = torch.ones(1, 1, 2, 2)
+    mask = torch.zeros(1, 1, 2, 2)
+    mask_config = LossTermConfig(
+        name="ssim",
+        weight=1.0,
+        params={
+            "mask": {
+                "enabled": True,
+                "foreground_weight": 1.0,
+                "background_weight": 0.25,
+                "ignore_empty_mask": True,
+            }
+        },
+    ).mask
+
+    value = reduce_masked_loss(loss_map, mask, mask_config=mask_config)
+
+    assert value.item() == pytest.approx(0.0)
+
+
+def test_mask_enabled_loss_requires_batch_mask() -> None:
+    term = LossTermConfig(
+        name="ssim",
+        weight=1.0,
+        params={"window_size": 5, "mask": {"enabled": True}},
+    )
+    x = torch.zeros(1, 3, 16, 16)
+
+    with pytest.raises(ValueError, match="foreground_mask"):
+        evaluate_loss_term(term, x, x, masks=None)
 
 
 # ---------------------------------------------------------------------------
@@ -223,3 +312,21 @@ def test_training_step_runs_on_cpu() -> None:
     result = step.step(torch.zeros(1, 3, 4, 4), torch.zeros(1, 3, 4, 4))
     assert result.loss_G >= 0.0
     assert result.loss_D >= 0.0
+
+
+def test_training_step_applies_configured_ssim_loss() -> None:
+    term = LossTermConfig(name="ssim", weight=1.0, params={"window_size": 3})
+    step = _make_configured_step(term)
+
+    result = step.step(torch.zeros(1, 3, 8, 8), torch.ones(1, 3, 8, 8) * 0.5, epoch=0)
+
+    assert (
+        result.loss_G
+        > Pix2PixLoss(l1_weight=0.0)
+        .generator_loss(
+            torch.zeros(1, 1, 1, 1),
+            torch.zeros(1, 3, 8, 8),
+            torch.ones(1, 3, 8, 8) * 0.5,
+        )
+        .item()
+    )

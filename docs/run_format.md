@@ -88,11 +88,11 @@ values that were not explicitly set by the user.
 
 Optional composable losses are recorded under top-level `losses.generator` and
 `losses.discriminator` lists. In the current registry contract, `ssim` is the
-only accepted explicit loss term, it is generator-side only, and its schedule
-type is `constant`. Registered losses have a default weight of `0.0`; a term is
-active only when it is explicitly listed, `enabled` is `true`, and its current
-weight is nonzero. Explicitly listed terms must declare `weight`; unlisted
-registry entries remain absent and inactive.
+only accepted explicit loss term and it is generator-side only. Registered
+losses have a default weight of `0.0`; a term is active only when it is
+explicitly listed, `enabled` is `true`, and its scheduled current weight is
+nonzero. Explicitly listed terms must declare `weight`; unlisted registry
+entries remain absent and inactive.
 
 ```yaml
 losses:
@@ -106,8 +106,16 @@ losses:
         sigma: 1.5
         channel_mode: rgb
         reduction: mean
+        mask:
+          enabled: false
+          source: foreground_mask
+          foreground_weight: 1.0
+          background_weight: 0.25
+          ignore_empty_mask: true
       schedule:
-        type: constant
+        type: linear_warmup
+        start_epoch: 0
+        end_epoch: 5
   discriminator: []
 ```
 
@@ -115,6 +123,18 @@ The training SSIM implementation is differentiable PyTorch code. It maps
 current training tensors from `[-1, 1]` to `[0, 1]` before computing SSIM, and
 uses `ssim_loss = 1 - SSIM(prediction, target)`. MS-SSIM and other structural
 losses are not supported by this registry yet.
+
+Supported schedule types are `constant`, `linear_warmup`, `linear_decay`,
+`step`, `cosine`, `turn_on_after_epoch`, and `turn_off_after_epoch`.
+`linear_warmup`, `linear_decay`, and `cosine` use `start_epoch` and
+`end_epoch`. `step`, `turn_on_after_epoch`, and `turn_off_after_epoch` use
+`epoch`; `step` also uses `factor`.
+
+Mask weighting is optional. When `params.mask.enabled` is `true`, the training
+dataset must provide a `foreground_mask` tensor for every batch. Missing masks
+raise an error instead of being treated as all-foreground. Current datasets look
+for sidecar patch masks named `<sample_id>_foreground_mask<ext>` in the same
+split directory.
 
 If `losses` is omitted, the training loop keeps the legacy Pix2Pix objective
 defined by `model.gan_loss: bce` and `training.l1_weight`.

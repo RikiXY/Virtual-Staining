@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from virtual_staining.training.config import LossTermConfig
+from virtual_staining.training.config import LossMaskConfig, LossTermConfig
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,7 @@ class LossTermResult:
     name: str
     raw: torch.Tensor
     weighted: torch.Tensor
+    current_weight: float
 
 
 class SsimLoss(nn.Module):
@@ -70,7 +71,7 @@ class SsimLoss(nn.Module):
         self.channel_mode = channel_mode
         self.reduction = reduction
 
-    def forward(self, prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def loss_map(self, prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         if prediction.shape != target.shape:
             raise ValueError(
                 f"prediction and target must have the same shape. "
@@ -122,7 +123,11 @@ class SsimLoss(nn.Module):
         numerator = (2 * mu_xy + c1) * (2 * sigma_xy + c2)
         denominator = (mu_x_sq + mu_y_sq + c1) * (sigma_x_sq + sigma_y_sq + c2)
         ssim_map = numerator / denominator.clamp_min(torch.finfo(denominator.dtype).eps)
-        loss = 1.0 - ssim_map.flatten(start_dim=1).mean(dim=1)
+        return 1.0 - ssim_map
+
+    def forward(self, prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        loss_map = self.loss_map(prediction, target)
+        loss = loss_map.flatten(start_dim=1).mean(dim=1)
 
         if self.reduction == "mean":
             return loss.mean()
@@ -156,11 +161,93 @@ def evaluate_loss_term(
     term: LossTermConfig,
     prediction: torch.Tensor,
     target: torch.Tensor,
+    *,
+    epoch: int = 0,
+    global_step: int | None = None,
+    masks: dict[str, torch.Tensor] | None = None,
 ) -> LossTermResult:
+    current_weight = term.current_weight(epoch=epoch, global_step=global_step)
     if term.name == "ssim":
-        raw = build_ssim_loss(term.params)(prediction, target)
-        return LossTermResult(name=term.name, raw=raw, weighted=raw * term.weight)
+        raw = _evaluate_ssim_term(term, prediction, target, masks=masks)
+        return LossTermResult(
+            name=term.name,
+            raw=raw,
+            weighted=raw * current_weight,
+            current_weight=current_weight,
+        )
     raise ValueError(f"Unsupported loss term: {term.name!r}")
+
+
+def _evaluate_ssim_term(
+    term: LossTermConfig,
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    masks: dict[str, torch.Tensor] | None,
+) -> torch.Tensor:
+    loss = build_ssim_loss(term.params)
+    mask_config = term.mask
+    if not mask_config.enabled:
+        return loss(prediction, target)
+    if masks is None or mask_config.source not in masks:
+        raise ValueError(
+            f"loss '{term.name}' requires batch mask '{mask_config.source}', "
+            "but the training batch did not provide it"
+        )
+    loss_map = loss.loss_map(prediction, target)
+    return reduce_masked_loss(
+        loss_map,
+        masks[mask_config.source],
+        mask_config=mask_config,
+        reduction=cast(Literal["mean", "sum", "none"], loss.reduction),
+    )
+
+
+def reduce_masked_loss(
+    loss_map: torch.Tensor,
+    mask: torch.Tensor,
+    *,
+    mask_config: LossMaskConfig,
+    reduction: Literal["mean", "sum", "none"] = "mean",
+) -> torch.Tensor:
+    if mask.ndim == 3:
+        mask = mask.unsqueeze(1)
+    if mask.ndim != 4:
+        raise ValueError("foreground_mask must be an NCHW or NHW tensor")
+    if mask.shape[0] != loss_map.shape[0]:
+        raise ValueError("foreground_mask batch dimension must match loss tensor")
+    if mask.shape[-2:] != loss_map.shape[-2:]:
+        raise ValueError("foreground_mask spatial dimensions must match loss tensor")
+    mask = mask.to(device=loss_map.device, dtype=loss_map.dtype)
+    foreground = mask > 0.5
+    weights = torch.where(
+        foreground,
+        loss_map.new_tensor(mask_config.foreground_weight),
+        loss_map.new_tensor(mask_config.background_weight),
+    )
+    if loss_map.shape[1] != weights.shape[1]:
+        weights = weights.expand(-1, loss_map.shape[1], -1, -1)
+
+    sample_values: list[torch.Tensor] = []
+    for index in range(loss_map.shape[0]):
+        sample_weights = weights[index]
+        if mask_config.ignore_empty_mask and not foreground[index].any():
+            continue
+        denom = sample_weights.sum().clamp_min(torch.finfo(loss_map.dtype).eps)
+        sample_values.append((loss_map[index] * sample_weights).sum() / denom)
+
+    if not sample_values:
+        empty = loss_map.sum() * 0.0
+        if reduction == "none":
+            return empty.reshape(1)[:0]
+        return empty
+
+    values = torch.stack(sample_values)
+    if reduction == "mean":
+        return values.mean()
+    if reduction == "sum":
+        return values.sum()
+    return values
 
 
 def _ssim_choice(raw: object, field_name: str, choices: set[str]) -> str:

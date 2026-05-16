@@ -109,6 +109,12 @@ training:
 #         sigma: 1.5
 #         channel_mode: rgb
 #         reduction: mean
+#         mask:
+#           enabled: false
+#           source: foreground_mask
+#           foreground_weight: 1.0
+#           background_weight: 0.25
+#           ignore_empty_mask: true
 #       schedule:
 #         type: constant
 #   discriminator: []

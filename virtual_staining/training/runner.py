@@ -48,6 +48,12 @@ def set_seed(seed: int) -> None:
     torch.backends.cudnn.benchmark = False
 
 
+def _requires_foreground_masks(config: RunConfig) -> bool:
+    if config.losses is None:
+        return False
+    return any(term.requires_mask for term in config.losses.generator)
+
+
 def run_training(
     config: RunConfig,
     config_path: Path,
@@ -164,17 +170,31 @@ def run_training(
             transforms.Normalize([0.5] * 3, [0.5] * 3),
         ]
     )
+    mask_transform = transforms.Compose(
+        [
+            transforms.Resize(
+                to_torchvision_hw(config.project.image_size),
+                interpolation=transforms.InterpolationMode.NEAREST,
+            ),
+            transforms.ToTensor(),
+        ]
+    )
 
     train_dir = config.project.split_dir("train")
     val_dir = config.project.split_dir("val")
+    include_foreground_mask = _requires_foreground_masks(config)
 
     train_dataset = PairedManifestDataset(
         manifest.filter_split("train"),
         transform=transform,
+        mask_transform=mask_transform,
+        include_foreground_mask=include_foreground_mask,
     )
     val_dataset = PairedManifestDataset(
         manifest.filter_split("val"),
         transform=transform,
+        mask_transform=mask_transform,
+        include_foreground_mask=include_foreground_mask,
     )
     logger.info(
         "Loaded manifest: %s train, %s val samples",
@@ -212,6 +232,7 @@ def run_training(
         image_size=config.project.image_size,
         train_dir=train_dir,
         val_dir=val_dir,
+        losses=config.losses,
     )
 
     start_epoch = 0
