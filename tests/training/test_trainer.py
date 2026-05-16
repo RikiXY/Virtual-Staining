@@ -18,7 +18,7 @@ from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.models.config import ModelConfig
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
-from virtual_staining.training.config import TrainingConfig
+from virtual_staining.training.config import LossConfig, LossTermConfig, TrainingConfig
 from virtual_staining.training.trainer import Trainer
 
 
@@ -260,6 +260,70 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
     assert len(rows) == 1
     assert float(rows[0]["loss_G_train"]) > 0
     assert float(rows[0]["loss_D_train"]) > 0
+
+
+def test_trainer_metrics_csv_includes_configured_loss_components(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "dataset"
+    project = _make_project(dataset_root, tmp_path / "results", "loss_component_run")
+    config = TrainingConfig(
+        batch_size=1,
+        epochs=1,
+        lr_g=2e-4,
+        lr_d=2e-4,
+        beta1=0.5,
+        beta2=0.999,
+        l1_weight=0.0,
+        seed=0,
+        num_workers=0,
+        validate_rate=1,
+        checkpoint_rate=2,
+        log_rate=1,
+    )
+    train_loader, val_loader = _make_train_val_loaders(
+        dataset_root,
+        project,
+        train_prefixes=["00000_00000"],
+        val_prefixes=["00256_00000"],
+    )
+    run_paths = RunPaths(project.run_root)
+    run_paths.create_directories()
+    losses = LossConfig(
+        generator=(LossTermConfig(name="ssim", weight=1.0, params={"window_size": 3}),)
+    )
+
+    trainer = Trainer(
+        config=config,
+        model_config=ModelConfig(),
+        run_paths=run_paths,
+        generator=UNetGenerator().to("cpu"),
+        discriminator=PatchGANDiscriminator().to("cpu"),
+        train_loader=train_loader,
+        val_loader=val_loader,
+        device=torch.device("cpu"),
+        image_size=project.image_size,
+        train_dir=dataset_root / "splits" / "train",
+        val_dir=dataset_root / "splits" / "val",
+        losses=losses,
+    )
+    trainer.train(seed=0)
+
+    with (run_paths.root / "metrics.csv").open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+
+    row = rows[0]
+    assert "loss_train_raw_ssim" in row
+    assert "loss_train_weighted_ssim" in row
+    assert "loss_train_current_weight_ssim" in row
+    assert "loss_val_raw_ssim" in row
+    assert "loss_val_weighted_ssim" in row
+    assert "loss_val_current_weight_ssim" in row
+    assert "loss_train_total_generator" in row
+    assert "loss_val_total_generator" in row
+    assert float(row["loss_train_raw_ssim"]) >= 0.0
+    assert float(row["loss_train_weighted_ssim"]) >= 0.0
+    assert float(row["loss_train_current_weight_ssim"]) == pytest.approx(1.0)
+    assert row["loss_G_train"] == row["loss_train_total_generator"]
+    assert row["loss_G_val"] == row["loss_val_total_generator"]
 
 
 def test_trainer_checkpoint_round_trip(

@@ -139,6 +139,27 @@ split directory.
 If `losses` is omitted, the training loop keeps the legacy Pix2Pix objective
 defined by `model.gan_loss: bce` and `training.l1_weight`.
 
+When configured loss terms are present, `metrics.csv` keeps the existing
+aggregate columns and adds deterministic component columns using normalized
+names:
+
+```text
+loss_train_total_generator
+loss_train_total_discriminator
+loss_train_raw_<loss_name>
+loss_train_weighted_<loss_name>
+loss_train_current_weight_<loss_name>
+loss_val_total_generator
+loss_val_total_discriminator
+loss_val_raw_<loss_name>
+loss_val_weighted_<loss_name>
+loss_val_current_weight_<loss_name>
+```
+
+For example, configured SSIM writes `loss_train_raw_ssim`,
+`loss_train_weighted_ssim`, and `loss_train_current_weight_ssim`, plus matching
+validation columns when validation runs.
+
 ### `metadata/run.json`
 
 Stable run-level provenance and aggregate summary. It identifies what the run is

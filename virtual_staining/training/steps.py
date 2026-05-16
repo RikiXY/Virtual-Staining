@@ -62,6 +62,9 @@ class Pix2PixTrainingStep:
             fake = self.generator(x)
             D_fake = self.discriminator(x, fake)
             loss_G = self.loss_fn.generator_loss(D_fake, fake, y)
+            component_raw: dict[str, float] = {}
+            component_weighted: dict[str, float] = {}
+            component_current_weight: dict[str, float] = {}
             for term in self.generator_loss_terms:
                 result = evaluate_loss_term(
                     term,
@@ -72,10 +75,19 @@ class Pix2PixTrainingStep:
                     masks=masks,
                 )
                 loss_G = loss_G + result.weighted
+                component_raw[result.name] = float(result.raw.detach().item())
+                component_weighted[result.name] = float(result.weighted.detach().item())
+                component_current_weight[result.name] = result.current_weight
 
         self.opt_G.zero_grad()
         self.scaler_G.scale(loss_G).backward()
         self.scaler_G.step(self.opt_G)
         self.scaler_G.update()
 
-        return StepLosses(loss_G=loss_G.item(), loss_D=loss_D.item())
+        return StepLosses(
+            loss_G=loss_G.item(),
+            loss_D=loss_D.item(),
+            raw=component_raw,
+            weighted=component_weighted,
+            current_weight=component_current_weight,
+        )

@@ -330,3 +330,17 @@ def test_training_step_applies_configured_ssim_loss() -> None:
         )
         .item()
     )
+
+
+def test_training_step_returns_component_maps() -> None:
+    term = LossTermConfig(name="ssim", weight=2.0, params={"window_size": 3})
+    step = _make_configured_step(term)
+
+    result = step.step(torch.zeros(1, 3, 8, 8), torch.ones(1, 3, 8, 8) * 0.5, epoch=0)
+
+    assert result.raw is not None
+    assert result.weighted is not None
+    assert result.current_weight is not None
+    assert result.raw["ssim"] > 0
+    assert result.weighted["ssim"] == pytest.approx(result.raw["ssim"] * 2.0)
+    assert result.current_weight["ssim"] == pytest.approx(2.0)

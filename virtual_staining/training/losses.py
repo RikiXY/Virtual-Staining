@@ -27,6 +27,9 @@ LOSS_REGISTRY: dict[str, LossRegistryEntry] = {
 class StepLosses:
     loss_G: float
     loss_D: float
+    raw: dict[str, float] | None = None
+    weighted: dict[str, float] | None = None
+    current_weight: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -35,6 +38,7 @@ class LossTermResult:
     raw: torch.Tensor
     weighted: torch.Tensor
     current_weight: float
+    stage: Literal["generator", "discriminator"] = "generator"
 
 
 class SsimLoss(nn.Module):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -10,6 +10,9 @@ class EpochMetrics:
     loss_D: float
     loss_L1: float | None = None
     loss_adv: float | None = None
+    raw: dict[str, float] = field(default_factory=dict)
+    weighted: dict[str, float] = field(default_factory=dict)
+    current_weight: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
