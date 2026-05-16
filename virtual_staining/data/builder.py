@@ -6,7 +6,6 @@ import datetime
 import json
 import logging
 import random
-import shutil
 import sys
 from pathlib import Path
 from typing import Any, cast
@@ -19,12 +18,12 @@ from virtual_staining.data.config import PreprocessingConfig
 from virtual_staining.data.manifest import DatasetManifest, ManifestRecord, Split
 from virtual_staining.data.preprocessing import (
     MASK_PARAMETER_GRID,
+    assign_split_by_hash,
     calculate_mask_with_multiple_parameters,
     ensure_clean_directory,
     estimate_affine_from_scaled,
     is_valid_patch_pair,
     iter_image_with_grid,
-    split_items,
     validate_image_filename,
     warp_aligned_patch,
 )
@@ -252,11 +251,17 @@ class DatasetBuilder:
             raise RuntimeError("align() must be called before _stream_patches_to_disk()")
 
         root = self.config.dataset_root
-        valid_src_dir = root / "processed" / "valid" / "source"
-        valid_tgt_dir = root / "processed" / "valid" / "target"
+        processed_root = root / "processed"
+        splits_root = root / "splits"
         discarded_src_dir = root / "discarded_patches" / "source"
         discarded_tgt_dir = root / "discarded_patches" / "target"
-        for path in [valid_src_dir, valid_tgt_dir]:
+        processed_root.mkdir(parents=True, exist_ok=True)
+        split_dirs: dict[Split, Path] = {
+            "train": splits_root / "train",
+            "val": splits_root / "val",
+            "test": splits_root / "test",
+        }
+        for path in split_dirs.values():
             ensure_clean_directory(path)
         if self.config.save_discarded_patches:
             for path in [discarded_src_dir, discarded_tgt_dir]:
@@ -283,6 +288,10 @@ class DatasetBuilder:
         valid_rows: list[dict[str, Any]] = []
         discarded_rows: list[dict[str, Any]] = []
         patch_w, patch_h = self.config.image_size
+        split_seed = self._effective_seed if self._effective_seed is not None else self.config.seed
+        if split_seed is None:
+            split_seed = 0
+        split_ratios = (self.config.train_ratio, self.config.val_ratio, self.config.test_ratio)
         for (x, y), src, src_mask in source_iter:
             if src_mask is None:
                 raise RuntimeError("Patch extraction did not return source masks")
@@ -317,6 +326,7 @@ class DatasetBuilder:
                 )
 
             extracted_pairs += 1
+            sample_id = f"{x:05}_{y:05}"
             patch_source_name = f"{x:05}_{y:05}_source{self._source_suffix}"
             patch_target_name = f"{x:05}_{y:05}_target{self._target_suffix}"
 
@@ -331,10 +341,21 @@ class DatasetBuilder:
                 max_largest_white_component_ratio=self.config.max_largest_white_component_ratio,
             )
             if is_valid:
-                cv2.imwrite(str(valid_src_dir / patch_source_name), src)
-                cv2.imwrite(str(valid_tgt_dir / patch_target_name), tgt)
+                split_name = cast(
+                    Split,
+                    assign_split_by_hash(
+                        seed=split_seed,
+                        sample_id=sample_id,
+                        ratios=split_ratios,
+                    ),
+                )
+                split_dir = split_dirs[split_name]
+                cv2.imwrite(str(split_dir / patch_source_name), src)
+                cv2.imwrite(str(split_dir / patch_target_name), tgt)
                 valid_rows.append(
                     {
+                        "sample_id": sample_id,
+                        "split": split_name,
                         "x": x,
                         "y": y,
                         "source": patch_source_name,
@@ -347,7 +368,7 @@ class DatasetBuilder:
                     cv2.imwrite(str(discarded_tgt_dir / patch_target_name), tgt)
                 discarded_rows.append(
                     {
-                        "sample_id": f"{x:05}_{y:05}",
+                        "sample_id": sample_id,
                         "source_name": patch_source_name,
                         "target_name": patch_target_name,
                         "source_foreground_ratio": debug_info["source_foreground_ratio"],
@@ -373,66 +394,45 @@ class DatasetBuilder:
         valid_rows: list[dict[str, Any]],
         discarded_rows: list[dict[str, Any]],
     ) -> DatasetBuildResult:
-        """Assign splits from staged valid patches and write manifests/metadata."""
+        """Write manifests and metadata for patches already streamed to disk."""
         root = self.config.dataset_root
-        valid_src_dir = root / "processed" / "valid" / "source"
-        valid_tgt_dir = root / "processed" / "valid" / "target"
         discarded_root = root / "discarded_patches"
         manifests_dir = root / "manifests"
         metadata_dir = root / "metadata"
-        splits_root = root / "splits"
 
         for path in [
             manifests_dir,
         ]:
             ensure_clean_directory(path)
-        for split_name in ("train", "val", "test"):
-            ensure_clean_directory(splits_root / split_name)
         metadata_dir.mkdir(parents=True, exist_ok=True)
         discarded_root.mkdir(parents=True, exist_ok=True)
 
-        if self._effective_seed is not None:
-            random.seed(self._effective_seed)
-        split = split_items(
-            valid_rows,
-            [self.config.train_ratio, self.config.val_ratio, self.config.test_ratio],
-        )
-        split_names: tuple[Split, Split, Split] = ("train", "val", "test")
-        split_dirs = {
-            "train": splits_root / "train",
-            "val": splits_root / "val",
-            "test": splits_root / "test",
-        }
         input_modality = _modality_from_filename(self._source_file)
         target_modality = _modality_from_filename(self._target_file)
 
         manifest_records: list[ManifestRecord] = []
-        for split_name, subset in zip(split_names, split, strict=True):
-            subset_dir = split_dirs[split_name]
-            for row in subset:
-                src_name = cast(str, row["source"])
-                tgt_name = cast(str, row["target"])
-                x = cast(int, row["x"])
-                y = cast(int, row["y"])
-                sample_id = f"{x:05}_{y:05}"  # unique only within this single-pair prepare run
+        for row in valid_rows:
+            src_name = cast(str, row["source"])
+            tgt_name = cast(str, row["target"])
+            x = cast(int, row["x"])
+            y = cast(int, row["y"])
+            split_name = cast(Split, row["split"])
+            sample_id = cast(str, row["sample_id"])
 
-                shutil.move(str(valid_src_dir / src_name), str(subset_dir / src_name))
-                shutil.move(str(valid_tgt_dir / tgt_name), str(subset_dir / tgt_name))
-
-                manifest_records.append(
-                    ManifestRecord(
-                        sample_id=sample_id,
-                        split=split_name,
-                        input_path=Path(f"splits/{split_name}/{src_name}"),
-                        target_path=Path(f"splits/{split_name}/{tgt_name}"),
-                        input_modality=input_modality,
-                        target_modality=target_modality,
-                        x=x,
-                        y=y,
-                        width=self.config.image_size[0],
-                        height=self.config.image_size[1],
-                    )
+            manifest_records.append(
+                ManifestRecord(
+                    sample_id=sample_id,
+                    split=split_name,
+                    input_path=Path(f"splits/{split_name}/{src_name}"),
+                    target_path=Path(f"splits/{split_name}/{tgt_name}"),
+                    input_modality=input_modality,
+                    target_modality=target_modality,
+                    x=x,
+                    y=y,
+                    width=self.config.image_size[0],
+                    height=self.config.image_size[1],
                 )
+            )
 
         discarded_manifest_records: list[ManifestRecord] = []
         for row in discarded_rows:
@@ -497,9 +497,9 @@ class DatasetBuilder:
             "num_patches_total": len(manifest_records) + len(discarded_manifest_records),
             "num_patches_valid": len(manifest_records),
             "num_patches_discarded": len(discarded_manifest_records),
-            "num_train": len(split[0]),
-            "num_val": len(split[1]),
-            "num_test": len(split[2]),
+            "num_train": sum(1 for record in manifest_records if record.split == "train"),
+            "num_val": sum(1 for record in manifest_records if record.split == "val"),
+            "num_test": sum(1 for record in manifest_records if record.split == "test"),
             "seed": self._effective_seed,
         }
         with open(metadata_dir / "dataset_build.json", "w", encoding="utf-8") as f:
@@ -516,16 +516,16 @@ class DatasetBuilder:
 
         logger.info(
             "Saved: train=%s, val=%s, test=%s, discarded=%s",
-            len(split[0]),
-            len(split[1]),
-            len(split[2]),
+            build_metadata["num_train"],
+            build_metadata["num_val"],
+            build_metadata["num_test"],
             len(discarded_rows),
         )
         _log_memory("split_and_save")
         return DatasetBuildResult(
-            train_count=len(split[0]),
-            val_count=len(split[1]),
-            test_count=len(split[2]),
+            train_count=cast(int, build_metadata["num_train"]),
+            val_count=cast(int, build_metadata["num_val"]),
+            test_count=cast(int, build_metadata["num_test"]),
             skipped_count=len(discarded_rows),
             output_root=root,
             reused=False,

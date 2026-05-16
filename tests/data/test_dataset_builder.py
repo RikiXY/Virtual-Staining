@@ -19,7 +19,7 @@ from virtual_staining.config.run import RunConfig
 from virtual_staining.data import builder as builder_module
 from virtual_staining.data.builder import DatasetBuilder
 from virtual_staining.data.config import PreprocessingConfig
-from virtual_staining.data.preprocessing import AlignmentMetadata
+from virtual_staining.data.preprocessing import AlignmentMetadata, assign_split_by_hash
 from virtual_staining.data.results import DatasetBuildResult
 
 # ---------------------------------------------------------------------------
@@ -473,7 +473,7 @@ def test_run_all_produces_same_output_as_old_stages(tmp_path: Path) -> None:
         assert streaming_files == legacy_files
 
 
-def test_stream_patches_to_disk_writes_valid_patch_staging(
+def test_stream_patches_to_disk_writes_valid_patches_to_final_splits(
     builder_config: PreprocessingConfig,
 ) -> None:
     builder = DatasetBuilder(builder_config)
@@ -485,16 +485,19 @@ def test_stream_patches_to_disk_writes_valid_patch_staging(
 
     assert len(valid_rows) == 81
     assert discarded_rows == []
-    assert all(set(row) == {"x", "y", "source", "target"} for row in valid_rows)
+    assert all(
+        set(row) == {"sample_id", "split", "x", "y", "source", "target"} for row in valid_rows
+    )
     assert all(
         not any(isinstance(value, np.ndarray) for value in row.values()) for row in valid_rows
     )
 
     root = builder_config.dataset_root
-    valid_source_files = list((root / "processed" / "valid" / "source").iterdir())
-    valid_target_files = list((root / "processed" / "valid" / "target").iterdir())
-    assert len(valid_source_files) == 81
-    assert len(valid_target_files) == 81
+    split_files = [
+        path for split in ("train", "val", "test") for path in (root / "splits" / split).iterdir()
+    ]
+    assert len(split_files) == len(valid_rows) * 2
+    assert not (root / "processed" / "valid").exists()
     assert not (root / "discarded_patches" / "source").exists()
     assert not (root / "discarded_patches" / "target").exists()
 
@@ -550,7 +553,9 @@ def test_stream_patches_to_disk_records_discarded_rows_without_images_by_default
     assert len(valid_rows) + len(discarded_rows) == 81
     assert valid_rows
     assert discarded_rows
-    assert all(set(row) == {"x", "y", "source", "target"} for row in valid_rows)
+    assert all(
+        set(row) == {"sample_id", "split", "x", "y", "source", "target"} for row in valid_rows
+    )
     assert all("reasons" in row for row in discarded_rows)
     assert all(
         {
@@ -570,10 +575,10 @@ def test_stream_patches_to_disk_records_discarded_rows_without_images_by_default
     )
 
     root = builder_config.dataset_root
-    valid_source_files = list((root / "processed" / "valid" / "source").iterdir())
-    valid_target_files = list((root / "processed" / "valid" / "target").iterdir())
-    assert len(valid_source_files) == len(valid_rows)
-    assert len(valid_target_files) == len(valid_rows)
+    split_files = [
+        path for split in ("train", "val", "test") for path in (root / "splits" / split).iterdir()
+    ]
+    assert len(split_files) == len(valid_rows) * 2
     assert not (root / "discarded_patches" / "source").exists()
     assert not (root / "discarded_patches" / "target").exists()
 
@@ -617,7 +622,7 @@ def test_stream_patches_to_disk_writes_discarded_patch_images_when_enabled(
     assert len(list((root / "discarded_patches" / "target").iterdir())) == len(discarded_rows)
 
 
-def test_assign_splits_and_finalize_moves_staged_files_and_writes_manifest(
+def test_assign_splits_and_finalize_writes_manifest_for_streamed_split_files(
     builder_config: PreprocessingConfig,
 ) -> None:
     builder = DatasetBuilder(builder_config)
@@ -655,8 +660,7 @@ def test_assign_splits_and_finalize_moves_staged_files_and_writes_manifest(
     assert result.skipped_count == len(discarded_rows)
 
     root = builder_config.dataset_root
-    assert list((root / "processed" / "valid" / "source").iterdir()) == []
-    assert list((root / "processed" / "valid" / "target").iterdir()) == []
+    assert not (root / "processed" / "valid").exists()
 
     train_files = list((root / "splits" / "train").iterdir())
     val_files = list((root / "splits" / "val").iterdir())
@@ -767,6 +771,28 @@ def test_assign_splits_and_finalize_is_deterministic_for_fixed_seed(
     second_assignment = _run_finalize(tmp_path / "run_two")
 
     assert first_assignment == second_assignment
+
+
+def test_hash_split_assignment_is_stable_and_approximately_matches_ratios() -> None:
+    ratios = (0.7, 0.2, 0.1)
+
+    first = [
+        assign_split_by_hash(seed=42, sample_id=f"{index:05}_00000", ratios=ratios)
+        for index in range(10_000)
+    ]
+    second = [
+        assign_split_by_hash(seed=42, sample_id=f"{index:05}_00000", ratios=ratios)
+        for index in range(10_000)
+    ]
+
+    assert first == second
+    assert first != [
+        assign_split_by_hash(seed=43, sample_id=f"{index:05}_00000", ratios=ratios)
+        for index in range(10_000)
+    ]
+    assert first.count("train") / len(first) == pytest.approx(0.7, abs=0.03)
+    assert first.count("val") / len(first) == pytest.approx(0.2, abs=0.03)
+    assert first.count("test") / len(first) == pytest.approx(0.1, abs=0.03)
 
 
 def test_log_memory_handles_missing_resource(caplog: pytest.LogCaptureFixture) -> None:

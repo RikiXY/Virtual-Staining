@@ -63,6 +63,11 @@ directory named by the manifest `split` value. Example manifest row:
 00512_09216,train,splits/train/00512_09216_source.tif,splits/train/00512_09216_target.tif,label_free,stained,512,9216,256,256
 ```
 
+Split assignment is deterministic for a fixed `seed` and `sample_id`: each
+accepted patch is assigned by a stable hash and written directly to its final
+`splits/<split>/` directory during preparation. Configured split ratios are
+therefore approximate, not exact-count guarantees.
+
 | Column | Type | Description |
 |---|---|---|
 | `sample_id` | string | Unique identifier for the patch (e.g. `00512_09216`) |

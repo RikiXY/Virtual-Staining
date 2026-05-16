@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import random
 import shutil
 from collections.abc import Iterator, Sequence
@@ -25,6 +26,7 @@ ALLOWED_EXTENSIONS = {".tif", ".tiff", ".png"}
 T = TypeVar("T")
 
 MIN_INLIERS = 4
+SPLIT_NAMES: tuple[str, str, str] = ("train", "val", "test")
 
 
 @dataclass
@@ -74,6 +76,32 @@ def pad_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
         img, top, bottom, left, right, borderType=cv2.BORDER_CONSTANT, value=255
     )
     return padded_image
+
+
+def assign_split_by_hash(
+    *,
+    seed: int,
+    sample_id: str,
+    ratios: Sequence[float],
+) -> str:
+    """Assign a sample to train/val/test using a stable hash of seed and sample id."""
+    if len(ratios) != len(SPLIT_NAMES):
+        raise ValueError(f"Expected {len(SPLIT_NAMES)} split ratios, got {len(ratios)}")
+    if any(ratio < 0 for ratio in ratios):
+        raise ValueError("Split ratios must be non-negative")
+    ratio_sum = sum(ratios)
+    if not np.isclose(ratio_sum, 1.0):
+        raise ValueError(f"Split ratios must sum to 1.0, got {ratio_sum}")
+
+    digest = hashlib.sha256(f"{seed}:{sample_id}".encode()).digest()
+    value = int.from_bytes(digest[:8], byteorder="big") / 2**64
+
+    cumulative = 0.0
+    for split_name, ratio in zip(SPLIT_NAMES, ratios, strict=True):
+        cumulative += ratio
+        if value < cumulative:
+            return split_name
+    return SPLIT_NAMES[-1]
 
 
 def calculate_mask(img: np.ndarray) -> np.ndarray:
