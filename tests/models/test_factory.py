@@ -38,7 +38,7 @@ def test_build_generator_uses_configured_parameters() -> None:
             base_channels=32,
             norm="instance",
             dropout=True,
-            bilinear=True,
+            bilinear=False,
         )
     )
 
@@ -48,7 +48,7 @@ def test_build_generator_uses_configured_parameters() -> None:
     assert generator.base_channels == 32
     assert generator.norm == "instance"
     assert generator.dropout is True
-    assert generator.bilinear is True
+    assert generator.bilinear is False
 
 
 def test_build_discriminator_uses_configured_parameters() -> None:

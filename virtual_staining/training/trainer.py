@@ -659,72 +659,80 @@ class Trainer:
         )
 
     def _validate(self, epoch: int, log_file: Path) -> EpochMetrics:
+        generator_was_training = self.generator.training
+        discriminator_was_training = self.discriminator.training
         self.generator.eval()
         self.discriminator.eval()
 
-        self._output_val_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self._output_val_dir.mkdir(parents=True, exist_ok=True)
 
-        total_loss_G = 0.0
-        total_loss_D = 0.0
-        raw_totals: dict[str, float] = {}
-        weighted_totals: dict[str, float] = {}
-        current_weight_totals: dict[str, float] = {}
-        loss_names = _configured_loss_names(self.losses)
-        count = 0
+            total_loss_G = 0.0
+            total_loss_D = 0.0
+            raw_totals: dict[str, float] = {}
+            weighted_totals: dict[str, float] = {}
+            current_weight_totals: dict[str, float] = {}
+            loss_names = _configured_loss_names(self.losses)
+            count = 0
 
-        with torch.no_grad():
-            for i, batch in enumerate(self.val_loader):
-                x, y, masks = _unpack_batch(batch, self.device)
+            with torch.no_grad():
+                for i, batch in enumerate(self.val_loader):
+                    x, y, masks = _unpack_batch(batch, self.device)
 
-                with autocast(device_type=self.device.type, enabled=self._amp_enabled):
-                    fake = self.generator(x)
-                    D_real = self.discriminator(x, y)
-                    D_fake = self.discriminator(x, fake)
-                    context = LossEvaluationContext(epoch=epoch, masks=masks)
-                    discriminator_loss = self._loss_evaluator.discriminator_total(
-                        discriminator_real=D_real,
-                        discriminator_fake=D_fake,
-                        context=context,
-                    )
-                    generator_loss = self._loss_evaluator.generator_total(
-                        prediction=fake,
-                        target=y,
-                        discriminator_fake=D_fake,
-                        context=context,
-                    )
-                    loss_D = discriminator_loss.total
-                    loss_G = generator_loss.total
-                    _accumulate_components(raw_totals, discriminator_loss.raw)
-                    _accumulate_components(weighted_totals, discriminator_loss.weighted)
-                    _accumulate_components(
-                        current_weight_totals,
-                        discriminator_loss.current_weight,
-                    )
-                    _accumulate_components(raw_totals, generator_loss.raw)
-                    _accumulate_components(weighted_totals, generator_loss.weighted)
-                    _accumulate_components(current_weight_totals, generator_loss.current_weight)
+                    with autocast(device_type=self.device.type, enabled=self._amp_enabled):
+                        fake = self.generator(x)
+                        D_real = self.discriminator(x, y)
+                        D_fake = self.discriminator(x, fake)
+                        context = LossEvaluationContext(epoch=epoch, masks=masks)
+                        discriminator_loss = self._loss_evaluator.discriminator_total(
+                            discriminator_real=D_real,
+                            discriminator_fake=D_fake,
+                            context=context,
+                        )
+                        generator_loss = self._loss_evaluator.generator_total(
+                            prediction=fake,
+                            target=y,
+                            discriminator_fake=D_fake,
+                            context=context,
+                        )
+                        loss_D = discriminator_loss.total
+                        loss_G = generator_loss.total
+                        _accumulate_components(raw_totals, discriminator_loss.raw)
+                        _accumulate_components(weighted_totals, discriminator_loss.weighted)
+                        _accumulate_components(
+                            current_weight_totals,
+                            discriminator_loss.current_weight,
+                        )
+                        _accumulate_components(raw_totals, generator_loss.raw)
+                        _accumulate_components(weighted_totals, generator_loss.weighted)
+                        _accumulate_components(current_weight_totals, generator_loss.current_weight)
 
-                total_loss_D += loss_D.item()
-                total_loss_G += loss_G.item()
-                count += 1
+                    total_loss_D += loss_D.item()
+                    total_loss_G += loss_G.item()
+                    count += 1
 
-                if i < 5:
-                    _save_images(self._output_val_dir, x[0], fake[0], y[0], epoch, i)
+                    if i < 5:
+                        _save_images(self._output_val_dir, x[0], fake[0], y[0], epoch, i)
 
-        avg_loss_G = total_loss_G / count if count > 0 else 0.0
-        avg_loss_D = total_loss_D / count if count > 0 else 0.0
+            avg_loss_G = total_loss_G / count if count > 0 else 0.0
+            avg_loss_D = total_loss_D / count if count > 0 else 0.0
 
-        logger.info(
-            "[Epoch %s] Validation: loss_G=%.4f loss_D=%.4f",
-            epoch,
-            avg_loss_G,
-            avg_loss_D,
-        )
+            logger.info(
+                "[Epoch %s] Validation: loss_G=%.4f loss_D=%.4f",
+                epoch,
+                avg_loss_G,
+                avg_loss_D,
+            )
 
-        return EpochMetrics(
-            loss_G=avg_loss_G,
-            loss_D=avg_loss_D,
-            raw=_average_components(raw_totals, count, loss_names),
-            weighted=_average_components(weighted_totals, count, loss_names),
-            current_weight=_average_components(current_weight_totals, count, loss_names),
-        )
+            return EpochMetrics(
+                loss_G=avg_loss_G,
+                loss_D=avg_loss_D,
+                raw=_average_components(raw_totals, count, loss_names),
+                weighted=_average_components(weighted_totals, count, loss_names),
+                current_weight=_average_components(current_weight_totals, count, loss_names),
+            )
+        finally:
+            if generator_was_training:
+                self.generator.train()
+            if discriminator_was_training:
+                self.discriminator.train()

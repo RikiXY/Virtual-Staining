@@ -73,5 +73,6 @@ result-*
 **/.obsidian/
 notes/*
 
-# Local Makefile env
+# Local env files
+.env
 .env.make
