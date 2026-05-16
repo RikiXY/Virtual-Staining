@@ -19,14 +19,14 @@ from virtual_staining.data.config import PreprocessingConfig
 from virtual_staining.data.manifest import DatasetManifest, ManifestRecord, Split
 from virtual_staining.data.preprocessing import (
     MASK_PARAMETER_GRID,
-    align_from_scaled,
     calculate_mask_with_multiple_parameters,
     ensure_clean_directory,
-    extract_image,
+    estimate_affine_from_scaled,
     is_valid_patch_pair,
     iter_image_with_grid,
     split_items,
     validate_image_filename,
+    warp_aligned_patch,
 )
 from virtual_staining.data.results import DatasetBuildResult
 from virtual_staining.experiment.snapshots import (
@@ -122,8 +122,7 @@ class DatasetBuilder:
         self._target_image: np.ndarray | None = None
         self._source_mask: np.ndarray | None = None
         self._target_mask: np.ndarray | None = None
-        self._aligned_target: np.ndarray | None = None
-        self._aligned_target_mask: np.ndarray | None = None
+        self._warp_matrix: np.ndarray | None = None
         self._alignment_metadata: dict[str, Any] | None = None
         self._started_at: str | None = None
         self._effective_seed: int | None = None
@@ -220,30 +219,17 @@ class DatasetBuilder:
             raise RuntimeError("compute_masks() must be called before align()")
 
         logger.info("Aligning images...")
-        aligned_target, aligned_target_mask, _, metadata = align_from_scaled(
+        warp_matrix, metadata = estimate_affine_from_scaled(
             self._source_image,
             self._target_image,
             mask1=self._source_mask,
             mask2=self._target_mask,
             scale=0.5,
         )
-        if aligned_target_mask is None:
-            raise RuntimeError("Alignment did not return a target mask")
-        self._aligned_target = aligned_target
-        self._aligned_target_mask = aligned_target_mask
+        self._warp_matrix = warp_matrix
         self._alignment_metadata = dataclasses.asdict(metadata)
 
-        # After alignment, patch extraction uses only source + aligned target state.
-        self._target_image = None
-        self._target_mask = None
-
         root = self.config.dataset_root
-        stem = self._target_file.stem
-        cv2.imwrite(str(root / f"aligned_{stem}{self._target_suffix}"), aligned_target)
-        cv2.imwrite(
-            str(root / f"aligned_mask_{stem}{self._target_suffix}"),
-            aligned_target_mask,
-        )
         with open(root / "alignment_metadata.json", "w", encoding="utf-8") as f:
             json.dump(self._alignment_metadata, f, indent=2)
 
@@ -259,8 +245,9 @@ class DatasetBuilder:
         if (
             self._source_image is None
             or self._source_mask is None
-            or self._aligned_target is None
-            or self._aligned_target_mask is None
+            or self._target_image is None
+            or self._target_mask is None
+            or self._warp_matrix is None
         ):
             raise RuntimeError("align() must be called before _stream_patches_to_disk()")
 
@@ -280,8 +267,6 @@ class DatasetBuilder:
 
         cropped_source = _crop(self._source_image)
         cropped_source_mask = _crop(self._source_mask)
-        cropped_target = _crop(self._aligned_target)
-        cropped_target_mask = _crop(self._aligned_target_mask)
         source_iter = iter_image_with_grid(
             cropped_source,
             self.config.image_size,
@@ -298,8 +283,24 @@ class DatasetBuilder:
         for (x, y), src, src_mask in source_iter:
             if src_mask is None:
                 raise RuntimeError("Patch extraction did not return source masks")
-            tgt = extract_image(cropped_target, x, y, patch_w, patch_h)
-            tgt_mask = extract_image(cropped_target_mask, x, y, patch_w, patch_h)
+            target_x = x + m
+            target_y = y + m
+            tgt = warp_aligned_patch(
+                self._target_image,
+                self._warp_matrix,
+                x=target_x,
+                y=target_y,
+                output_size=(patch_w, patch_h),
+                is_mask=False,
+            )
+            tgt_mask = warp_aligned_patch(
+                self._target_mask,
+                self._warp_matrix,
+                x=target_x,
+                y=target_y,
+                output_size=(patch_w, patch_h),
+                is_mask=True,
+            )
             if (
                 tgt.shape[0] < patch_h
                 or tgt.shape[1] < patch_w

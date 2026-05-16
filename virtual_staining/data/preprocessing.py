@@ -323,6 +323,32 @@ def warp_aligned_image(
     )
 
 
+def warp_aligned_patch(
+    img: np.ndarray,
+    warp_matrix: np.ndarray,
+    *,
+    x: int,
+    y: int,
+    output_size: tuple[int, int],
+    is_mask: bool,
+) -> np.ndarray:
+    """
+    Warp one destination patch from an image aligned by ``warp_matrix``.
+
+    ``warp_matrix`` maps the input image into the full reference image frame.
+    The patch origin ``(x, y)`` is expressed in that full destination frame.
+    """
+    patch_matrix = np.asarray(warp_matrix, dtype=np.float64).copy()
+    patch_matrix[0, 2] -= x
+    patch_matrix[1, 2] -= y
+    return warp_aligned_image(
+        img,
+        patch_matrix,
+        output_size,
+        is_mask=is_mask,
+    )
+
+
 def align_images(
     img1: np.ndarray,
     img2: np.ndarray,
@@ -359,7 +385,7 @@ def align_images(
     return img2_aligned, mask2_aligned, warp_matrix, metadata
 
 
-def align_from_scaled(
+def estimate_affine_from_scaled(
     img1: np.ndarray,
     img2: np.ndarray,
     scale: float = 0.5,
@@ -367,10 +393,9 @@ def align_from_scaled(
     mask2: np.ndarray | None = None,
     nfeatures: int = 10000,
     ed_distance: int = 200,
-) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, AlignmentMetadata]:
+) -> tuple[np.ndarray, AlignmentMetadata]:
     """
-    Aligns two images by first scaling them, estimating the transformation on the scaled images,
-    and then applying the transformation to the original images.
+    Estimate a full-resolution affine transform from downscaled image inputs.
 
     Parameters
     ----------
@@ -391,10 +416,6 @@ def align_from_scaled(
 
     Returns
     -------
-    img2_aligned : np.ndarray
-        The second image aligned to the first.
-    mask2_aligned : Optional[np.ndarray]
-        The aligned mask for the second image, if provided.
     warp_matrix : np.ndarray
         The affine transformation matrix used for alignment.
     metadata : AlignmentMetadata
@@ -429,6 +450,32 @@ def align_from_scaled(
         translation_x=diagnostics["translation_x"],
         translation_y=diagnostics["translation_y"],
         warp_matrix=warp_matrix.tolist(),
+    )
+
+    return warp_matrix, metadata
+
+
+def align_from_scaled(
+    img1: np.ndarray,
+    img2: np.ndarray,
+    scale: float = 0.5,
+    mask1: np.ndarray | None = None,
+    mask2: np.ndarray | None = None,
+    nfeatures: int = 10000,
+    ed_distance: int = 200,
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, AlignmentMetadata]:
+    """
+    Aligns two images by first scaling them, estimating the transformation on the scaled images,
+    and then applying the transformation to the original images.
+    """
+    warp_matrix, metadata = estimate_affine_from_scaled(
+        img1,
+        img2,
+        scale=scale,
+        mask1=mask1,
+        mask2=mask2,
+        nfeatures=nfeatures,
+        ed_distance=ed_distance,
     )
 
     img2_aligned = warp_aligned_image(

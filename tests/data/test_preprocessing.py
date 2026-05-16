@@ -16,6 +16,8 @@ from virtual_staining.data.preprocessing import (
     is_valid_patch_pair,
     pad_image,
     split_items,
+    warp_aligned_image,
+    warp_aligned_patch,
 )
 
 # ---------------------------------------------------------------------------
@@ -341,3 +343,55 @@ def test_align_from_scaled_uses_nearest_neighbor_for_scaled_masks() -> None:
         align_from_scaled(img, img, scale=0.5, mask1=mask, mask2=mask)
 
     assert any(call.get("interpolation") == cv2.INTER_NEAREST for call in resize_calls[2:4])
+
+
+def test_warp_aligned_patch_matches_full_frame_warp_crop() -> None:
+    rng = np.random.default_rng(4)
+    img = rng.integers(0, 255, size=(96, 112, 3), dtype=np.uint8)
+    warp_matrix = np.array(
+        [
+            [0.998, -0.035, 7.4],
+            [0.035, 0.998, -5.2],
+        ],
+        dtype=np.float64,
+    )
+
+    full = warp_aligned_image(
+        img,
+        warp_matrix,
+        (90, 80),
+        is_mask=False,
+    )
+    patch = warp_aligned_patch(
+        img,
+        warp_matrix,
+        x=13,
+        y=17,
+        output_size=(32, 24),
+        is_mask=False,
+    )
+
+    assert np.allclose(patch, full[17 : 17 + 24, 13 : 13 + 32], atol=8)
+
+
+def test_warp_aligned_patch_uses_nearest_neighbor_for_masks() -> None:
+    mask = np.zeros((32, 32), dtype=np.uint8)
+    mask[:, 16:] = 255
+    warp_matrix = np.array(
+        [
+            [1.0, 0.0, 0.4],
+            [0.0, 1.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+
+    patch = warp_aligned_patch(
+        mask,
+        warp_matrix,
+        x=0,
+        y=0,
+        output_size=(32, 32),
+        is_mask=True,
+    )
+
+    assert set(np.unique(patch)).issubset({0, 255})

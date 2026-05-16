@@ -93,11 +93,9 @@ def _identity_align(
     mask2: np.ndarray | None = None,
     scale: float = 0.5,
     **_kwargs,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, AlignmentMetadata]:
-    """Return target unchanged - simulates a perfect identity alignment."""
-    aligned_mask = (
-        mask2.copy() if mask2 is not None else np.full(tgt.shape[:2], 255, dtype=np.uint8)
-    )
+) -> tuple[np.ndarray, AlignmentMetadata]:
+    """Return an identity matrix - simulates a perfect identity alignment."""
+    del src, tgt, mask1, mask2, scale
     eye = np.eye(2, 3, dtype=np.float64)
     metadata = AlignmentMetadata(
         n_keypoints_src=100,
@@ -112,7 +110,7 @@ def _identity_align(
         translation_y=0.0,
         warp_matrix=eye.tolist(),
     )
-    return tgt.copy(), aligned_mask, eye, metadata
+    return eye, metadata
 
 
 @contextmanager
@@ -123,7 +121,7 @@ def _patched_builder_dependencies() -> Iterator[None]:
             side_effect=_white_mask,
         ),
         patch(
-            "virtual_staining.data.builder.align_from_scaled",
+            "virtual_staining.data.builder.estimate_affine_from_scaled",
             side_effect=_identity_align,
         ),
     ):
@@ -992,7 +990,9 @@ def test_run_all_saves_manifest_layout_and_resolved_config(
     assert len(manifest.filter_split("train")) == result.train_count
 
 
-def test_align_releases_original_target_arrays(builder_config: PreprocessingConfig) -> None:
+def test_align_keeps_warp_matrix_without_materializing_aligned_target(
+    builder_config: PreprocessingConfig,
+) -> None:
     builder = DatasetBuilder(builder_config)
 
     with _patched_builder_dependencies():
@@ -1001,10 +1001,11 @@ def test_align_releases_original_target_arrays(builder_config: PreprocessingConf
         assert builder._target_mask is not None
         builder.align()
 
-    assert builder._aligned_target is not None
-    assert builder._aligned_target_mask is not None
-    assert builder._target_image is None
-    assert builder._target_mask is None
+    assert builder._warp_matrix is not None
+    assert not hasattr(builder, "_aligned_target")
+    assert not hasattr(builder, "_aligned_target_mask")
+    assert builder._target_image is not None
+    assert builder._target_mask is not None
 
 
 def test_run_all_writes_manifest_columns_and_relative_paths(
@@ -1230,7 +1231,7 @@ def test_stream_patches_to_disk_raises_on_count_mismatch(
 
         with (
             patch(
-                "virtual_staining.data.builder.extract_image",
+                "virtual_staining.data.builder.warp_aligned_patch",
                 side_effect=[dummy, dummy_mask[:32, :32]],
             ),
             pytest.raises(RuntimeError, match="mismatch"),
