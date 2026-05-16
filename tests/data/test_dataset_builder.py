@@ -547,7 +547,7 @@ def test_stream_patches_to_disk_writes_valid_patches_to_final_splits(
         path for split in ("train", "val", "test") for path in (root / "splits" / split).iterdir()
     ]
     assert len(split_files) == len(valid_rows) * 2
-    assert not (root / "processed" / "valid").exists()
+    assert not (root / "processed").exists()
     assert not (root / "discarded_patches" / "source").exists()
     assert not (root / "discarded_patches" / "target").exists()
 
@@ -772,7 +772,7 @@ def test_assign_splits_and_finalize_writes_manifest_for_streamed_split_files(
     assert result.skipped_count == len(discarded_rows)
 
     root = builder_config.dataset_root
-    assert not (root / "processed" / "valid").exists()
+    assert not (root / "processed").exists()
 
     train_files = list((root / "splits" / "train").iterdir())
     val_files = list((root / "splits" / "val").iterdir())
@@ -1154,7 +1154,7 @@ def test_run_all_saves_manifest_layout_and_resolved_config(
         result = DatasetBuilder(builder_config).run_all()
 
     root = builder_config.dataset_root
-    assert (root / "processed").exists()
+    assert not (root / "processed").exists()
     assert (root / "splits").exists()
     assert (root / "manifests" / "manifest.csv").exists()
     assert (root / "manifests" / "discarded_manifest.csv").exists()

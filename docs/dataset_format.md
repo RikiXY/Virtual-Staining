@@ -8,7 +8,6 @@
 ```
 local_workspace/datasets/<name>/
 ├── raw/                        # (reserved for future use)
-├── processed/                  # intermediate aligned images
 ├── splits/
 │   ├── train/                  # accepted train-split patch pairs
 │   ├── val/                    # accepted validation-split patch pairs
@@ -29,6 +28,19 @@ local_workspace/datasets/<name>/
     ├── dataset_fingerprint.json # cache identity for prepare reuse decisions
     └── environment.json        # runtime environment snapshot
 ```
+
+## Alignment Outputs
+
+`vs-prepare` writes `alignment_metadata.json` in the dataset root. This file
+contains the affine warp matrix and alignment diagnostics used to pair source
+and target patches.
+
+The full-resolution aligned target image is not materialized or saved, and
+there is currently no config option that enables this preview artifact. During
+patch preparation, target patches are warped on demand from the original target
+image or from target regions when `preprocessing.tiled_io: true`. This keeps the
+canonical dataset outputs at patch level and avoids retaining a full aligned
+target frame solely for preview/debug purposes.
 
 ## Manifest as Pipeline Contract
 

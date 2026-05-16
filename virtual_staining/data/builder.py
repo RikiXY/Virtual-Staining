@@ -407,11 +407,9 @@ class DatasetBuilder:
             raise RuntimeError("align() must be called before _stream_patches_to_disk()")
 
         root = self.config.dataset_root
-        processed_root = root / "processed"
         splits_root = root / "splits"
         discarded_src_dir = root / "discarded_patches" / "source"
         discarded_tgt_dir = root / "discarded_patches" / "target"
-        processed_root.mkdir(parents=True, exist_ok=True)
         split_dirs: dict[Split, Path] = {
             "train": splits_root / "train",
             "val": splits_root / "val",
