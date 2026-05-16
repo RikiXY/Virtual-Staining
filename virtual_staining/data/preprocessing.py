@@ -27,6 +27,11 @@ T = TypeVar("T")
 
 MIN_INLIERS = 4
 SPLIT_NAMES: tuple[str, str, str] = ("train", "val", "test")
+LOWE_RATIO_THRESHOLD = 0.75
+RANSAC_REPROJECTION_THRESHOLD = 5.0
+RANSAC_MAX_ITERS = 2000
+RANSAC_CONFIDENCE = 0.99
+RANSAC_REFINE_ITERS = 10
 
 
 @dataclass
@@ -228,13 +233,29 @@ def _affine_diagnostics(warp_matrix: np.ndarray) -> dict[str, float]:
     }
 
 
+def _ratio_test_matches(
+    knn_matches: Sequence[Sequence[cv2.DMatch]],
+    *,
+    ratio_threshold: float = LOWE_RATIO_THRESHOLD,
+) -> list[cv2.DMatch]:
+    """Keep descriptor matches whose nearest neighbor is clearly better than the second."""
+    good_matches = []
+    for candidates in knn_matches:
+        if len(candidates) < 2:
+            continue
+        best, second_best = candidates[0], candidates[1]
+        if best.distance < ratio_threshold * second_best.distance:
+            good_matches.append(best)
+    return good_matches
+
+
 def estimate_affine_transform(
     img1: np.ndarray,
     img2: np.ndarray,
     mask1: np.ndarray | None = None,
     mask2: np.ndarray | None = None,
     nfeatures: int = 10000,
-    ed_distance: int = 200,
+    ratio_threshold: float = LOWE_RATIO_THRESHOLD,
 ) -> tuple[np.ndarray, AlignmentMetadata]:
     """
     Estimate an affine transform that maps ``img2`` into ``img1`` coordinates.
@@ -251,8 +272,9 @@ def estimate_affine_transform(
         The mask for the second image. Default is None.
     nfeatures : int, optional
         Number of features for SIFT computation. Default is 10000.
-    ed_distance : int, optional
-        Inclusive Euclidean distance threshold for filtering matches. Default is 200.
+    ratio_threshold : float, optional
+        Lowe-style nearest/second-nearest descriptor distance ratio threshold.
+        Default is 0.75.
 
     Returns
     -------
@@ -277,22 +299,23 @@ def estimate_affine_transform(
     keypoints_1, descriptors_1 = sift.detectAndCompute(img1_clahe, mask1)
     keypoints_2, descriptors_2 = sift.detectAndCompute(img2_clahe, mask2)
 
-    if len(keypoints_1) < 4 or len(keypoints_2) < 4:
-        raise ValueError("Not enough features for alignment")
-
-    bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
-    matches = bf.match(descriptors_1, descriptors_2)
-
-    filtered_matches = []
-    for match in matches:
-        distance = np.linalg.norm(
-            np.array(keypoints_1[match.queryIdx].pt) - np.array(keypoints_2[match.trainIdx].pt)
+    n_keypoints_1 = len(keypoints_1)
+    n_keypoints_2 = len(keypoints_2)
+    if n_keypoints_1 < 4 or n_keypoints_2 < 4 or descriptors_1 is None or descriptors_2 is None:
+        raise ValueError(
+            "Not enough features for alignment: "
+            f"source={n_keypoints_1}, target={n_keypoints_2}, minimum=4"
         )
-        if distance <= ed_distance:
-            filtered_matches.append(match)
+
+    bf = cv2.BFMatcher(cv2.NORM_L2)
+    knn_matches = bf.knnMatch(descriptors_1, descriptors_2, k=2)
+    filtered_matches = _ratio_test_matches(knn_matches, ratio_threshold=ratio_threshold)
 
     if len(filtered_matches) < 4:
-        raise ValueError("Not enough matches for alignment")
+        raise ValueError(
+            "Not enough good descriptor matches for alignment after ratio test: "
+            f"good={len(filtered_matches)}, minimum=4, ratio_threshold={ratio_threshold}"
+        )
 
     points_1 = np.asarray(
         [keypoints_1[match.queryIdx].pt for match in filtered_matches],
@@ -303,10 +326,21 @@ def estimate_affine_transform(
         dtype=np.float32,
     ).reshape(-1, 1, 2)
 
-    warp_matrix, inlier_mask = cv2.estimateAffinePartial2D(points_2, points_1)
+    warp_matrix, inlier_mask = cv2.estimateAffinePartial2D(
+        points_2,
+        points_1,
+        method=cv2.RANSAC,
+        ransacReprojThreshold=RANSAC_REPROJECTION_THRESHOLD,
+        maxIters=RANSAC_MAX_ITERS,
+        confidence=RANSAC_CONFIDENCE,
+        refineIters=RANSAC_REFINE_ITERS,
+    )
 
     if warp_matrix is None:
-        raise ValueError("Affine estimation failed: cv2.estimateAffinePartial2D returned None")
+        raise ValueError(
+            "Affine estimation failed after ratio-test matching and RANSAC: "
+            "cv2.estimateAffinePartial2D returned None"
+        )
 
     n_inliers = int(inlier_mask.sum()) if inlier_mask is not None else 0
     if n_inliers < MIN_INLIERS:
@@ -317,8 +351,8 @@ def estimate_affine_transform(
     inlier_ratio = n_inliers / len(filtered_matches)
     diagnostics = _affine_diagnostics(warp_matrix)
     metadata = AlignmentMetadata(
-        n_keypoints_src=len(keypoints_1),
-        n_keypoints_tgt=len(keypoints_2),
+        n_keypoints_src=n_keypoints_1,
+        n_keypoints_tgt=n_keypoints_2,
         n_matches=len(filtered_matches),
         n_inliers=n_inliers,
         inlier_ratio=inlier_ratio,
@@ -383,7 +417,7 @@ def align_images(
     mask1: np.ndarray | None = None,
     mask2: np.ndarray | None = None,
     nfeatures: int = 10000,
-    ed_distance: int = 200,
+    ratio_threshold: float = LOWE_RATIO_THRESHOLD,
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, AlignmentMetadata]:
     """Align a moving image to a reference image and return warped outputs."""
     warp_matrix, metadata = estimate_affine_transform(
@@ -392,7 +426,7 @@ def align_images(
         mask1=mask1,
         mask2=mask2,
         nfeatures=nfeatures,
-        ed_distance=ed_distance,
+        ratio_threshold=ratio_threshold,
     )
 
     img2_aligned = warp_aligned_image(
@@ -420,7 +454,7 @@ def estimate_affine_from_scaled(
     mask1: np.ndarray | None = None,
     mask2: np.ndarray | None = None,
     nfeatures: int = 10000,
-    ed_distance: int = 200,
+    ratio_threshold: float = LOWE_RATIO_THRESHOLD,
 ) -> tuple[np.ndarray, AlignmentMetadata]:
     """
     Estimate a full-resolution affine transform from downscaled image inputs.
@@ -439,8 +473,8 @@ def estimate_affine_from_scaled(
         Optional mask for the second image.
     nfeatures : int, optional
         Number of features to use for alignment (default is 10000).
-    ed_distance : int, optional
-        Euclidean distance threshold for feature matching (default is 200).
+    ratio_threshold : float, optional
+        Lowe-style nearest/second-nearest descriptor distance ratio threshold.
 
     Returns
     -------
@@ -463,8 +497,8 @@ def estimate_affine_from_scaled(
         img2_scaled,
         mask1_scaled if mask1 is not None else None,
         mask2_scaled if mask2 is not None else None,
-        nfeatures,
-        ed_distance,
+        nfeatures=nfeatures,
+        ratio_threshold=ratio_threshold,
     )
 
     warp_matrix[0, 2] /= scale
@@ -490,7 +524,7 @@ def align_from_scaled(
     mask1: np.ndarray | None = None,
     mask2: np.ndarray | None = None,
     nfeatures: int = 10000,
-    ed_distance: int = 200,
+    ratio_threshold: float = LOWE_RATIO_THRESHOLD,
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, AlignmentMetadata]:
     """
     Aligns two images by first scaling them, estimating the transformation on the scaled images,
@@ -503,7 +537,7 @@ def align_from_scaled(
         mask1=mask1,
         mask2=mask2,
         nfeatures=nfeatures,
-        ed_distance=ed_distance,
+        ratio_threshold=ratio_threshold,
     )
 
     img2_aligned = warp_aligned_image(

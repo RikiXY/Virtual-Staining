@@ -9,10 +9,12 @@ import pytest
 
 from virtual_staining.data.preprocessing import (
     AlignmentMetadata,
+    _ratio_test_matches,
     align_from_scaled,
     align_images,
     calculate_mask,
     calculate_mask_with_grid,
+    estimate_affine_transform,
     is_valid_patch_pair,
     pad_image,
     split_items,
@@ -253,6 +255,142 @@ def test_debug_info_contains_required_keys() -> None:
 def _textured_image(seed: int = 0) -> np.ndarray:
     rng = np.random.default_rng(seed)
     return rng.integers(10, 200, (300, 300, 3), dtype=np.uint8)
+
+
+def _dmatch(query_idx: int, train_idx: int, distance: float) -> cv2.DMatch:
+    return cv2.DMatch(_queryIdx=query_idx, _trainIdx=train_idx, _distance=distance)
+
+
+def _keypoints(count: int) -> list[cv2.KeyPoint]:
+    return [cv2.KeyPoint(float(index), float(index * 2), 1.0) for index in range(count)]
+
+
+def _descriptors(count: int) -> np.ndarray:
+    return np.arange(count * 128, dtype=np.float32).reshape(count, 128)
+
+
+class _FakeSift:
+    def __init__(
+        self,
+        keypoints_1: list[cv2.KeyPoint],
+        descriptors_1: np.ndarray | None,
+        keypoints_2: list[cv2.KeyPoint],
+        descriptors_2: np.ndarray | None,
+    ) -> None:
+        self._results = iter(
+            [
+                (keypoints_1, descriptors_1),
+                (keypoints_2, descriptors_2),
+            ]
+        )
+
+    def detectAndCompute(
+        self, _img: np.ndarray, _mask: np.ndarray | None
+    ) -> tuple[list[cv2.KeyPoint], np.ndarray | None]:
+        return next(self._results)
+
+
+class _FakeMatcher:
+    def __init__(self, knn_matches: list[list[cv2.DMatch]]) -> None:
+        self.knn_matches = knn_matches
+        self.calls: list[tuple[np.ndarray, np.ndarray, int]] = []
+
+    def knnMatch(
+        self, descriptors_1: np.ndarray, descriptors_2: np.ndarray, k: int
+    ) -> list[list[cv2.DMatch]]:
+        self.calls.append((descriptors_1, descriptors_2, k))
+        return self.knn_matches
+
+
+def test_ratio_test_matches_keeps_only_distinct_best_descriptor_matches() -> None:
+    matches = _ratio_test_matches(
+        [
+            [_dmatch(0, 0, 10.0), _dmatch(0, 1, 20.0)],
+            [_dmatch(1, 1, 18.0), _dmatch(1, 2, 20.0)],
+            [_dmatch(2, 2, 1.0)],
+        ],
+        ratio_threshold=0.75,
+    )
+
+    assert [(match.queryIdx, match.trainIdx) for match in matches] == [(0, 0)]
+
+
+def test_estimate_affine_transform_uses_ratio_test_and_explicit_ransac() -> None:
+    matcher = _FakeMatcher(
+        [
+            [_dmatch(0, 0, 10.0), _dmatch(0, 1, 20.0)],
+            [_dmatch(1, 1, 10.0), _dmatch(1, 2, 20.0)],
+            [_dmatch(2, 2, 10.0), _dmatch(2, 3, 20.0)],
+            [_dmatch(3, 3, 10.0), _dmatch(3, 4, 20.0)],
+            [_dmatch(4, 4, 19.0), _dmatch(4, 5, 20.0)],
+        ]
+    )
+    eye = np.eye(2, 3, dtype=np.float64)
+    inliers = np.ones((4, 1), dtype=np.uint8)
+
+    def _bf_matcher(norm: int, **kwargs: Any) -> _FakeMatcher:
+        assert norm == cv2.NORM_L2
+        assert "crossCheck" not in kwargs
+        return matcher
+
+    with (
+        patch(
+            "virtual_staining.data.preprocessing.cv2.SIFT_create",
+            return_value=_FakeSift(_keypoints(6), _descriptors(6), _keypoints(6), _descriptors(6)),
+        ),
+        patch("virtual_staining.data.preprocessing.cv2.BFMatcher", side_effect=_bf_matcher),
+        patch(
+            "virtual_staining.data.preprocessing.cv2.estimateAffinePartial2D",
+            return_value=(eye, inliers),
+        ) as estimate_affine,
+    ):
+        _, metadata = estimate_affine_transform(
+            _textured_image(),
+            _textured_image(1),
+            ratio_threshold=0.75,
+        )
+
+    assert metadata.n_matches == 4
+    assert matcher.calls[0][2] == 2
+    assert estimate_affine.call_args.kwargs == {
+        "method": cv2.RANSAC,
+        "ransacReprojThreshold": 5.0,
+        "maxIters": 2000,
+        "confidence": 0.99,
+        "refineIters": 10,
+    }
+
+
+def test_estimate_affine_transform_raises_on_low_feature_count() -> None:
+    with (
+        patch(
+            "virtual_staining.data.preprocessing.cv2.SIFT_create",
+            return_value=_FakeSift(_keypoints(3), _descriptors(3), _keypoints(4), _descriptors(4)),
+        ),
+        pytest.raises(ValueError, match="Not enough features"),
+    ):
+        estimate_affine_transform(_textured_image(), _textured_image(1))
+
+
+def test_estimate_affine_transform_raises_on_low_ratio_test_match_count() -> None:
+    matcher = _FakeMatcher(
+        [
+            [_dmatch(0, 0, 19.0), _dmatch(0, 1, 20.0)],
+            [_dmatch(1, 1, 19.0), _dmatch(1, 2, 20.0)],
+            [_dmatch(2, 2, 19.0), _dmatch(2, 3, 20.0)],
+            [_dmatch(3, 3, 10.0), _dmatch(3, 4, 20.0)],
+        ]
+    )
+
+    with (
+        patch(
+            "virtual_staining.data.preprocessing.cv2.SIFT_create",
+            return_value=_FakeSift(_keypoints(4), _descriptors(4), _keypoints(5), _descriptors(5)),
+        ),
+        patch("virtual_staining.data.preprocessing.cv2.BFMatcher", return_value=matcher),
+        pytest.raises(ValueError, match="Not enough good descriptor matches"),
+    ):
+        estimate_affine_transform(_textured_image(), _textured_image(1))
 
 
 def test_align_images_raises_when_warp_matrix_is_none() -> None:
