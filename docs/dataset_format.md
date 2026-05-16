@@ -152,6 +152,21 @@ memory, but foreground ratios are approximate near mask boundaries because they
 are measured on fewer mask pixels. The saved patch images, manifest coordinates,
 split paths, and discarded log schema are unchanged.
 
+## Region-Based Image I/O
+
+Set `preprocessing.tiled_io: true` to use the region-reader preparation path.
+This path opens source and target images through the shared image-reader
+abstraction, reads low-resolution previews for mask generation and global
+alignment, and reads only the source and target regions required for each patch
+during streaming. It supports the local image formats handled by Pillow,
+including PNG, JPEG, TIFF, and BMP files.
+
+For whole-slide-scale inputs, pair `tiled_io: true` with `mask_scale < 1.0`;
+the preview scale is controlled by `mask_scale`. In tiled mode, foreground
+filtering uses mask-space patch windows even when `lowres_mask_filtering` is not
+set explicitly. The affine model is still global and rigid/affine; non-rigid
+whole-slide registration and cloud/object-store streaming are not implemented.
+
 ## dataset_build.json Fields
 
 `metadata/dataset_build.json` records build statistics and is written once

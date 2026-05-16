@@ -38,6 +38,7 @@ _PREPROCESSING_KEYS: frozenset[str] = frozenset(
         "target_mask_strategy",
         "mask_scale",
         "lowres_mask_filtering",
+        "tiled_io",
         "max_memory_gb",
         "train_ratio",
         "val_ratio",
@@ -90,6 +91,7 @@ class PreprocessingConfig:
     target_mask_strategy: str | None = None
     mask_scale: float = 1.0
     lowres_mask_filtering: bool = False
+    tiled_io: bool = False
     max_memory_gb: float | None = None
     train_ratio: float = 0.8
     val_ratio: float = 0.05
@@ -173,6 +175,7 @@ class PreprocessingConfig:
             target_mask_strategy=getattr(args, "target_mask_strategy", None),
             mask_scale=getattr(args, "mask_scale", 1.0),
             lowres_mask_filtering=getattr(args, "lowres_mask_filtering", False),
+            tiled_io=getattr(args, "tiled_io", False),
             max_memory_gb=getattr(args, "max_memory_gb", None),
             train_ratio=getattr(args, "train_ratio", 0.8),
             val_ratio=getattr(args, "val_ratio", 0.05),
@@ -204,6 +207,7 @@ class PreprocessingConfig:
             "target_mask_strategy": self.target_mask_strategy,
             "mask_scale": self.mask_scale,
             "lowres_mask_filtering": self.lowres_mask_filtering,
+            "tiled_io": self.tiled_io,
             "max_memory_gb": self.max_memory_gb,
             "train_ratio": self.train_ratio,
             "val_ratio": self.val_ratio,
@@ -257,6 +261,7 @@ def load_preprocessing_config(path: str | Path) -> PreprocessingConfig:
             data.get("lowres_mask_filtering", False),
             "lowres_mask_filtering",
         ),
+        tiled_io=parse_bool_strict(data.get("tiled_io", False), "tiled_io"),
         max_memory_gb=None if raw_max_memory_gb is None else float(raw_max_memory_gb),
         train_ratio=float(data.get("train_ratio", 0.8)),
         val_ratio=float(data.get("val_ratio", 0.05)),

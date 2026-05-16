@@ -603,6 +603,34 @@ def test_run_all_with_lowres_mask_filtering_writes_patches(
     assert result.train_count + result.val_count + result.test_count > 0
 
 
+def test_run_all_with_tiled_io_uses_region_readers_without_cv2_imread(
+    builder_scaled_config: PreprocessingConfig,
+) -> None:
+    config = dataclasses.replace(
+        builder_scaled_config,
+        tiled_io=True,
+        lowres_mask_filtering=True,
+    )
+    builder = DatasetBuilder(config)
+
+    with (
+        _patched_builder_dependencies(),
+        patch(
+            "virtual_staining.data.builder.cv2.imread",
+            side_effect=AssertionError("tiled_io should not call cv2.imread"),
+        ),
+    ):
+        result = builder.run_all()
+
+    assert builder._source_reader is not None
+    assert builder._target_reader is not None
+    assert builder._source_image is not None
+    assert builder._target_image is not None
+    assert builder._source_image.shape[:2] == (150, 150)
+    assert builder._target_image.shape[:2] == (150, 150)
+    assert result.train_count + result.val_count + result.test_count > 0
+
+
 def test_stream_patches_to_disk_records_discarded_rows_without_images_by_default(
     builder_config: PreprocessingConfig,
 ) -> None:

@@ -22,6 +22,7 @@ def _make_namespace(**overrides: object) -> argparse.Namespace:
         source_mask_strategy=None,
         target_mask_strategy=None,
         lowres_mask_filtering=False,
+        tiled_io=False,
         image_size=[256, 256],
         grid_movement=[256, 256],
         margin=200,
@@ -52,6 +53,7 @@ def test_from_args_basic() -> None:
     assert config.target_mask_strategy is None
     assert config.mask_scale == pytest.approx(1.0)
     assert config.lowres_mask_filtering is False
+    assert config.tiled_io is False
     assert config.max_memory_gb is None
 
 
@@ -107,6 +109,7 @@ def test_from_yaml(tmp_path: Path) -> None:
         target_mask_strategy: hsv
         mask_scale: 0.25
         lowres_mask_filtering: true
+        tiled_io: true
         max_memory_gb: 6.5
         train_ratio: 0.7
         val_ratio: 0.1
@@ -132,6 +135,7 @@ def test_from_yaml(tmp_path: Path) -> None:
     assert config.target_mask_strategy == "hsv"
     assert config.mask_scale == pytest.approx(0.25)
     assert config.lowres_mask_filtering is True
+    assert config.tiled_io is True
     assert config.max_memory_gb == pytest.approx(6.5)
     assert config.train_ratio == pytest.approx(0.7)
     assert config.val_ratio == pytest.approx(0.1)
@@ -155,6 +159,7 @@ def test_from_args_partial_namespace() -> None:
     assert config.target_mask_strategy is None
     assert config.mask_scale == pytest.approx(1.0)
     assert config.lowres_mask_filtering is False
+    assert config.tiled_io is False
     assert config.max_memory_gb is None
     assert config.train_ratio == pytest.approx(0.8)
     assert config.min_foreground_ratio == pytest.approx(0.25)
@@ -177,6 +182,7 @@ def test_to_yaml_round_trip(tmp_path: Path) -> None:
         target_mask_strategy="hsv",
         mask_scale=0.25,
         lowres_mask_filtering=True,
+        tiled_io=True,
         max_memory_gb=6.5,
         train_ratio=0.7,
         val_ratio=0.1,
@@ -226,6 +232,7 @@ def test_from_yaml_defaults_for_optional_fields(tmp_path: Path) -> None:
     assert config.target_mask_strategy is None
     assert config.mask_scale == pytest.approx(1.0)
     assert config.lowres_mask_filtering is False
+    assert config.tiled_io is False
     assert config.max_memory_gb is None
     assert config.train_ratio == pytest.approx(0.8)
     assert config.val_ratio == pytest.approx(0.05)
@@ -254,6 +261,7 @@ def test_from_run_yaml_section(tmp_path: Path) -> None:
           target_mask_strategy: hsv
           mask_scale: 0.5
           lowres_mask_filtering: true
+          tiled_io: true
           max_memory_gb: 4
     """,
     )
@@ -271,6 +279,7 @@ def test_from_run_yaml_section(tmp_path: Path) -> None:
     assert config.target_mask_strategy == "hsv"
     assert config.mask_scale == pytest.approx(0.5)
     assert config.lowres_mask_filtering is True
+    assert config.tiled_io is True
     assert config.max_memory_gb == pytest.approx(4.0)
 
 
@@ -458,4 +467,19 @@ def test_from_yaml_non_string_mask_strategy_raises(tmp_path: Path) -> None:
     """,
     )
     with pytest.raises(TypeError, match="mask_strategy"):
+        load_preprocessing_config(yaml_file)
+
+
+def test_from_yaml_string_bool_tiled_io_raises(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "str_bool_tiled_io.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data/samples
+        source_name: source.tif
+        target_name: target.tif
+        tiled_io: "false"
+    """,
+    )
+    with pytest.raises(TypeError, match="tiled_io"):
         load_preprocessing_config(yaml_file)

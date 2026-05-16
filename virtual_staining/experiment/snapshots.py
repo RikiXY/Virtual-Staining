@@ -151,6 +151,7 @@ def serialize_preprocessing_config(config: PreprocessingConfig) -> dict[str, Any
         "target_mask_strategy": config.target_mask_strategy,
         "mask_scale": config.mask_scale,
         "lowres_mask_filtering": config.lowres_mask_filtering,
+        "tiled_io": config.tiled_io,
         "max_memory_gb": config.max_memory_gb,
         "train_ratio": config.train_ratio,
         "val_ratio": config.val_ratio,
