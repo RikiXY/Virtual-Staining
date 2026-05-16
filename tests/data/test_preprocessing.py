@@ -161,6 +161,16 @@ def test_calculate_mask_by_strategy_preserves_connected_components_default() -> 
     assert np.array_equal(direct, expected)
 
 
+def test_calculate_mask_uses_max_channel_std_for_background_components() -> None:
+    img = np.full((128, 128, 3), 255, dtype=np.uint8)
+    img[:, 64:, 1] = np.tile(np.arange(64, dtype=np.uint8), (128, 1))
+
+    mask = calculate_mask(img)
+
+    assert mask[32, 32] == 0
+    assert mask[32, 96] == 255
+
+
 def test_calculate_hsv_tissue_mask_detects_saturated_tissue_on_white_background() -> None:
     img = np.full((80, 80, 3), 255, dtype=np.uint8)
     cv2.rectangle(img, (20, 20), (59, 59), (120, 40, 180), thickness=-1)
