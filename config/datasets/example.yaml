@@ -1,0 +1,71 @@
+# Dataset preparation config.
+# Copy this file to config/datasets/local/<name>.yaml and edit it.
+#
+# This file is intended only for dataset creation.
+# It runs vs-prepare only: no training, no inference, no evaluation.
+#
+# Run with:
+#   make dataset CONFIG=config/datasets/local/<name>.yaml
+# or:
+#   uv run vs-prepare --config config/datasets/local/<name>.yaml
+
+# Root directory of this dataset.
+# Full-size input images must be placed inside this folder.
+dataset_root: local_workspace/datasets/your_dataset
+
+# Required by the shared RunConfig machinery.
+# These do NOT start a full training run.
+results_path: local_workspace/results
+run_name: your_dataset_prepare
+
+# Convention: [width, height].
+image_size: [256, 256]
+
+preprocessing:
+  # Full-size paired input files inside dataset_root.
+  source_name: label_free.tif
+  target_name: stained.tif
+
+  # Defaults to top-level image_size if omitted.
+  # patch_size: [256, 256]
+
+  # Sliding-grid step. Usually equal to patch size for non-overlapping patches.
+  grid_movement: [256, 256]
+
+  # Border margin ignored during patch extraction.
+  margin: 200
+
+  # Tissue mask strategy.
+  # Available values depend on the implementation, currently commonly:
+  #   connected_components
+  #   hsv
+  mask_strategy: connected_components
+
+  # Optional modality-specific overrides.
+  # Useful if source and target need different mask strategies.
+  # source_mask_strategy: connected_components
+  # target_mask_strategy: hsv
+
+  # Optional memory-saving settings for large full-size images.
+  # mask_scale: 0.25
+  # lowres_mask_filtering: true
+  # tiled_io: true
+  # max_memory_gb: 8.0
+
+  # Patch-level split ratios.
+  train_ratio: 0.80
+  val_ratio: 0.05
+  test_ratio: 0.15
+
+  # Patch quality filters.
+  min_foreground_ratio: 0.25
+  max_white_ratio: 0.70
+  white_threshold: 250
+  max_largest_white_component_ratio: 0.20
+
+  # Debug/inspection outputs.
+  save_discarded_patches: false
+  save_masks: false
+
+  # Reproducibility seed for split/shuffle logic.
+  seed: 42
