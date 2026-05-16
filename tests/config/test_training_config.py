@@ -183,7 +183,6 @@ def test_run_config_from_yaml_parses_explicit_ssim_loss(tmp_path: Path) -> None:
             - name: ssim
               weight: 1.0
               enabled: true
-              target: image
               params:
                 data_range: 1.0
                 window_size: 11
@@ -204,7 +203,6 @@ def test_run_config_from_yaml_parses_explicit_ssim_loss(tmp_path: Path) -> None:
     assert term.weight == pytest.approx(1.0)
     assert term.enabled is True
     assert term.is_active is True
-    assert term.target == "image"
     assert term.params["window_size"] == 11
     assert term.schedule.type == "constant"
     assert run_config.losses.active_generator == (term,)
@@ -288,7 +286,6 @@ def test_loss_config_to_yaml_dict_preserves_explicit_losses(tmp_path: Path) -> N
                 "name": "ssim",
                 "weight": 1.0,
                 "enabled": False,
-                "target": "image",
                 "params": {"reduction": "mean"},
                 "schedule": {"type": "constant"},
             }
@@ -304,6 +301,7 @@ def test_loss_config_to_yaml_dict_preserves_explicit_losses(tmp_path: Path) -> N
         ("name: ssim\n  weight: -1.0", "weight"),
         ("weight: 1.0", "name is required"),
         ("name: ssim", "weight is required"),
+        ("name: ssim\n  weight: 1.0\n  target: image", "target"),
         ("name: ssim\n  weight: 1.0\n  typo: true", "typo"),
         ("name: ssim\n  weight: 1.0\n  schedule: {type: linear}", "schedule"),
         ("name: ssim\n  weight: 1.0\n  enabled: 'true'", "enabled"),

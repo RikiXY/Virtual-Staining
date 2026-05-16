@@ -100,7 +100,6 @@ losses:
     - name: ssim
       weight: 1.0
       enabled: true
-      target: image
       params:
         data_range: 1.0
         window_size: 11

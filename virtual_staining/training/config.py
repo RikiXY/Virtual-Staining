@@ -24,16 +24,13 @@ _TRAINING_KEYS: frozenset[str] = frozenset(
 )
 
 _LOSS_CONFIG_KEYS: frozenset[str] = frozenset({"generator", "discriminator"})
-_LOSS_TERM_KEYS: frozenset[str] = frozenset(
-    {"name", "weight", "enabled", "target", "params", "schedule"}
-)
+_LOSS_TERM_KEYS: frozenset[str] = frozenset({"name", "weight", "enabled", "params", "schedule"})
 _LOSS_SCHEDULE_KEYS: frozenset[str] = frozenset({"type"})
 _SSIM_PARAM_KEYS: frozenset[str] = frozenset(
     {"data_range", "window_size", "channel_mode", "reduction"}
 )
 
 LossName = Literal["ssim"]
-LossTarget = Literal["image"]
 LossScheduleType = Literal["constant"]
 LossRole = Literal["generator", "discriminator"]
 
@@ -55,7 +52,6 @@ class LossTermConfig:
     name: LossName
     weight: float
     enabled: bool = True
-    target: LossTarget = "image"
     params: dict[str, Any] = field(default_factory=dict)
     schedule: LossScheduleConfig = field(default_factory=LossScheduleConfig)
 
@@ -66,8 +62,6 @@ class LossTermConfig:
             raise ValueError("loss 'ssim' is supported only in losses.generator")
         if self.weight < 0:
             raise ValueError(f"loss '{self.name}' weight must be greater than or equal to 0")
-        if self.target != "image":
-            raise ValueError("loss target must be one of ['image']")
         self.schedule.validate()
         reject_unknown_keys(self.params, _SSIM_PARAM_KEYS, f"loss '{self.name}' params")
 
@@ -80,7 +74,6 @@ class LossTermConfig:
             "name": self.name,
             "weight": self.weight,
             "enabled": self.enabled,
-            "target": self.target,
             "params": dict(self.params),
             "schedule": self.schedule.to_yaml_dict(),
         }
@@ -146,7 +139,6 @@ def _parse_loss_term(raw: Any, context: str) -> LossTermConfig:
         raise ValueError(f"{context}.weight is required")
 
     name = _parse_choice(raw["name"], f"{context}.name", {"ssim"})
-    target = _parse_choice(raw.get("target", "image"), f"{context}.target", {"image"})
     params = raw.get("params", {})
     if params is None:
         params = {}
@@ -158,7 +150,6 @@ def _parse_loss_term(raw: Any, context: str) -> LossTermConfig:
         name=cast(LossName, name),
         weight=float(raw["weight"]),
         enabled=parse_bool_strict(raw.get("enabled", True), f"{context}.enabled"),
-        target=cast(LossTarget, target),
         params=dict(params),
         schedule=schedule,
     )
