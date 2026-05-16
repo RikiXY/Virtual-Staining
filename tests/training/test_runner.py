@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+import torch
 import yaml
 
 from tests.config_helpers import write_run_config
@@ -241,6 +242,70 @@ def test_run_training_writes_resolved_config_and_hash(tmp_path: Path, monkeypatc
     ]
     assert [event["event_type"] for event in events] == ["stage_started", "stage_completed"]
     assert all(event["stage"] == "train" for event in events)
+
+
+def test_run_training_uses_separate_seeded_loader_generators(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_root = tmp_path / "dataset"
+    train_dir = dataset_root / "splits" / "train"
+    val_dir = dataset_root / "splits" / "val"
+    train_dir.mkdir(parents=True)
+    val_dir.mkdir(parents=True)
+    write_rgb_pair(train_dir, size=(32, 32))
+    write_rgb_pair(val_dir, "00256_00000", size=(32, 32))
+    _write_training_manifest(dataset_root)
+
+    config_path = write_run_config(
+        tmp_path,
+        """\
+        image_size: [32, 32]
+        training:
+          epochs: 1
+          seed: 123
+          num_workers: 0
+        losses:
+          generator:
+            - name: adversarial_bce
+              weight: 1.0
+            - name: l1
+              weight: 25.0
+          discriminator:
+            - name: adversarial_bce
+              weight: 1.0
+        """,
+        filename="train.yaml",
+        dataset_root=dataset_root,
+        results_path=tmp_path / "results",
+        run_name="smoke_run",
+    )
+    config = RunConfig.from_yaml(config_path)
+    loader_kwargs: list[dict[str, object]] = []
+
+    class _FakeDataLoader:
+        def __init__(self, dataset, **kwargs) -> None:
+            self.dataset = dataset
+            loader_kwargs.append(kwargs)
+
+    def _fake_train(self, seed: int, start_epoch: int = 0, reporter=None) -> TrainingResult:
+        return TrainingResult(final_epoch=start_epoch, best_checkpoint_path=None)
+
+    monkeypatch.setattr("virtual_staining.training.runner.DataLoader", _FakeDataLoader)
+    monkeypatch.setattr("virtual_staining.training.trainer.Trainer.train", _fake_train)
+
+    run_training(config, config_path)
+
+    assert len(loader_kwargs) == 2
+    train_generator = loader_kwargs[0]["generator"]
+    val_generator = loader_kwargs[1]["generator"]
+    assert isinstance(train_generator, torch.Generator)
+    assert isinstance(val_generator, torch.Generator)
+    assert train_generator is not val_generator
+    assert train_generator.initial_seed() == 123
+    assert val_generator.initial_seed() == 124
+    assert loader_kwargs[0]["shuffle"] is True
+    assert loader_kwargs[1]["shuffle"] is False
 
 
 def test_run_training_writes_failed_stage_metadata_and_events(tmp_path: Path, monkeypatch) -> None:

@@ -204,12 +204,18 @@ def run_training(
         len(val_dataset),
     )
 
+    train_loader_generator = torch.Generator()
+    train_loader_generator.manual_seed(seed)
+    val_loader_generator = torch.Generator()
+    val_loader_generator.manual_seed(seed + 1)
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.training.batch_size,
         shuffle=True,
         num_workers=config.training.num_workers,
         pin_memory=(device.type == "cuda"),
+        generator=train_loader_generator,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -217,6 +223,7 @@ def run_training(
         shuffle=False,
         num_workers=config.training.num_workers,
         pin_memory=(device.type == "cuda"),
+        generator=val_loader_generator,
     )
 
     generator = build_generator(config.model.generator).to(device)
