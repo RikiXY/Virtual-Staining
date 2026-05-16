@@ -301,6 +301,34 @@ def test_compute_masks_with_lowres_mask_filtering_keeps_scaled_masks(
     assert builder._target_mask.shape != builder._target_image.shape[:2]
 
 
+def test_compute_masks_allows_source_and_target_mask_strategy_overrides(
+    builder_config: PreprocessingConfig,
+) -> None:
+    config = dataclasses.replace(
+        builder_config,
+        mask_strategy="connected_components",
+        source_mask_strategy="hsv",
+        target_mask_strategy="connected_components",
+    )
+    builder = DatasetBuilder(config)
+
+    with (
+        patch(
+            "virtual_staining.data.builder.calculate_mask_by_strategy",
+            return_value=np.full((600, 600), 255, dtype=np.uint8),
+        ) as mock_strategy,
+        patch(
+            "virtual_staining.data.builder.calculate_mask_with_multiple_parameters",
+            return_value=np.full((600, 600), 255, dtype=np.uint8),
+        ) as mock_connected_components,
+    ):
+        builder.compute_masks()
+
+    assert mock_strategy.call_count == 1
+    assert mock_strategy.call_args.kwargs["strategy"] == "hsv"
+    assert mock_connected_components.call_count == 1
+
+
 def test_compute_masks_raises_if_estimated_memory_exceeds_limit(
     builder_config: PreprocessingConfig,
 ) -> None:

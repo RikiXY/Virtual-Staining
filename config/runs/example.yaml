@@ -45,6 +45,11 @@ preprocessing:
 
   grid_movement: [256, 256]
   margin: 200
+  # Tissue mask strategy: connected_components (default) or hsv.
+  mask_strategy: connected_components
+  # Optional modality-specific overrides.
+  # source_mask_strategy: connected_components
+  # target_mask_strategy: hsv
   # Optional: compute tissue masks at reduced resolution to save memory.
   # mask_scale: 0.25
   # Optional: keep reduced-resolution masks for patch foreground filtering.

@@ -18,6 +18,9 @@ def _make_namespace(**overrides: object) -> argparse.Namespace:
         seed=None,
         save_masks=False,
         save_discarded_patches=False,
+        mask_strategy="connected_components",
+        source_mask_strategy=None,
+        target_mask_strategy=None,
         lowres_mask_filtering=False,
         image_size=[256, 256],
         grid_movement=[256, 256],
@@ -44,6 +47,9 @@ def test_from_args_basic() -> None:
     assert config.seed is None
     assert config.save_masks is False
     assert config.save_discarded_patches is False
+    assert config.mask_strategy == "connected_components"
+    assert config.source_mask_strategy is None
+    assert config.target_mask_strategy is None
     assert config.mask_scale == pytest.approx(1.0)
     assert config.lowres_mask_filtering is False
     assert config.max_memory_gb is None
@@ -96,6 +102,9 @@ def test_from_yaml(tmp_path: Path) -> None:
         seed: 7
         save_masks: true
         save_discarded_patches: true
+        mask_strategy: hsv
+        source_mask_strategy: connected_components
+        target_mask_strategy: hsv
         mask_scale: 0.25
         lowres_mask_filtering: true
         max_memory_gb: 6.5
@@ -118,6 +127,9 @@ def test_from_yaml(tmp_path: Path) -> None:
     assert config.seed == 7
     assert config.save_masks is True
     assert config.save_discarded_patches is True
+    assert config.mask_strategy == "hsv"
+    assert config.source_mask_strategy == "connected_components"
+    assert config.target_mask_strategy == "hsv"
     assert config.mask_scale == pytest.approx(0.25)
     assert config.lowres_mask_filtering is True
     assert config.max_memory_gb == pytest.approx(6.5)
@@ -138,6 +150,9 @@ def test_from_args_partial_namespace() -> None:
     assert config.seed is None
     assert config.save_masks is False
     assert config.save_discarded_patches is False
+    assert config.mask_strategy == "connected_components"
+    assert config.source_mask_strategy is None
+    assert config.target_mask_strategy is None
     assert config.mask_scale == pytest.approx(1.0)
     assert config.lowres_mask_filtering is False
     assert config.max_memory_gb is None
@@ -157,6 +172,9 @@ def test_to_yaml_round_trip(tmp_path: Path) -> None:
         seed=7,
         save_masks=True,
         save_discarded_patches=True,
+        mask_strategy="hsv",
+        source_mask_strategy="connected_components",
+        target_mask_strategy="hsv",
         mask_scale=0.25,
         lowres_mask_filtering=True,
         max_memory_gb=6.5,
@@ -203,6 +221,9 @@ def test_from_yaml_defaults_for_optional_fields(tmp_path: Path) -> None:
     assert config.seed is None
     assert config.save_masks is False
     assert config.save_discarded_patches is False
+    assert config.mask_strategy == "connected_components"
+    assert config.source_mask_strategy is None
+    assert config.target_mask_strategy is None
     assert config.mask_scale == pytest.approx(1.0)
     assert config.lowres_mask_filtering is False
     assert config.max_memory_gb is None
@@ -228,6 +249,9 @@ def test_from_run_yaml_section(tmp_path: Path) -> None:
           grid_movement: [512, 512]
           save_masks: true
           save_discarded_patches: true
+          mask_strategy: hsv
+          source_mask_strategy: connected_components
+          target_mask_strategy: hsv
           mask_scale: 0.5
           lowres_mask_filtering: true
           max_memory_gb: 4
@@ -242,6 +266,9 @@ def test_from_run_yaml_section(tmp_path: Path) -> None:
     assert config.grid_movement == (512, 512)
     assert config.save_masks is True
     assert config.save_discarded_patches is True
+    assert config.mask_strategy == "hsv"
+    assert config.source_mask_strategy == "connected_components"
+    assert config.target_mask_strategy == "hsv"
     assert config.mask_scale == pytest.approx(0.5)
     assert config.lowres_mask_filtering is True
     assert config.max_memory_gb == pytest.approx(4.0)
@@ -255,6 +282,9 @@ def test_from_run_yaml_section(tmp_path: Path) -> None:
         ({"image_size": [0, 256]}, "image_size"),
         ({"grid_movement": [256, -1]}, "grid_movement"),
         ({"margin": -1}, "margin"),
+        ({"mask_strategy": "unknown"}, "mask_strategy"),
+        ({"source_mask_strategy": "unknown"}, "source_mask_strategy"),
+        ({"target_mask_strategy": "unknown"}, "target_mask_strategy"),
         ({"mask_scale": 0.0}, "mask_scale"),
         ({"mask_scale": 1.5}, "mask_scale"),
         ({"max_memory_gb": 0.0}, "max_memory_gb"),
@@ -413,4 +443,19 @@ def test_from_yaml_string_bool_lowres_mask_filtering_raises(tmp_path: Path) -> N
     """,
     )
     with pytest.raises(TypeError, match="lowres_mask_filtering"):
+        load_preprocessing_config(yaml_file)
+
+
+def test_from_yaml_non_string_mask_strategy_raises(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "bad_mask_strategy.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data/samples
+        source_name: source.tif
+        target_name: target.tif
+        mask_strategy: 123
+    """,
+    )
+    with pytest.raises(TypeError, match="mask_strategy"):
         load_preprocessing_config(yaml_file)

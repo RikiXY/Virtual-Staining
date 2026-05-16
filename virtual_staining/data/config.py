@@ -13,6 +13,7 @@ from virtual_staining.config import (
     section_with_shared_fields,
 )
 from virtual_staining.config.validation import _TOP_LEVEL_KEYS
+from virtual_staining.data.preprocessing import ALLOWED_MASK_STRATEGIES
 from virtual_staining.utils.dimensions import (
     parse_wh_size,
     parse_wh_size_from_aliases,
@@ -32,6 +33,9 @@ _PREPROCESSING_KEYS: frozenset[str] = frozenset(
         "seed",
         "save_masks",
         "save_discarded_patches",
+        "mask_strategy",
+        "source_mask_strategy",
+        "target_mask_strategy",
         "mask_scale",
         "lowres_mask_filtering",
         "max_memory_gb",
@@ -58,6 +62,18 @@ def _pair(value: object, default: tuple[int, int]) -> tuple[int, int]:
     return int(items[0]), int(items[1])
 
 
+def _optional_strategy(value: object, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string")
+    strategy = value.strip()
+    if strategy not in ALLOWED_MASK_STRATEGIES:
+        allowed = ", ".join(ALLOWED_MASK_STRATEGIES)
+        raise ValueError(f"{field_name} must be one of: {allowed}")
+    return strategy
+
+
 @dataclass(frozen=True)
 class PreprocessingConfig:
     dataset_root: Path
@@ -69,6 +85,9 @@ class PreprocessingConfig:
     seed: int | None = None
     save_masks: bool = False
     save_discarded_patches: bool = False
+    mask_strategy: str = "connected_components"
+    source_mask_strategy: str | None = None
+    target_mask_strategy: str | None = None
     mask_scale: float = 1.0
     lowres_mask_filtering: bool = False
     max_memory_gb: float | None = None
@@ -133,6 +152,10 @@ class PreprocessingConfig:
         if self.white_threshold < 0 or self.white_threshold > 255:
             raise ValueError("white_threshold must be between 0 and 255")
 
+        _optional_strategy(self.mask_strategy, "mask_strategy")
+        _optional_strategy(self.source_mask_strategy, "source_mask_strategy")
+        _optional_strategy(self.target_mask_strategy, "target_mask_strategy")
+
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> PreprocessingConfig:
         config = cls(
@@ -145,6 +168,9 @@ class PreprocessingConfig:
             seed=getattr(args, "seed", None),
             save_masks=getattr(args, "save_masks", False),
             save_discarded_patches=getattr(args, "save_discarded_patches", False),
+            mask_strategy=getattr(args, "mask_strategy", "connected_components"),
+            source_mask_strategy=getattr(args, "source_mask_strategy", None),
+            target_mask_strategy=getattr(args, "target_mask_strategy", None),
             mask_scale=getattr(args, "mask_scale", 1.0),
             lowres_mask_filtering=getattr(args, "lowres_mask_filtering", False),
             max_memory_gb=getattr(args, "max_memory_gb", None),
@@ -173,6 +199,9 @@ class PreprocessingConfig:
             "seed": self.seed,
             "save_masks": self.save_masks,
             "save_discarded_patches": self.save_discarded_patches,
+            "mask_strategy": self.mask_strategy,
+            "source_mask_strategy": self.source_mask_strategy,
+            "target_mask_strategy": self.target_mask_strategy,
             "mask_scale": self.mask_scale,
             "lowres_mask_filtering": self.lowres_mask_filtering,
             "max_memory_gb": self.max_memory_gb,
@@ -209,6 +238,19 @@ def load_preprocessing_config(path: str | Path) -> PreprocessingConfig:
         save_discarded_patches=parse_bool_strict(
             data.get("save_discarded_patches", False),
             "save_discarded_patches",
+        ),
+        mask_strategy=_optional_strategy(
+            data.get("mask_strategy", "connected_components"),
+            "mask_strategy",
+        )
+        or "connected_components",
+        source_mask_strategy=_optional_strategy(
+            data.get("source_mask_strategy"),
+            "source_mask_strategy",
+        ),
+        target_mask_strategy=_optional_strategy(
+            data.get("target_mask_strategy"),
+            "target_mask_strategy",
         ),
         mask_scale=float(data.get("mask_scale", 1.0)),
         lowres_mask_filtering=parse_bool_strict(

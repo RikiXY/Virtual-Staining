@@ -22,6 +22,13 @@ MIN_STD_DEV = 10
 # different scales makes the mask robust to both fine and coarse background regions.
 MASK_PARAMETER_GRID = [(2, 3), (4, 6), (6, 9), (8, 15)]
 
+MASK_STRATEGY_CONNECTED_COMPONENTS = "connected_components"
+MASK_STRATEGY_HSV = "hsv"
+ALLOWED_MASK_STRATEGIES: tuple[str, str] = (
+    MASK_STRATEGY_CONNECTED_COMPONENTS,
+    MASK_STRATEGY_HSV,
+)
+
 ALLOWED_EXTENSIONS = {".tif", ".tiff", ".png"}
 T = TypeVar("T")
 
@@ -221,6 +228,56 @@ def calculate_mask_with_multiple_parameters(
         mask = cv2.bitwise_and(mask, _mask)
 
     return mask
+
+
+def apply_mask_morphology(mask: np.ndarray, *, kernel_size: int = 5) -> np.ndarray:
+    """Clean small mask speckles and holes while preserving a binary foreground mask."""
+    if kernel_size <= 1:
+        return mask
+    kernel_size = kernel_size if kernel_size % 2 == 1 else kernel_size + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    opened = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    return cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel)
+
+
+def calculate_hsv_tissue_mask(
+    img: np.ndarray,
+    *,
+    min_saturation: int = 20,
+    max_value: int = 245,
+    morphology_kernel_size: int = 5,
+) -> np.ndarray:
+    """
+    Build a foreground mask from HSV saturation and value thresholds.
+
+    Tissue is considered foreground when it is either visibly saturated or dark
+    enough to be distinct from bright background.
+    """
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    saturation = hsv[:, :, 1]
+    value = hsv[:, :, 2]
+    foreground = (saturation >= min_saturation) | (value <= max_value)
+    mask = foreground.astype(np.uint8) * 255
+    return apply_mask_morphology(mask, kernel_size=morphology_kernel_size)
+
+
+def calculate_mask_by_strategy(
+    img: np.ndarray,
+    *,
+    strategy: str = MASK_STRATEGY_CONNECTED_COMPONENTS,
+    parameters: list[tuple[int, int]] | None = None,
+) -> np.ndarray:
+    """Dispatch tissue-mask generation through a named strategy."""
+    if strategy == MASK_STRATEGY_CONNECTED_COMPONENTS:
+        return calculate_mask_with_multiple_parameters(
+            img,
+            MASK_PARAMETER_GRID if parameters is None else parameters,
+        )
+    if strategy == MASK_STRATEGY_HSV:
+        return calculate_hsv_tissue_mask(img)
+    raise ValueError(
+        f"Unknown mask strategy {strategy!r}; expected one of {ALLOWED_MASK_STRATEGIES}"
+    )
 
 
 def _affine_diagnostics(warp_matrix: np.ndarray) -> dict[str, float]:

@@ -19,6 +19,7 @@ from virtual_staining.data.manifest import DatasetManifest, ManifestRecord, Spli
 from virtual_staining.data.preprocessing import (
     MASK_PARAMETER_GRID,
     assign_split_by_hash,
+    calculate_mask_by_strategy,
     calculate_mask_with_multiple_parameters,
     ensure_clean_directory,
     estimate_affine_from_scaled,
@@ -146,6 +147,18 @@ class DatasetBuilder:
             return mask
         return cv2.resize(mask, (image_w, image_h), interpolation=cv2.INTER_NEAREST)
 
+    def _source_mask_strategy(self) -> str:
+        return self.config.source_mask_strategy or self.config.mask_strategy
+
+    def _target_mask_strategy(self) -> str:
+        return self.config.target_mask_strategy or self.config.mask_strategy
+
+    @staticmethod
+    def _calculate_mask(img: np.ndarray, *, strategy: str) -> np.ndarray:
+        if strategy == "connected_components":
+            return calculate_mask_with_multiple_parameters(img, MASK_PARAMETER_GRID)
+        return calculate_mask_by_strategy(img, strategy=strategy, parameters=MASK_PARAMETER_GRID)
+
     # ------------------------------------------------------------------
     # Pipeline stages
     # ------------------------------------------------------------------
@@ -196,8 +209,14 @@ class DatasetBuilder:
 
             small_source = cv2.resize(self._source_image, scaled_source_size)
             small_target = cv2.resize(self._target_image, scaled_target_size)
-            source_mask = calculate_mask_with_multiple_parameters(small_source, MASK_PARAMETER_GRID)
-            target_mask = calculate_mask_with_multiple_parameters(small_target, MASK_PARAMETER_GRID)
+            source_mask = self._calculate_mask(
+                small_source,
+                strategy=self._source_mask_strategy(),
+            )
+            target_mask = self._calculate_mask(
+                small_target,
+                strategy=self._target_mask_strategy(),
+            )
             if self._uses_lowres_mask_filtering():
                 self._source_mask = source_mask
                 self._target_mask = target_mask
@@ -213,11 +232,13 @@ class DatasetBuilder:
                     interpolation=cv2.INTER_NEAREST,
                 )
         else:
-            self._source_mask = calculate_mask_with_multiple_parameters(
-                self._source_image, MASK_PARAMETER_GRID
+            self._source_mask = self._calculate_mask(
+                self._source_image,
+                strategy=self._source_mask_strategy(),
             )
-            self._target_mask = calculate_mask_with_multiple_parameters(
-                self._target_image, MASK_PARAMETER_GRID
+            self._target_mask = self._calculate_mask(
+                self._target_image,
+                strategy=self._target_mask_strategy(),
             )
 
         if self.config.save_masks:

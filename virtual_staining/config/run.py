@@ -188,6 +188,9 @@ class RunConfig:
                 "seed": self.preprocessing.seed,
                 "save_masks": self.preprocessing.save_masks,
                 "save_discarded_patches": self.preprocessing.save_discarded_patches,
+                "mask_strategy": self.preprocessing.mask_strategy,
+                "source_mask_strategy": self.preprocessing.source_mask_strategy,
+                "target_mask_strategy": self.preprocessing.target_mask_strategy,
                 "mask_scale": self.preprocessing.mask_scale,
                 "lowres_mask_filtering": self.preprocessing.lowres_mask_filtering,
                 "max_memory_gb": self.preprocessing.max_memory_gb,
@@ -435,7 +438,12 @@ def _parse_inference(raw: dict[str, Any]) -> InferenceConfig:
 
 
 def _parse_preprocessing(raw: dict[str, Any]) -> PreprocessingConfig:
-    from virtual_staining.data.config import _PREPROCESSING_KEYS, PreprocessingConfig, _pair
+    from virtual_staining.data.config import (
+        _PREPROCESSING_KEYS,
+        PreprocessingConfig,
+        _optional_strategy,
+        _pair,
+    )
 
     data = section_with_shared_fields(raw, "preprocessing", {"dataset_root", "image_size"})
     reject_unknown_keys(data, _PREPROCESSING_KEYS, "preprocessing")
@@ -454,6 +462,19 @@ def _parse_preprocessing(raw: dict[str, Any]) -> PreprocessingConfig:
         save_discarded_patches=parse_bool_strict(
             data.get("save_discarded_patches", False),
             "save_discarded_patches",
+        ),
+        mask_strategy=_optional_strategy(
+            data.get("mask_strategy", "connected_components"),
+            "mask_strategy",
+        )
+        or "connected_components",
+        source_mask_strategy=_optional_strategy(
+            data.get("source_mask_strategy"),
+            "source_mask_strategy",
+        ),
+        target_mask_strategy=_optional_strategy(
+            data.get("target_mask_strategy"),
+            "target_mask_strategy",
         ),
         mask_scale=float(data.get("mask_scale", 1.0)),
         lowres_mask_filtering=parse_bool_strict(

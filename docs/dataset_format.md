@@ -123,6 +123,21 @@ written. Discarded patch image files are written only when
 `preprocessing.save_discarded_patches: true`; otherwise the `source/` and
 `target/` subdirectories under `discarded_patches/` may be absent.
 
+## Tissue Mask Strategies
+
+`preprocessing.mask_strategy` controls how tissue foreground masks are
+generated. The default is `connected_components`, which preserves the historical
+multi-scale bright-component heuristic. The alternative `hsv` strategy marks
+pixels as tissue when they are sufficiently saturated or darker than bright
+background, then applies morphology cleanup to remove small speckles and fill
+small holes.
+
+Use `preprocessing.source_mask_strategy` and
+`preprocessing.target_mask_strategy` to override the global strategy for one
+modality. Valid values are `connected_components` and `hsv`. The HSV strategy is
+faster and useful for stained or visibly colored tissue, but it can be less
+appropriate for very pale or low-saturation label-free inputs.
+
 ## Low-Resolution Mask Filtering
 
 When `preprocessing.mask_scale < 1.0`, masks are computed on downsampled image
