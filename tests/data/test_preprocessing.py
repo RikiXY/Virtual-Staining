@@ -9,6 +9,7 @@ import pytest
 
 from virtual_staining.data.preprocessing import (
     AlignmentMetadata,
+    _aligned_mask_iou,
     _ratio_test_matches,
     align_from_scaled,
     align_images,
@@ -318,15 +319,15 @@ def test_ratio_test_matches_keeps_only_distinct_best_descriptor_matches() -> Non
 def test_estimate_affine_transform_uses_ratio_test_and_explicit_ransac() -> None:
     matcher = _FakeMatcher(
         [
-            [_dmatch(0, 0, 10.0), _dmatch(0, 1, 20.0)],
-            [_dmatch(1, 1, 10.0), _dmatch(1, 2, 20.0)],
-            [_dmatch(2, 2, 10.0), _dmatch(2, 3, 20.0)],
-            [_dmatch(3, 3, 10.0), _dmatch(3, 4, 20.0)],
-            [_dmatch(4, 4, 19.0), _dmatch(4, 5, 20.0)],
+            *[
+                [_dmatch(index, index, 10.0), _dmatch(index, index + 1, 20.0)]
+                for index in range(12)
+            ],
+            [_dmatch(12, 12, 19.0), _dmatch(12, 13, 20.0)],
         ]
     )
     eye = np.eye(2, 3, dtype=np.float64)
-    inliers = np.ones((4, 1), dtype=np.uint8)
+    inliers = np.ones((12, 1), dtype=np.uint8)
 
     def _bf_matcher(norm: int, **kwargs: Any) -> _FakeMatcher:
         assert norm == cv2.NORM_L2
@@ -336,7 +337,12 @@ def test_estimate_affine_transform_uses_ratio_test_and_explicit_ransac() -> None
     with (
         patch(
             "virtual_staining.data.preprocessing.cv2.SIFT_create",
-            return_value=_FakeSift(_keypoints(6), _descriptors(6), _keypoints(6), _descriptors(6)),
+            return_value=_FakeSift(
+                _keypoints(14),
+                _descriptors(14),
+                _keypoints(14),
+                _descriptors(14),
+            ),
         ),
         patch("virtual_staining.data.preprocessing.cv2.BFMatcher", side_effect=_bf_matcher),
         patch(
@@ -344,13 +350,19 @@ def test_estimate_affine_transform_uses_ratio_test_and_explicit_ransac() -> None
             return_value=(eye, inliers),
         ) as estimate_affine,
     ):
+        mask = np.ones((300, 300), dtype=np.uint8) * 255
         _, metadata = estimate_affine_transform(
             _textured_image(),
             _textured_image(1),
+            mask_1=mask,
+            mask_2=mask,
             ratio_threshold=0.75,
         )
 
-    assert metadata.n_matches == 4
+    assert metadata.n_matches == 12
+    assert metadata.n_inliers == 12
+    assert metadata.inlier_ratio == pytest.approx(1.0)
+    assert metadata.mask_iou == pytest.approx(1.0)
     assert matcher.calls[0][2] == 2
     assert estimate_affine.call_args.kwargs == {
         "method": cv2.RANSAC,
@@ -391,6 +403,54 @@ def test_estimate_affine_transform_raises_on_low_ratio_test_match_count() -> Non
         pytest.raises(ValueError, match="Not enough good descriptor matches"),
     ):
         estimate_affine_transform(_textured_image(), _textured_image(1))
+
+
+def test_estimate_affine_transform_raises_on_low_inlier_ratio() -> None:
+    match_count = 200
+    matcher = _FakeMatcher(
+        [
+            [_dmatch(index, index, 10.0), _dmatch(index, index + 1, 20.0)]
+            for index in range(match_count)
+        ]
+    )
+    eye = np.eye(2, 3, dtype=np.float64)
+    low_ratio_inliers = np.zeros((match_count, 1), dtype=np.uint8)
+    low_ratio_inliers[:12] = 1
+
+    with (
+        patch(
+            "virtual_staining.data.preprocessing.cv2.SIFT_create",
+            return_value=_FakeSift(
+                _keypoints(match_count + 1),
+                _descriptors(match_count + 1),
+                _keypoints(match_count + 1),
+                _descriptors(match_count + 1),
+            ),
+        ),
+        patch("virtual_staining.data.preprocessing.cv2.BFMatcher", return_value=matcher),
+        patch(
+            "virtual_staining.data.preprocessing.cv2.estimateAffinePartial2D",
+            return_value=(eye, low_ratio_inliers),
+        ),
+        pytest.raises(ValueError, match="inlier ratio"),
+    ):
+        estimate_affine_transform(_textured_image(), _textured_image(1))
+
+
+def test_aligned_mask_iou_returns_overlap_diagnostic() -> None:
+    mask_1 = np.zeros((8, 8), dtype=np.uint8)
+    mask_2 = np.zeros((8, 8), dtype=np.uint8)
+    mask_1[2:6, 2:6] = 255
+    mask_2[2:6, 2:6] = 255
+
+    iou = _aligned_mask_iou(
+        mask_1,
+        mask_2,
+        np.eye(2, 3, dtype=np.float64),
+        (8, 8),
+    )
+
+    assert iou == pytest.approx(1.0)
 
 
 def test_align_images_raises_when_warp_matrix_is_none() -> None:
@@ -437,12 +497,14 @@ def test_alignment_metadata_has_expected_fields() -> None:
         translation_x=0.0,
         translation_y=0.0,
         warp_matrix=eye.tolist(),
+        mask_iou=0.75,
     )
     assert meta.n_keypoints_src == 200
     assert meta.n_keypoints_tgt == 180
     assert meta.n_matches == 60
     assert meta.n_inliers == 50
     assert meta.inlier_ratio == 50 / 60
+    assert meta.mask_iou == pytest.approx(0.75)
     assert len(meta.warp_matrix) == 2
     assert len(meta.warp_matrix[0]) == 3
 
@@ -478,7 +540,7 @@ def test_align_from_scaled_uses_nearest_neighbor_for_scaled_masks() -> None:
             return_value=(np.eye(2, 3, dtype=np.float64), metadata),
         ),
     ):
-        align_from_scaled(img, img, scale=0.5, mask1=mask, mask2=mask)
+        align_from_scaled(img, img, scale=0.5, mask_1=mask, mask_2=mask)
 
     assert any(call.get("interpolation") == cv2.INTER_NEAREST for call in resize_calls[2:4])
 

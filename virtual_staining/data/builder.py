@@ -221,8 +221,8 @@ class DatasetBuilder:
         warp_matrix, metadata = estimate_affine_from_scaled(
             self._source_image,
             self._target_image,
-            mask1=self._source_mask,
-            mask2=self._target_mask,
+            mask_1=self._source_mask,
+            mask_2=self._target_mask,
             scale=0.5,
         )
         self._warp_matrix = warp_matrix

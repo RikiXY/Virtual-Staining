@@ -25,7 +25,8 @@ MASK_PARAMETER_GRID = [(2, 3), (4, 6), (6, 9), (8, 15)]
 ALLOWED_EXTENSIONS = {".tif", ".tiff", ".png"}
 T = TypeVar("T")
 
-MIN_INLIERS = 4
+MIN_INLIERS = 12
+MIN_INLIER_RATIO = 0.10
 SPLIT_NAMES: tuple[str, str, str] = ("train", "val", "test")
 LOWE_RATIO_THRESHOLD = 0.75
 RANSAC_REPROJECTION_THRESHOLD = 5.0
@@ -49,6 +50,7 @@ class AlignmentMetadata:
     translation_x: float
     translation_y: float
     warp_matrix: list[list[float]]
+    mask_iou: float | None = None
 
 
 def pad_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
@@ -249,11 +251,39 @@ def _ratio_test_matches(
     return good_matches
 
 
+def _aligned_mask_iou(
+    mask_1: np.ndarray | None,
+    mask_2: np.ndarray | None,
+    warp_matrix: np.ndarray,
+    output_size: tuple[int, int],
+) -> float | None:
+    """Compute foreground IoU after warping mask_2 into mask_1 coordinates."""
+    if mask_1 is None or mask_2 is None:
+        return None
+
+    aligned_mask_2 = cv2.warpAffine(
+        mask_2,
+        warp_matrix,
+        output_size,
+        flags=cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
+    foreground_1 = mask_1 > 0
+    foreground_2 = aligned_mask_2 > 0
+    union = np.logical_or(foreground_1, foreground_2)
+    union_count = int(np.count_nonzero(union))
+    if union_count == 0:
+        return None
+    intersection_count = int(np.count_nonzero(np.logical_and(foreground_1, foreground_2)))
+    return intersection_count / union_count
+
+
 def estimate_affine_transform(
     img1: np.ndarray,
     img2: np.ndarray,
-    mask1: np.ndarray | None = None,
-    mask2: np.ndarray | None = None,
+    mask_1: np.ndarray | None = None,
+    mask_2: np.ndarray | None = None,
     nfeatures: int = 10000,
     ratio_threshold: float = LOWE_RATIO_THRESHOLD,
 ) -> tuple[np.ndarray, AlignmentMetadata]:
@@ -266,9 +296,9 @@ def estimate_affine_transform(
         Reference image.
     img2 : np.ndarray
         Image to align to the reference.
-    mask1 : np.ndarray, optional
+    mask_1 : np.ndarray, optional
         The mask for the first image. Default is None.
-    mask2 : np.ndarray, optional
+    mask_2 : np.ndarray, optional
         The mask for the second image. Default is None.
     nfeatures : int, optional
         Number of features for SIFT computation. Default is 10000.
@@ -296,8 +326,8 @@ def estimate_affine_transform(
     img2_clahe = clahe.apply(img2_clahe)
 
     sift = cv2.SIFT_create(nfeatures=nfeatures)  # type: ignore[attr-defined]
-    keypoints_1, descriptors_1 = sift.detectAndCompute(img1_clahe, mask1)
-    keypoints_2, descriptors_2 = sift.detectAndCompute(img2_clahe, mask2)
+    keypoints_1, descriptors_1 = sift.detectAndCompute(img1_clahe, mask_1)
+    keypoints_2, descriptors_2 = sift.detectAndCompute(img2_clahe, mask_2)
 
     n_keypoints_1 = len(keypoints_1)
     n_keypoints_2 = len(keypoints_2)
@@ -343,13 +373,25 @@ def estimate_affine_transform(
         )
 
     n_inliers = int(inlier_mask.sum()) if inlier_mask is not None else 0
+    inlier_ratio = n_inliers / len(filtered_matches)
     if n_inliers < MIN_INLIERS:
         raise ValueError(
             f"Alignment rejected: only {n_inliers} inliers found (minimum {MIN_INLIERS} required)"
         )
+    if inlier_ratio < MIN_INLIER_RATIO:
+        raise ValueError(
+            "Alignment rejected: inlier ratio "
+            f"{inlier_ratio:.3f} is below minimum {MIN_INLIER_RATIO:.3f} "
+            f"({n_inliers}/{len(filtered_matches)} inliers)"
+        )
 
-    inlier_ratio = n_inliers / len(filtered_matches)
     diagnostics = _affine_diagnostics(warp_matrix)
+    mask_iou = _aligned_mask_iou(
+        mask_1,
+        mask_2,
+        warp_matrix,
+        (img1.shape[1], img1.shape[0]),
+    )
     metadata = AlignmentMetadata(
         n_keypoints_src=n_keypoints_1,
         n_keypoints_tgt=n_keypoints_2,
@@ -362,6 +404,7 @@ def estimate_affine_transform(
         translation_x=diagnostics["translation_x"],
         translation_y=diagnostics["translation_y"],
         warp_matrix=warp_matrix.tolist(),
+        mask_iou=mask_iou,
     )
 
     return warp_matrix, metadata
@@ -414,8 +457,8 @@ def warp_aligned_patch(
 def align_images(
     img1: np.ndarray,
     img2: np.ndarray,
-    mask1: np.ndarray | None = None,
-    mask2: np.ndarray | None = None,
+    mask_1: np.ndarray | None = None,
+    mask_2: np.ndarray | None = None,
     nfeatures: int = 10000,
     ratio_threshold: float = LOWE_RATIO_THRESHOLD,
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, AlignmentMetadata]:
@@ -423,8 +466,8 @@ def align_images(
     warp_matrix, metadata = estimate_affine_transform(
         img1,
         img2,
-        mask1=mask1,
-        mask2=mask2,
+        mask_1=mask_1,
+        mask_2=mask_2,
         nfeatures=nfeatures,
         ratio_threshold=ratio_threshold,
     )
@@ -435,24 +478,24 @@ def align_images(
         (img1.shape[1], img1.shape[0]),
         is_mask=False,
     )
-    mask2_aligned = None
-    if mask2 is not None:
-        mask2_aligned = warp_aligned_image(
-            mask2,
+    mask_2_aligned = None
+    if mask_2 is not None:
+        mask_2_aligned = warp_aligned_image(
+            mask_2,
             warp_matrix,
             (img1.shape[1], img1.shape[0]),
             is_mask=True,
         )
 
-    return img2_aligned, mask2_aligned, warp_matrix, metadata
+    return img2_aligned, mask_2_aligned, warp_matrix, metadata
 
 
 def estimate_affine_from_scaled(
     img1: np.ndarray,
     img2: np.ndarray,
     scale: float = 0.5,
-    mask1: np.ndarray | None = None,
-    mask2: np.ndarray | None = None,
+    mask_1: np.ndarray | None = None,
+    mask_2: np.ndarray | None = None,
     nfeatures: int = 10000,
     ratio_threshold: float = LOWE_RATIO_THRESHOLD,
 ) -> tuple[np.ndarray, AlignmentMetadata]:
@@ -467,9 +510,9 @@ def estimate_affine_from_scaled(
         Target image to be aligned to the source image.
     scale : float, optional
         Scaling factor to resize images before alignment (default is 0.5).
-    mask1 : Optional[np.ndarray], optional
+    mask_1 : Optional[np.ndarray], optional
         Optional mask for the first image.
-    mask2 : Optional[np.ndarray], optional
+    mask_2 : Optional[np.ndarray], optional
         Optional mask for the second image.
     nfeatures : int, optional
         Number of features to use for alignment (default is 10000).
@@ -486,17 +529,21 @@ def estimate_affine_from_scaled(
     img1_scaled = cv2.resize(img1, None, fx=scale, fy=scale)
     img2_scaled = cv2.resize(img2, None, fx=scale, fy=scale)
 
-    if mask1 is None or mask2 is None:
+    if mask_1 is None or mask_2 is None:
         raise ValueError("Error: the scaled mask is None. Cannot align images.")
     else:
-        mask1_scaled = cv2.resize(mask1, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
-        mask2_scaled = cv2.resize(mask2, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
+        mask_1_scaled = cv2.resize(
+            mask_1, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST
+        )
+        mask_2_scaled = cv2.resize(
+            mask_2, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST
+        )
 
     warp_matrix, metadata = estimate_affine_transform(
         img1_scaled,
         img2_scaled,
-        mask1_scaled if mask1 is not None else None,
-        mask2_scaled if mask2 is not None else None,
+        mask_1=mask_1_scaled if mask_1 is not None else None,
+        mask_2=mask_2_scaled if mask_2 is not None else None,
         nfeatures=nfeatures,
         ratio_threshold=ratio_threshold,
     )
@@ -521,8 +568,8 @@ def align_from_scaled(
     img1: np.ndarray,
     img2: np.ndarray,
     scale: float = 0.5,
-    mask1: np.ndarray | None = None,
-    mask2: np.ndarray | None = None,
+    mask_1: np.ndarray | None = None,
+    mask_2: np.ndarray | None = None,
     nfeatures: int = 10000,
     ratio_threshold: float = LOWE_RATIO_THRESHOLD,
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, AlignmentMetadata]:
@@ -534,8 +581,8 @@ def align_from_scaled(
         img1,
         img2,
         scale=scale,
-        mask1=mask1,
-        mask2=mask2,
+        mask_1=mask_1,
+        mask_2=mask_2,
         nfeatures=nfeatures,
         ratio_threshold=ratio_threshold,
     )
@@ -546,16 +593,16 @@ def align_from_scaled(
         (img1.shape[1], img1.shape[0]),
         is_mask=False,
     )
-    mask2_aligned = None
-    if mask2 is not None:
-        mask2_aligned = warp_aligned_image(
-            mask2,
+    mask_2_aligned = None
+    if mask_2 is not None:
+        mask_2_aligned = warp_aligned_image(
+            mask_2,
             warp_matrix,
             (img1.shape[1], img1.shape[0]),
             is_mask=True,
         )
 
-    return img2_aligned, mask2_aligned, warp_matrix, metadata
+    return img2_aligned, mask_2_aligned, warp_matrix, metadata
 
 
 def extract_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:

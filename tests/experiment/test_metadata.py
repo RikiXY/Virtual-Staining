@@ -27,12 +27,12 @@ def _white_mask(img: np.ndarray, _params: object) -> np.ndarray:
 def _identity_align(
     _src: np.ndarray,
     tgt: np.ndarray,
-    mask1: np.ndarray | None = None,
-    mask2: np.ndarray | None = None,
+    mask_1: np.ndarray | None = None,
+    mask_2: np.ndarray | None = None,
     scale: float = 0.5,
     **_kwargs: object,
 ) -> tuple[np.ndarray, AlignmentMetadata]:
-    del _src, tgt, mask1, mask2, scale
+    del _src, tgt, mask_1, mask_2, scale
     eye = np.eye(2, 3, dtype=np.float64)
     metadata = AlignmentMetadata(
         n_keypoints_src=100,
