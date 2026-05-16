@@ -18,6 +18,7 @@ def _make_namespace(**overrides: object) -> argparse.Namespace:
         seed=None,
         save_masks=False,
         save_discarded_patches=False,
+        lowres_mask_filtering=False,
         image_size=[256, 256],
         grid_movement=[256, 256],
         margin=200,
@@ -44,6 +45,7 @@ def test_from_args_basic() -> None:
     assert config.save_masks is False
     assert config.save_discarded_patches is False
     assert config.mask_scale == pytest.approx(1.0)
+    assert config.lowres_mask_filtering is False
     assert config.max_memory_gb is None
 
 
@@ -95,6 +97,7 @@ def test_from_yaml(tmp_path: Path) -> None:
         save_masks: true
         save_discarded_patches: true
         mask_scale: 0.25
+        lowres_mask_filtering: true
         max_memory_gb: 6.5
         train_ratio: 0.7
         val_ratio: 0.1
@@ -116,6 +119,7 @@ def test_from_yaml(tmp_path: Path) -> None:
     assert config.save_masks is True
     assert config.save_discarded_patches is True
     assert config.mask_scale == pytest.approx(0.25)
+    assert config.lowres_mask_filtering is True
     assert config.max_memory_gb == pytest.approx(6.5)
     assert config.train_ratio == pytest.approx(0.7)
     assert config.val_ratio == pytest.approx(0.1)
@@ -135,6 +139,7 @@ def test_from_args_partial_namespace() -> None:
     assert config.save_masks is False
     assert config.save_discarded_patches is False
     assert config.mask_scale == pytest.approx(1.0)
+    assert config.lowres_mask_filtering is False
     assert config.max_memory_gb is None
     assert config.train_ratio == pytest.approx(0.8)
     assert config.min_foreground_ratio == pytest.approx(0.25)
@@ -153,6 +158,7 @@ def test_to_yaml_round_trip(tmp_path: Path) -> None:
         save_masks=True,
         save_discarded_patches=True,
         mask_scale=0.25,
+        lowres_mask_filtering=True,
         max_memory_gb=6.5,
         train_ratio=0.7,
         val_ratio=0.1,
@@ -198,6 +204,7 @@ def test_from_yaml_defaults_for_optional_fields(tmp_path: Path) -> None:
     assert config.save_masks is False
     assert config.save_discarded_patches is False
     assert config.mask_scale == pytest.approx(1.0)
+    assert config.lowres_mask_filtering is False
     assert config.max_memory_gb is None
     assert config.train_ratio == pytest.approx(0.8)
     assert config.val_ratio == pytest.approx(0.05)
@@ -222,6 +229,7 @@ def test_from_run_yaml_section(tmp_path: Path) -> None:
           save_masks: true
           save_discarded_patches: true
           mask_scale: 0.5
+          lowres_mask_filtering: true
           max_memory_gb: 4
     """,
     )
@@ -235,6 +243,7 @@ def test_from_run_yaml_section(tmp_path: Path) -> None:
     assert config.save_masks is True
     assert config.save_discarded_patches is True
     assert config.mask_scale == pytest.approx(0.5)
+    assert config.lowres_mask_filtering is True
     assert config.max_memory_gb == pytest.approx(4.0)
 
 
@@ -389,4 +398,19 @@ def test_from_yaml_string_bool_save_discarded_patches_raises(tmp_path: Path) -> 
     """,
     )
     with pytest.raises(TypeError, match="save_discarded_patches"):
+        load_preprocessing_config(yaml_file)
+
+
+def test_from_yaml_string_bool_lowres_mask_filtering_raises(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "str_bool_lowres_mask_filtering.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data/samples
+        source_name: source.tif
+        target_name: target.tif
+        lowres_mask_filtering: "false"
+    """,
+    )
+    with pytest.raises(TypeError, match="lowres_mask_filtering"):
         load_preprocessing_config(yaml_file)

@@ -454,6 +454,82 @@ def warp_aligned_patch(
     )
 
 
+def mask_window_for_patch(
+    mask: np.ndarray,
+    image_shape: tuple[int, int] | tuple[int, int, int],
+    *,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+) -> np.ndarray:
+    """Return the mask-space window corresponding to a full-resolution image patch."""
+    if width <= 0 or height <= 0:
+        raise ValueError("Patch width and height must be positive")
+
+    image_h, image_w = image_shape[:2]
+    if image_h <= 0 or image_w <= 0:
+        raise ValueError("Image shape must have positive height and width")
+
+    mask_h, mask_w = mask.shape[:2]
+    if mask_h <= 0 or mask_w <= 0:
+        raise ValueError("Mask shape must have positive height and width")
+
+    scale_x = mask_w / image_w
+    scale_y = mask_h / image_h
+    x0 = max(0, min(mask_w - 1, int(np.floor(x * scale_x))))
+    y0 = max(0, min(mask_h - 1, int(np.floor(y * scale_y))))
+    x1 = max(x0 + 1, int(np.ceil((x + width) * scale_x)))
+    y1 = max(y0 + 1, int(np.ceil((y + height) * scale_y)))
+    x1 = min(mask_w, x1)
+    y1 = min(mask_h, y1)
+    return mask[y0:y1, x0:x1]
+
+
+def foreground_ratio_for_patch(
+    mask: np.ndarray,
+    image_shape: tuple[int, int] | tuple[int, int, int],
+    *,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+) -> float:
+    """Compute approximate foreground coverage for an image patch from mask-space pixels."""
+    window = mask_window_for_patch(mask, image_shape, x=x, y=y, width=width, height=height)
+    return cv2.countNonZero(window) / window.size
+
+
+def warp_aligned_mask_patch_from_mask_space(
+    mask: np.ndarray,
+    warp_matrix: np.ndarray,
+    image_shape: tuple[int, int] | tuple[int, int, int],
+    *,
+    x: int,
+    y: int,
+    output_size: tuple[int, int],
+) -> np.ndarray:
+    """Warp a destination patch from a mask that may be stored below image resolution."""
+    image_h, image_w = image_shape[:2]
+    mask_h, mask_w = mask.shape[:2]
+    scale_x = mask_w / image_w
+    scale_y = mask_h / image_h
+    if scale_x <= 0 or scale_y <= 0:
+        raise ValueError("Mask and image shapes must be positive")
+
+    mask_space_matrix = np.asarray(warp_matrix, dtype=np.float64).copy()
+    mask_space_matrix[:, 0] /= scale_x
+    mask_space_matrix[:, 1] /= scale_y
+    return warp_aligned_patch(
+        mask,
+        mask_space_matrix,
+        x=x,
+        y=y,
+        output_size=output_size,
+        is_mask=True,
+    )
+
+
 def align_images(
     img1: np.ndarray,
     img2: np.ndarray,

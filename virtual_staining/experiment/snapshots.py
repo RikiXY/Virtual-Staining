@@ -147,6 +147,7 @@ def serialize_preprocessing_config(config: PreprocessingConfig) -> dict[str, Any
         "save_masks": config.save_masks,
         "save_discarded_patches": config.save_discarded_patches,
         "mask_scale": config.mask_scale,
+        "lowres_mask_filtering": config.lowres_mask_filtering,
         "max_memory_gb": config.max_memory_gb,
         "train_ratio": config.train_ratio,
         "val_ratio": config.val_ratio,

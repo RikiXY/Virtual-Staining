@@ -16,10 +16,13 @@ from virtual_staining.data.preprocessing import (
     calculate_mask,
     calculate_mask_with_grid,
     estimate_affine_transform,
+    foreground_ratio_for_patch,
     is_valid_patch_pair,
+    mask_window_for_patch,
     pad_image,
     split_items,
     warp_aligned_image,
+    warp_aligned_mask_patch_from_mask_space,
     warp_aligned_patch,
 )
 
@@ -595,3 +598,59 @@ def test_warp_aligned_patch_uses_nearest_neighbor_for_masks() -> None:
     )
 
     assert set(np.unique(patch)).issubset({0, 255})
+
+
+def test_mask_window_for_patch_maps_full_resolution_patch_to_mask_space() -> None:
+    mask = np.zeros((5, 10), dtype=np.uint8)
+    mask[1:4, 2:7] = 255
+
+    window = mask_window_for_patch(
+        mask,
+        (20, 40, 3),
+        x=8,
+        y=4,
+        width=12,
+        height=8,
+    )
+
+    assert window.shape == (2, 3)
+    assert np.all(window == 255)
+
+
+def test_foreground_ratio_for_patch_uses_mask_space_window() -> None:
+    mask = np.array(
+        [
+            [255, 0],
+            [255, 255],
+        ],
+        dtype=np.uint8,
+    )
+
+    ratio = foreground_ratio_for_patch(mask, (8, 8, 3), x=0, y=0, width=8, height=8)
+
+    assert ratio == pytest.approx(0.75)
+
+
+def test_warp_aligned_mask_patch_from_mask_space_scales_affine_columns() -> None:
+    mask = np.zeros((16, 16), dtype=np.uint8)
+    mask[4:12, 4:12] = 255
+    warp_matrix = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+
+    patch = warp_aligned_mask_patch_from_mask_space(
+        mask,
+        warp_matrix,
+        (32, 32, 3),
+        x=8,
+        y=8,
+        output_size=(16, 16),
+    )
+
+    assert patch.shape == (16, 16)
+    assert set(np.unique(patch)).issubset({0, 255})
+    assert cv2.countNonZero(patch) > 0

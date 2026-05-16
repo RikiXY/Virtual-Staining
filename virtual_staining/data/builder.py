@@ -22,9 +22,12 @@ from virtual_staining.data.preprocessing import (
     calculate_mask_with_multiple_parameters,
     ensure_clean_directory,
     estimate_affine_from_scaled,
+    foreground_ratio_for_patch,
     is_valid_patch_pair,
     iter_image_with_grid,
+    mask_window_for_patch,
     validate_image_filename,
+    warp_aligned_mask_patch_from_mask_space,
     warp_aligned_patch,
 )
 from virtual_staining.data.results import DatasetBuildResult
@@ -62,7 +65,13 @@ def _build_manifest_metadata(records: list[ManifestRecord]) -> dict[str, Any]:
     }
 
 
-def _estimate_memory_gb(h: int, w: int, *, mask_scale: float = 1.0) -> float:
+def _estimate_memory_gb(
+    h: int,
+    w: int,
+    *,
+    mask_scale: float = 1.0,
+    lowres_mask_filtering: bool = False,
+) -> float:
     """Rough working-set estimate for processing a single image pair."""
     pixels = h * w
     scaled_h = max(1, int(h * mask_scale))
@@ -70,7 +79,8 @@ def _estimate_memory_gb(h: int, w: int, *, mask_scale: float = 1.0) -> float:
     scaled_pixels = scaled_h * scaled_w
 
     # Full-resolution resident state kept across the pipeline.
-    full_res_bytes = pixels * (2 * 3 + 2 + (3 + 1))
+    resident_mask_pixels = scaled_pixels if lowres_mask_filtering else pixels
+    full_res_bytes = pixels * (2 * 3 + (3 + 1)) + resident_mask_pixels * 2
     # Mask computation scales with the downsampled image area when mask_scale < 1.0.
     scaled_mask_bytes = scaled_pixels * (2 * 3 + 2) * 3
     estimated_bytes = full_res_bytes + scaled_mask_bytes
@@ -126,6 +136,16 @@ class DatasetBuilder:
         self._started_at: str | None = None
         self._effective_seed: int | None = None
 
+    def _uses_lowres_mask_filtering(self) -> bool:
+        return self.config.lowres_mask_filtering and self.config.mask_scale < 1.0
+
+    @staticmethod
+    def _mask_in_image_space(mask: np.ndarray, image: np.ndarray) -> np.ndarray:
+        image_h, image_w = image.shape[:2]
+        if mask.shape[:2] == (image_h, image_w):
+            return mask
+        return cv2.resize(mask, (image_w, image_h), interpolation=cv2.INTER_NEAREST)
+
     # ------------------------------------------------------------------
     # Pipeline stages
     # ------------------------------------------------------------------
@@ -142,6 +162,7 @@ class DatasetBuilder:
             source_h,
             source_w,
             mask_scale=self.config.mask_scale,
+            lowres_mask_filtering=self._uses_lowres_mask_filtering(),
         )
         if self.config.max_memory_gb is not None and estimated_gb > self.config.max_memory_gb:
             raise MemoryError(
@@ -177,16 +198,20 @@ class DatasetBuilder:
             small_target = cv2.resize(self._target_image, scaled_target_size)
             source_mask = calculate_mask_with_multiple_parameters(small_source, MASK_PARAMETER_GRID)
             target_mask = calculate_mask_with_multiple_parameters(small_target, MASK_PARAMETER_GRID)
-            self._source_mask = cv2.resize(
-                source_mask,
-                (source_w, source_h),
-                interpolation=cv2.INTER_NEAREST,
-            )
-            self._target_mask = cv2.resize(
-                target_mask,
-                (target_w, target_h),
-                interpolation=cv2.INTER_NEAREST,
-            )
+            if self._uses_lowres_mask_filtering():
+                self._source_mask = source_mask
+                self._target_mask = target_mask
+            else:
+                self._source_mask = cv2.resize(
+                    source_mask,
+                    (source_w, source_h),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+                self._target_mask = cv2.resize(
+                    target_mask,
+                    (target_w, target_h),
+                    interpolation=cv2.INTER_NEAREST,
+                )
         else:
             self._source_mask = calculate_mask_with_multiple_parameters(
                 self._source_image, MASK_PARAMETER_GRID
@@ -196,13 +221,15 @@ class DatasetBuilder:
             )
 
         if self.config.save_masks:
+            source_mask_to_save = self._mask_in_image_space(self._source_mask, self._source_image)
+            target_mask_to_save = self._mask_in_image_space(self._target_mask, self._target_image)
             cv2.imwrite(
                 str(root / f"mask_{self._source_file.stem}{self._source_suffix}"),
-                self._source_mask,
+                source_mask_to_save,
             )
             cv2.imwrite(
                 str(root / f"mask_{self._target_file.stem}{self._target_suffix}"),
-                self._target_mask,
+                target_mask_to_save,
             )
 
         _log_memory("compute_masks")
@@ -218,11 +245,13 @@ class DatasetBuilder:
             raise RuntimeError("compute_masks() must be called before align()")
 
         logger.info("Aligning images...")
+        source_alignment_mask = self._mask_in_image_space(self._source_mask, self._source_image)
+        target_alignment_mask = self._mask_in_image_space(self._target_mask, self._target_image)
         warp_matrix, metadata = estimate_affine_from_scaled(
             self._source_image,
             self._target_image,
-            mask_1=self._source_mask,
-            mask_2=self._target_mask,
+            mask_1=source_alignment_mask,
+            mask_2=target_alignment_mask,
             scale=0.5,
         )
         self._warp_matrix = warp_matrix
@@ -274,7 +303,8 @@ class DatasetBuilder:
             return img[m:-m, m:-m] if m > 0 else img
 
         cropped_source = _crop(self._source_image)
-        cropped_source_mask = _crop(self._source_mask)
+        use_lowres_masks = self._uses_lowres_mask_filtering()
+        cropped_source_mask = None if use_lowres_masks else _crop(self._source_mask)
         source_iter = iter_image_with_grid(
             cropped_source,
             self.config.image_size,
@@ -293,10 +323,34 @@ class DatasetBuilder:
             split_seed = 0
         split_ratios = (self.config.train_ratio, self.config.val_ratio, self.config.test_ratio)
         for (x, y), src, src_mask in source_iter:
-            if src_mask is None:
-                raise RuntimeError("Patch extraction did not return source masks")
             target_x = x + m
             target_y = y + m
+            if use_lowres_masks:
+                source_foreground_ratio = foreground_ratio_for_patch(
+                    self._source_mask,
+                    self._source_image.shape,
+                    x=target_x,
+                    y=target_y,
+                    width=patch_w,
+                    height=patch_h,
+                )
+                if source_foreground_ratio < self.config.min_foreground_ratio:
+                    continue
+                source_mask_window = mask_window_for_patch(
+                    self._source_mask,
+                    self._source_image.shape,
+                    x=target_x,
+                    y=target_y,
+                    width=patch_w,
+                    height=patch_h,
+                )
+                src_mask = cv2.resize(
+                    source_mask_window,
+                    (patch_w, patch_h),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+            elif src_mask is None:
+                raise RuntimeError("Patch extraction did not return source masks")
             tgt = warp_aligned_patch(
                 self._target_image,
                 self._warp_matrix,
@@ -305,14 +359,24 @@ class DatasetBuilder:
                 output_size=(patch_w, patch_h),
                 is_mask=False,
             )
-            tgt_mask = warp_aligned_patch(
-                self._target_mask,
-                self._warp_matrix,
-                x=target_x,
-                y=target_y,
-                output_size=(patch_w, patch_h),
-                is_mask=True,
-            )
+            if use_lowres_masks:
+                tgt_mask = warp_aligned_mask_patch_from_mask_space(
+                    self._target_mask,
+                    self._warp_matrix,
+                    self._target_image.shape,
+                    x=target_x,
+                    y=target_y,
+                    output_size=(patch_w, patch_h),
+                )
+            else:
+                tgt_mask = warp_aligned_patch(
+                    self._target_mask,
+                    self._warp_matrix,
+                    x=target_x,
+                    y=target_y,
+                    output_size=(patch_w, patch_h),
+                    is_mask=True,
+                )
             if (
                 tgt.shape[0] < patch_h
                 or tgt.shape[1] < patch_w

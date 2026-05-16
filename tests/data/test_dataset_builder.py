@@ -279,6 +279,28 @@ def test_compute_masks_with_mask_scale(
     assert builder._target_mask.shape == builder._target_image.shape[:2]
 
 
+def test_compute_masks_with_lowres_mask_filtering_keeps_scaled_masks(
+    builder_scaled_config: PreprocessingConfig,
+) -> None:
+    config = dataclasses.replace(builder_scaled_config, lowres_mask_filtering=True)
+    builder = DatasetBuilder(config)
+
+    with patch(
+        "virtual_staining.data.builder.calculate_mask_with_multiple_parameters",
+        return_value=np.full((150, 150), 255, dtype=np.uint8),
+    ):
+        builder.compute_masks()
+
+    assert builder._source_image is not None
+    assert builder._target_image is not None
+    assert builder._source_mask is not None
+    assert builder._target_mask is not None
+    assert builder._source_mask.shape == (150, 150)
+    assert builder._target_mask.shape == (150, 150)
+    assert builder._source_mask.shape != builder._source_image.shape[:2]
+    assert builder._target_mask.shape != builder._target_image.shape[:2]
+
+
 def test_compute_masks_raises_if_estimated_memory_exceeds_limit(
     builder_config: PreprocessingConfig,
 ) -> None:
@@ -517,6 +539,40 @@ def test_stream_patches_to_disk_uses_min_foreground_ratio_for_source_prefilter(
         builder._stream_patches_to_disk()
 
     assert mock_iter.call_args.kwargs["max_mask_percentage"] == builder_config.min_foreground_ratio
+
+
+def test_stream_patches_to_disk_lowres_mask_filtering_keeps_mask_out_of_iterator(
+    builder_scaled_config: PreprocessingConfig,
+) -> None:
+    config = dataclasses.replace(builder_scaled_config, lowres_mask_filtering=True)
+    builder = DatasetBuilder(config)
+
+    with (
+        _patched_builder_dependencies(),
+        patch("virtual_staining.data.builder.iter_image_with_grid") as mock_iter,
+    ):
+        mock_iter.return_value = iter(())
+        builder.compute_masks()
+        builder.align()
+        builder._stream_patches_to_disk()
+
+    assert mock_iter.call_args.args[3] is None
+
+
+def test_run_all_with_lowres_mask_filtering_writes_patches(
+    builder_scaled_config: PreprocessingConfig,
+) -> None:
+    config = dataclasses.replace(builder_scaled_config, lowres_mask_filtering=True)
+    builder = DatasetBuilder(config)
+
+    with _patched_builder_dependencies():
+        result = builder.run_all()
+
+    assert builder._source_mask is not None
+    assert builder._target_mask is not None
+    assert builder._source_mask.shape == (150, 150)
+    assert builder._target_mask.shape == (150, 150)
+    assert result.train_count + result.val_count + result.test_count > 0
 
 
 def test_stream_patches_to_disk_records_discarded_rows_without_images_by_default(

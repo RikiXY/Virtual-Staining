@@ -189,6 +189,7 @@ class RunConfig:
                 "save_masks": self.preprocessing.save_masks,
                 "save_discarded_patches": self.preprocessing.save_discarded_patches,
                 "mask_scale": self.preprocessing.mask_scale,
+                "lowres_mask_filtering": self.preprocessing.lowres_mask_filtering,
                 "max_memory_gb": self.preprocessing.max_memory_gb,
                 "train_ratio": self.preprocessing.train_ratio,
                 "val_ratio": self.preprocessing.val_ratio,
@@ -455,6 +456,10 @@ def _parse_preprocessing(raw: dict[str, Any]) -> PreprocessingConfig:
             "save_discarded_patches",
         ),
         mask_scale=float(data.get("mask_scale", 1.0)),
+        lowres_mask_filtering=parse_bool_strict(
+            data.get("lowres_mask_filtering", False),
+            "lowres_mask_filtering",
+        ),
         max_memory_gb=None if max_memory_gb_raw is None else float(max_memory_gb_raw),
         train_ratio=float(data.get("train_ratio", 0.8)),
         val_ratio=float(data.get("val_ratio", 0.05)),

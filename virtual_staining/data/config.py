@@ -33,6 +33,7 @@ _PREPROCESSING_KEYS: frozenset[str] = frozenset(
         "save_masks",
         "save_discarded_patches",
         "mask_scale",
+        "lowres_mask_filtering",
         "max_memory_gb",
         "train_ratio",
         "val_ratio",
@@ -69,6 +70,7 @@ class PreprocessingConfig:
     save_masks: bool = False
     save_discarded_patches: bool = False
     mask_scale: float = 1.0
+    lowres_mask_filtering: bool = False
     max_memory_gb: float | None = None
     train_ratio: float = 0.8
     val_ratio: float = 0.05
@@ -144,6 +146,7 @@ class PreprocessingConfig:
             save_masks=getattr(args, "save_masks", False),
             save_discarded_patches=getattr(args, "save_discarded_patches", False),
             mask_scale=getattr(args, "mask_scale", 1.0),
+            lowres_mask_filtering=getattr(args, "lowres_mask_filtering", False),
             max_memory_gb=getattr(args, "max_memory_gb", None),
             train_ratio=getattr(args, "train_ratio", 0.8),
             val_ratio=getattr(args, "val_ratio", 0.05),
@@ -171,6 +174,7 @@ class PreprocessingConfig:
             "save_masks": self.save_masks,
             "save_discarded_patches": self.save_discarded_patches,
             "mask_scale": self.mask_scale,
+            "lowres_mask_filtering": self.lowres_mask_filtering,
             "max_memory_gb": self.max_memory_gb,
             "train_ratio": self.train_ratio,
             "val_ratio": self.val_ratio,
@@ -207,6 +211,10 @@ def load_preprocessing_config(path: str | Path) -> PreprocessingConfig:
             "save_discarded_patches",
         ),
         mask_scale=float(data.get("mask_scale", 1.0)),
+        lowres_mask_filtering=parse_bool_strict(
+            data.get("lowres_mask_filtering", False),
+            "lowres_mask_filtering",
+        ),
         max_memory_gb=None if raw_max_memory_gb is None else float(raw_max_memory_gb),
         train_ratio=float(data.get("train_ratio", 0.8)),
         val_ratio=float(data.get("val_ratio", 0.05)),

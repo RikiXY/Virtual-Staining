@@ -123,6 +123,20 @@ written. Discarded patch image files are written only when
 `preprocessing.save_discarded_patches: true`; otherwise the `source/` and
 `target/` subdirectories under `discarded_patches/` may be absent.
 
+## Low-Resolution Mask Filtering
+
+When `preprocessing.mask_scale < 1.0`, masks are computed on downsampled image
+copies. By default, those masks are resized back to full image resolution before
+patch filtering, preserving the historical pixel-space behavior.
+
+Set `preprocessing.lowres_mask_filtering: true` to keep those masks in their
+downsampled mask space during patch admission. Source patch windows are mapped
+from full-resolution image coordinates into mask coordinates, and target mask
+patches are warped from mask space on demand. This reduces long-lived mask
+memory, but foreground ratios are approximate near mask boundaries because they
+are measured on fewer mask pixels. The saved patch images, manifest coordinates,
+split paths, and discarded log schema are unchanged.
+
 ## dataset_build.json Fields
 
 `metadata/dataset_build.json` records build statistics and is written once
