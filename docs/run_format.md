@@ -60,8 +60,7 @@ local_workspace/results/<run_name>/
 │   ├── ep020.pth
 │   └── ...
 ├── metrics/
-│   ├── train.csv               # per-epoch training losses
-│   └── validation.csv          # per-epoch validation losses
+│   └── metrics.csv             # per-epoch training and validation losses
 ├── artifacts/
 │   ├── output_train/           # generated images for train-split samples
 │   ├── output_val/             # generated images for validation-split samples
@@ -164,7 +163,7 @@ split directory. `vs-prepare` writes those sidecar masks for accepted patches
 when `preprocessing.save_masks: true`; the sidecar mask is the aligned target
 foreground mask for that patch.
 
-When configured loss terms are present, `metrics.csv` keeps the existing
+When configured loss terms are present, `metrics/metrics.csv` keeps the existing
 aggregate columns and adds deterministic component columns using normalized
 names:
 
@@ -230,11 +229,11 @@ event such as:
 Events include `timestamp`, `run_name`, `stage`, `status`, `config_hash`, and
 optional `details`.
 
-### `metrics/train.csv` and `metrics/validation.csv`
+### `metrics/metrics.csv`
 
-One row per epoch. Columns include at minimum `epoch`, `loss_g` (generator loss),
-and `loss_d` (discriminator loss). Written incrementally during training so
-partial results are available if the run is interrupted.
+One row per epoch. Columns include at minimum `epoch`, `loss_G_train`,
+`loss_D_train`, `loss_G_val`, and `loss_D_val`. Written incrementally during
+training so partial results are available if the run is interrupted.
 
 ### `checkpoints/ep<NNN>.pth`
 

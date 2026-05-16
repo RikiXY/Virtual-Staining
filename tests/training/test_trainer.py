@@ -190,7 +190,7 @@ def test_trainer_smoke_run_creates_expected_files(
     trainer.train(seed=42)
 
     run_root = run_paths.root
-    assert (run_root / "metrics.csv").exists()
+    assert (run_paths.metrics_dir / "metrics.csv").exists()
     assert (run_paths.logs_dir / "training.log").exists()
     assert not (run_root / "run_metadata.json").exists()
 
@@ -202,7 +202,7 @@ def test_trainer_metrics_csv_structure(
 
     trainer.train(seed=42)
 
-    metrics_path = run_paths.root / "metrics.csv"
+    metrics_path = run_paths.metrics_dir / "metrics.csv"
     with metrics_path.open(newline="", encoding="utf-8") as metrics_file:
         rows = list(csv.DictReader(metrics_file))
 
@@ -222,7 +222,7 @@ def test_trainer_metrics_csv_structure(
 
 
 def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
-    """Train losses in metrics.csv must be averages over all batches (not last-batch)."""
+    """Train losses in metrics/metrics.csv must be averages over all batches."""
     dataset_root = tmp_path / "dataset"
     project = _make_project(dataset_root, tmp_path / "results", "avg_run")
     config = TrainingConfig(
@@ -264,7 +264,7 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
     )
     trainer.train(seed=0)
 
-    metrics_path = run_paths.root / "metrics.csv"
+    metrics_path = run_paths.metrics_dir / "metrics.csv"
     with metrics_path.open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
 
@@ -322,7 +322,7 @@ def test_trainer_metrics_csv_includes_configured_loss_components(tmp_path: Path)
     )
     trainer.train(seed=0)
 
-    with (run_paths.root / "metrics.csv").open(newline="", encoding="utf-8") as f:
+    with (run_paths.metrics_dir / "metrics.csv").open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
 
     row = rows[0]
