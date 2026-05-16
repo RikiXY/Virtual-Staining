@@ -130,6 +130,48 @@ def test_run_config_model_explicit_contract_parses(tmp_path: Path) -> None:
     assert run_config.model.discriminator.norm == "batch"
 
 
+def test_run_config_rejects_unsupported_bilinear_generator(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "train.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: yaml_run
+        image_size: [128, 128]
+        model:
+          generator:
+            bilinear: true
+        training:
+          epochs: 1
+    """,
+    )
+
+    with pytest.raises(ValueError, match=r"model\.generator\.bilinear.*bilinear: false"):
+        RunConfig.from_yaml(yaml_file)
+
+
+def test_run_config_rejects_non_bool_bilinear_generator(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "train.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: yaml_run
+        image_size: [128, 128]
+        model:
+          generator:
+            bilinear: "false"
+        training:
+          epochs: 1
+    """,
+    )
+
+    with pytest.raises(TypeError, match=r"model\.generator\.bilinear"):
+        RunConfig.from_yaml(yaml_file)
+
+
 def test_training_from_run_yaml_defaults(tmp_path: Path) -> None:
     yaml_file = tmp_path / "minimal.yaml"
     write_yaml(
