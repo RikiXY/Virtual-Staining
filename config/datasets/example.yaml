@@ -58,7 +58,7 @@ preprocessing:
   test_ratio: 0.15
 
   # Patch quality filters.
-  min_foreground_ratio: 0.25
+  min_foreground_ratio: 0.40
   max_white_ratio: 0.70
   white_threshold: 250
   max_largest_white_component_ratio: 0.20
