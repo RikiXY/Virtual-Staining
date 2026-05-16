@@ -215,10 +215,7 @@ def build_metric_case_artifacts(
         generated_path=generated_path,
         target_path=target_path,
         save_path=comparison_path,
-        suptitle=(
-            f"{metric_name.upper()} | {kind.upper()} | "
-            f"sample={sample_id} | value={metric_value:.6f}"
-        ),
+        suptitle=None,
     )
 
     diagnostics_case_dir = metric_dir / "diagnostics" / f"{kind}_{sample_id}"
@@ -471,10 +468,17 @@ def save_metric_diagnostics_summary(
 
     for path_key, filename, suptitle in output_specs:
         image_paths: list[str | Path] = [entry[path_key] for entry in diagnostic_entries]
+        row_titles = [
+            (
+                f"{entry['kind'].upper()} | sample={entry['sample_id']} | "
+                f"{metric_name}={entry['metric_value']:.6f}"
+            )
+            for entry in diagnostic_entries
+        ]
         saved_path = save_stacked_image_panel(
             image_paths=image_paths,
             save_path=metric_dir / filename,
-            row_titles=None,
+            row_titles=row_titles,
             suptitle=suptitle,
         )
         saved_paths.append(saved_path)
