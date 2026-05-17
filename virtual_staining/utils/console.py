@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import TextIO
 
 ANSI = {
     "reset": "\033[0m",
@@ -16,14 +17,14 @@ ANSI = {
 }
 
 
-def use_color() -> bool:
+def use_color(stream: TextIO = sys.stdout) -> bool:
     """Returns True if using ANSI colours in the console makes sense."""
-    return os.environ.get("NO_COLOR") is None and sys.stdout.isatty()
+    return os.environ.get("NO_COLOR") is None and stream.isatty()
 
 
-def style(text: str, *names: str) -> str:
+def style(text: str, *names: str, stream: TextIO = sys.stdout) -> str:
     """Applies an ANSI style to the text, if colour output is enabled."""
-    if not use_color():
+    if not use_color(stream):
         return text
     prefix = "".join(ANSI[name] for name in names if name in ANSI)
     return prefix + text + ANSI["reset"]

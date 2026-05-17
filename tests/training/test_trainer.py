@@ -345,11 +345,11 @@ def test_trainer_metrics_csv_includes_configured_loss_components(tmp_path: Path)
 def test_validate_restores_models_that_started_in_train_mode(
     smoke_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
 ) -> None:
-    trainer, _config, run_paths, _project = smoke_trainer
+    trainer, _config, _run_paths, _project = smoke_trainer
     trainer.generator.train()
     trainer.discriminator.train()
 
-    trainer._validate(epoch=0, log_file=run_paths.logs_dir / "training.log")
+    trainer._validate(epoch=0)
 
     assert trainer.generator.training is True
     assert trainer.discriminator.training is True
@@ -358,11 +358,11 @@ def test_validate_restores_models_that_started_in_train_mode(
 def test_validate_preserves_models_that_started_in_eval_mode(
     smoke_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
 ) -> None:
-    trainer, _config, run_paths, _project = smoke_trainer
+    trainer, _config, _run_paths, _project = smoke_trainer
     trainer.generator.eval()
     trainer.discriminator.eval()
 
-    trainer._validate(epoch=0, log_file=run_paths.logs_dir / "training.log")
+    trainer._validate(epoch=0)
 
     assert trainer.generator.training is False
     assert trainer.discriminator.training is False

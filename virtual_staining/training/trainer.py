@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import csv
 import datetime
+import io
 import logging
+import os
+import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TextIO
 
 import torch
 import torch.nn as nn
@@ -16,19 +19,27 @@ from torchvision.utils import save_image
 
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.models.config import ModelConfig
-from virtual_staining.training.checkpoints import BEST_CHECKPOINT_POLICY, CheckpointManager
+from virtual_staining.training.checkpoints import (
+    BEST_CHECKPOINT_POLICY,
+    CheckpointManager,
+    load_best_checkpoint_record,
+)
 from virtual_staining.training.config import LossConfig, TrainingConfig
 from virtual_staining.training.losses import (
     ConfiguredLossEvaluator,
     LossEvaluationContext,
+    StepLosses,
 )
 from virtual_staining.training.results import EpochMetrics, TrainingResult
 from virtual_staining.training.steps import Pix2PixTrainingStep
+from virtual_staining.utils.console import style
 
 if TYPE_CHECKING:
     from virtual_staining.reporting.base import TrainingReporter
 
 logger = logging.getLogger(__name__)
+checkpoint_logger = logging.getLogger("virtual_staining.training.checkpoints")
+_PLAIN_TEXT_STREAM = io.StringIO()
 
 # ---------------------------------------------------------------------------
 # Module-level helpers (private to this module)
@@ -188,11 +199,24 @@ def _format_duration(seconds: float | None) -> str:
     return f"{days}d {hours:02d}h"
 
 
-def _color_progress(progress: float) -> str:
-    return f"{progress:.2%}"
+def _style_console(text: str, *names: str, stream: TextIO, color: bool) -> str:
+    if not color:
+        return text
+    return style(text, *names, stream=stream)
 
 
-def _render_progress_bar(progress: float, width: int = 40) -> str:
+def _color_progress(progress: float, stream: TextIO = sys.stderr) -> str:
+    text = f"{progress:.2%}"
+    if progress < 0.33:
+        return style(text, "yellow", stream=stream)
+    if progress < 0.66:
+        return style(text, "cyan", stream=stream)
+    if progress < 0.90:
+        return style(text, "blue", stream=stream)
+    return style(text, "green", stream=stream)
+
+
+def _render_progress_bar(progress: float, width: int = 40, stream: TextIO = sys.stderr) -> str:
     progress = min(max(progress, 0.0), 1.0)
     filled = int(width * progress)
     if progress > 0 and filled == 0:
@@ -201,15 +225,136 @@ def _render_progress_bar(progress: float, width: int = 40) -> str:
         filled = width
     empty = width - filled
     bar = "█" * filled + "-" * empty
-    return f"[{bar}]"
+    return f"[{style(bar, 'green', stream=stream)}]"
 
 
-def _update_console_progress(message: str) -> None:
-    logger.debug(message)
+def _format_loss_parts(
+    step_losses: StepLosses,
+    *,
+    stream: TextIO,
+    color: bool,
+) -> str:
+    parts = [
+        (
+            f"{_style_console('loss_G', 'bold', stream=stream, color=color)} "
+            f"{_style_console(f'{step_losses.loss_G:.4f}', 'cyan', stream=stream, color=color)}"
+        )
+    ]
+    parts.append(
+        f"{_style_console('loss_D', 'bold', stream=stream, color=color)} "
+        f"{_style_console(f'{step_losses.loss_D:.4f}', 'orange', stream=stream, color=color)}"
+    )
+    return " | ".join(parts)
 
 
-def _finish_console_progress() -> None:
-    logger.debug("Progress finished")
+def _format_progress_message(
+    *,
+    progress: float,
+    epoch_progress: float,
+    epoch: int,
+    batch_index: int,
+    progress_tracker: _ProgressTracker,
+    step_losses: StepLosses,
+    elapsed_str: str,
+    eta_str: str,
+    end_time_str: str,
+    last_checkpoint_name: str,
+    best_checkpoint_name: str,
+    stream: TextIO = sys.stderr,
+    color: bool = True,
+) -> str:
+    bar = (
+        _render_progress_bar(progress, stream=stream)
+        if color
+        else _render_progress_bar(progress, stream=_PLAIN_TEXT_STREAM)
+    )
+    progress_text = _color_progress(progress, stream=stream) if color else f"{progress:.2%}"
+    return (
+        f"{bar} "
+        f"ep {epoch + 1}/{progress_tracker.total_epochs} "
+        f"({progress_text}) | "
+        f"b {batch_index + 1}/{progress_tracker.total_batches} "
+        f"({epoch_progress:.0%}) | "
+        f"{_format_loss_parts(step_losses, stream=stream, color=color)} | "
+        f"elapsed {elapsed_str} | "
+        f"ETA {eta_str} | "
+        f"end {end_time_str} | "
+        f"last ckpt {last_checkpoint_name} | "
+        f"best ckpt {best_checkpoint_name}"
+    )
+
+
+def _emit_progress_update(
+    *,
+    progress: float,
+    epoch_progress: float,
+    epoch: int,
+    batch_index: int,
+    progress_tracker: _ProgressTracker,
+    step_losses: StepLosses,
+    elapsed_str: str,
+    eta_str: str,
+    end_time_str: str,
+    last_checkpoint_name: str,
+    best_checkpoint_name: str,
+) -> None:
+    console_message = _format_progress_message(
+        progress=progress,
+        epoch_progress=epoch_progress,
+        epoch=epoch,
+        batch_index=batch_index,
+        progress_tracker=progress_tracker,
+        step_losses=step_losses,
+        elapsed_str=elapsed_str,
+        eta_str=eta_str,
+        end_time_str=end_time_str,
+        last_checkpoint_name=last_checkpoint_name,
+        best_checkpoint_name=best_checkpoint_name,
+        stream=sys.stderr,
+        color=True,
+    )
+    _update_console_progress(console_message)
+
+    log_message = _format_progress_message(
+        progress=progress,
+        epoch_progress=epoch_progress,
+        epoch=epoch,
+        batch_index=batch_index,
+        progress_tracker=progress_tracker,
+        step_losses=step_losses,
+        elapsed_str=elapsed_str,
+        eta_str=eta_str,
+        end_time_str=end_time_str,
+        last_checkpoint_name=last_checkpoint_name,
+        best_checkpoint_name=best_checkpoint_name,
+        stream=_PLAIN_TEXT_STREAM,
+        color=False,
+    )
+    logger.debug("%s", log_message)
+
+
+def _terminal_width(stream: TextIO = sys.stderr) -> int:
+    try:
+        return os.get_terminal_size(stream.fileno()).columns
+    except OSError:
+        return 140
+
+
+def _update_console_progress(message: str, stream: TextIO = sys.stderr) -> None:
+    if not stream.isatty():
+        stream.write(message + "\n")
+        stream.flush()
+        return
+
+    terminal_width = _terminal_width(stream)
+    clean_message = message[: terminal_width - 1]
+    stream.write("\r" + clean_message.ljust(terminal_width - 1))
+    stream.flush()
+
+
+def _finish_console_progress(stream: TextIO = sys.stderr) -> None:
+    stream.write("\n")
+    stream.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -405,8 +550,15 @@ class Trainer:
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
         old_level = logger.level
+        old_propagate = logger.propagate
+        old_checkpoint_level = checkpoint_logger.level
+        old_checkpoint_propagate = checkpoint_logger.propagate
         logger.setLevel(logging.DEBUG)
+        logger.propagate = False
         logger.addHandler(file_handler)
+        checkpoint_logger.setLevel(logging.DEBUG)
+        checkpoint_logger.propagate = False
+        checkpoint_logger.addHandler(file_handler)
         try:
             device_name = (
                 torch.cuda.get_device_name(self.device) if self.device.type == "cuda" else "CPU"
@@ -456,12 +608,32 @@ class Trainer:
             training_status = {
                 "last_checkpoint": (
                     Path(self.config.resume).name if self.config.resume else "none "
-                )
+                ),
+                "best_checkpoint": "none",
             }
 
             metrics_path = self._run_paths.metrics_dir / "metrics.csv"
             best_checkpoint_path: Path | None = None
             best_val_loss: float | None = None
+            if start_epoch > 0:
+                try:
+                    best_record = load_best_checkpoint_record(
+                        self._checkpoints_dir,
+                        policy=BEST_CHECKPOINT_POLICY,
+                    )
+                except FileNotFoundError:
+                    logger.info("No existing best checkpoint record found for resumed training")
+                else:
+                    best_checkpoint_path = best_record.checkpoint_path
+                    best_val_loss = best_record.metric_value
+                    training_status["best_checkpoint"] = best_record.checkpoint_path.name
+                    logger.info(
+                        "Resumed best checkpoint: %s (%s=%.6f at epoch %s)",
+                        best_record.checkpoint_path,
+                        best_record.metric,
+                        best_record.metric_value,
+                        best_record.epoch,
+                    )
             loss_names = _configured_loss_names(self.losses)
             with open(metrics_path, "w", newline="", encoding="utf-8") as metrics_file:
                 metrics_writer = csv.DictWriter(
@@ -473,9 +645,7 @@ class Trainer:
                 for epoch in range(start_epoch, self.config.epochs):
                     logger.debug("Starting epoch %s", epoch)
 
-                    epoch_metrics = self._train_epoch(
-                        epoch, log_file, progress_tracker, training_status
-                    )
+                    epoch_metrics = self._train_epoch(epoch, progress_tracker, training_status)
                     checkpoint_path_for_epoch: Path | None = None
 
                     logger.debug("Finished epoch %s", epoch)
@@ -488,22 +658,29 @@ class Trainer:
                         )
                         if reporter is not None:
                             reporter.on_checkpoint_saved(checkpoint_path_for_epoch, epoch)
-                        if epoch == self.config.epochs - 1:
-                            _update_console_progress(
-                                f"{_render_progress_bar(1.0)} "
-                                f"global {_color_progress(1.0)} | "
-                                f"ep {epoch + 1}/{self.config.epochs} (100%) | "
-                                f"b {len(self.train_loader)}/{len(self.train_loader)} | "
-                                f"loss_G {epoch_metrics.loss_G:.4f} | "
-                                f"loss_D {epoch_metrics.loss_D:.4f} | "
-                                f"elapsed {_format_duration(time.time() - start_time)} | "
-                                f"ETA 0s | "
-                                f"ckpt {training_status['last_checkpoint']}"
-                            )
+                        elapsed_str = _format_duration(time.time() - start_time)
+                        end_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        epoch_step_losses = StepLosses(
+                            loss_G=epoch_metrics.loss_G,
+                            loss_D=epoch_metrics.loss_D,
+                        )
+                        _emit_progress_update(
+                            progress=(epoch + 1) / progress_tracker.total_epochs,
+                            epoch_progress=1.0,
+                            epoch=epoch,
+                            batch_index=len(self.train_loader) - 1,
+                            progress_tracker=progress_tracker,
+                            step_losses=epoch_step_losses,
+                            elapsed_str=elapsed_str,
+                            eta_str="0s" if epoch == self.config.epochs - 1 else "--",
+                            end_time_str=end_time_str,
+                            last_checkpoint_name=training_status["last_checkpoint"],
+                            best_checkpoint_name=training_status["best_checkpoint"],
+                        )
 
                     val_metrics = None
                     if (epoch + 1) % self.config.validate_rate == 0:
-                        val_metrics = self._validate(epoch, log_file)
+                        val_metrics = self._validate(epoch)
                         if best_val_loss is None or val_metrics.loss_G < best_val_loss:
                             if checkpoint_path_for_epoch is None:
                                 checkpoint_path_for_epoch = self._checkpoint_manager.save(epoch)
@@ -525,6 +702,25 @@ class Trainer:
                             )
                             best_val_loss = val_metrics.loss_G
                             best_checkpoint_path = checkpoint_path_for_epoch
+                            training_status["best_checkpoint"] = checkpoint_path_for_epoch.name
+                            elapsed_str = _format_duration(time.time() - start_time)
+                            end_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            _emit_progress_update(
+                                progress=(epoch + 1) / progress_tracker.total_epochs,
+                                epoch_progress=1.0,
+                                epoch=epoch,
+                                batch_index=len(self.train_loader) - 1,
+                                progress_tracker=progress_tracker,
+                                step_losses=StepLosses(
+                                    loss_G=epoch_metrics.loss_G,
+                                    loss_D=epoch_metrics.loss_D,
+                                ),
+                                elapsed_str=elapsed_str,
+                                eta_str="0s" if epoch == self.config.epochs - 1 else "--",
+                                end_time_str=end_time_str,
+                                last_checkpoint_name=training_status["last_checkpoint"],
+                                best_checkpoint_name=training_status["best_checkpoint"],
+                            )
 
                     row = {
                         "epoch": epoch,
@@ -554,8 +750,29 @@ class Trainer:
                         reporter.on_checkpoint_saved(checkpoint_path, final_epoch)
                     if best_checkpoint_path is None:
                         best_checkpoint_path = checkpoint_path
+                        training_status["best_checkpoint"] = checkpoint_path.name
+                    elapsed_str = _format_duration(time.time() - start_time)
+                    end_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    _emit_progress_update(
+                        progress=1.0,
+                        epoch_progress=1.0,
+                        epoch=final_epoch,
+                        batch_index=len(self.train_loader) - 1,
+                        progress_tracker=progress_tracker,
+                        step_losses=StepLosses(
+                            loss_G=epoch_metrics.loss_G,
+                            loss_D=epoch_metrics.loss_D,
+                        ),
+                        elapsed_str=elapsed_str,
+                        eta_str="0s",
+                        end_time_str=end_time_str,
+                        last_checkpoint_name=training_status["last_checkpoint"],
+                        best_checkpoint_name=training_status["best_checkpoint"],
+                    )
             if best_checkpoint_path is None:
                 best_checkpoint_path = self._checkpoint_manager.latest()
+                if best_checkpoint_path is not None:
+                    training_status["best_checkpoint"] = best_checkpoint_path.name
 
             _finish_console_progress()
             total_seconds = time.time() - start_time
@@ -566,8 +783,12 @@ class Trainer:
                 best_checkpoint_path=best_checkpoint_path,
             )
         finally:
+            checkpoint_logger.removeHandler(file_handler)
             logger.removeHandler(file_handler)
             file_handler.close()
+            checkpoint_logger.propagate = old_checkpoint_propagate
+            checkpoint_logger.setLevel(old_checkpoint_level)
+            logger.propagate = old_propagate
             logger.setLevel(old_level)
 
     # ------------------------------------------------------------------
@@ -577,7 +798,6 @@ class Trainer:
     def _train_epoch(
         self,
         epoch: int,
-        log_file: Path,
         progress_tracker: _ProgressTracker,
         training_status: dict,
     ) -> EpochMetrics:
@@ -612,40 +832,28 @@ class Trainer:
             elapsed_str = _format_duration(elapsed)
             eta_str = _format_duration(eta)
             epoch_progress = (i + 1) / progress_tracker.total_batches
-
-            console_message = (
-                f"{_render_progress_bar(progress)} "
-                f"global {_color_progress(progress)} | "
-                f"ep {epoch + 1}/{progress_tracker.total_epochs} "
-                f"({epoch_progress:.0%}) | "
-                f"b {i + 1}/{progress_tracker.total_batches} | "
-                f"loss_G {step_losses.loss_G:.4f} | "
-                f"loss_D {step_losses.loss_D:.4f} | "
-                f"elapsed {elapsed_str} | "
-                f"ETA {eta_str} | "
-                f"ckpt {training_status['last_checkpoint']}"
+            end_time_str = (
+                "warming up"
+                if end_time is None
+                else datetime.datetime.fromtimestamp(end_time).strftime("%Y-%m-%d %H:%M:%S")
             )
 
-            if i % self.config.log_rate == 0 or i == len(self.train_loader) - 1:
-                _update_console_progress(console_message)
-
-            if i % self.config.log_rate == 0:
-                end_time_str = (
-                    "warming up"
-                    if end_time is None
-                    else datetime.datetime.fromtimestamp(end_time).strftime("%Y-%m-%d %H:%M:%S")
-                )
-                logger.debug(
-                    "[ep %s | b %s] loss_G: %.4f loss_D: %.4f - "
-                    "%.2f%% | elapsed %s | ETA %s | end %s",
-                    epoch,
-                    i,
-                    step_losses.loss_G,
-                    step_losses.loss_D,
-                    progress * 100,
-                    elapsed_str,
-                    eta_str,
-                    end_time_str,
+            should_update_progress = (
+                i % self.config.log_rate == 0 or i == len(self.train_loader) - 1
+            )
+            if should_update_progress:
+                _emit_progress_update(
+                    progress=progress,
+                    epoch_progress=epoch_progress,
+                    epoch=epoch,
+                    batch_index=i,
+                    progress_tracker=progress_tracker,
+                    step_losses=step_losses,
+                    elapsed_str=elapsed_str,
+                    eta_str=eta_str,
+                    end_time_str=end_time_str,
+                    last_checkpoint_name=training_status["last_checkpoint"],
+                    best_checkpoint_name=training_status["best_checkpoint"],
                 )
 
         if num_batches == 0:
@@ -658,7 +866,7 @@ class Trainer:
             current_weight=_average_components(current_weight_totals, num_batches, loss_names),
         )
 
-    def _validate(self, epoch: int, log_file: Path) -> EpochMetrics:
+    def _validate(self, epoch: int) -> EpochMetrics:
         generator_was_training = self.generator.training
         discriminator_was_training = self.discriminator.training
         self.generator.eval()

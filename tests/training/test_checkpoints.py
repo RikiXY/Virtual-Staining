@@ -14,6 +14,7 @@ from virtual_staining.training.checkpoints import (
     CHECKPOINT_FORMAT_VERSION,
     NORMALIZATION_CONTRACT,
     CheckpointManager,
+    load_best_checkpoint_record,
     resolve_best_checkpoint_path,
 )
 
@@ -152,6 +153,26 @@ def test_resolve_best_checkpoint_path_returns_selected_checkpoint(tmp_path: Path
 
     resolved = resolve_best_checkpoint_path(mgr.checkpoints_dir, policy=BEST_CHECKPOINT_POLICY)
     assert resolved == checkpoint_path
+
+
+def test_load_best_checkpoint_record_returns_selected_checkpoint_metadata(tmp_path: Path) -> None:
+    mgr = _make_manager(tmp_path)
+    checkpoint_path = mgr.save(epoch=3)
+    mgr.save_best_record(
+        policy=BEST_CHECKPOINT_POLICY,
+        metric="loss_G_val",
+        epoch=3,
+        checkpoint_path=checkpoint_path,
+        metric_value=0.1234,
+    )
+
+    record = load_best_checkpoint_record(mgr.checkpoints_dir, policy=BEST_CHECKPOINT_POLICY)
+
+    assert record.policy == BEST_CHECKPOINT_POLICY
+    assert record.metric == "loss_G_val"
+    assert record.epoch == 3
+    assert record.checkpoint_path == checkpoint_path
+    assert record.metric_value == pytest.approx(0.1234)
 
 
 def test_resolve_best_checkpoint_path_raises_when_record_missing(tmp_path: Path) -> None:

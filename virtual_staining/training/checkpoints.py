@@ -33,6 +33,15 @@ class CheckpointState:
     scaler_D_state_dict: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class BestCheckpointRecord:
+    policy: str
+    metric: str
+    epoch: int
+    checkpoint_path: Path
+    metric_value: float
+
+
 def _make_arch_metadata(
     generator: nn.Module,
     discriminator: nn.Module,
@@ -282,8 +291,8 @@ class CheckpointManager:
         return candidates[-1] if candidates else None
 
 
-def resolve_best_checkpoint_path(checkpoints_dir: Path, *, policy: str) -> Path:
-    """Resolve a best-checkpoint policy via checkpoints/best.json."""
+def load_best_checkpoint_record(checkpoints_dir: Path, *, policy: str) -> BestCheckpointRecord:
+    """Load and validate checkpoints/best.json for a checkpoint policy."""
     best_path = checkpoints_dir / "best.json"
     if not best_path.exists():
         raise FileNotFoundError(
@@ -309,6 +318,18 @@ def resolve_best_checkpoint_path(checkpoints_dir: Path, *, policy: str) -> Path:
     if not isinstance(checkpoint_value, str) or not checkpoint_value.strip():
         raise ValueError(f"Best checkpoint metadata at {best_path} has no valid checkpoint_path.")
 
+    metric_value = payload.get("metric_value")
+    if not isinstance(metric_value, int | float):
+        raise ValueError(f"Best checkpoint metadata at {best_path} has no valid metric_value.")
+
+    metric = payload.get("metric")
+    if not isinstance(metric, str) or not metric.strip():
+        raise ValueError(f"Best checkpoint metadata at {best_path} has no valid metric.")
+
+    epoch = payload.get("epoch")
+    if not isinstance(epoch, int):
+        raise ValueError(f"Best checkpoint metadata at {best_path} has no valid epoch.")
+
     checkpoint_path = Path(checkpoint_value)
     if not checkpoint_path.is_absolute():
         checkpoint_path = checkpoints_dir / checkpoint_path
@@ -317,4 +338,15 @@ def resolve_best_checkpoint_path(checkpoints_dir: Path, *, policy: str) -> Path:
             f"Best checkpoint metadata at {best_path} points to missing file {checkpoint_path}."
         )
 
-    return checkpoint_path
+    return BestCheckpointRecord(
+        policy=policy,
+        metric=metric,
+        epoch=epoch,
+        checkpoint_path=checkpoint_path,
+        metric_value=float(metric_value),
+    )
+
+
+def resolve_best_checkpoint_path(checkpoints_dir: Path, *, policy: str) -> Path:
+    """Resolve a best-checkpoint policy via checkpoints/best.json."""
+    return load_best_checkpoint_record(checkpoints_dir, policy=policy).checkpoint_path
