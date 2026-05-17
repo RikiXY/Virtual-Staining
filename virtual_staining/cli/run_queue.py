@@ -11,7 +11,7 @@ from virtual_staining.applications.run_queue import run_queue
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vs-run-queue",
-        description="Execute a local queue of full-run configs sequentially.",
+        description="Execute a local queue of configurable pipeline stages.",
     )
     parser.add_argument(
         "--queue",

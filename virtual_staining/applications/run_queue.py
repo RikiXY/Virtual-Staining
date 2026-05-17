@@ -5,13 +5,17 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from virtual_staining.applications.complete_run import complete_run
+from virtual_staining.applications.run_stages import (
+    DEFAULT_FULL_RUN_STAGES,
+    VALID_STAGES,
+    run_stages,
+)
 from virtual_staining.config.loader import load_yaml_mapping
 from virtual_staining.config.run import RunConfig
 from virtual_staining.config.validation import parse_bool_strict, reject_unknown_keys
 
 _QUEUE_KEYS: frozenset[str] = frozenset({"name", "continue_on_failure", "jobs"})
-_QUEUE_JOB_KEYS: frozenset[str] = frozenset({"config_path", "label", "notes"})
+_QUEUE_JOB_KEYS: frozenset[str] = frozenset({"config_path", "label", "notes", "stages"})
 
 
 @dataclass(frozen=True)
@@ -19,6 +23,7 @@ class QueueJob:
     config_path: Path
     label: str | None = None
     notes: str | None = None
+    stages: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -39,6 +44,7 @@ class QueueJobState:
     config_path: str
     label: str | None
     notes: str | None
+    stages: list[str] | None = None
     status: str = "pending"
     started_at: str | None = None
     completed_at: str | None = None
@@ -88,23 +94,59 @@ def load_local_run_queue(queue_path: Path) -> LocalRunQueue:
     for index, raw_job in enumerate(raw_jobs):
         if not isinstance(raw_job, dict):
             raise ValueError(f"Queue job at index {index} must be a mapping.")
+
         reject_unknown_keys(raw_job, _QUEUE_JOB_KEYS, f"queue.jobs[{index}]")
+
         raw_config_path = raw_job.get("config_path")
         if not isinstance(raw_config_path, str) or not raw_config_path.strip():
             raise ValueError(f"Queue job at index {index} must define 'config_path'.")
+
         label = raw_job.get("label")
         notes = raw_job.get("notes")
+
         if label is not None and not isinstance(label, str):
             raise ValueError(f"Queue job at index {index} has non-string 'label'.")
         if notes is not None and not isinstance(notes, str):
             raise ValueError(f"Queue job at index {index} has non-string 'notes'.")
+
+        raw_stages = raw_job.get("stages")
+        stages: tuple[str, ...] | None = None
+
+        if raw_stages is not None:
+            if not isinstance(raw_stages, list) or not raw_stages:
+                raise ValueError(
+                    f"Queue job at index {index} has invalid 'stages': expected a non-empty list."
+                )
+
+            if not all(isinstance(stage, str) for stage in raw_stages):
+                raise ValueError(
+                    f"Queue job at index {index} has invalid 'stages': all stages must be strings."
+                )
+
+            stages = tuple(raw_stages)
+            unknown_stages = [stage for stage in stages if stage not in VALID_STAGES]
+            if unknown_stages:
+                allowed = ", ".join(VALID_STAGES)
+                unknown = ", ".join(unknown_stages)
+                raise ValueError(
+                    f"Queue job at index {index} has unknown stage(s): {unknown}. "
+                    f"Allowed stages: {allowed}"
+                )
 
         config_path = Path(raw_config_path)
         if not config_path.is_absolute():
             config_path = (queue_path.parent / config_path).resolve()
         else:
             config_path = config_path.resolve()
-        jobs.append(QueueJob(config_path=config_path, label=label, notes=notes))
+
+        jobs.append(
+            QueueJob(
+                config_path=config_path,
+                label=label,
+                notes=notes,
+                stages=stages,
+            )
+        )
 
     return LocalRunQueue(
         name=raw_name.strip(),
@@ -129,6 +171,7 @@ def _initial_queue_state(queue: LocalRunQueue) -> QueueState:
                 config_path=str(job.config_path),
                 label=job.label,
                 notes=job.notes,
+                stages=list(job.stages) if job.stages is not None else None,
             )
             for index, job in enumerate(queue.jobs)
         ],
@@ -150,7 +193,11 @@ def run_queue(queue_path: Path) -> QueueState:
 
         try:
             config = RunConfig.from_yaml(job.config_path)
-            complete_run(config, job.config_path)
+            run_stages(
+                config=config,
+                config_path=job.config_path,
+                stages=job.stages or DEFAULT_FULL_RUN_STAGES,
+            )
         except Exception as exc:
             failures += 1
             job_state.status = "failed"
