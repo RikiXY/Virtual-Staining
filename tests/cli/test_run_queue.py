@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -141,19 +142,29 @@ def test_run_queue_executes_jobs_in_order_and_persists_state(
         """,
         continue_on_failure=False,
     )
-    calls: list[Path] = []
+    calls: list[tuple[Path, tuple[str, ...]]] = []
 
-    def _fake_complete_run(config: RunConfig, config_path: Path) -> None:
+    def _fake_run_stages(
+        config: RunConfig,
+        config_path: Path,
+        stages: Sequence[str],
+    ) -> None:
         del config
-        calls.append(config_path)
+        calls.append((config_path, tuple(stages)))
 
-    monkeypatch.setattr("virtual_staining.applications.run_queue.complete_run", _fake_complete_run)
+    monkeypatch.setattr(
+        "virtual_staining.applications.run_queue.run_stages",
+        _fake_run_stages,
+    )
 
     state = run_queue(queue_path)
     state_path = tmp_path / "local_workspace" / "queues" / "nightly.state.json"
     state_data = json.loads(state_path.read_text(encoding="utf-8"))
 
-    assert calls == [config_a.resolve(), config_b.resolve()]
+    assert calls == [
+        (config_a.resolve(), ("prepare", "train", "infer", "evaluate")),
+        (config_b.resolve(), ("prepare", "train", "infer", "evaluate")),
+    ]
     assert state.status == "completed"
     assert state_data["status"] == "completed"
     assert [job["status"] for job in state_data["jobs"]] == ["completed", "completed"]
@@ -175,12 +186,19 @@ def test_run_queue_stops_on_failure_when_continue_on_failure_is_false(
     )
     calls: list[Path] = []
 
-    def _fake_complete_run(config: RunConfig, config_path: Path) -> None:
-        del config
+    def _fake_run_stages(
+        config: RunConfig,
+        config_path: Path,
+        stages: Sequence[str],
+    ) -> None:
+        del config, stages
         calls.append(config_path)
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("virtual_staining.applications.run_queue.complete_run", _fake_complete_run)
+    monkeypatch.setattr(
+        "virtual_staining.applications.run_queue.run_stages",
+        _fake_run_stages,
+    )
 
     state = run_queue(queue_path)
     state_data = json.loads(
@@ -208,13 +226,20 @@ def test_run_queue_continues_after_failure_when_configured(
     )
     calls: list[Path] = []
 
-    def _fake_complete_run(config: RunConfig, config_path: Path) -> None:
-        del config
+    def _fake_run_stages(
+        config: RunConfig,
+        config_path: Path,
+        stages: Sequence[str],
+    ) -> None:
+        del config, stages
         calls.append(config_path)
         if config_path == config_a.resolve():
             raise RuntimeError("boom")
 
-    monkeypatch.setattr("virtual_staining.applications.run_queue.complete_run", _fake_complete_run)
+    monkeypatch.setattr(
+        "virtual_staining.applications.run_queue.run_stages",
+        _fake_run_stages,
+    )
 
     state = run_queue(queue_path)
     state_data = json.loads(
@@ -225,3 +250,35 @@ def test_run_queue_continues_after_failure_when_configured(
     assert state.status == "failed"
     assert [job["status"] for job in state_data["jobs"]] == ["failed", "completed"]
     assert state_data["continue_on_failure"] is True
+
+
+def test_load_local_run_queue_reads_configurable_stages(tmp_path: Path) -> None:
+    config = _write_config(tmp_path / "a", "training:\n  epochs: 1\n")
+    queue_path = _write_queue(
+        tmp_path,
+        f"""\
+          - config_path: {config}
+            label: train_only
+            stages: [train, infer, evaluate]
+        """,
+        continue_on_failure=False,
+    )
+
+    queue = load_local_run_queue(queue_path)
+
+    assert queue.jobs[0].stages == ("train", "infer", "evaluate")
+
+
+def test_load_local_run_queue_rejects_unknown_stage(tmp_path: Path) -> None:
+    config = _write_config(tmp_path / "a", "training:\n  epochs: 1\n")
+    queue_path = _write_queue(
+        tmp_path,
+        f"""\
+          - config_path: {config}
+            stages: [train, banana, evaluate]
+        """,
+        continue_on_failure=False,
+    )
+
+    with pytest.raises(ValueError, match="unknown stage"):
+        load_local_run_queue(queue_path)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import tomllib
+from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -583,21 +584,18 @@ def test_complete_run_executes_stages_in_order(
     config = RunConfig.from_yaml(config_path)
     calls: list[str] = []
 
+    def _fake_run_stages(
+        config_arg: RunConfig,
+        config_path_arg: Path,
+        stages: Sequence[str],
+    ) -> None:
+        assert config_arg is config
+        assert config_path_arg == config_path
+        calls.extend(stages)
+
     monkeypatch.setattr(
-        "virtual_staining.applications.complete_run.prepare",
-        lambda *_: calls.append("prepare"),
-    )
-    monkeypatch.setattr(
-        "virtual_staining.applications.complete_run.train",
-        lambda *_: calls.append("train"),
-    )
-    monkeypatch.setattr(
-        "virtual_staining.applications.complete_run.infer",
-        lambda *_: calls.append("infer"),
-    )
-    monkeypatch.setattr(
-        "virtual_staining.applications.complete_run.evaluate",
-        lambda *_: calls.append("evaluate"),
+        "virtual_staining.applications.complete_run.run_stages",
+        _fake_run_stages,
     )
 
     complete_run(config, config_path)
@@ -625,25 +623,20 @@ def test_complete_run_stops_on_first_failing_stage(
     config = RunConfig.from_yaml(config_path)
     calls: list[str] = []
 
-    def _fail_prepare(*_args: object) -> None:
+    def _fake_run_stages(
+        config_arg: RunConfig,
+        config_path_arg: Path,
+        stages: Sequence[str],
+    ) -> None:
+        assert config_arg is config
+        assert config_path_arg == config_path
+        assert list(stages) == ["prepare", "train", "infer", "evaluate"]
         calls.append("prepare")
         raise RuntimeError("prepare failed")
 
     monkeypatch.setattr(
-        "virtual_staining.applications.complete_run.prepare",
-        _fail_prepare,
-    )
-    monkeypatch.setattr(
-        "virtual_staining.applications.complete_run.train",
-        lambda *_: calls.append("train"),
-    )
-    monkeypatch.setattr(
-        "virtual_staining.applications.complete_run.infer",
-        lambda *_: calls.append("infer"),
-    )
-    monkeypatch.setattr(
-        "virtual_staining.applications.complete_run.evaluate",
-        lambda *_: calls.append("evaluate"),
+        "virtual_staining.applications.complete_run.run_stages",
+        _fake_run_stages,
     )
 
     with pytest.raises(RuntimeError, match="prepare failed"):
