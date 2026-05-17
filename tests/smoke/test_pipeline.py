@@ -125,6 +125,16 @@ def _write_smoke_config(tmp_path: Path, dataset_root: Path, *, run_name: str = "
           checkpoint_rate: 1
           log_rate: 1
 
+        losses:
+          generator:
+            - name: adversarial_bce
+              weight: 1.0
+            - name: l1
+              weight: 25.0
+          discriminator:
+            - name: adversarial_bce
+              weight: 1.0
+
         inference:
           checkpoint_policy: latest
 
