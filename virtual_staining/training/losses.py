@@ -6,6 +6,7 @@ from typing import Any, Literal, cast
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.amp import autocast
 
 from virtual_staining.training.config import LossMaskConfig, LossTermConfig
 
@@ -172,50 +173,52 @@ class SsimLoss(nn.Module):
                 f"window_size={self.window_size}"
             )
 
-        compute_dtype = (
-            torch.float32
-            if prediction.dtype in {torch.float16, torch.bfloat16}
-            else prediction.dtype
-        )
-        prediction_01 = (prediction.to(dtype=compute_dtype) + 1.0) * 0.5
-        target_01 = (target.to(dtype=compute_dtype) + 1.0) * 0.5
-        if self.channel_mode == "gray":
-            prediction_01 = _rgb_to_gray_tensor(prediction_01)
-            target_01 = _rgb_to_gray_tensor(target_01)
+        with autocast(device_type=prediction.device.type, enabled=False):
+            compute_dtype = (
+                torch.float32
+                if prediction.dtype in {torch.float16, torch.bfloat16}
+                else prediction.dtype
+            )
+            prediction_01 = (prediction.to(dtype=compute_dtype) + 1.0) * 0.5
+            target_01 = (target.to(dtype=compute_dtype) + 1.0) * 0.5
+            if self.channel_mode == "gray":
+                prediction_01 = _rgb_to_gray_tensor(prediction_01)
+                target_01 = _rgb_to_gray_tensor(target_01)
 
-        channels = prediction_01.shape[1]
-        window = _gaussian_window(
-            self.window_size,
-            self.sigma,
-            channels,
-            device=prediction_01.device,
-            dtype=prediction_01.dtype,
-        )
-        padding = self.window_size // 2
+            channels = prediction_01.shape[1]
+            window = _gaussian_window(
+                self.window_size,
+                self.sigma,
+                channels,
+                device=prediction_01.device,
+                dtype=prediction_01.dtype,
+            )
+            padding = self.window_size // 2
 
-        mu_x = F.conv2d(prediction_01, window, padding=padding, groups=channels)
-        mu_y = F.conv2d(target_01, window, padding=padding, groups=channels)
-        mu_x_sq = mu_x.pow(2)
-        mu_y_sq = mu_y.pow(2)
-        mu_xy = mu_x * mu_y
+            mu_x = F.conv2d(prediction_01, window, padding=padding, groups=channels)
+            mu_y = F.conv2d(target_01, window, padding=padding, groups=channels)
+            mu_x_sq = mu_x.pow(2)
+            mu_y_sq = mu_y.pow(2)
+            mu_xy = mu_x * mu_y
 
-        sigma_x_sq = (
-            F.conv2d(prediction_01 * prediction_01, window, padding=padding, groups=channels)
-            - mu_x_sq
-        )
-        sigma_y_sq = (
-            F.conv2d(target_01 * target_01, window, padding=padding, groups=channels) - mu_y_sq
-        )
-        sigma_xy = (
-            F.conv2d(prediction_01 * target_01, window, padding=padding, groups=channels) - mu_xy
-        )
+            sigma_x_sq = (
+                F.conv2d(prediction_01 * prediction_01, window, padding=padding, groups=channels)
+                - mu_x_sq
+            )
+            sigma_y_sq = (
+                F.conv2d(target_01 * target_01, window, padding=padding, groups=channels) - mu_y_sq
+            )
+            sigma_xy = (
+                F.conv2d(prediction_01 * target_01, window, padding=padding, groups=channels)
+                - mu_xy
+            )
 
-        c1 = (0.01 * self.data_range) ** 2
-        c2 = (0.03 * self.data_range) ** 2
-        numerator = (2 * mu_xy + c1) * (2 * sigma_xy + c2)
-        denominator = (mu_x_sq + mu_y_sq + c1) * (sigma_x_sq + sigma_y_sq + c2)
-        ssim_map = numerator / denominator.clamp_min(torch.finfo(denominator.dtype).eps)
-        return 1.0 - ssim_map
+            c1 = (0.01 * self.data_range) ** 2
+            c2 = (0.03 * self.data_range) ** 2
+            numerator = (2 * mu_xy + c1) * (2 * sigma_xy + c2)
+            denominator = (mu_x_sq + mu_y_sq + c1) * (sigma_x_sq + sigma_y_sq + c2)
+            ssim_map = numerator / denominator.clamp_min(torch.finfo(denominator.dtype).eps)
+            return 1.0 - ssim_map
 
     def forward(self, prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         loss_map = self.loss_map(prediction, target)

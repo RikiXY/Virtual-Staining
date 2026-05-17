@@ -200,7 +200,8 @@ def test_ssim_loss_low_precision_inputs_use_stable_float32_math(dtype: torch.dty
     target = -prediction
 
     expected = loss(prediction, target)
-    value = loss(prediction.to(dtype=dtype), target.to(dtype=dtype))
+    with torch.amp.autocast(device_type=prediction.device.type, dtype=dtype):
+        value = loss(prediction.to(dtype=dtype), target.to(dtype=dtype))
 
     assert value.dtype == torch.float32
     assert value.item() == pytest.approx(expected.item(), abs=2e-3)
