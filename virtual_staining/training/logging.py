@@ -76,7 +76,11 @@ def _color_progress(progress: float, stream: TextIO = sys.stderr) -> str:
     return style(text, "green", stream=stream)
 
 
-def _render_progress_bar(progress: float, width: int = 40, stream: TextIO = sys.stderr) -> str:
+def _render_progress_bar_rows(
+    progress: float,
+    width: int = 40,
+    stream: TextIO = sys.stderr,
+) -> tuple[str, str]:
     progress = min(max(progress, 0.0), 1.0)
     filled = int(width * progress)
     if progress > 0 and filled == 0:
@@ -84,8 +88,15 @@ def _render_progress_bar(progress: float, width: int = 40, stream: TextIO = sys.
     if progress >= 1:
         filled = width
     empty = width - filled
-    bar = "█" * filled + "-" * empty
-    return f"[{style(bar, 'green', stream=stream)}]"
+    bar = "█" * filled + "░" * empty
+    colored_bar = style(bar, "green", stream=stream)
+    return f"▌{colored_bar}▐", f"▌{colored_bar}▐"
+
+
+def _format_checkpoint_name(name: str, *, stream: TextIO, color: bool) -> str:
+    if name.strip() == "none":
+        return _style_console("none", "red", stream=stream, color=color)
+    return name
 
 
 def _format_loss_parts(
@@ -107,6 +118,28 @@ def _format_loss_parts(
     return " | ".join(parts)
 
 
+def _format_eval_parts(
+    eval_losses: StepLosses | None,
+    *,
+    eval_epoch: int | None,
+    stream: TextIO,
+    color: bool,
+) -> str:
+    label = _style_console("eval", "bold", stream=stream, color=color)
+    if eval_losses is None:
+        return f"{label} --"
+
+    epoch_text = f"ep {eval_epoch + 1} | " if eval_epoch is not None else ""
+    return (
+        f"{label} {epoch_text}"
+        f"{_style_console('loss_G', 'bold', stream=stream, color=color)} "
+        f"{_style_console(f'{eval_losses.loss_G:.4f}', 'blue', stream=stream, color=color)}"
+        f" | "
+        f"{_style_console('loss_D', 'bold', stream=stream, color=color)} "
+        f"{_style_console(f'{eval_losses.loss_D:.4f}', 'magenta', stream=stream, color=color)}"
+    )
+
+
 def _format_progress_message(
     *,
     progress: float,
@@ -115,6 +148,8 @@ def _format_progress_message(
     batch_index: int,
     progress_tracker: ProgressTracker,
     step_losses: StepLosses,
+    eval_losses: StepLosses | None,
+    eval_epoch: int | None,
     elapsed_str: str,
     eta_str: str,
     end_time_str: str,
@@ -123,14 +158,24 @@ def _format_progress_message(
     stream: TextIO = sys.stderr,
     color: bool = True,
 ) -> str:
-    bar = (
-        _render_progress_bar(progress, stream=stream)
+    bar_top, bar_bottom = (
+        _render_progress_bar_rows(progress, stream=stream)
         if color
-        else _render_progress_bar(progress, stream=_PLAIN_TEXT_STREAM)
+        else _render_progress_bar_rows(progress, stream=_PLAIN_TEXT_STREAM)
     )
     progress_text = _color_progress(progress, stream=stream) if color else f"{progress:.2%}"
-    return (
-        f"{bar} "
+    last_checkpoint = _format_checkpoint_name(
+        last_checkpoint_name,
+        stream=stream,
+        color=color,
+    )
+    best_checkpoint = _format_checkpoint_name(
+        best_checkpoint_name,
+        stream=stream,
+        color=color,
+    )
+    first_line = (
+        f"{bar_top} "
         f"ep {epoch + 1}/{progress_tracker.total_epochs} "
         f"({progress_text}) | "
         f"b {batch_index + 1}/{progress_tracker.total_batches} "
@@ -139,9 +184,51 @@ def _format_progress_message(
         f"elapsed {elapsed_str} | "
         f"ETA {eta_str} | "
         f"end {end_time_str} | "
-        f"last ckpt {last_checkpoint_name} | "
-        f"best ckpt {best_checkpoint_name}"
+        f"last ckpt {last_checkpoint}"
     )
+    second_line = (
+        f"{bar_bottom} "
+        f"{_format_eval_parts(eval_losses, eval_epoch=eval_epoch, stream=stream, color=color)} | "
+        f"best ckpt {best_checkpoint}"
+    )
+    return f"{first_line}\n{second_line}"
+
+
+def _format_progress_log_message(
+    *,
+    progress: float,
+    epoch_progress: float,
+    epoch: int,
+    batch_index: int,
+    progress_tracker: ProgressTracker,
+    step_losses: StepLosses,
+    eval_losses: StepLosses | None,
+    eval_epoch: int | None,
+    elapsed_str: str,
+    eta_str: str,
+    end_time_str: str,
+    last_checkpoint_name: str,
+    best_checkpoint_name: str,
+) -> str:
+    first_line = (
+        f"ep {epoch + 1}/{progress_tracker.total_epochs} "
+        f"({progress:.2%}) | "
+        f"b {batch_index + 1}/{progress_tracker.total_batches} "
+        f"({epoch_progress:.0%}) | "
+        f"{_format_loss_parts(step_losses, stream=_PLAIN_TEXT_STREAM, color=False)} | "
+        f"elapsed {elapsed_str} | "
+        f"ETA {eta_str} | "
+        f"end {end_time_str} | "
+        f"last ckpt {last_checkpoint_name.strip()}"
+    )
+    eval_parts = _format_eval_parts(
+        eval_losses,
+        eval_epoch=eval_epoch,
+        stream=_PLAIN_TEXT_STREAM,
+        color=False,
+    )
+    second_line = f"{eval_parts} | best ckpt {best_checkpoint_name.strip()}"
+    return f"{first_line}\n{second_line}"
 
 
 def emit_progress_update(
@@ -157,6 +244,8 @@ def emit_progress_update(
     end_time_str: str,
     last_checkpoint_name: str,
     best_checkpoint_name: str,
+    eval_losses: StepLosses | None = None,
+    eval_epoch: int | None = None,
 ) -> None:
     console_message = _format_progress_message(
         progress=progress,
@@ -165,6 +254,8 @@ def emit_progress_update(
         batch_index=batch_index,
         progress_tracker=progress_tracker,
         step_losses=step_losses,
+        eval_losses=eval_losses,
+        eval_epoch=eval_epoch,
         elapsed_str=elapsed_str,
         eta_str=eta_str,
         end_time_str=end_time_str,
@@ -175,20 +266,20 @@ def emit_progress_update(
     )
     update_console_progress(console_message)
 
-    log_message = _format_progress_message(
+    log_message = _format_progress_log_message(
         progress=progress,
         epoch_progress=epoch_progress,
         epoch=epoch,
         batch_index=batch_index,
         progress_tracker=progress_tracker,
         step_losses=step_losses,
+        eval_losses=eval_losses,
+        eval_epoch=eval_epoch,
         elapsed_str=elapsed_str,
         eta_str=eta_str,
         end_time_str=end_time_str,
         last_checkpoint_name=last_checkpoint_name,
         best_checkpoint_name=best_checkpoint_name,
-        stream=_PLAIN_TEXT_STREAM,
-        color=False,
     )
     logger.debug("%s", log_message)
 
@@ -207,13 +298,21 @@ def update_console_progress(message: str, stream: TextIO = sys.stderr) -> None:
         return
 
     terminal_width = _terminal_width(stream)
-    clean_message = message[: terminal_width - 1]
-    stream.write("\r" + clean_message.ljust(terminal_width - 1))
+    lines = message.splitlines() or [""]
+    clean_lines = [line[: terminal_width - 1].ljust(terminal_width - 1) for line in lines]
+    stream.write("\r\033[2K" + clean_lines[0])
+    for line in clean_lines[1:]:
+        stream.write("\n\033[2K" + line)
+    if len(clean_lines) > 1:
+        stream.write(f"\033[{len(clean_lines) - 1}F")
     stream.flush()
 
 
 def finish_console_progress(stream: TextIO = sys.stderr) -> None:
-    stream.write("\n")
+    if stream.isatty():
+        stream.write("\033[1E\n")
+    else:
+        stream.write("\n")
     stream.flush()
 
 

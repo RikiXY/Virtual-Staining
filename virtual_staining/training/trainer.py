@@ -57,6 +57,8 @@ checkpoint_logger = logging.getLogger("virtual_staining.training.checkpoints")
 class _TrainingStatus:
     last_checkpoint: str
     best_checkpoint: str = "none"
+    latest_eval_losses: StepLosses | None = None
+    latest_eval_epoch: int | None = None
 
 
 @dataclass
@@ -275,7 +277,7 @@ class Trainer:
         return progress_tracker
 
     def _initial_training_status(self) -> _TrainingStatus:
-        last_checkpoint = Path(self.config.resume).name if self.config.resume else "none "
+        last_checkpoint = Path(self.config.resume).name if self.config.resume else "none"
         return _TrainingStatus(last_checkpoint=last_checkpoint)
 
     def _load_resumed_best_checkpoint(
@@ -437,6 +439,11 @@ class Trainer:
             return None
 
         val_metrics = self._validate(epoch)
+        training_status.latest_eval_losses = StepLosses(
+            loss_G=val_metrics.loss_G,
+            loss_D=val_metrics.loss_D,
+        )
+        training_status.latest_eval_epoch = epoch
         if best_state.val_loss is None or val_metrics.loss_G < best_state.val_loss:
             best_checkpoint_path = self._ensure_best_checkpoint_path(
                 epoch=epoch,
@@ -454,14 +461,14 @@ class Trainer:
             best_state.val_loss = val_metrics.loss_G
             best_state.path = best_checkpoint_path
             training_status.best_checkpoint = best_checkpoint_path.name
-            self._emit_epoch_progress(
-                epoch=epoch,
-                epoch_metrics=epoch_metrics,
-                progress_tracker=progress_tracker,
-                training_status=training_status,
-                start_time=start_time,
-                eta_str="0s" if epoch == self.config.epochs - 1 else "--",
-            )
+        self._emit_epoch_progress(
+            epoch=epoch,
+            epoch_metrics=epoch_metrics,
+            progress_tracker=progress_tracker,
+            training_status=training_status,
+            start_time=start_time,
+            eta_str="0s" if epoch == self.config.epochs - 1 else "--",
+        )
         return val_metrics
 
     def _ensure_best_checkpoint_path(
@@ -569,6 +576,8 @@ class Trainer:
             end_time_str=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             last_checkpoint_name=training_status.last_checkpoint,
             best_checkpoint_name=training_status.best_checkpoint,
+            eval_losses=training_status.latest_eval_losses,
+            eval_epoch=training_status.latest_eval_epoch,
         )
 
     def _train_epoch(
@@ -629,6 +638,8 @@ class Trainer:
                     end_time_str=end_time_str,
                     last_checkpoint_name=training_status.last_checkpoint,
                     best_checkpoint_name=training_status.best_checkpoint,
+                    eval_losses=training_status.latest_eval_losses,
+                    eval_epoch=training_status.latest_eval_epoch,
                 )
 
         if num_batches == 0:
