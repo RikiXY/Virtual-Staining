@@ -4,4 +4,5 @@ jobs:
   - config_path: ../runs/local/run_a.yaml
     label: baseline
   - config_path: ../runs/local/run_b.yaml
+    stages: [train, infer, evaluate]
     notes: retry with lower learning rate

@@ -11,7 +11,7 @@ generation of virtually stained images from label-free microscopy inputs (and vi
 |---|---|
 | `vs-prepare` | Build the patch dataset from full-size image pairs |
 | `vs-complete-run` | Run prepare, train, infer, and evaluate in sequence |
-| `vs-run-queue` | Execute multiple full runs sequentially from a queue file |
+| `vs-run-queue` | Execute full or staged runs sequentially from a queue file |
 | `vs-train` | Train the Pix2Pix model |
 | `vs-infer` | Run inference on the test split |
 | `vs-infer-images` | Run inference on one image file or a directory of images |
@@ -73,7 +73,7 @@ size. Use `--mode resize` to force the resizing of the whole input to
 `image_size`. Use `--output-format png` to force a common output format
 for directory batches.
 
-Queue multiple full runs locally:
+Queue multiple full or partial pipeline runs locally:
 
 ```yaml
 # config/queues/nightly.yaml
@@ -83,12 +83,17 @@ jobs:
   - config_path: ../runs/local/run_a.yaml
     label: baseline
   - config_path: ../runs/local/run_b.yaml
+    stages: [train, infer, evaluate]
     notes: retry with lower lr
 ```
 
 ```bash
 vs-run-queue --queue config/queues/nightly.yaml
 ```
+
+Omit `stages` to run the full `prepare`, `train`, `infer`, `evaluate`
+sequence. When `stages` is present, allowed values are `prepare`, `train`,
+`infer`, and `evaluate`, executed in the order listed.
 
 Queue definitions live under `config/queues/`. Personal queue YAMLs can live
 under `config/queues/local/`. Queue runtime state is written under

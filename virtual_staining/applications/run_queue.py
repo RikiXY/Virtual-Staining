@@ -67,6 +67,15 @@ class QueueState:
         path.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
 
 
+class QueuePreflightError(ValueError):
+    def __init__(self, job_index: int, config_path: Path, message: str) -> None:
+        super().__init__(
+            f"Queue preflight failed for job {job_index} config {config_path}: {message}"
+        )
+        self.job_index = job_index
+        self.config_path = config_path
+
+
 def _resolve_queue_state_path(queue_path: Path, queue_name: str) -> Path:
     parts = queue_path.parts
     for index in range(len(parts) - 1):
@@ -178,13 +187,42 @@ def _initial_queue_state(queue: LocalRunQueue) -> QueueState:
     )
 
 
+def _preflight_run_configs(queue: LocalRunQueue) -> tuple[RunConfig, ...]:
+    configs: list[RunConfig] = []
+    for index, job in enumerate(queue.jobs):
+        try:
+            if not job.config_path.is_file():
+                raise FileNotFoundError(f"Config file not found: {job.config_path}")
+            configs.append(RunConfig.from_yaml(job.config_path))
+        except Exception as exc:
+            raise QueuePreflightError(index, job.config_path, str(exc)) from exc
+    return tuple(configs)
+
+
+def _mark_preflight_failure(state: QueueState, error: QueuePreflightError) -> None:
+    completed_at = datetime.now(UTC).isoformat()
+    job_state = state.jobs[error.job_index]
+    job_state.status = "failed"
+    job_state.completed_at = completed_at
+    job_state.error = str(error)
+    state.status = "failed"
+    state.completed_at = completed_at
+    state.current_job_index = None
+
+
 def run_queue(queue_path: Path) -> QueueState:
     queue = load_local_run_queue(queue_path.resolve())
     state = _initial_queue_state(queue)
     state.save(queue.state_path)
+    try:
+        configs = _preflight_run_configs(queue)
+    except QueuePreflightError as exc:
+        _mark_preflight_failure(state, exc)
+        state.save(queue.state_path)
+        return state
 
     failures = 0
-    for index, job in enumerate(queue.jobs):
+    for index, (job, config) in enumerate(zip(queue.jobs, configs, strict=True)):
         job_state = state.jobs[index]
         job_state.status = "running"
         job_state.started_at = datetime.now(UTC).isoformat()
@@ -192,7 +230,6 @@ def run_queue(queue_path: Path) -> QueueState:
         state.save(queue.state_path)
 
         try:
-            config = RunConfig.from_yaml(job.config_path)
             run_stages(
                 config=config,
                 config_path=job.config_path,

@@ -252,6 +252,56 @@ def test_run_queue_continues_after_failure_when_configured(
     assert state_data["continue_on_failure"] is True
 
 
+def test_run_queue_preflights_configs_before_running_any_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_a = _write_config(tmp_path / "a", "training:\n  epochs: 1\n")
+    invalid_config = write_yaml(
+        tmp_path / "b" / "run.yaml",
+        """
+        dataset_root: /tmp/data
+        results_path: /tmp/results
+        run_name: invalid
+        training:
+          epochs: 1
+        unexpected: true
+        """,
+    )
+    queue_path = _write_queue(
+        tmp_path,
+        f"""\
+          - config_path: {config_a}
+          - config_path: {invalid_config}
+        """,
+        continue_on_failure=False,
+    )
+    calls: list[Path] = []
+
+    def _fake_run_stages(
+        config: RunConfig,
+        config_path: Path,
+        stages: Sequence[str],
+    ) -> None:
+        del config, stages
+        calls.append(config_path)
+
+    monkeypatch.setattr(
+        "virtual_staining.applications.run_queue.run_stages",
+        _fake_run_stages,
+    )
+
+    state = run_queue(queue_path)
+    state_data = json.loads(
+        (tmp_path / "local_workspace" / "queues" / "nightly.state.json").read_text(encoding="utf-8")
+    )
+
+    assert calls == []
+    assert state.status == "failed"
+    assert [job["status"] for job in state_data["jobs"]] == ["pending", "failed"]
+    assert state_data["jobs"][1]["error"].startswith("Queue preflight failed for job 1")
+    assert "Unknown key(s) in top level: unexpected" in state_data["jobs"][1]["error"]
+
+
 def test_load_local_run_queue_reads_configurable_stages(tmp_path: Path) -> None:
     config = _write_config(tmp_path / "a", "training:\n  epochs: 1\n")
     queue_path = _write_queue(
