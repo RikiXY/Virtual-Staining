@@ -99,6 +99,16 @@ def _format_checkpoint_name(name: str, *, stream: TextIO, color: bool) -> str:
     return name
 
 
+def _format_best_checkpoint_loss(
+    loss_G_val: float | None,
+    *,
+    stream: TextIO,
+    color: bool,
+) -> str:
+    value = "--" if loss_G_val is None else f"{loss_G_val:.4f}"
+    return _style_console(value, "light_blue", stream=stream, color=color)
+
+
 def _format_loss_parts(
     step_losses: StepLosses,
     *,
@@ -167,6 +177,7 @@ def _format_progress_message(
     end_time_str: str,
     last_checkpoint_name: str,
     best_checkpoint_name: str,
+    best_checkpoint_loss_G_val: float | None,
     stream: TextIO = sys.stderr,
     color: bool = True,
 ) -> str:
@@ -186,6 +197,11 @@ def _format_progress_message(
         stream=stream,
         color=color,
     )
+    best_checkpoint_loss = _format_best_checkpoint_loss(
+        best_checkpoint_loss_G_val,
+        stream=stream,
+        color=color,
+    )
     first_line = (
         f"{bar_top} "
         f"ep {epoch + 1}/{progress_tracker.total_epochs} "
@@ -201,7 +217,7 @@ def _format_progress_message(
     second_line = (
         f"{bar_bottom} "
         f"{_format_eval_parts(eval_losses, eval_epoch=eval_epoch, stream=stream, color=color)} | "
-        f"best ckpt {best_checkpoint}"
+        f"best ckpt {best_checkpoint} ({best_checkpoint_loss})"
     )
     return f"{first_line}\n{second_line}"
 
@@ -221,6 +237,7 @@ def _format_progress_log_message(
     end_time_str: str,
     last_checkpoint_name: str,
     best_checkpoint_name: str,
+    best_checkpoint_loss_G_val: float | None,
 ) -> str:
     first_line = (
         f"ep {epoch + 1}/{progress_tracker.total_epochs} "
@@ -239,7 +256,14 @@ def _format_progress_log_message(
         stream=_PLAIN_TEXT_STREAM,
         color=False,
     )
-    second_line = f"{eval_parts} | best ckpt {best_checkpoint_name.strip()}"
+    best_checkpoint_loss = _format_best_checkpoint_loss(
+        best_checkpoint_loss_G_val,
+        stream=_PLAIN_TEXT_STREAM,
+        color=False,
+    )
+    second_line = (
+        f"{eval_parts} | best ckpt {best_checkpoint_name.strip()} ({best_checkpoint_loss})"
+    )
     return f"{first_line}\n{second_line}"
 
 
@@ -256,6 +280,7 @@ def emit_progress_update(
     end_time_str: str,
     last_checkpoint_name: str,
     best_checkpoint_name: str,
+    best_checkpoint_loss_G_val: float | None = None,
     eval_losses: StepLosses | None = None,
     eval_epoch: int | None = None,
 ) -> None:
@@ -273,6 +298,7 @@ def emit_progress_update(
         end_time_str=end_time_str,
         last_checkpoint_name=last_checkpoint_name,
         best_checkpoint_name=best_checkpoint_name,
+        best_checkpoint_loss_G_val=best_checkpoint_loss_G_val,
         stream=sys.stderr,
         color=True,
     )
@@ -292,6 +318,7 @@ def emit_progress_update(
         end_time_str=end_time_str,
         last_checkpoint_name=last_checkpoint_name,
         best_checkpoint_name=best_checkpoint_name,
+        best_checkpoint_loss_G_val=best_checkpoint_loss_G_val,
     )
     logger.debug("%s", log_message)
 

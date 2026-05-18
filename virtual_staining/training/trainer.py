@@ -57,6 +57,7 @@ checkpoint_logger = logging.getLogger("virtual_staining.training.checkpoints")
 class _TrainingStatus:
     last_checkpoint: str
     best_checkpoint: str = "none"
+    best_loss_G_val: float | None = None
     latest_eval_losses: StepLosses | None = None
     latest_eval_epoch: int | None = None
 
@@ -298,6 +299,7 @@ class Trainer:
             return _BestCheckpointState()
 
         training_status.best_checkpoint = best_record.checkpoint_path.name
+        training_status.best_loss_G_val = best_record.metric_value
         logger.info(
             "Resumed best checkpoint: %s (%s=%.6f at epoch %s)",
             best_record.checkpoint_path,
@@ -461,6 +463,7 @@ class Trainer:
             best_state.val_loss = val_metrics.loss_G
             best_state.path = best_checkpoint_path
             training_status.best_checkpoint = best_checkpoint_path.name
+            training_status.best_loss_G_val = val_metrics.loss_G
         self._emit_epoch_progress(
             epoch=epoch,
             epoch_metrics=epoch_metrics,
@@ -576,6 +579,7 @@ class Trainer:
             end_time_str=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             last_checkpoint_name=training_status.last_checkpoint,
             best_checkpoint_name=training_status.best_checkpoint,
+            best_checkpoint_loss_G_val=training_status.best_loss_G_val,
             eval_losses=training_status.latest_eval_losses,
             eval_epoch=training_status.latest_eval_epoch,
         )
@@ -638,6 +642,7 @@ class Trainer:
                     end_time_str=end_time_str,
                     last_checkpoint_name=training_status.last_checkpoint,
                     best_checkpoint_name=training_status.best_checkpoint,
+                    best_checkpoint_loss_G_val=training_status.best_loss_G_val,
                     eval_losses=training_status.latest_eval_losses,
                     eval_epoch=training_status.latest_eval_epoch,
                 )
