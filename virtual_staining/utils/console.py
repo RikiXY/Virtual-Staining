@@ -13,6 +13,8 @@ ANSI = {
     "blue": "\033[34m",
     "magenta": "\033[35m",
     "cyan": "\033[36m",
+    "light_blue": "\033[94m",
+    "light_magenta": "\033[95m",
     "orange": "\033[38;5;208m",
 }
 

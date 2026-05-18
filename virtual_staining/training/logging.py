@@ -130,13 +130,25 @@ def _format_eval_parts(
         return f"{label} --"
 
     epoch_text = f"ep {eval_epoch + 1} | " if eval_epoch is not None else ""
+    eval_loss_g = _style_console(
+        f"{eval_losses.loss_G:.4f}",
+        "light_blue",
+        stream=stream,
+        color=color,
+    )
+    eval_loss_d = _style_console(
+        f"{eval_losses.loss_D:.4f}",
+        "light_magenta",
+        stream=stream,
+        color=color,
+    )
     return (
         f"{label} {epoch_text}"
         f"{_style_console('loss_G', 'bold', stream=stream, color=color)} "
-        f"{_style_console(f'{eval_losses.loss_G:.4f}', 'blue', stream=stream, color=color)}"
+        f"{eval_loss_g}"
         f" | "
         f"{_style_console('loss_D', 'bold', stream=stream, color=color)} "
-        f"{_style_console(f'{eval_losses.loss_D:.4f}', 'magenta', stream=stream, color=color)}"
+        f"{eval_loss_d}"
     )
 
 
