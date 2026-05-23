@@ -280,6 +280,14 @@ mode. Metric-based policies record `best_val_ssim`, `best_val_mae`,
 `best_val_pcc_rgb_mean`, with `metric`, `mode`, `epoch`, `checkpoint_path`, and
 `metric_value` fields.
 
+### `checkpoints/top_k.json`
+
+Ranked checkpoint candidate list for the same policy, metric, and mode used by
+`best.json`. The file records `top_k` and a deterministic `records` array with
+`rank`, `epoch`, `checkpoint_path`, and `metric_value`, plus config/loss context
+when available. It is metadata only; checkpoint files are not deleted by this
+retention record.
+
 ### `artifacts/output_train/`, `output_val/`, `output_test/`
 
 Generated images produced during training (train/val) and inference (test).

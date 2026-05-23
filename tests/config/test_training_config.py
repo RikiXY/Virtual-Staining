@@ -47,6 +47,7 @@ def _make_training_config(**overrides: object) -> TrainingConfig:
         "checkpoint_rate": 10,
         "checkpoint_metric": "loss_G_val",
         "checkpoint_mode": "min",
+        "checkpoint_top_k": 3,
         "log_rate": 15,
         "resume": None,
     }
@@ -64,6 +65,7 @@ def _make_training_config(**overrides: object) -> TrainingConfig:
         checkpoint_rate=defaults["checkpoint_rate"],  # type: ignore[arg-type]
         checkpoint_metric=defaults["checkpoint_metric"],  # type: ignore[arg-type]
         checkpoint_mode=defaults["checkpoint_mode"],  # type: ignore[arg-type]
+        checkpoint_top_k=defaults["checkpoint_top_k"],  # type: ignore[arg-type]
         log_rate=defaults["log_rate"],  # type: ignore[arg-type]
         resume=defaults["resume"],  # type: ignore[arg-type]
     )
@@ -101,6 +103,7 @@ def test_run_config_from_yaml(tmp_path: Path) -> None:
     assert run_config.training.seed == 7
     assert run_config.training.checkpoint_metric == "loss_G_val"
     assert run_config.training.checkpoint_mode == "min"
+    assert run_config.training.checkpoint_top_k == 3
     assert run_config.model == ModelConfig()
 
 
@@ -116,6 +119,7 @@ def test_training_checkpoint_metric_and_mode_parse(tmp_path: Path) -> None:
           epochs: 20
           checkpoint_metric: val_mae
           checkpoint_mode: min
+          checkpoint_top_k: 5
     """,
     )
 
@@ -124,6 +128,7 @@ def test_training_checkpoint_metric_and_mode_parse(tmp_path: Path) -> None:
     assert run_config.training is not None
     assert run_config.training.checkpoint_metric == "val_mae"
     assert run_config.training.checkpoint_mode == "min"
+    assert run_config.training.checkpoint_top_k == 5
 
 
 def test_training_checkpoint_mode_defaults_from_metric_direction(tmp_path: Path) -> None:
@@ -832,6 +837,8 @@ def test_inference_unknown_checkpoint_policy_raises(tmp_path: Path) -> None:
         ({"num_workers": -1}, "num_workers"),
         ({"validate_rate": 0}, "validate_rate"),
         ({"checkpoint_rate": 0}, "checkpoint_rate"),
+        ({"checkpoint_top_k": 0}, "checkpoint_top_k"),
+        ({"checkpoint_top_k": -1}, "checkpoint_top_k"),
         ({"log_rate": 0}, "log_rate"),
     ],
 )

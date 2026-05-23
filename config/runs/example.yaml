@@ -95,6 +95,8 @@ training:
   # Use min for losses/errors such as loss_G_val, val_mae, val_rmse.
   # Use max for similarity/correlation metrics such as val_ssim and val_psnr.
   checkpoint_mode: min
+  # Number of ranked validation checkpoint candidates to list in checkpoints/top_k.json.
+  checkpoint_top_k: 3
   log_rate: 15
   resume: null
 

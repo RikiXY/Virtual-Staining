@@ -17,7 +17,6 @@ from torch.amp import GradScaler, autocast
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.models.config import ModelConfig
 from virtual_staining.training.checkpoints import (
-    BEST_CHECKPOINT_POLICY,
     CHECKPOINT_POLICY_BY_METRIC,
     CheckpointManager,
     load_best_checkpoint_record,
@@ -487,31 +486,45 @@ class Trainer:
         checkpoint_metric_value = self._checkpoint_metric_value(val_metrics)
         if not math.isfinite(checkpoint_metric_value):
             logger.warning(
-                "Skipping best-checkpoint update for %s because value is non-finite: %s",
+                "Skipping checkpoint ranking update for %s because value is non-finite: %s",
                 self.config.checkpoint_metric,
                 checkpoint_metric_value,
             )
-        elif self._is_better_checkpoint_value(checkpoint_metric_value, best_state.metric_value):
-            best_checkpoint_path = self._ensure_best_checkpoint_path(
+        else:
+            ranked_checkpoint_path = self._ensure_best_checkpoint_path(
                 epoch=epoch,
                 checkpoint_path=checkpoint_path,
                 training_status=training_status,
                 reporter=reporter,
             )
-            self._checkpoint_manager.save_best_record(
+            config_hash = self._read_config_hash()
+            loss_config = self.losses.to_yaml_dict() if self.losses is not None else None
+            self._checkpoint_manager.update_top_k_records(
                 policy=self._checkpoint_policy(),
                 metric=self.config.checkpoint_metric,
                 mode=self.config.checkpoint_mode,
+                top_k=self.config.checkpoint_top_k,
                 epoch=epoch,
-                checkpoint_path=best_checkpoint_path,
+                checkpoint_path=ranked_checkpoint_path,
                 metric_value=checkpoint_metric_value,
-                config_hash=self._read_config_hash(),
-                loss_config=self.losses.to_yaml_dict() if self.losses is not None else None,
+                config_hash=config_hash,
+                loss_config=loss_config,
             )
-            best_state.metric_value = checkpoint_metric_value
-            best_state.path = best_checkpoint_path
-            training_status.best_checkpoint = best_checkpoint_path.name
-            training_status.best_loss_G_val = checkpoint_metric_value
+            if self._is_better_checkpoint_value(checkpoint_metric_value, best_state.metric_value):
+                self._checkpoint_manager.save_best_record(
+                    policy=self._checkpoint_policy(),
+                    metric=self.config.checkpoint_metric,
+                    mode=self.config.checkpoint_mode,
+                    epoch=epoch,
+                    checkpoint_path=ranked_checkpoint_path,
+                    metric_value=checkpoint_metric_value,
+                    config_hash=config_hash,
+                    loss_config=loss_config,
+                )
+                best_state.metric_value = checkpoint_metric_value
+                best_state.path = ranked_checkpoint_path
+                training_status.best_checkpoint = ranked_checkpoint_path.name
+                training_status.best_loss_G_val = checkpoint_metric_value
         self._emit_epoch_progress(
             epoch=epoch,
             epoch_metrics=epoch_metrics,
@@ -564,7 +577,7 @@ class Trainer:
             "Checkpoint saved to %s at epoch %s for %s",
             checkpoint_path,
             epoch,
-            BEST_CHECKPOINT_POLICY,
+            self._checkpoint_policy(),
         )
         if reporter is not None:
             reporter.on_checkpoint_saved(checkpoint_path, epoch)

@@ -259,6 +259,115 @@ def test_load_best_checkpoint_record_accepts_legacy_record_without_mode(
     assert record.checkpoint_path == checkpoint_path
 
 
+def test_update_top_k_records_sorts_max_mode_and_trims(tmp_path: Path) -> None:
+    mgr = _make_manager(tmp_path)
+    checkpoints = [mgr.save(epoch=epoch) for epoch in range(3)]
+
+    for epoch, checkpoint_path, metric_value in [
+        (0, checkpoints[0], 0.5),
+        (1, checkpoints[1], 0.9),
+        (2, checkpoints[2], 0.7),
+    ]:
+        mgr.update_top_k_records(
+            policy="best_val_ssim",
+            metric="val_ssim",
+            mode="max",
+            top_k=2,
+            epoch=epoch,
+            checkpoint_path=checkpoint_path,
+            metric_value=metric_value,
+            config_hash="abc123",
+            loss_config={"generator": [], "discriminator": []},
+        )
+
+    payload = json.loads(mgr.top_k_record_path.read_text(encoding="utf-8"))
+    assert payload["policy"] == "best_val_ssim"
+    assert payload["metric"] == "val_ssim"
+    assert payload["mode"] == "max"
+    assert payload["top_k"] == 2
+    ranked_values = [
+        (record["rank"], record["epoch"], record["metric_value"]) for record in payload["records"]
+    ]
+    assert ranked_values == [(1, 1, 0.9), (2, 2, 0.7)]
+    assert payload["records"][0]["config_hash"] == "abc123"
+    assert payload["records"][0]["loss_config"] == {"generator": [], "discriminator": []}
+
+
+def test_update_top_k_records_sorts_min_mode(tmp_path: Path) -> None:
+    mgr = _make_manager(tmp_path)
+    checkpoints = [mgr.save(epoch=epoch) for epoch in range(3)]
+
+    for epoch, checkpoint_path, metric_value in [
+        (0, checkpoints[0], 0.5),
+        (1, checkpoints[1], 0.2),
+        (2, checkpoints[2], 0.4),
+    ]:
+        mgr.update_top_k_records(
+            policy=BEST_CHECKPOINT_POLICY,
+            metric="loss_G_val",
+            mode="min",
+            top_k=3,
+            epoch=epoch,
+            checkpoint_path=checkpoint_path,
+            metric_value=metric_value,
+        )
+
+    payload = json.loads(mgr.top_k_record_path.read_text(encoding="utf-8"))
+    ranked_values = [
+        (record["rank"], record["epoch"], record["metric_value"]) for record in payload["records"]
+    ]
+    assert ranked_values == [(1, 1, 0.2), (2, 2, 0.4), (3, 0, 0.5)]
+
+
+def test_update_top_k_records_replaces_duplicate_epoch(tmp_path: Path) -> None:
+    mgr = _make_manager(tmp_path)
+    checkpoint_path = mgr.save(epoch=0)
+
+    mgr.update_top_k_records(
+        policy=BEST_CHECKPOINT_POLICY,
+        metric="loss_G_val",
+        mode="min",
+        top_k=3,
+        epoch=0,
+        checkpoint_path=checkpoint_path,
+        metric_value=0.5,
+    )
+    mgr.update_top_k_records(
+        policy=BEST_CHECKPOINT_POLICY,
+        metric="loss_G_val",
+        mode="min",
+        top_k=3,
+        epoch=0,
+        checkpoint_path=checkpoint_path,
+        metric_value=0.1,
+    )
+
+    payload = json.loads(mgr.top_k_record_path.read_text(encoding="utf-8"))
+    assert payload["records"] == [
+        {
+            "epoch": 0,
+            "checkpoint_path": "ep000.pth",
+            "metric_value": 0.1,
+            "rank": 1,
+        }
+    ]
+
+
+def test_update_top_k_records_rejects_missing_checkpoint(tmp_path: Path) -> None:
+    mgr = _make_manager(tmp_path)
+
+    with pytest.raises(FileNotFoundError, match="missing checkpoint"):
+        mgr.update_top_k_records(
+            policy=BEST_CHECKPOINT_POLICY,
+            metric="loss_G_val",
+            mode="min",
+            top_k=1,
+            epoch=0,
+            checkpoint_path=mgr.checkpoints_dir / "ep000.pth",
+            metric_value=0.1,
+        )
+
+
 def test_checkpoint_manager_image_size_mismatch_raises(tmp_path: Path) -> None:
     mgr = _make_manager(tmp_path, image_size=(256, 256))
     mgr.save(epoch=0)

@@ -216,6 +216,10 @@ class CheckpointManager:
     def best_record_path(self) -> Path:
         return self.checkpoints_dir / "best.json"
 
+    @property
+    def top_k_record_path(self) -> Path:
+        return self.checkpoints_dir / "top_k.json"
+
     def save(self, epoch: int) -> Path:
         """Save a full training checkpoint. Returns the path."""
         self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
@@ -277,6 +281,97 @@ class CheckpointManager:
         self.best_record_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         logger.info("Best checkpoint record saved: %s", self.best_record_path)
         return self.best_record_path
+
+    def update_top_k_records(
+        self,
+        *,
+        policy: str,
+        metric: str,
+        mode: str,
+        top_k: int,
+        epoch: int,
+        checkpoint_path: Path,
+        metric_value: float,
+        config_hash: str | None = None,
+        loss_config: dict[str, Any] | None = None,
+    ) -> Path:
+        """Update checkpoints/top_k.json with a deterministic ranked record list."""
+        if top_k <= 0:
+            raise ValueError("top_k must be greater than 0")
+        if mode not in {"min", "max"}:
+            raise ValueError("mode must be one of ['max', 'min']")
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Cannot rank missing checkpoint file: {checkpoint_path}")
+
+        self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
+        records = self._load_existing_top_k_records(policy=policy, metric=metric, mode=mode)
+        records = [
+            record
+            for record in records
+            if record["epoch"] != epoch
+            and self._checkpoint_record_path(str(record["checkpoint_path"])).exists()
+        ]
+
+        record: dict[str, Any] = {
+            "epoch": epoch,
+            "checkpoint_path": checkpoint_path.name,
+            "metric_value": metric_value,
+        }
+        if config_hash is not None:
+            record["config_hash"] = config_hash
+        if loss_config is not None:
+            record["loss_config"] = loss_config
+        records.append(record)
+
+        ranked_records = _rank_top_k_records(records, mode=mode, top_k=top_k)
+        payload = {
+            "policy": policy,
+            "metric": metric,
+            "mode": mode,
+            "top_k": top_k,
+            "records": ranked_records,
+        }
+        self.top_k_record_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        logger.info("Top-k checkpoint record saved: %s", self.top_k_record_path)
+        return self.top_k_record_path
+
+    def _load_existing_top_k_records(
+        self,
+        *,
+        policy: str,
+        metric: str,
+        mode: str,
+    ) -> list[dict[str, Any]]:
+        if not self.top_k_record_path.exists():
+            return []
+        try:
+            payload = json.loads(self.top_k_record_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Top-k checkpoint metadata at {self.top_k_record_path} is not valid JSON."
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ValueError(
+                f"Top-k checkpoint metadata at {self.top_k_record_path} must be a JSON object."
+            )
+        if (
+            payload.get("policy") != policy
+            or payload.get("metric") != metric
+            or payload.get("mode") != mode
+        ):
+            return []
+        records = payload.get("records", [])
+        if not isinstance(records, list):
+            raise ValueError(
+                f"Top-k checkpoint metadata at {self.top_k_record_path} has invalid records."
+            )
+        return [_normalize_top_k_record(record, self.top_k_record_path) for record in records]
+
+    def _checkpoint_record_path(self, checkpoint_value: str) -> Path:
+        checkpoint_path = Path(checkpoint_value)
+        if not checkpoint_path.is_absolute():
+            checkpoint_path = self.checkpoints_dir / checkpoint_path
+        return checkpoint_path
 
     def load(self, path: Path) -> int:
         """Load a training checkpoint. Returns the start_epoch for resuming."""
@@ -374,3 +469,69 @@ def load_best_checkpoint_record(checkpoints_dir: Path, *, policy: str) -> BestCh
 def resolve_best_checkpoint_path(checkpoints_dir: Path, *, policy: str) -> Path:
     """Resolve a best-checkpoint policy via checkpoints/best.json."""
     return load_best_checkpoint_record(checkpoints_dir, policy=policy).checkpoint_path
+
+
+def _normalize_top_k_record(record: Any, top_k_path: Path) -> dict[str, Any]:
+    if not isinstance(record, dict):
+        raise ValueError(f"Top-k checkpoint metadata at {top_k_path} contains a non-object record.")
+
+    epoch = record.get("epoch")
+    if not isinstance(epoch, int):
+        raise ValueError(f"Top-k checkpoint metadata at {top_k_path} has invalid record epoch.")
+
+    checkpoint_value = record.get("checkpoint_path")
+    if not isinstance(checkpoint_value, str) or not checkpoint_value.strip():
+        raise ValueError(
+            f"Top-k checkpoint metadata at {top_k_path} has invalid record checkpoint_path."
+        )
+
+    metric_value = record.get("metric_value")
+    if not isinstance(metric_value, int | float):
+        raise ValueError(
+            f"Top-k checkpoint metadata at {top_k_path} has invalid record metric_value."
+        )
+
+    normalized = {
+        "epoch": epoch,
+        "checkpoint_path": checkpoint_value,
+        "metric_value": float(metric_value),
+    }
+    if "config_hash" in record:
+        config_hash = record["config_hash"]
+        if not isinstance(config_hash, str):
+            raise ValueError(
+                f"Top-k checkpoint metadata at {top_k_path} has invalid record config_hash."
+            )
+        normalized["config_hash"] = config_hash
+    if "loss_config" in record:
+        loss_config = record["loss_config"]
+        if not isinstance(loss_config, dict):
+            raise ValueError(
+                f"Top-k checkpoint metadata at {top_k_path} has invalid record loss_config."
+            )
+        normalized["loss_config"] = loss_config
+    return normalized
+
+
+def _rank_top_k_records(
+    records: list[dict[str, Any]],
+    *,
+    mode: str,
+    top_k: int,
+) -> list[dict[str, Any]]:
+    reverse = mode == "max"
+    sorted_records = sorted(
+        records,
+        key=lambda record: (
+            (float(record["metric_value"]), -int(record["epoch"]))
+            if reverse
+            else (float(record["metric_value"]), int(record["epoch"]))
+        ),
+        reverse=reverse,
+    )
+    ranked_records: list[dict[str, Any]] = []
+    for rank, record in enumerate(sorted_records[:top_k], start=1):
+        ranked_record = dict(record)
+        ranked_record["rank"] = rank
+        ranked_records.append(ranked_record)
+    return ranked_records

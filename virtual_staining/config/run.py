@@ -173,6 +173,7 @@ class RunConfig:
                 "checkpoint_rate": self.training.checkpoint_rate,
                 "checkpoint_metric": self.training.checkpoint_metric,
                 "checkpoint_mode": self.training.checkpoint_mode,
+                "checkpoint_top_k": self.training.checkpoint_top_k,
                 "log_rate": self.training.log_rate,
                 "resume": self.training.resume,
             }
@@ -436,6 +437,7 @@ def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
         checkpoint_rate=int(data.get("checkpoint_rate", 10)),
         checkpoint_metric=cast(CheckpointMetric, checkpoint_metric),
         checkpoint_mode=cast(CheckpointMode, checkpoint_mode),
+        checkpoint_top_k=int(data.get("checkpoint_top_k", 3)),
         log_rate=int(data.get("log_rate", 15)),
         resume=data.get("resume"),
     )

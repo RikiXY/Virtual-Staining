@@ -21,6 +21,7 @@ _TRAINING_KEYS: frozenset[str] = frozenset(
         "checkpoint_rate",
         "checkpoint_metric",
         "checkpoint_mode",
+        "checkpoint_top_k",
         "log_rate",
         "resume",
     }
@@ -491,6 +492,7 @@ class TrainingConfig:
     checkpoint_rate: int
     checkpoint_metric: CheckpointMetric = "loss_G_val"
     checkpoint_mode: CheckpointMode = "min"
+    checkpoint_top_k: int = 3
     log_rate: int = 15
     resume: str | None = None
 
@@ -500,6 +502,7 @@ class TrainingConfig:
             ("epochs", self.epochs),
             ("validate_rate", self.validate_rate),
             ("checkpoint_rate", self.checkpoint_rate),
+            ("checkpoint_top_k", self.checkpoint_top_k),
             ("log_rate", self.log_rate),
         ):
             if value <= 0:
