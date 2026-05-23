@@ -106,6 +106,12 @@ training:
     # factor: 0.5
     # patience: 5
     # min_lr: 0.00002
+  # Optional early stopping based on validation CSV columns.
+  # early_stopping:
+  #   monitor: val_ssim
+  #   mode: max
+  #   patience: 15
+  #   min_delta: 0.0
 
 augmentation:
   # Training-only on-the-fly augmentation. No transformed patches are saved.

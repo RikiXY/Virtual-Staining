@@ -11,6 +11,7 @@ from virtual_staining.config.project import ProjectConfig
 from virtual_staining.models.config import ModelConfig
 from virtual_staining.training.config import (
     AugmentationConfig,
+    EarlyStoppingConfig,
     LearningRateSchedulerConfig,
     LossConfig,
     LossScheduleConfig,
@@ -50,6 +51,7 @@ def _make_training_config(**overrides: object) -> TrainingConfig:
         "log_rate": 15,
         "resume": None,
         "scheduler": LearningRateSchedulerConfig(),
+        "early_stopping": None,
     }
     defaults.update(overrides)
     return TrainingConfig(
@@ -67,6 +69,7 @@ def _make_training_config(**overrides: object) -> TrainingConfig:
         log_rate=defaults["log_rate"],  # type: ignore[arg-type]
         resume=defaults["resume"],  # type: ignore[arg-type]
         scheduler=defaults["scheduler"],  # type: ignore[arg-type]
+        early_stopping=defaults["early_stopping"],  # type: ignore[arg-type]
     )
 
 
@@ -203,6 +206,78 @@ def test_training_scheduler_parses_reduce_on_plateau(tmp_path: Path) -> None:
     assert scheduler.factor == pytest.approx(0.5)
     assert scheduler.patience == 5
     assert scheduler.min_lr == pytest.approx(0.00002)
+
+
+def test_training_early_stopping_parses_valid_config(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "train.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: yaml_run
+        training:
+          epochs: 20
+          early_stopping:
+            monitor: val_ssim
+            mode: max
+            patience: 5
+            min_delta: 0.001
+    """,
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+
+    assert run_config.training is not None
+    early_stopping = run_config.training.early_stopping
+    assert early_stopping == EarlyStoppingConfig(
+        monitor="val_ssim",
+        mode="max",
+        patience=5,
+        min_delta=0.001,
+    )
+    assert run_config.to_yaml_dict()["training"]["early_stopping"] == {
+        "monitor": "val_ssim",
+        "mode": "max",
+        "patience": 5,
+        "min_delta": 0.001,
+    }
+
+
+@pytest.mark.parametrize(
+    ("early_stopping_yaml", "match"),
+    [
+        ("monitor: train_loss", "training.early_stopping.monitor"),
+        ("monitor: val_ssim\n  mode: median", "training.early_stopping.mode"),
+        ("monitor: val_ssim\n  patience: -1", "patience"),
+        ("monitor: val_ssim\n  min_delta: -0.1", "min_delta"),
+    ],
+)
+def test_training_early_stopping_rejects_invalid_values(
+    tmp_path: Path,
+    early_stopping_yaml: str,
+    match: str,
+) -> None:
+    yaml_file = tmp_path / "bad_early_stopping.yaml"
+    early_stopping_body = textwrap.indent(
+        "\n".join(line.strip() for line in early_stopping_yaml.splitlines()),
+        "            ",
+    )
+    write_yaml(
+        yaml_file,
+        f"""\
+        dataset_root: /data
+        results_path: /results
+        run_name: yaml_run
+        training:
+          epochs: 20
+          early_stopping:
+{early_stopping_body}
+    """,
+    )
+
+    with pytest.raises((TypeError, ValueError), match=match):
+        RunConfig.from_yaml(yaml_file)
 
 
 def test_training_scheduler_rejects_decay_start_at_or_after_epochs() -> None:

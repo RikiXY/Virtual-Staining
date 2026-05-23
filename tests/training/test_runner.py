@@ -234,6 +234,7 @@ def test_run_training_writes_resolved_config_and_hash(tmp_path: Path, monkeypatc
     assert stage_metadata["status"] == "completed"
     assert stage_metadata["config_hash"] == expected
     assert stage_metadata["manifest_sha256"] == manifest_hash
+    assert stage_metadata["stopped_early"] is False
 
     events = [
         json.loads(line)
@@ -243,6 +244,61 @@ def test_run_training_writes_resolved_config_and_hash(tmp_path: Path, monkeypatc
     ]
     assert [event["event_type"] for event in events] == ["stage_started", "stage_completed"]
     assert all(event["stage"] == "train" for event in events)
+
+
+def test_run_training_writes_early_stopping_result_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_root = tmp_path / "dataset"
+    train_dir = dataset_root / "splits" / "train"
+    val_dir = dataset_root / "splits" / "val"
+    train_dir.mkdir(parents=True)
+    val_dir.mkdir(parents=True)
+    write_rgb_pair(train_dir, size=(32, 32))
+    write_rgb_pair(val_dir, "00256_00000", size=(32, 32))
+    _write_training_manifest(dataset_root)
+
+    config_path = _write_train_config(tmp_path, dataset_root)
+    config = RunConfig.from_yaml(config_path)
+
+    def _fake_train(self, seed: int, start_epoch: int = 0, reporter=None) -> TrainingResult:
+        return TrainingResult(
+            final_epoch=3,
+            best_checkpoint_path=None,
+            stopped_early=True,
+            stop_epoch=3,
+            stop_reason="early_stopping: val_ssim did not improve",
+            early_stopping_monitor="val_ssim",
+            early_stopping_mode="max",
+            early_stopping_best_epoch=1,
+            early_stopping_best_value=0.8,
+        )
+
+    monkeypatch.setattr("virtual_staining.training.trainer.Trainer.train", _fake_train)
+
+    run_training(config, config_path)
+
+    run_root = tmp_path / "results" / "smoke_run"
+    stage_metadata = json.loads(
+        (run_root / "metadata" / "stages" / "train.json").read_text(encoding="utf-8")
+    )
+    assert stage_metadata["stopped_early"] is True
+    assert stage_metadata["stop_epoch"] == 3
+    assert stage_metadata["stop_reason"] == "early_stopping: val_ssim did not improve"
+    assert stage_metadata["early_stopping_monitor"] == "val_ssim"
+    assert stage_metadata["early_stopping_mode"] == "max"
+    assert stage_metadata["early_stopping_best_epoch"] == 1
+    assert stage_metadata["early_stopping_best_value"] == pytest.approx(0.8)
+
+    events = [
+        json.loads(line)
+        for line in (run_root / "metadata" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert events[-1]["details"]["stopped_early"] is True
+    assert events[-1]["details"]["early_stopping_monitor"] == "val_ssim"
 
 
 def test_run_training_uses_separate_seeded_loader_generators(

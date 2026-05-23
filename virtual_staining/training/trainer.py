@@ -73,6 +73,30 @@ class _BestCheckpointState:
     path: Path | None = None
 
 
+@dataclass
+class _EarlyStoppingState:
+    best_value: float | None = None
+    best_epoch: int | None = None
+    stale_count: int = 0
+    stopped: bool = False
+    stop_epoch: int | None = None
+    stop_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class _EpochResult:
+    metrics: EpochMetrics
+    stopped_early: bool = False
+
+
+@dataclass(frozen=True)
+class _TrainingLoopResult:
+    final_epoch: int
+    stopped_early: bool
+    stop_reason: str | None
+    early_stopping_state: _EarlyStoppingState | None
+
+
 # ---------------------------------------------------------------------------
 # Trainer
 # ---------------------------------------------------------------------------
@@ -201,7 +225,7 @@ class Trainer:
             training_status = self._initial_training_status()
             best_state = self._load_resumed_best_checkpoint(start_epoch, training_status)
 
-            self._run_training_epochs(
+            loop_result = self._run_training_epochs(
                 start_epoch=start_epoch,
                 progress_tracker=progress_tracker,
                 training_status=training_status,
@@ -218,10 +242,29 @@ class Trainer:
             finish_console_progress()
             total_seconds = time.time() - start_time
             logger.info("Execution completed. Total time = %.2f seconds", total_seconds)
-            final_epoch = max(start_epoch, self.config.epochs) - 1
+            early_state = loop_result.early_stopping_state
             return TrainingResult(
-                final_epoch=final_epoch,
+                final_epoch=loop_result.final_epoch,
                 best_checkpoint_path=best_state.path,
+                stopped_early=loop_result.stopped_early,
+                stop_epoch=early_state.stop_epoch if early_state is not None else None,
+                stop_reason=loop_result.stop_reason,
+                early_stopping_monitor=(
+                    self.config.early_stopping.monitor
+                    if self.config.early_stopping is not None
+                    else None
+                ),
+                early_stopping_mode=(
+                    self.config.early_stopping.mode
+                    if self.config.early_stopping is not None
+                    else None
+                ),
+                early_stopping_best_epoch=(
+                    early_state.best_epoch if early_state is not None else None
+                ),
+                early_stopping_best_value=(
+                    early_state.best_value if early_state is not None else None
+                ),
             )
 
     # ------------------------------------------------------------------
@@ -343,12 +386,16 @@ class Trainer:
         best_state: _BestCheckpointState,
         start_time: float,
         reporter: TrainingReporter | None,
-    ) -> None:
+    ) -> _TrainingLoopResult:
         loss_names = configured_loss_names(self.losses)
         train_metrics_path = self._run_paths.metrics_dir / "train.csv"
         validation_metrics_path = self._run_paths.metrics_dir / "validation.csv"
         all_metrics_path = self._run_paths.metrics_dir / "all.csv"
         last_epoch_metrics: EpochMetrics | None = None
+        final_epoch = max(start_epoch, self.config.epochs) - 1
+        early_stopping_state = (
+            _EarlyStoppingState() if self.config.early_stopping is not None else None
+        )
 
         with (
             open(train_metrics_path, "w", newline="", encoding="utf-8") as train_metrics_file,
@@ -375,7 +422,7 @@ class Trainer:
             all_metrics_writer.writeheader()
 
             for epoch in range(start_epoch, self.config.epochs):
-                last_epoch_metrics = self._run_training_epoch(
+                epoch_result = self._run_training_epoch(
                     epoch=epoch,
                     train_metrics_writer=train_metrics_writer,
                     validation_metrics_writer=validation_metrics_writer,
@@ -388,16 +435,28 @@ class Trainer:
                     best_state=best_state,
                     start_time=start_time,
                     reporter=reporter,
+                    early_stopping_state=early_stopping_state,
                 )
+                last_epoch_metrics = epoch_result.metrics
+                final_epoch = epoch
+                if epoch_result.stopped_early:
+                    break
 
         self._save_final_checkpoint_if_needed(
             start_epoch=start_epoch,
+            final_epoch=final_epoch,
             final_metrics=last_epoch_metrics,
             progress_tracker=progress_tracker,
             training_status=training_status,
             best_state=best_state,
             start_time=start_time,
             reporter=reporter,
+        )
+        return _TrainingLoopResult(
+            final_epoch=final_epoch,
+            stopped_early=bool(early_stopping_state and early_stopping_state.stopped),
+            stop_reason=early_stopping_state.stop_reason if early_stopping_state else None,
+            early_stopping_state=early_stopping_state,
         )
 
     def _run_training_epoch(
@@ -415,7 +474,8 @@ class Trainer:
         best_state: _BestCheckpointState,
         start_time: float,
         reporter: TrainingReporter | None,
-    ) -> EpochMetrics:
+        early_stopping_state: _EarlyStoppingState | None,
+    ) -> _EpochResult:
         logger.debug("Starting epoch %s", epoch)
         epoch_metrics = self._train_epoch(epoch, progress_tracker, training_status)
         logger.debug("Finished epoch %s", epoch)
@@ -451,7 +511,14 @@ class Trainer:
         all_metrics_file.flush()
         if reporter is not None:
             reporter.on_epoch_completed(epoch_metrics)
-        return epoch_metrics
+        stopped_early = False
+        if val_metrics is not None and early_stopping_state is not None:
+            stopped_early = self._update_early_stopping(
+                epoch=epoch,
+                val_metrics=val_metrics,
+                state=early_stopping_state,
+            )
+        return _EpochResult(metrics=epoch_metrics, stopped_early=stopped_early)
 
     def _save_scheduled_checkpoint(
         self,
@@ -583,6 +650,82 @@ class Trainer:
             return val_metrics.loss_G
         return val_metrics.image.get(monitor)
 
+    def _update_early_stopping(
+        self,
+        *,
+        epoch: int,
+        val_metrics: EpochMetrics,
+        state: _EarlyStoppingState,
+    ) -> bool:
+        early_config = self.config.early_stopping
+        if early_config is None:
+            return False
+
+        metric_value = self._early_stopping_monitor_value(val_metrics)
+        if metric_value is None or not math.isfinite(metric_value):
+            logger.warning(
+                "Skipping early-stopping update at epoch %s because %s is unavailable",
+                epoch,
+                early_config.monitor,
+            )
+            return False
+
+        if self._is_early_stopping_improvement(metric_value, state.best_value):
+            state.best_value = metric_value
+            state.best_epoch = epoch
+            state.stale_count = 0
+            return False
+
+        state.stale_count += 1
+        if state.stale_count >= early_config.patience:
+            state.stopped = True
+            state.stop_epoch = epoch
+            state.stop_reason = (
+                f"early_stopping: {early_config.monitor} did not improve by at least "
+                f"{early_config.min_delta:g} for {early_config.patience} validation event(s); "
+                f"best epoch {state.best_epoch} value {state.best_value:.6g}"
+            )
+            logger.info("Stopping early at epoch %s: %s", epoch, state.stop_reason)
+            return True
+        return False
+
+    def _early_stopping_monitor_value(self, val_metrics: EpochMetrics) -> float | None:
+        early_config = self.config.early_stopping
+        if early_config is None:
+            return None
+        monitor = early_config.monitor
+        if monitor == "loss_G_val":
+            return val_metrics.loss_G
+        if monitor == "loss_D_val":
+            return val_metrics.loss_D
+        if monitor in val_metrics.image:
+            return val_metrics.image[monitor]
+        if monitor == "loss_val_total_generator":
+            return val_metrics.loss_G
+        if monitor == "loss_val_total_discriminator":
+            return val_metrics.loss_D
+        prefix_maps = (
+            ("loss_val_raw_", val_metrics.raw),
+            ("loss_val_weighted_", val_metrics.weighted),
+            ("loss_val_current_weight_", val_metrics.current_weight),
+        )
+        for prefix, values in prefix_maps:
+            if monitor.startswith(prefix):
+                return values.get(monitor.removeprefix(prefix))
+        return None
+
+    def _is_early_stopping_improvement(
+        self,
+        value: float,
+        best_value: float | None,
+    ) -> bool:
+        early_config = self.config.early_stopping
+        if early_config is None or best_value is None:
+            return True
+        if early_config.mode == "max":
+            return value > best_value + early_config.min_delta
+        return value < best_value - early_config.min_delta
+
     def _log_learning_rates(self, epoch: int) -> None:
         logger.info(
             "Learning rates | epoch=%s | lr_g=%s | lr_d=%s",
@@ -694,6 +837,7 @@ class Trainer:
         self,
         *,
         start_epoch: int,
+        final_epoch: int,
         final_metrics: EpochMetrics | None,
         progress_tracker: ProgressTracker,
         training_status: _TrainingStatus,
@@ -704,7 +848,6 @@ class Trainer:
         if start_epoch >= self.config.epochs or final_metrics is None:
             return
 
-        final_epoch = self.config.epochs - 1
         if (final_epoch + 1) % self.config.checkpoint_rate == 0:
             return
 

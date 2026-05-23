@@ -134,6 +134,21 @@ training:
 Optimizer LR schedules are separate from `losses.*.schedule`, which changes
 loss-term weights rather than optimizer learning rates.
 
+Early stopping is configured under `training.early_stopping` and is disabled
+when omitted. `patience` counts validation events, not raw epochs, so
+`validate_rate` controls how often the monitored value can become stale. Use
+validation CSV column names such as `val_ssim`, `val_mae`, `val_rmse`,
+`loss_G_val`, `loss_D_val`, or configured `loss_val_*` component columns.
+
+```yaml
+training:
+  early_stopping:
+    monitor: val_ssim
+    mode: max
+    patience: 15
+    min_delta: 0.0
+```
+
 Accepted loss names are:
 
 - `adversarial_bce`: generator or discriminator BCE-with-logits adversarial loss.

@@ -304,6 +304,15 @@ def run_training(
         raise
 
     completed_at = datetime.now(UTC).isoformat()
+    early_stopping_details = {
+        "stopped_early": result.stopped_early,
+        "stop_epoch": result.stop_epoch,
+        "stop_reason": result.stop_reason,
+        "early_stopping_monitor": result.early_stopping_monitor,
+        "early_stopping_mode": result.early_stopping_mode,
+        "early_stopping_best_epoch": result.early_stopping_best_epoch,
+        "early_stopping_best_value": result.early_stopping_best_value,
+    }
     save_stage_metadata(
         "train",
         {
@@ -314,6 +323,7 @@ def run_training(
             "config_hash": config_hash,
             **train_details,
             "final_epoch": result.final_epoch,
+            **early_stopping_details,
             "best_checkpoint_path": (
                 str(result.best_checkpoint_path)
                 if result.best_checkpoint_path is not None
@@ -333,6 +343,7 @@ def run_training(
             "details": {
                 **train_details,
                 "final_epoch": result.final_epoch,
+                **early_stopping_details,
                 "best_checkpoint_path": (
                     str(result.best_checkpoint_path)
                     if result.best_checkpoint_path is not None

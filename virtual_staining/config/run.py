@@ -177,6 +177,8 @@ class RunConfig:
             }
             if self.training.scheduler.name != "none":
                 training_data["scheduler"] = self.training.scheduler.to_yaml_dict()
+            if self.training.early_stopping is not None:
+                training_data["early_stopping"] = self.training.early_stopping.to_yaml_dict()
             data["training"] = training_data
 
         data["augmentation"] = self.augmentation.to_yaml_dict()
@@ -417,6 +419,7 @@ def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
     from virtual_staining.training.config import (
         _TRAINING_KEYS,
         TrainingConfig,
+        parse_early_stopping_config,
         parse_learning_rate_scheduler_config,
     )
 
@@ -430,6 +433,7 @@ def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
         legacy_lr_schedule=data.get("lr_schedule"),
         legacy_decay_start_epoch=data.get("decay_start_epoch"),
     )
+    early_stopping = parse_early_stopping_config(data.get("early_stopping"))
     config = TrainingConfig(
         batch_size=int(data.get("batch_size", 8)),
         epochs=epochs,
@@ -445,6 +449,7 @@ def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
         log_rate=int(data.get("log_rate", 15)),
         resume=data.get("resume"),
         scheduler=scheduler,
+        early_stopping=early_stopping,
     )
     config.validate()
     return config

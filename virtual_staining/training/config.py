@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
@@ -23,6 +24,7 @@ _TRAINING_KEYS: frozenset[str] = frozenset(
         "log_rate",
         "resume",
         "scheduler",
+        "early_stopping",
         "lr_schedule",
         "decay_start_epoch",
     }
@@ -30,6 +32,7 @@ _TRAINING_KEYS: frozenset[str] = frozenset(
 _SCHEDULER_KEYS: frozenset[str] = frozenset(
     {"name", "decay_start_epoch", "monitor", "mode", "factor", "patience", "min_lr"}
 )
+_EARLY_STOPPING_KEYS: frozenset[str] = frozenset({"monitor", "mode", "patience", "min_delta"})
 _AUGMENTATION_KEYS: frozenset[str] = frozenset({"enabled", "expansion_factor", "intensity"})
 
 _LOSS_CONFIG_KEYS: frozenset[str] = frozenset({"generator", "discriminator"})
@@ -70,6 +73,7 @@ CheckpointMetric = Literal[
 ]
 CheckpointMode = Literal["min", "max"]
 LearningRateSchedulerName = Literal["none", "linear_decay", "reduce_on_plateau"]
+EarlyStoppingMonitor = str
 SUPPORTED_CHECKPOINT_METRICS: frozenset[str] = frozenset(
     {
         "loss_G_val",
@@ -81,6 +85,17 @@ SUPPORTED_CHECKPOINT_METRICS: frozenset[str] = frozenset(
         "val_pcc_rgb_mean",
     }
 )
+_VALIDATION_LOSS_MONITOR_PATTERN = re.compile(
+    r"^loss_val_(?:total_(?:generator|discriminator)|"
+    r"(?:raw|weighted|current_weight)_(?:generator|discriminator)_[a-z0-9_]+)$"
+)
+
+
+def is_supported_early_stopping_monitor(monitor: str) -> bool:
+    """Return whether a monitor name can be produced by validation metrics CSVs."""
+    if monitor in SUPPORTED_CHECKPOINT_METRICS or monitor == "loss_D_val":
+        return True
+    return bool(_VALIDATION_LOSS_MONITOR_PATTERN.fullmatch(monitor))
 
 
 @dataclass(frozen=True)
@@ -139,6 +154,36 @@ class LearningRateSchedulerConfig:
                 }
             )
         return data
+
+
+@dataclass(frozen=True)
+class EarlyStoppingConfig:
+    monitor: EarlyStoppingMonitor = "val_ssim"
+    mode: CheckpointMode = "max"
+    patience: int = 15
+    min_delta: float = 0.0
+
+    def validate(self) -> None:
+        if not is_supported_early_stopping_monitor(self.monitor):
+            raise ValueError(
+                "training.early_stopping.monitor must be a validation CSV column "
+                "such as loss_G_val, loss_D_val, val_ssim, val_mae, or a configured "
+                "loss_val_* column"
+            )
+        if self.mode not in {"min", "max"}:
+            raise ValueError("training.early_stopping.mode must be one of ['max', 'min']")
+        if self.patience < 0:
+            raise ValueError("training.early_stopping.patience must be >= 0")
+        if self.min_delta < 0:
+            raise ValueError("training.early_stopping.min_delta must be >= 0")
+
+    def to_yaml_dict(self) -> dict[str, Any]:
+        return {
+            "monitor": self.monitor,
+            "mode": self.mode,
+            "patience": self.patience,
+            "min_delta": self.min_delta,
+        }
 
 
 @dataclass(frozen=True)
@@ -546,6 +591,42 @@ def parse_learning_rate_scheduler_config(
     return config
 
 
+def parse_early_stopping_config(raw: Any) -> EarlyStoppingConfig | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise TypeError("training.early_stopping must be a YAML mapping")
+    reject_unknown_keys(raw, _EARLY_STOPPING_KEYS, "training.early_stopping")
+
+    monitor_raw = raw.get("monitor", "val_ssim")
+    if not isinstance(monitor_raw, str):
+        raise TypeError("training.early_stopping.monitor must be a string")
+    monitor = monitor_raw
+    if not is_supported_early_stopping_monitor(monitor):
+        raise ValueError(
+            "training.early_stopping.monitor must be a validation CSV column "
+            "such as loss_G_val, loss_D_val, val_ssim, val_mae, or a configured "
+            "loss_val_* column"
+        )
+    if monitor in {"loss_G_val", "loss_D_val"} or monitor.startswith("loss_val_"):
+        default_mode = "min"
+    else:
+        default_mode = default_checkpoint_mode(monitor)
+    mode = _parse_choice(
+        raw.get("mode", default_mode),
+        "training.early_stopping.mode",
+        {"min", "max"},
+    )
+    config = EarlyStoppingConfig(
+        monitor=monitor,
+        mode=cast(CheckpointMode, mode),
+        patience=int(raw.get("patience", 15)),
+        min_delta=float(raw.get("min_delta", 0.0)),
+    )
+    config.validate()
+    return config
+
+
 def _parse_choice(raw: Any, field_name: str, choices: set[str]) -> str:
     if not isinstance(raw, str):
         raise TypeError(f"{field_name} must be a string. Supported values: {sorted(choices)}.")
@@ -614,6 +695,7 @@ class TrainingConfig:
     log_rate: int = 15
     resume: str | None = None
     scheduler: LearningRateSchedulerConfig = field(default_factory=LearningRateSchedulerConfig)
+    early_stopping: EarlyStoppingConfig | None = None
 
     def validate(self) -> None:
         for field_name, value in (
@@ -635,6 +717,8 @@ class TrainingConfig:
             if not (0.0 <= value < 1.0):
                 raise ValueError(f"{field_name} must be in [0, 1)")
         self.scheduler.validate(epochs=self.epochs)
+        if self.early_stopping is not None:
+            self.early_stopping.validate()
 
 
 def default_checkpoint_mode(metric: str) -> CheckpointMode:

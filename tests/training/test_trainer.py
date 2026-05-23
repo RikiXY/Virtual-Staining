@@ -21,6 +21,7 @@ from virtual_staining.models.config import ModelConfig
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.config import (
+    EarlyStoppingConfig,
     LearningRateSchedulerConfig,
     LossConfig,
     LossTermConfig,
@@ -573,27 +574,31 @@ def test_training_writes_best_checkpoint_record(
 def _make_policy_selection_trainer(
     tmp_path: Path,
     *,
+    epochs: int = 2,
+    validate_rate: int = 1,
     checkpoint_top_k: int = 3,
     losses: LossConfig | None = None,
     discriminator: nn.Module | None = None,
     scheduler: LearningRateSchedulerConfig | None = None,
+    early_stopping: EarlyStoppingConfig | None = None,
 ) -> tuple[Trainer, RunPaths]:
     dataset_root = tmp_path / "dataset"
     project = _make_project(dataset_root, tmp_path / "results", "policy_run")
     config = TrainingConfig(
         batch_size=1,
-        epochs=2,
+        epochs=epochs,
         lr_g=2e-4,
         lr_d=2e-4,
         beta1=0.5,
         beta2=0.999,
         seed=0,
         num_workers=0,
-        validate_rate=1,
+        validate_rate=validate_rate,
         checkpoint_rate=1,
         checkpoint_top_k=checkpoint_top_k,
         log_rate=1,
         scheduler=scheduler or LearningRateSchedulerConfig(),
+        early_stopping=early_stopping,
     )
     train_loader, val_loader = _make_train_val_loaders(
         dataset_root,
@@ -817,6 +822,143 @@ def test_metric_checkpoint_selection_does_not_require_discriminator_loss(
     assert ssim_selection["best"]["metric_value"] == pytest.approx(0.7)
     assert ssim_selection["records"][0]["epoch"] == 0
     assert ssim_selection["records"][0]["metric_value"] == pytest.approx(0.7)
+
+
+def test_early_stopping_max_mode_stops_after_patience_validation_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trainer, run_paths = _make_policy_selection_trainer(
+        tmp_path,
+        epochs=5,
+        validate_rate=2,
+        early_stopping=EarlyStoppingConfig(
+            monitor="val_ssim",
+            mode="max",
+            patience=1,
+            min_delta=0.0,
+        ),
+    )
+
+    monkeypatch.setattr(trainer, "_train_epoch", lambda *args: _stub_optimizer_epoch(trainer))
+    monkeypatch.setattr(
+        trainer,
+        "_validate",
+        lambda epoch: EpochMetrics(
+            loss_G=1.0,
+            loss_D=1.0,
+            image={"val_ssim": {1: 0.8, 3: 0.7}[epoch]},
+        ),
+    )
+
+    result = trainer.train(seed=0)
+
+    assert result.stopped_early is True
+    assert result.final_epoch == 3
+    assert result.stop_epoch == 3
+    assert result.early_stopping_monitor == "val_ssim"
+    assert result.early_stopping_mode == "max"
+    assert result.early_stopping_best_epoch == 1
+    assert result.early_stopping_best_value == pytest.approx(0.8)
+    with (run_paths.metrics_dir / "validation.csv").open(newline="", encoding="utf-8") as f:
+        validation_rows = list(csv.DictReader(f))
+    with (run_paths.metrics_dir / "all.csv").open(newline="", encoding="utf-8") as f:
+        all_rows = list(csv.DictReader(f))
+    assert [row["epoch"] for row in validation_rows] == ["1", "3"]
+    assert [row["epoch"] for row in all_rows] == ["0", "1", "2", "3"]
+    assert (run_paths.checkpoints_dir / "ep003.pth").exists()
+
+
+def test_early_stopping_min_mode_can_monitor_validation_loss(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trainer, _run_paths = _make_policy_selection_trainer(
+        tmp_path,
+        epochs=4,
+        early_stopping=EarlyStoppingConfig(
+            monitor="loss_val_total_generator",
+            mode="min",
+            patience=1,
+            min_delta=0.0,
+        ),
+    )
+
+    monkeypatch.setattr(trainer, "_train_epoch", lambda *args: _stub_optimizer_epoch(trainer))
+    monkeypatch.setattr(
+        trainer,
+        "_validate",
+        lambda epoch: EpochMetrics(
+            loss_G=[0.5, 0.6, 0.7, 0.8][epoch],
+            loss_D=1.0,
+            raw={"generator_l1": [0.5, 0.6, 0.7, 0.8][epoch]},
+            weighted={"generator_l1": [0.5, 0.6, 0.7, 0.8][epoch]},
+            current_weight={"generator_l1": 1.0},
+            image={"val_mae": [0.3, 0.4, 0.5, 0.6][epoch]},
+        ),
+    )
+
+    result = trainer.train(seed=0)
+
+    assert result.stopped_early is True
+    assert result.final_epoch == 1
+    assert result.stop_epoch == 1
+    assert result.early_stopping_best_epoch == 0
+    assert result.early_stopping_best_value == pytest.approx(0.5)
+
+
+def test_omitted_early_stopping_preserves_full_epoch_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trainer, _run_paths = _make_policy_selection_trainer(tmp_path, epochs=3)
+
+    monkeypatch.setattr(trainer, "_train_epoch", lambda *args: _stub_optimizer_epoch(trainer))
+    monkeypatch.setattr(
+        trainer,
+        "_validate",
+        lambda epoch: EpochMetrics(
+            loss_G=1.0,
+            loss_D=1.0,
+            image={"val_ssim": [0.8, 0.7, 0.6][epoch]},
+        ),
+    )
+
+    result = trainer.train(seed=0)
+
+    assert result.stopped_early is False
+    assert result.final_epoch == 2
+    assert result.stop_epoch is None
+
+
+def test_early_stopping_on_validation_image_metric_without_discriminator_loss(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trainer, _run_paths = _make_policy_selection_trainer(
+        tmp_path,
+        epochs=3,
+        losses=LossConfig(generator=(LossTermConfig(name="l1", weight=1.0),), discriminator=()),
+        discriminator=_FailingDiscriminator(),
+        early_stopping=EarlyStoppingConfig(monitor="val_mae", mode="min", patience=1),
+    )
+
+    monkeypatch.setattr(trainer, "_train_epoch", lambda *args: _stub_epoch_metrics())
+    monkeypatch.setattr(
+        trainer,
+        "_validate",
+        lambda epoch: EpochMetrics(
+            loss_G=1.0,
+            loss_D=0.0,
+            image={"val_mae": [0.1, 0.2, 0.3][epoch]},
+        ),
+    )
+
+    result = trainer.train(seed=0)
+
+    assert result.stopped_early is True
+    assert result.final_epoch == 1
+    assert result.early_stopping_monitor == "val_mae"
 
 
 def test_load_checkpoint_validates_matching_architecture(
