@@ -18,6 +18,39 @@ jobs:
     notes: retry with lower lr
 ```
 
+Controlled ablation queues can add an optional `ablation` block. Queue
+preflight loads each run config, compares the resolved config dictionaries, and
+fails before running any job if a difference is not covered by
+`variable_fields`. Dot paths are compared against resolved config fields, not
+raw YAML text. Use `run_name` as a variable when each ablation arm writes to a
+separate run directory.
+
+```yaml
+name: loss_ablation
+continue_on_failure: false
+ablation:
+  fixed_fields:
+    - model.generator.base_channels
+    - training.epochs
+  variable_fields:
+    - run_name
+    - losses.generator
+    - losses.discriminator
+    - training.scheduler.name
+jobs:
+  - config_path: ../runs/local/ablation/baseline.yaml
+    label: baseline_l1_adv
+  - config_path: ../runs/local/ablation/ssim_only.yaml
+    label: ssim_only
+```
+
+Ablation summaries are written beside queue state as
+`local_workspace/queues/<queue-name>.ablation.summary.json`. The summary lists
+jobs, labels, run names, canonical resolved config hashes, declared fixed
+values, and declared variable values. Loss lists are compared through resolved
+EPIC_11 loss config entries, so omitted default-zero terms are not treated as
+active losses.
+
 Example layout:
 
 ```text
@@ -28,6 +61,7 @@ config/queues/
 
 local_workspace/queues/
 ├── nightly.state.json
+├── loss_ablation.ablation.summary.json
 └── my_queue.state.json
 ```
 

@@ -101,6 +101,11 @@ under `config/queues/local/`. Queue runtime state is written under
 State files are flat in that directory, for example
 `local_workspace/queues/nightly.state.json`.
 
+For controlled ablations, add an optional `ablation` block to the queue. The
+queue preflight compares resolved configs and fails before training if a field
+differs outside the declared `variable_fields`. Summary metadata is written to
+`local_workspace/queues/<queue-name>.ablation.summary.json`.
+
 ## Configuration
 
 All experiment parameters live in a single YAML file. Copy

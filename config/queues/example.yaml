@@ -1,5 +1,16 @@
 name: example
 continue_on_failure: false
+# Optional controlled-ablation guardrails. When present, queue preflight compares
+# resolved run configs and fails if any undeclared field differs.
+# ablation:
+#   fixed_fields:
+#     - model.generator.base_channels
+#     - training.epochs
+#   variable_fields:
+#     - run_name
+#     - losses.generator
+#     - losses.discriminator
+#     - training.scheduler.name
 jobs:
   - config_path: ../runs/local/run_a.yaml
     label: baseline
