@@ -64,30 +64,37 @@ def configured_loss_names(losses: LossConfig | None) -> list[str]:
     return names
 
 
-def metrics_fieldnames(loss_names: list[str]) -> list[str]:
-    fields = [
-        "epoch",
-        "loss_G_train",
-        "loss_D_train",
-        "loss_G_val",
-        "loss_D_val",
-    ]
+def metrics_fieldnames(loss_names: list[str], *, stage: str | None = None) -> list[str]:
+    if stage == "train":
+        fields = ["epoch", "loss_G_train", "loss_D_train"]
+        stages = ("train",)
+    elif stage == "val":
+        fields = ["epoch", "loss_G_val", "loss_D_val"]
+        stages = ("val",)
+    else:
+        fields = [
+            "epoch",
+            "loss_G_train",
+            "loss_D_train",
+            "loss_G_val",
+            "loss_D_val",
+        ]
+        stages = ("train", "val")
     if loss_names:
-        fields.extend(
-            [
-                "loss_train_total_generator",
-                "loss_train_total_discriminator",
-                "loss_val_total_generator",
-                "loss_val_total_discriminator",
-            ]
-        )
-    for stage in ("train", "val"):
+        for selected_stage in stages:
+            fields.extend(
+                [
+                    f"loss_{selected_stage}_total_generator",
+                    f"loss_{selected_stage}_total_discriminator",
+                ]
+            )
+    for selected_stage in stages:
         for term_name in loss_names:
             fields.extend(
                 [
-                    f"loss_{stage}_raw_{term_name}",
-                    f"loss_{stage}_weighted_{term_name}",
-                    f"loss_{stage}_current_weight_{term_name}",
+                    f"loss_{selected_stage}_raw_{term_name}",
+                    f"loss_{selected_stage}_weighted_{term_name}",
+                    f"loss_{selected_stage}_current_weight_{term_name}",
                 ]
             )
     return fields

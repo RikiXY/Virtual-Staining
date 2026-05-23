@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 from pathlib import Path
 
 import pytest
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
@@ -39,6 +41,15 @@ def _pix2pix_losses() -> LossConfig:
         ),
         discriminator=(LossTermConfig(name="adversarial_bce", weight=1.0),),
     )
+
+
+class _FailingDiscriminator(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(1))
+
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        raise AssertionError("validation image metrics must not require discriminator outputs")
 
 
 def _make_manifest_dataset(
@@ -190,7 +201,9 @@ def test_trainer_smoke_run_creates_expected_files(
     trainer.train(seed=42)
 
     run_root = run_paths.root
-    assert (run_paths.metrics_dir / "metrics.csv").exists()
+    assert (run_paths.metrics_dir / "train.csv").exists()
+    assert (run_paths.metrics_dir / "validation.csv").exists()
+    assert (run_paths.metrics_dir / "all.csv").exists()
     assert (run_paths.logs_dir / "training.log").exists()
     assert not (run_root / "run_metadata.json").exists()
 
@@ -202,27 +215,69 @@ def test_trainer_metrics_csv_structure(
 
     trainer.train(seed=42)
 
-    metrics_path = run_paths.metrics_dir / "metrics.csv"
-    with metrics_path.open(newline="", encoding="utf-8") as metrics_file:
-        rows = list(csv.DictReader(metrics_file))
+    train_metrics_path = run_paths.metrics_dir / "train.csv"
+    validation_metrics_path = run_paths.metrics_dir / "validation.csv"
+    all_metrics_path = run_paths.metrics_dir / "all.csv"
+    with train_metrics_path.open(newline="", encoding="utf-8") as metrics_file:
+        train_rows = list(csv.DictReader(metrics_file))
+    with validation_metrics_path.open(newline="", encoding="utf-8") as metrics_file:
+        validation_rows = list(csv.DictReader(metrics_file))
+    with all_metrics_path.open(newline="", encoding="utf-8") as metrics_file:
+        all_rows = list(csv.DictReader(metrics_file))
 
-    assert len(rows) == config.epochs
+    assert len(train_rows) == config.epochs
+    assert len(validation_rows) == config.epochs
+    assert len(all_rows) == config.epochs
+    assert {
+        "epoch",
+        "loss_G_train",
+        "loss_D_train",
+    } <= set(train_rows[0].keys())
+    assert {
+        "epoch",
+        "loss_G_val",
+        "loss_D_val",
+        "val_ssim",
+        "val_mae",
+        "val_rmse",
+        "val_psnr",
+        "val_pcc_gray",
+        "val_pcc_rgb_mean",
+    } <= set(validation_rows[0].keys())
     assert {
         "epoch",
         "loss_G_train",
         "loss_D_train",
         "loss_G_val",
         "loss_D_val",
-    } <= set(rows[0].keys())
-    for row in rows:
+        "val_ssim",
+        "val_mae",
+        "val_rmse",
+        "val_psnr",
+        "val_pcc_gray",
+        "val_pcc_rgb_mean",
+    } <= set(all_rows[0].keys())
+    for row in validation_rows:
         assert row["loss_G_val"] != ""
         assert row["loss_D_val"] != ""
+        assert row["val_ssim"] != ""
+        assert row["val_mae"] != ""
+        assert row["val_rmse"] != ""
+    for row in all_rows:
+        assert row["loss_G_train"] != ""
+        assert row["loss_D_train"] != ""
+        assert row["loss_G_val"] != ""
+        assert row["loss_D_val"] != ""
+        assert row["val_ssim"] != ""
+        assert row["val_mae"] != ""
+        assert row["val_rmse"] != ""
+    for row in train_rows:
         assert float(row["loss_G_train"]) > 0
         assert float(row["loss_D_train"]) > 0
 
 
 def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
-    """Train losses in metrics/metrics.csv must be averages over all batches."""
+    """Train losses in metrics/train.csv must be averages over all batches."""
     dataset_root = tmp_path / "dataset"
     project = _make_project(dataset_root, tmp_path / "results", "avg_run")
     config = TrainingConfig(
@@ -264,7 +319,7 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
     )
     trainer.train(seed=0)
 
-    metrics_path = run_paths.metrics_dir / "metrics.csv"
+    metrics_path = run_paths.metrics_dir / "train.csv"
     with metrics_path.open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
 
@@ -322,24 +377,34 @@ def test_trainer_metrics_csv_includes_configured_loss_components(tmp_path: Path)
     )
     trainer.train(seed=0)
 
-    with (run_paths.metrics_dir / "metrics.csv").open(newline="", encoding="utf-8") as f:
+    with (run_paths.metrics_dir / "train.csv").open(newline="", encoding="utf-8") as f:
+        train_rows = list(csv.DictReader(f))
+    with (run_paths.metrics_dir / "validation.csv").open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
+    with (run_paths.metrics_dir / "all.csv").open(newline="", encoding="utf-8") as f:
+        all_rows = list(csv.DictReader(f))
 
     row = rows[0]
-    assert "loss_train_raw_generator_ssim" in row
-    assert "loss_train_weighted_generator_ssim" in row
-    assert "loss_train_current_weight_generator_ssim" in row
+    train_row = train_rows[0]
+    all_row = all_rows[0]
+    assert "loss_train_raw_generator_ssim" in train_row
+    assert "loss_train_weighted_generator_ssim" in train_row
+    assert "loss_train_current_weight_generator_ssim" in train_row
     assert "loss_val_raw_generator_ssim" in row
     assert "loss_val_weighted_generator_ssim" in row
     assert "loss_val_current_weight_generator_ssim" in row
-    assert "loss_train_raw_discriminator_adversarial_bce" in row
-    assert "loss_train_total_generator" in row
+    assert "loss_train_raw_discriminator_adversarial_bce" in train_row
+    assert "loss_train_total_generator" in train_row
     assert "loss_val_total_generator" in row
-    assert float(row["loss_train_raw_generator_ssim"]) >= 0.0
-    assert float(row["loss_train_weighted_generator_ssim"]) >= 0.0
-    assert float(row["loss_train_current_weight_generator_ssim"]) == pytest.approx(1.0)
-    assert row["loss_G_train"] == row["loss_train_total_generator"]
+    assert float(train_row["loss_train_raw_generator_ssim"]) >= 0.0
+    assert float(train_row["loss_train_weighted_generator_ssim"]) >= 0.0
+    assert float(train_row["loss_train_current_weight_generator_ssim"]) == pytest.approx(1.0)
+    assert train_row["loss_G_train"] == train_row["loss_train_total_generator"]
     assert row["loss_G_val"] == row["loss_val_total_generator"]
+    assert "loss_train_raw_generator_ssim" in all_row
+    assert "loss_val_raw_generator_ssim" in all_row
+    assert all_row["loss_G_train"] == all_row["loss_train_total_generator"]
+    assert all_row["loss_G_val"] == all_row["loss_val_total_generator"]
 
 
 def test_validate_restores_models_that_started_in_train_mode(
@@ -366,6 +431,53 @@ def test_validate_preserves_models_that_started_in_eval_mode(
 
     assert trainer.generator.training is False
     assert trainer.discriminator.training is False
+
+
+def test_validate_image_metrics_do_not_require_discriminator_outputs(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "dataset"
+    project = _make_project(dataset_root, tmp_path / "results", "reconstruction_val_run")
+    config = TrainingConfig(
+        batch_size=1,
+        epochs=1,
+        lr_g=2e-4,
+        lr_d=2e-4,
+        beta1=0.5,
+        beta2=0.999,
+        seed=0,
+        num_workers=0,
+        validate_rate=1,
+        checkpoint_rate=2,
+        log_rate=1,
+    )
+    train_loader, val_loader = _make_train_val_loaders(
+        dataset_root,
+        project,
+        train_prefixes=["00000_00000"],
+        val_prefixes=["00256_00000"],
+    )
+    run_paths = RunPaths(project.run_root)
+    run_paths.create_directories()
+    losses = LossConfig(generator=(LossTermConfig(name="l1", weight=1.0),), discriminator=())
+    trainer = Trainer(
+        config=config,
+        model_config=ModelConfig(),
+        run_paths=run_paths,
+        generator=UNetGenerator().to("cpu"),
+        discriminator=_FailingDiscriminator().to("cpu"),
+        train_loader=train_loader,
+        val_loader=val_loader,
+        device=torch.device("cpu"),
+        image_size=project.image_size,
+        train_dir=dataset_root / "splits" / "train",
+        val_dir=dataset_root / "splits" / "val",
+        losses=losses,
+    )
+
+    metrics = trainer._validate(epoch=0)
+
+    assert metrics.loss_D == pytest.approx(0.0)
+    assert math.isfinite(metrics.image["val_ssim"])
+    assert metrics.image["val_mae"] >= 0.0
 
 
 def test_trainer_checkpoint_round_trip(

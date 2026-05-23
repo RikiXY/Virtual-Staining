@@ -28,6 +28,7 @@ def test_epoch_metrics_component_maps_default_empty() -> None:
     assert metrics.raw == {}
     assert metrics.weighted == {}
     assert metrics.current_weight == {}
+    assert metrics.image == {}
 
 
 def test_epoch_metrics_component_maps_settable() -> None:
@@ -37,10 +38,12 @@ def test_epoch_metrics_component_maps_settable() -> None:
         raw={"ssim": 0.2},
         weighted={"ssim": 0.4},
         current_weight={"ssim": 2.0},
+        image={"val_ssim": 0.9},
     )
     assert metrics.raw["ssim"] == pytest.approx(0.2)
     assert metrics.weighted["ssim"] == pytest.approx(0.4)
     assert metrics.current_weight["ssim"] == pytest.approx(2.0)
+    assert metrics.image["val_ssim"] == pytest.approx(0.9)
 
 
 def test_epoch_metrics_frozen() -> None:

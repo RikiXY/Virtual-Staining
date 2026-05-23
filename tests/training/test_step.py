@@ -20,6 +20,7 @@ from virtual_staining.training.losses import (
     reduce_masked_loss,
 )
 from virtual_staining.training.steps import Pix2PixTrainingStep
+from virtual_staining.training.validation_metrics import ValidationImageMetricAccumulator
 
 
 class _TinyGen(nn.Module):
@@ -38,6 +39,12 @@ class _TinyDisc(nn.Module):
 
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         return torch.zeros(x.shape[0], 1, 1, 1) * self.scale
+
+
+def _validation_image_metrics(generated: torch.Tensor, target: torch.Tensor) -> dict[str, float]:
+    accumulator = ValidationImageMetricAccumulator()
+    accumulator.add_batch(generated, target)
+    return accumulator.mean()
 
 
 def _make_step() -> Pix2PixTrainingStep:
@@ -79,6 +86,32 @@ def _make_configured_step(term: LossTermConfig) -> Pix2PixTrainingStep:
 # ---------------------------------------------------------------------------
 # Registry losses
 # ---------------------------------------------------------------------------
+
+
+def test_validation_image_metrics_identical_tensors_are_perfect_except_nonfinite_psnr() -> None:
+    image = torch.linspace(-1.0, 1.0, 64).view(1, 1, 8, 8).expand(1, 3, 8, 8)
+
+    metrics = _validation_image_metrics(image, image)
+
+    assert metrics["val_mae"] == pytest.approx(0.0)
+    assert metrics["val_rmse"] == pytest.approx(0.0)
+    assert metrics["val_ssim"] == pytest.approx(1.0)
+    assert metrics["val_pcc_gray"] == pytest.approx(1.0)
+    assert metrics["val_pcc_rgb_mean"] == pytest.approx(1.0)
+    assert math.isnan(metrics["val_psnr"])
+
+
+def test_validation_image_metrics_drops_nonfinite_pcc_for_constant_images() -> None:
+    generated = torch.zeros(2, 3, 8, 8)
+    target = torch.zeros(2, 3, 8, 8)
+
+    metrics = _validation_image_metrics(generated, target)
+
+    assert metrics["val_mae"] == pytest.approx(0.0)
+    assert metrics["val_rmse"] == pytest.approx(0.0)
+    assert metrics["val_ssim"] == pytest.approx(1.0)
+    assert math.isnan(metrics["val_pcc_gray"])
+    assert math.isnan(metrics["val_pcc_rgb_mean"])
 
 
 def test_l1_registry_weight_scales_generator_loss() -> None:

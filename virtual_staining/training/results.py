@@ -13,6 +13,7 @@ class EpochMetrics:
     raw: dict[str, float] = field(default_factory=dict)
     weighted: dict[str, float] = field(default_factory=dict)
     current_weight: dict[str, float] = field(default_factory=dict)
+    image: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

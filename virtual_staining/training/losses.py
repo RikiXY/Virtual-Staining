@@ -84,10 +84,10 @@ class ConfiguredLossEvaluator:
         *,
         prediction: torch.Tensor,
         target: torch.Tensor,
-        discriminator_fake: torch.Tensor,
+        discriminator_fake: torch.Tensor | None = None,
         context: LossEvaluationContext,
     ) -> LossAggregate:
-        total = discriminator_fake.sum() * 0.0
+        total = prediction.sum() * 0.0
         results: list[LossTermResult] = []
         for term in self.generator_terms:
             result = evaluate_generator_loss_term(

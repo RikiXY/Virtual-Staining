@@ -60,7 +60,9 @@ local_workspace/results/<run_name>/
 │   ├── ep020.pth
 │   └── ...
 ├── metrics/
-│   └── metrics.csv             # per-epoch training and validation losses
+│   ├── train.csv               # per-epoch training losses
+│   ├── validation.csv          # validation losses and image-quality metrics
+│   └── all.csv                 # combined train and validation epoch metrics
 ├── artifacts/
 │   ├── output_train/           # generated images for train-split samples
 │   ├── output_val/             # generated images for validation-split samples
@@ -174,9 +176,9 @@ split directory. `vs-prepare` writes those sidecar masks for accepted patches
 when `preprocessing.save_masks: true`; the sidecar mask is the aligned target
 foreground mask for that patch.
 
-When configured loss terms are present, `metrics/metrics.csv` keeps the existing
-aggregate columns and adds deterministic component columns using normalized
-names:
+When configured loss terms are present, `metrics/train.csv`,
+`metrics/validation.csv`, and `metrics/all.csv` add deterministic component
+columns using normalized names:
 
 ```text
 loss_train_total_generator
@@ -240,11 +242,26 @@ event such as:
 Events include `timestamp`, `run_name`, `stage`, `status`, `config_hash`, and
 optional `details`.
 
-### `metrics/metrics.csv`
+### `metrics/train.csv`
 
-One row per epoch. Columns include at minimum `epoch`, `loss_G_train`,
-`loss_D_train`, `loss_G_val`, and `loss_D_val`. Written incrementally during
-training so partial results are available if the run is interrupted.
+One row per training epoch. Columns include at minimum `epoch`, `loss_G_train`,
+and `loss_D_train`. Written incrementally during training so partial results are
+available if the run is interrupted.
+
+### `metrics/validation.csv`
+
+One row per validation epoch. Columns include at minimum `epoch`, `loss_G_val`,
+`loss_D_val`, `val_ssim`, `val_mae`, `val_rmse`, `val_psnr`, `val_pcc_gray`,
+and `val_pcc_rgb_mean`. Validation image metrics are computed from generated and
+target tensors converted from `[-1, 1]` to `[0, 1]`, reusing the same metric
+semantics as test-set evaluation. Non-finite aggregates are written as blank
+cells.
+
+### `metrics/all.csv`
+
+One row per training epoch with the union of `metrics/train.csv` and
+`metrics/validation.csv` columns. Validation columns are blank on epochs where
+validation does not run.
 
 ### `checkpoints/ep<NNN>.pth`
 

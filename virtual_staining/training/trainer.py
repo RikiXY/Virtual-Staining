@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import datetime
 import logging
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +46,10 @@ from virtual_staining.training.losses import (
 )
 from virtual_staining.training.results import EpochMetrics, TrainingResult
 from virtual_staining.training.steps import Pix2PixTrainingStep
+from virtual_staining.training.validation_metrics import (
+    VALIDATION_IMAGE_METRIC_NAMES,
+    ValidationImageMetricAccumulator,
+)
 
 if TYPE_CHECKING:
     from virtual_staining.reporting.base import TrainingReporter
@@ -323,21 +328,44 @@ class Trainer:
         reporter: TrainingReporter | None,
     ) -> None:
         loss_names = configured_loss_names(self.losses)
-        metrics_path = self._run_paths.metrics_dir / "metrics.csv"
+        train_metrics_path = self._run_paths.metrics_dir / "train.csv"
+        validation_metrics_path = self._run_paths.metrics_dir / "validation.csv"
+        all_metrics_path = self._run_paths.metrics_dir / "all.csv"
         last_epoch_metrics: EpochMetrics | None = None
 
-        with open(metrics_path, "w", newline="", encoding="utf-8") as metrics_file:
-            metrics_writer = csv.DictWriter(
-                metrics_file,
-                fieldnames=metrics_fieldnames(loss_names),
+        with (
+            open(train_metrics_path, "w", newline="", encoding="utf-8") as train_metrics_file,
+            open(
+                validation_metrics_path, "w", newline="", encoding="utf-8"
+            ) as validation_metrics_file,
+            open(all_metrics_path, "w", newline="", encoding="utf-8") as all_metrics_file,
+        ):
+            train_metrics_writer = csv.DictWriter(
+                train_metrics_file,
+                fieldnames=metrics_fieldnames(loss_names, stage="train"),
             )
-            metrics_writer.writeheader()
+            validation_metrics_writer = csv.DictWriter(
+                validation_metrics_file,
+                fieldnames=metrics_fieldnames(loss_names, stage="val")
+                + VALIDATION_IMAGE_METRIC_NAMES,
+            )
+            all_metrics_writer = csv.DictWriter(
+                all_metrics_file,
+                fieldnames=metrics_fieldnames(loss_names) + VALIDATION_IMAGE_METRIC_NAMES,
+            )
+            train_metrics_writer.writeheader()
+            validation_metrics_writer.writeheader()
+            all_metrics_writer.writeheader()
 
             for epoch in range(start_epoch, self.config.epochs):
                 last_epoch_metrics = self._run_training_epoch(
                     epoch=epoch,
-                    metrics_writer=metrics_writer,
-                    metrics_file=metrics_file,
+                    train_metrics_writer=train_metrics_writer,
+                    validation_metrics_writer=validation_metrics_writer,
+                    all_metrics_writer=all_metrics_writer,
+                    train_metrics_file=train_metrics_file,
+                    validation_metrics_file=validation_metrics_file,
+                    all_metrics_file=all_metrics_file,
                     progress_tracker=progress_tracker,
                     training_status=training_status,
                     best_state=best_state,
@@ -359,8 +387,12 @@ class Trainer:
         self,
         *,
         epoch: int,
-        metrics_writer: csv.DictWriter,
-        metrics_file: TextIO,
+        train_metrics_writer: csv.DictWriter,
+        validation_metrics_writer: csv.DictWriter,
+        all_metrics_writer: csv.DictWriter,
+        train_metrics_file: TextIO,
+        validation_metrics_file: TextIO,
+        all_metrics_file: TextIO,
         progress_tracker: ProgressTracker,
         training_status: _TrainingStatus,
         best_state: _BestCheckpointState,
@@ -391,8 +423,13 @@ class Trainer:
             reporter=reporter,
         )
 
-        self._write_epoch_metrics(metrics_writer, epoch, epoch_metrics, val_metrics)
-        metrics_file.flush()
+        self._write_train_metrics(train_metrics_writer, epoch, epoch_metrics)
+        train_metrics_file.flush()
+        if val_metrics is not None:
+            self._write_validation_metrics(validation_metrics_writer, epoch, val_metrics)
+            validation_metrics_file.flush()
+        self._write_all_metrics(all_metrics_writer, epoch, epoch_metrics, val_metrics)
+        all_metrics_file.flush()
         if reporter is not None:
             reporter.on_epoch_completed(epoch_metrics)
         return epoch_metrics
@@ -497,7 +534,38 @@ class Trainer:
             reporter.on_checkpoint_saved(checkpoint_path, epoch)
         return checkpoint_path
 
-    def _write_epoch_metrics(
+    def _write_train_metrics(
+        self,
+        metrics_writer: csv.DictWriter,
+        epoch: int,
+        epoch_metrics: EpochMetrics,
+    ) -> None:
+        row = {
+            "epoch": epoch,
+            "loss_G_train": f"{epoch_metrics.loss_G:.6f}",
+            "loss_D_train": f"{epoch_metrics.loss_D:.6f}",
+        }
+        row.update(component_metric_row("train", epoch_metrics))
+        metrics_writer.writerow(row)
+
+    def _write_validation_metrics(
+        self,
+        metrics_writer: csv.DictWriter,
+        epoch: int,
+        val_metrics: EpochMetrics,
+    ) -> None:
+        row = {
+            "epoch": epoch,
+            "loss_G_val": f"{val_metrics.loss_G:.6f}",
+            "loss_D_val": f"{val_metrics.loss_D:.6f}",
+        }
+        row.update(component_metric_row("val", val_metrics))
+        for name in VALIDATION_IMAGE_METRIC_NAMES:
+            value = val_metrics.image.get(name, float("nan"))
+            row[name] = f"{value:.6f}" if math.isfinite(value) else ""
+        metrics_writer.writerow(row)
+
+    def _write_all_metrics(
         self,
         metrics_writer: csv.DictWriter,
         epoch: int,
@@ -513,6 +581,10 @@ class Trainer:
         }
         row.update(component_metric_row("train", epoch_metrics))
         row.update(component_metric_row("val", val_metrics))
+        if val_metrics is not None:
+            for name in VALIDATION_IMAGE_METRIC_NAMES:
+                value = val_metrics.image.get(name, float("nan"))
+                row[name] = f"{value:.6f}" if math.isfinite(value) else ""
         metrics_writer.writerow(row)
 
     def _save_final_checkpoint_if_needed(
@@ -670,6 +742,7 @@ class Trainer:
             total_loss_G = 0.0
             total_loss_D = 0.0
             component_totals = LossComponentAccumulator(configured_loss_names(self.losses))
+            image_metric_totals = ValidationImageMetricAccumulator()
             count = 0
 
             with torch.no_grad():
@@ -678,27 +751,37 @@ class Trainer:
 
                     with autocast(device_type=self.device.type, enabled=self._amp_enabled):
                         fake = self.generator(x)
-                        D_real = self.discriminator(x, y)
-                        D_fake = self.discriminator(x, fake)
                         context = LossEvaluationContext(epoch=epoch, masks=masks)
-                        discriminator_loss = self._loss_evaluator.discriminator_total(
-                            discriminator_real=D_real,
-                            discriminator_fake=D_fake,
-                            context=context,
-                        )
+                        D_fake: torch.Tensor | None = None
+                        if self._validation_needs_discriminator_logits():
+                            D_real = self.discriminator(x, y)
+                            D_fake_logits = self.discriminator(x, fake)
+                            D_fake = D_fake_logits
+                            discriminator_loss = self._loss_evaluator.discriminator_total(
+                                discriminator_real=D_real,
+                                discriminator_fake=D_fake_logits,
+                                context=context,
+                            )
+                        else:
+                            discriminator_loss = None
                         generator_loss = self._loss_evaluator.generator_total(
                             prediction=fake,
                             target=y,
                             discriminator_fake=D_fake,
                             context=context,
                         )
-                        loss_D = discriminator_loss.total
-                        loss_G = generator_loss.total
-                        component_totals.add(
-                            raw=discriminator_loss.raw,
-                            weighted=discriminator_loss.weighted,
-                            current_weight=discriminator_loss.current_weight,
+                        loss_D = (
+                            discriminator_loss.total
+                            if discriminator_loss is not None
+                            else fake.sum() * 0.0
                         )
+                        loss_G = generator_loss.total
+                        if discriminator_loss is not None:
+                            component_totals.add(
+                                raw=discriminator_loss.raw,
+                                weighted=discriminator_loss.weighted,
+                                current_weight=discriminator_loss.current_weight,
+                            )
                         component_totals.add(
                             raw=generator_loss.raw,
                             weighted=generator_loss.weighted,
@@ -707,6 +790,7 @@ class Trainer:
 
                     total_loss_D += loss_D.item()
                     total_loss_G += loss_G.item()
+                    image_metric_totals.add_batch(fake, y)
                     count += 1
 
                     if i < 5:
@@ -729,9 +813,16 @@ class Trainer:
                 raw=component_averages.raw,
                 weighted=component_averages.weighted,
                 current_weight=component_averages.current_weight,
+                image=image_metric_totals.mean(),
             )
         finally:
             if generator_was_training:
                 self.generator.train()
             if discriminator_was_training:
                 self.discriminator.train()
+
+    def _validation_needs_discriminator_logits(self) -> bool:
+        if self.losses is None:
+            return False
+        terms = (*self.losses.generator, *self.losses.discriminator)
+        return any(term.name == "adversarial_bce" for term in terms)
