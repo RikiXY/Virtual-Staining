@@ -11,6 +11,7 @@ from virtual_staining.config.project import ProjectConfig
 from virtual_staining.models.config import ModelConfig
 from virtual_staining.training.config import (
     AugmentationConfig,
+    LearningRateSchedulerConfig,
     LossConfig,
     LossScheduleConfig,
     TrainingConfig,
@@ -48,6 +49,7 @@ def _make_training_config(**overrides: object) -> TrainingConfig:
         "checkpoint_top_k": 3,
         "log_rate": 15,
         "resume": None,
+        "scheduler": LearningRateSchedulerConfig(),
     }
     defaults.update(overrides)
     return TrainingConfig(
@@ -64,6 +66,7 @@ def _make_training_config(**overrides: object) -> TrainingConfig:
         checkpoint_top_k=defaults["checkpoint_top_k"],  # type: ignore[arg-type]
         log_rate=defaults["log_rate"],  # type: ignore[arg-type]
         resume=defaults["resume"],  # type: ignore[arg-type]
+        scheduler=defaults["scheduler"],  # type: ignore[arg-type]
     )
 
 
@@ -119,6 +122,136 @@ def test_training_checkpoint_top_k_parse(tmp_path: Path) -> None:
 
     assert run_config.training is not None
     assert run_config.training.checkpoint_top_k == 5
+
+
+def test_training_scheduler_parses_linear_decay(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "train.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: yaml_run
+        training:
+          epochs: 20
+          scheduler:
+            name: linear_decay
+            decay_start_epoch: 10
+    """,
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+
+    assert run_config.training is not None
+    assert run_config.training.scheduler.name == "linear_decay"
+    assert run_config.training.scheduler.decay_start_epoch == 10
+    assert run_config.to_yaml_dict()["training"]["scheduler"] == {
+        "name": "linear_decay",
+        "decay_start_epoch": 10,
+    }
+
+
+def test_training_scheduler_parses_legacy_linear_decay_keys(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "train.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: yaml_run
+        training:
+          epochs: 20
+          lr_schedule: linear_decay
+          decay_start_epoch: 10
+    """,
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+
+    assert run_config.training is not None
+    assert run_config.training.scheduler.name == "linear_decay"
+    assert run_config.training.scheduler.decay_start_epoch == 10
+
+
+def test_training_scheduler_parses_reduce_on_plateau(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "train.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: yaml_run
+        training:
+          epochs: 20
+          scheduler:
+            name: reduce_on_plateau
+            monitor: val_ssim
+            mode: max
+            factor: 0.5
+            patience: 5
+            min_lr: 0.00002
+    """,
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+
+    assert run_config.training is not None
+    scheduler = run_config.training.scheduler
+    assert scheduler.name == "reduce_on_plateau"
+    assert scheduler.monitor == "val_ssim"
+    assert scheduler.mode == "max"
+    assert scheduler.factor == pytest.approx(0.5)
+    assert scheduler.patience == 5
+    assert scheduler.min_lr == pytest.approx(0.00002)
+
+
+def test_training_scheduler_rejects_decay_start_at_or_after_epochs() -> None:
+    config = _make_training_config(
+        epochs=10,
+        scheduler=LearningRateSchedulerConfig(name="linear_decay", decay_start_epoch=10),
+    )
+
+    with pytest.raises(ValueError, match="decay_start_epoch"):
+        config.validate()
+
+
+@pytest.mark.parametrize(
+    ("scheduler_yaml", "match"),
+    [
+        ("name: cosine", "training.scheduler.name"),
+        ("name: reduce_on_plateau\n  monitor: val_loss", "training.scheduler.monitor"),
+        ("name: reduce_on_plateau\n  mode: median", "training.scheduler.mode"),
+        ("name: reduce_on_plateau\n  factor: 1.0", "factor"),
+        ("name: reduce_on_plateau\n  factor: 0.0", "factor"),
+        ("name: reduce_on_plateau\n  patience: -1", "patience"),
+        ("name: reduce_on_plateau\n  min_lr: -0.1", "min_lr"),
+    ],
+)
+def test_training_scheduler_rejects_invalid_values(
+    tmp_path: Path,
+    scheduler_yaml: str,
+    match: str,
+) -> None:
+    yaml_file = tmp_path / "bad_scheduler.yaml"
+    scheduler_body = textwrap.indent(
+        "\n".join(line.strip() for line in scheduler_yaml.splitlines()),
+        "            ",
+    )
+    write_yaml(
+        yaml_file,
+        f"""\
+        dataset_root: /data
+        results_path: /results
+        run_name: yaml_run
+        training:
+          epochs: 20
+          scheduler:
+{scheduler_body}
+    """,
+    )
+
+    with pytest.raises((TypeError, ValueError), match=match):
+        RunConfig.from_yaml(yaml_file)
 
 
 def test_run_config_model_explicit_contract_parses(tmp_path: Path) -> None:
@@ -392,6 +525,39 @@ def test_run_config_from_yaml_parses_scheduled_masked_ssim_loss(tmp_path: Path) 
     assert term.current_weight(epoch=0) == pytest.approx(0.0)
     assert term.current_weight(epoch=2) == pytest.approx(0.5)
     assert term.current_weight(epoch=4) == pytest.approx(1.0)
+
+
+def test_lr_scheduler_config_does_not_consume_loss_term_schedule(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "schedules.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: schedules_run
+        training:
+          epochs: 10
+          scheduler:
+            name: linear_decay
+            decay_start_epoch: 5
+        losses:
+          generator:
+            - name: ssim
+              weight: 1.0
+              schedule:
+                type: linear_warmup
+                start_epoch: 0
+                end_epoch: 4
+          discriminator: []
+    """,
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+
+    assert run_config.training is not None
+    assert run_config.training.scheduler.name == "linear_decay"
+    assert run_config.losses is not None
+    assert run_config.losses.generator[0].schedule.type == "linear_warmup"
 
 
 def test_run_config_from_yaml_requires_explicit_loss_weight(tmp_path: Path) -> None:

@@ -46,19 +46,34 @@ class _TinyDiscriminator(nn.Module):
         return x
 
 
-def _make_manager(tmp_path: Path, image_size: tuple[int, int] = (256, 256)) -> CheckpointManager:
+def _make_manager(
+    tmp_path: Path,
+    image_size: tuple[int, int] = (256, 256),
+    *,
+    with_scheduler: bool = False,
+) -> CheckpointManager:
     gen = _TinyGenerator()
     disc = _TinyDiscriminator()
+    opt_g = optim.Adam(gen.parameters())
+    opt_d = optim.Adam(disc.parameters())
+    scheduler_g = (
+        optim.lr_scheduler.StepLR(opt_g, step_size=1, gamma=0.5) if with_scheduler else None
+    )
+    scheduler_d = (
+        optim.lr_scheduler.StepLR(opt_d, step_size=1, gamma=0.5) if with_scheduler else None
+    )
     return CheckpointManager(
         checkpoints_dir=tmp_path / "checkpoints",
         generator=gen,
         discriminator=disc,
-        opt_G=optim.Adam(gen.parameters()),
-        opt_D=optim.Adam(disc.parameters()),
+        opt_G=opt_g,
+        opt_D=opt_d,
         scaler_G=GradScaler(enabled=False),
         scaler_D=GradScaler(enabled=False),
         image_size=image_size,
         device=torch.device("cpu"),
+        scheduler_G=scheduler_g,
+        scheduler_D=scheduler_d,
     )
 
 
@@ -74,6 +89,25 @@ def test_checkpoint_manager_load_returns_correct_epoch(tmp_path: Path) -> None:
     mgr.save(epoch=5)
     start_epoch = mgr.load(mgr.checkpoints_dir / "ep005.pth")
     assert start_epoch == 6
+
+
+def test_checkpoint_manager_round_trips_scheduler_state(tmp_path: Path) -> None:
+    mgr = _make_manager(tmp_path, with_scheduler=True)
+    assert isinstance(mgr.scheduler_G, optim.lr_scheduler.StepLR)
+    assert isinstance(mgr.scheduler_D, optim.lr_scheduler.StepLR)
+    mgr.opt_G.step()
+    mgr.opt_D.step()
+    mgr.scheduler_G.step()
+    mgr.scheduler_D.step()
+    path = mgr.save(epoch=0)
+
+    mgr_2 = _make_manager(tmp_path, with_scheduler=True)
+    assert isinstance(mgr_2.scheduler_G, optim.lr_scheduler.StepLR)
+    assert isinstance(mgr_2.scheduler_D, optim.lr_scheduler.StepLR)
+    mgr_2.load(path)
+
+    assert mgr_2.scheduler_G.state_dict()["last_epoch"] == 1
+    assert mgr_2.scheduler_D.state_dict()["last_epoch"] == 1
 
 
 def test_checkpoint_stores_format_version(tmp_path: Path) -> None:

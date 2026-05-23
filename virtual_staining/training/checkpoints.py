@@ -174,6 +174,12 @@ class CheckpointManager:
         image_size: tuple[int, int],
         device: torch.device,
         *,
+        scheduler_G: (
+            optim.lr_scheduler.LRScheduler | optim.lr_scheduler.ReduceLROnPlateau | None
+        ) = None,
+        scheduler_D: (
+            optim.lr_scheduler.LRScheduler | optim.lr_scheduler.ReduceLROnPlateau | None
+        ) = None,
         model_name: str | None = None,
         lr_g: float | None = None,
         lr_d: float | None = None,
@@ -190,6 +196,8 @@ class CheckpointManager:
         self.opt_D = opt_D
         self.scaler_G = scaler_G
         self.scaler_D = scaler_D
+        self.scheduler_G = scheduler_G
+        self.scheduler_D = scheduler_D
         self.image_size = image_size
         self.device = device
         self.model_name = model_name
@@ -224,6 +232,12 @@ class CheckpointManager:
             "optimizerD_state_dict": self.opt_D.state_dict(),
             "scalerG_state_dict": self.scaler_G.state_dict(),
             "scalerD_state_dict": self.scaler_D.state_dict(),
+            "schedulerG_state_dict": (
+                self.scheduler_G.state_dict() if self.scheduler_G is not None else None
+            ),
+            "schedulerD_state_dict": (
+                self.scheduler_D.state_dict() if self.scheduler_D is not None else None
+            ),
             "lr_g": self.lr_g,
             "lr_d": self.lr_d,
             "beta1": self.beta1,
@@ -345,6 +359,10 @@ class CheckpointManager:
         self.opt_D.load_state_dict(checkpoint["optimizerD_state_dict"])
         self.scaler_G.load_state_dict(checkpoint["scalerG_state_dict"])
         self.scaler_D.load_state_dict(checkpoint["scalerD_state_dict"])
+        if self.scheduler_G is not None and checkpoint.get("schedulerG_state_dict") is not None:
+            self.scheduler_G.load_state_dict(checkpoint["schedulerG_state_dict"])
+        if self.scheduler_D is not None and checkpoint.get("schedulerD_state_dict") is not None:
+            self.scheduler_D.load_state_dict(checkpoint["schedulerD_state_dict"])
 
         start_epoch: int = checkpoint["epoch"] + 1
         logger.info("Checkpoint loaded from %s, resuming at epoch %s", path, start_epoch)

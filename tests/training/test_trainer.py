@@ -20,7 +20,12 @@ from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.models.config import ModelConfig
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
-from virtual_staining.training.config import LossConfig, LossTermConfig, TrainingConfig
+from virtual_staining.training.config import (
+    LearningRateSchedulerConfig,
+    LossConfig,
+    LossTermConfig,
+    TrainingConfig,
+)
 from virtual_staining.training.results import EpochMetrics
 from virtual_staining.training.trainer import Trainer
 
@@ -571,6 +576,7 @@ def _make_policy_selection_trainer(
     checkpoint_top_k: int = 3,
     losses: LossConfig | None = None,
     discriminator: nn.Module | None = None,
+    scheduler: LearningRateSchedulerConfig | None = None,
 ) -> tuple[Trainer, RunPaths]:
     dataset_root = tmp_path / "dataset"
     project = _make_project(dataset_root, tmp_path / "results", "policy_run")
@@ -587,6 +593,7 @@ def _make_policy_selection_trainer(
         checkpoint_rate=1,
         checkpoint_top_k=checkpoint_top_k,
         log_rate=1,
+        scheduler=scheduler or LearningRateSchedulerConfig(),
     )
     train_loader, val_loader = _make_train_val_loaders(
         dataset_root,
@@ -617,6 +624,12 @@ def _stub_epoch_metrics() -> EpochMetrics:
     return EpochMetrics(loss_G=1.0, loss_D=1.0)
 
 
+def _stub_optimizer_epoch(trainer: Trainer) -> EpochMetrics:
+    trainer._opt_D.step()
+    trainer._opt_G.step()
+    return _stub_epoch_metrics()
+
+
 def test_training_best_checkpoint_policy_uses_higher_is_better_metric(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -625,7 +638,7 @@ def test_training_best_checkpoint_policy_uses_higher_is_better_metric(
         tmp_path,
     )
 
-    monkeypatch.setattr(trainer, "_train_epoch", lambda *args: _stub_epoch_metrics())
+    monkeypatch.setattr(trainer, "_train_epoch", lambda *args: _stub_optimizer_epoch(trainer))
     monkeypatch.setattr(
         trainer,
         "_validate",
@@ -667,7 +680,7 @@ def test_training_best_checkpoint_policy_uses_lower_is_better_metric(
         tmp_path,
     )
 
-    monkeypatch.setattr(trainer, "_train_epoch", lambda *args: _stub_epoch_metrics())
+    monkeypatch.setattr(trainer, "_train_epoch", lambda *args: _stub_optimizer_epoch(trainer))
     monkeypatch.setattr(
         trainer,
         "_validate",
@@ -691,6 +704,88 @@ def test_training_best_checkpoint_policy_uses_lower_is_better_metric(
         for record in mae_selection["records"]
     ]
     assert ranked_values == [(1, 1, 0.1), (2, 0, 0.4)]
+
+
+def test_linear_decay_scheduler_steps_active_optimizers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trainer, _run_paths = _make_policy_selection_trainer(
+        tmp_path,
+        scheduler=LearningRateSchedulerConfig(name="linear_decay", decay_start_epoch=1),
+    )
+    initial_lr_g = trainer._opt_G.param_groups[0]["lr"]
+    initial_lr_d = trainer._opt_D.param_groups[0]["lr"]
+
+    monkeypatch.setattr(trainer, "_train_epoch", lambda *args: _stub_optimizer_epoch(trainer))
+    monkeypatch.setattr(
+        trainer,
+        "_validate",
+        lambda epoch: EpochMetrics(loss_G=1.0, loss_D=1.0, image={"val_ssim": 0.5}),
+    )
+
+    trainer.train(seed=0)
+
+    assert trainer._opt_G.param_groups[0]["lr"] < initial_lr_g
+    assert trainer._opt_D.param_groups[0]["lr"] < initial_lr_d
+
+
+def test_reduce_on_plateau_scheduler_steps_from_validation_metric(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trainer, _run_paths = _make_policy_selection_trainer(
+        tmp_path,
+        scheduler=LearningRateSchedulerConfig(
+            name="reduce_on_plateau",
+            monitor="val_ssim",
+            mode="max",
+            factor=0.5,
+            patience=0,
+        ),
+    )
+    initial_lr_g = trainer._opt_G.param_groups[0]["lr"]
+    initial_lr_d = trainer._opt_D.param_groups[0]["lr"]
+
+    monkeypatch.setattr(trainer, "_train_epoch", lambda *args: _stub_optimizer_epoch(trainer))
+    monkeypatch.setattr(
+        trainer,
+        "_validate",
+        lambda epoch: EpochMetrics(
+            loss_G=1.0,
+            loss_D=1.0,
+            image={"val_ssim": [0.8, 0.7][epoch]},
+        ),
+    )
+
+    trainer.train(seed=0)
+
+    assert trainer._opt_G.param_groups[0]["lr"] == pytest.approx(initial_lr_g * 0.5)
+    assert trainer._opt_D.param_groups[0]["lr"] == pytest.approx(initial_lr_d * 0.5)
+
+
+def test_scheduler_skips_discriminator_when_discriminator_loss_inactive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trainer, _run_paths = _make_policy_selection_trainer(
+        tmp_path,
+        losses=LossConfig(generator=(LossTermConfig(name="l1", weight=1.0),), discriminator=()),
+        scheduler=LearningRateSchedulerConfig(name="linear_decay", decay_start_epoch=1),
+    )
+    initial_lr_d = trainer._opt_D.param_groups[0]["lr"]
+
+    monkeypatch.setattr(trainer, "_train_epoch", lambda *args: _stub_optimizer_epoch(trainer))
+    monkeypatch.setattr(
+        trainer,
+        "_validate",
+        lambda epoch: EpochMetrics(loss_G=1.0, loss_D=0.0, image={"val_ssim": 0.5}),
+    )
+
+    trainer.train(seed=0)
+
+    assert trainer._opt_G.param_groups[0]["lr"] < 2e-4
+    assert trainer._opt_D.param_groups[0]["lr"] == pytest.approx(initial_lr_d)
 
 
 def test_metric_checkpoint_selection_does_not_require_discriminator_loss(

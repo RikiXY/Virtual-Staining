@@ -132,6 +132,10 @@ class Trainer:
         self._scaler_D = GradScaler(enabled=self._amp_enabled)
         generator_loss_terms = losses.generator if losses is not None else ()
         discriminator_loss_terms = losses.discriminator if losses is not None else ()
+        self._scheduler_G = self._build_scheduler(self._opt_G)
+        self._scheduler_D = (
+            self._build_scheduler(self._opt_D) if self._has_active_discriminator() else None
+        )
         self._loss_evaluator = ConfiguredLossEvaluator(
             generator_terms=generator_loss_terms,
             discriminator_terms=discriminator_loss_terms,
@@ -161,6 +165,8 @@ class Trainer:
             opt_D=self._opt_D,
             scaler_G=self._scaler_G,
             scaler_D=self._scaler_D,
+            scheduler_G=self._scheduler_G,
+            scheduler_D=self._scheduler_D,
             image_size=image_size,
             device=device,
             model_name=model_config.name,
@@ -264,13 +270,47 @@ class Trainer:
         logger.info("Validation batches: %s", len(self.val_loader))
         logger.info("Detailed log: %s", log_file)
         logger.info(
-            "Hyperparameters | lr_g=%s | lr_d=%s | beta1=%s | beta2=%s",
+            "Hyperparameters | lr_g=%s | lr_d=%s | beta1=%s | beta2=%s | scheduler=%s",
             self.config.lr_g,
             self.config.lr_d,
             self.config.beta1,
             self.config.beta2,
+            self.config.scheduler.to_yaml_dict(),
         )
         logger.info("Training started")
+
+    def _build_scheduler(
+        self,
+        optimizer: optim.Optimizer,
+    ) -> optim.lr_scheduler.LRScheduler | optim.lr_scheduler.ReduceLROnPlateau | None:
+        scheduler_config = self.config.scheduler
+        if scheduler_config.name == "none":
+            return None
+        if scheduler_config.name == "linear_decay":
+            assert scheduler_config.decay_start_epoch is not None
+            decay_start_epoch = scheduler_config.decay_start_epoch
+            decay_span = max(1, self.config.epochs - decay_start_epoch)
+
+            def lr_lambda(epoch: int) -> float:
+                if epoch <= decay_start_epoch:
+                    return 1.0
+                return max(0.0, 1.0 - (epoch - decay_start_epoch) / decay_span)
+
+            return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+        if scheduler_config.name == "reduce_on_plateau":
+            return optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode=scheduler_config.mode,
+                factor=scheduler_config.factor,
+                patience=scheduler_config.patience,
+                min_lr=scheduler_config.min_lr,
+            )
+        raise AssertionError(f"Unsupported scheduler {scheduler_config.name!r}")
+
+    def _has_active_discriminator(self) -> bool:
+        if self.losses is None:
+            return True
+        return bool(self.losses.active_discriminator)
 
     def _start_progress_tracker(self, start_epoch: int) -> ProgressTracker:
         progress_tracker = ProgressTracker(
@@ -380,24 +420,26 @@ class Trainer:
         epoch_metrics = self._train_epoch(epoch, progress_tracker, training_status)
         logger.debug("Finished epoch %s", epoch)
 
-        checkpoint_path = self._save_scheduled_checkpoint(
+        val_metrics, validation_checkpoint_path = self._validate_and_update_best(
             epoch=epoch,
             epoch_metrics=epoch_metrics,
-            progress_tracker=progress_tracker,
-            training_status=training_status,
-            start_time=start_time,
-            reporter=reporter,
-        )
-
-        val_metrics = self._validate_and_update_best(
-            epoch=epoch,
-            epoch_metrics=epoch_metrics,
-            checkpoint_path=checkpoint_path,
             progress_tracker=progress_tracker,
             training_status=training_status,
             best_state=best_state,
             start_time=start_time,
             reporter=reporter,
+        )
+        if val_metrics is None:
+            self._step_lr_schedulers(epoch=epoch, val_metrics=None)
+
+        self._save_scheduled_checkpoint(
+            epoch=epoch,
+            epoch_metrics=epoch_metrics,
+            progress_tracker=progress_tracker,
+            training_status=training_status,
+            start_time=start_time,
+            reporter=reporter,
+            existing_checkpoint_path=validation_checkpoint_path,
         )
 
         self._write_train_metrics(train_metrics_writer, epoch, epoch_metrics)
@@ -420,15 +462,18 @@ class Trainer:
         training_status: _TrainingStatus,
         start_time: float,
         reporter: TrainingReporter | None,
+        existing_checkpoint_path: Path | None = None,
     ) -> Path | None:
         if (epoch + 1) % self.config.checkpoint_rate != 0:
             return None
 
-        checkpoint_path = self._checkpoint_manager.save(epoch)
-        training_status.last_checkpoint = checkpoint_path.name
-        logger.info("Checkpoint saved to %s at epoch %s", checkpoint_path, epoch)
-        if reporter is not None:
-            reporter.on_checkpoint_saved(checkpoint_path, epoch)
+        checkpoint_path = existing_checkpoint_path
+        if checkpoint_path is None:
+            checkpoint_path = self._checkpoint_manager.save(epoch)
+            training_status.last_checkpoint = checkpoint_path.name
+            logger.info("Checkpoint saved to %s at epoch %s", checkpoint_path, epoch)
+            if reporter is not None:
+                reporter.on_checkpoint_saved(checkpoint_path, epoch)
         self._emit_epoch_progress(
             epoch=epoch,
             epoch_metrics=epoch_metrics,
@@ -444,15 +489,14 @@ class Trainer:
         *,
         epoch: int,
         epoch_metrics: EpochMetrics,
-        checkpoint_path: Path | None,
         progress_tracker: ProgressTracker,
         training_status: _TrainingStatus,
         best_state: _BestCheckpointState,
         start_time: float,
         reporter: TrainingReporter | None,
-    ) -> EpochMetrics | None:
+    ) -> tuple[EpochMetrics | None, Path | None]:
         if (epoch + 1) % self.config.validate_rate != 0:
-            return None
+            return None, None
 
         val_metrics = self._validate(epoch)
         training_status.latest_eval_losses = StepLosses(
@@ -460,13 +504,15 @@ class Trainer:
             loss_D=val_metrics.loss_D,
         )
         training_status.latest_eval_epoch = epoch
+        self._step_lr_schedulers(epoch=epoch, val_metrics=val_metrics)
         checkpoint_metrics = self._checkpoint_selection_metrics(val_metrics)
+        ranked_checkpoint_path: Path | None = None
         if not checkpoint_metrics:
             logger.warning("Skipping checkpoint ranking update because all metrics are non-finite")
         else:
             ranked_checkpoint_path = self._ensure_best_checkpoint_path(
                 epoch=epoch,
-                checkpoint_path=checkpoint_path,
+                checkpoint_path=None,
                 training_status=training_status,
                 reporter=reporter,
             )
@@ -490,7 +536,64 @@ class Trainer:
             start_time=start_time,
             eta_str="0s" if epoch == self.config.epochs - 1 else "--",
         )
-        return val_metrics
+        return val_metrics, ranked_checkpoint_path
+
+    def _step_lr_schedulers(
+        self,
+        *,
+        epoch: int,
+        val_metrics: EpochMetrics | None,
+    ) -> None:
+        scheduler_config = self.config.scheduler
+        if scheduler_config.name == "none":
+            return
+
+        if scheduler_config.name == "linear_decay":
+            for scheduler in (self._scheduler_G, self._scheduler_D):
+                if scheduler is not None and not isinstance(
+                    scheduler,
+                    optim.lr_scheduler.ReduceLROnPlateau,
+                ):
+                    scheduler.step()
+            self._log_learning_rates(epoch)
+            return
+
+        if scheduler_config.name == "reduce_on_plateau":
+            if val_metrics is None:
+                return
+            metric_value = self._scheduler_monitor_value(val_metrics)
+            if metric_value is None or not math.isfinite(metric_value):
+                logger.warning(
+                    "Skipping learning-rate scheduler step at epoch %s because %s is unavailable",
+                    epoch,
+                    scheduler_config.monitor,
+                )
+                return
+            for scheduler in (self._scheduler_G, self._scheduler_D):
+                if isinstance(scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                    scheduler.step(metric_value)
+            self._log_learning_rates(epoch)
+            return
+
+        raise AssertionError(f"Unsupported scheduler {scheduler_config.name!r}")
+
+    def _scheduler_monitor_value(self, val_metrics: EpochMetrics) -> float | None:
+        monitor = self.config.scheduler.monitor
+        if monitor == "loss_G_val":
+            return val_metrics.loss_G
+        return val_metrics.image.get(monitor)
+
+    def _log_learning_rates(self, epoch: int) -> None:
+        logger.info(
+            "Learning rates | epoch=%s | lr_g=%s | lr_d=%s",
+            epoch,
+            self._optimizer_lr(self._opt_G),
+            self._optimizer_lr(self._opt_D),
+        )
+
+    @staticmethod
+    def _optimizer_lr(optimizer: optim.Optimizer) -> float:
+        return float(optimizer.param_groups[0]["lr"])
 
     def _checkpoint_selection_metrics(self, val_metrics: EpochMetrics) -> dict[str, float]:
         metrics = {"loss_G_val": val_metrics.loss_G}

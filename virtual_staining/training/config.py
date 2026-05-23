@@ -22,7 +22,13 @@ _TRAINING_KEYS: frozenset[str] = frozenset(
         "checkpoint_top_k",
         "log_rate",
         "resume",
+        "scheduler",
+        "lr_schedule",
+        "decay_start_epoch",
     }
+)
+_SCHEDULER_KEYS: frozenset[str] = frozenset(
+    {"name", "decay_start_epoch", "monitor", "mode", "factor", "patience", "min_lr"}
 )
 _AUGMENTATION_KEYS: frozenset[str] = frozenset({"enabled", "expansion_factor", "intensity"})
 
@@ -63,6 +69,7 @@ CheckpointMetric = Literal[
     "val_pcc_rgb_mean",
 ]
 CheckpointMode = Literal["min", "max"]
+LearningRateSchedulerName = Literal["none", "linear_decay", "reduce_on_plateau"]
 SUPPORTED_CHECKPOINT_METRICS: frozenset[str] = frozenset(
     {
         "loss_G_val",
@@ -74,6 +81,64 @@ SUPPORTED_CHECKPOINT_METRICS: frozenset[str] = frozenset(
         "val_pcc_rgb_mean",
     }
 )
+
+
+@dataclass(frozen=True)
+class LearningRateSchedulerConfig:
+    name: LearningRateSchedulerName = "none"
+    decay_start_epoch: int | None = None
+    monitor: CheckpointMetric = "loss_G_val"
+    mode: CheckpointMode = "min"
+    factor: float = 0.1
+    patience: int = 10
+    min_lr: float = 0.0
+
+    def validate(self, *, epochs: int) -> None:
+        if self.name not in {"none", "linear_decay", "reduce_on_plateau"}:
+            raise ValueError(
+                "training.scheduler.name must be one of "
+                "['linear_decay', 'none', 'reduce_on_plateau']"
+            )
+        if self.name == "linear_decay":
+            if self.decay_start_epoch is None:
+                raise ValueError("training.scheduler.decay_start_epoch is required")
+            if self.decay_start_epoch < 0:
+                raise ValueError("training.scheduler.decay_start_epoch must be >= 0")
+            if self.decay_start_epoch >= epochs:
+                raise ValueError("training.scheduler.decay_start_epoch must be less than epochs")
+        elif self.decay_start_epoch is not None and self.decay_start_epoch < 0:
+            raise ValueError("training.scheduler.decay_start_epoch must be >= 0")
+
+        if self.name == "reduce_on_plateau":
+            if self.monitor not in SUPPORTED_CHECKPOINT_METRICS:
+                raise ValueError(
+                    f"training.scheduler.monitor must be one of "
+                    f"{sorted(SUPPORTED_CHECKPOINT_METRICS)}"
+                )
+            if self.mode not in {"min", "max"}:
+                raise ValueError("training.scheduler.mode must be one of ['max', 'min']")
+            if not (0.0 < self.factor < 1.0):
+                raise ValueError("training.scheduler.factor must be in (0, 1)")
+            if self.patience < 0:
+                raise ValueError("training.scheduler.patience must be >= 0")
+            if self.min_lr < 0:
+                raise ValueError("training.scheduler.min_lr must be >= 0")
+
+    def to_yaml_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {"name": self.name}
+        if self.name == "linear_decay":
+            data["decay_start_epoch"] = self.decay_start_epoch
+        elif self.name == "reduce_on_plateau":
+            data.update(
+                {
+                    "monitor": self.monitor,
+                    "mode": self.mode,
+                    "factor": self.factor,
+                    "patience": self.patience,
+                    "min_lr": self.min_lr,
+                }
+            )
+        return data
 
 
 @dataclass(frozen=True)
@@ -423,6 +488,64 @@ def parse_loss_mask_config(raw: Any, context: str = "loss mask") -> LossMaskConf
     return config
 
 
+def parse_learning_rate_scheduler_config(
+    raw: Any,
+    *,
+    epochs: int,
+    legacy_lr_schedule: Any = None,
+    legacy_decay_start_epoch: Any = None,
+) -> LearningRateSchedulerConfig:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise TypeError("training.scheduler must be a YAML mapping")
+    reject_unknown_keys(raw, _SCHEDULER_KEYS, "training.scheduler")
+
+    if legacy_lr_schedule is not None:
+        if "name" in raw:
+            raise ValueError("Use either training.scheduler.name or training.lr_schedule, not both")
+        raw = dict(raw)
+        raw["name"] = legacy_lr_schedule
+    if legacy_decay_start_epoch is not None:
+        if "decay_start_epoch" in raw:
+            raise ValueError(
+                "Use either training.scheduler.decay_start_epoch or "
+                "training.decay_start_epoch, not both"
+            )
+        raw = dict(raw)
+        raw["decay_start_epoch"] = legacy_decay_start_epoch
+
+    name = _parse_choice(
+        raw.get("name", "none"),
+        "training.scheduler.name",
+        {"none", "linear_decay", "reduce_on_plateau"},
+    )
+    monitor = _parse_choice(
+        raw.get("monitor", "loss_G_val"),
+        "training.scheduler.monitor",
+        set(SUPPORTED_CHECKPOINT_METRICS),
+    )
+    default_mode = default_checkpoint_mode(monitor)
+    mode = _parse_choice(
+        raw.get("mode", default_mode),
+        "training.scheduler.mode",
+        {"min", "max"},
+    )
+    config = LearningRateSchedulerConfig(
+        name=cast(LearningRateSchedulerName, name),
+        decay_start_epoch=(
+            int(raw["decay_start_epoch"]) if raw.get("decay_start_epoch") is not None else None
+        ),
+        monitor=cast(CheckpointMetric, monitor),
+        mode=cast(CheckpointMode, mode),
+        factor=float(raw.get("factor", 0.1)),
+        patience=int(raw.get("patience", 10)),
+        min_lr=float(raw.get("min_lr", 0.0)),
+    )
+    config.validate(epochs=epochs)
+    return config
+
+
 def _parse_choice(raw: Any, field_name: str, choices: set[str]) -> str:
     if not isinstance(raw, str):
         raise TypeError(f"{field_name} must be a string. Supported values: {sorted(choices)}.")
@@ -490,6 +613,7 @@ class TrainingConfig:
     checkpoint_top_k: int = 3
     log_rate: int = 15
     resume: str | None = None
+    scheduler: LearningRateSchedulerConfig = field(default_factory=LearningRateSchedulerConfig)
 
     def validate(self) -> None:
         for field_name, value in (
@@ -510,6 +634,7 @@ class TrainingConfig:
         for field_name, value in (("beta1", self.beta1), ("beta2", self.beta2)):
             if not (0.0 <= value < 1.0):
                 raise ValueError(f"{field_name} must be in [0, 1)")
+        self.scheduler.validate(epochs=self.epochs)
 
 
 def default_checkpoint_mode(metric: str) -> CheckpointMode:

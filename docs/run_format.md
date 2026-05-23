@@ -105,6 +105,35 @@ augmentation:
   intensity: light  # light, medium, or strong
 ```
 
+Optimizer learning-rate schedules are configured under `training.scheduler`.
+Omitting the section preserves a flat learning rate. Epoch numbers are
+zero-based. `linear_decay` keeps the initial optimizer LR through
+`decay_start_epoch`, then decays linearly through the final epoch. Plateau
+scheduling steps only after validation, using validation metric columns such as
+`loss_G_val`, `val_ssim`, `val_mae`, `val_rmse`, `val_psnr`, `val_pcc_gray`, or
+`val_pcc_rgb_mean`. `loss_G_val` depends on the configured training loss terms.
+
+```yaml
+training:
+  scheduler:
+    name: linear_decay
+    decay_start_epoch: 50
+```
+
+```yaml
+training:
+  scheduler:
+    name: reduce_on_plateau
+    monitor: val_ssim
+    mode: max
+    factor: 0.5
+    patience: 5
+    min_lr: 0.00002
+```
+
+Optimizer LR schedules are separate from `losses.*.schedule`, which changes
+loss-term weights rather than optimizer learning rates.
+
 Accepted loss names are:
 
 - `adversarial_bce`: generator or discriminator BCE-with-logits adversarial loss.

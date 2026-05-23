@@ -160,7 +160,7 @@ class RunConfig:
             data["manifest_path"] = str(self.project.manifest_path_override)
 
         if self.training is not None:
-            data["training"] = {
+            training_data: dict[str, Any] = {
                 "batch_size": self.training.batch_size,
                 "epochs": self.training.epochs,
                 "lr_g": self.training.lr_g,
@@ -175,6 +175,9 @@ class RunConfig:
                 "log_rate": self.training.log_rate,
                 "resume": self.training.resume,
             }
+            if self.training.scheduler.name != "none":
+                training_data["scheduler"] = self.training.scheduler.to_yaml_dict()
+            data["training"] = training_data
 
         data["augmentation"] = self.augmentation.to_yaml_dict()
 
@@ -411,14 +414,25 @@ def _parse_supported_choice(raw: Any, field: str, choices: set[str]) -> str:
 
 
 def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
-    from virtual_staining.training.config import _TRAINING_KEYS, TrainingConfig
+    from virtual_staining.training.config import (
+        _TRAINING_KEYS,
+        TrainingConfig,
+        parse_learning_rate_scheduler_config,
+    )
 
     data = section_with_shared_fields(raw, "training", set())
     reject_unknown_keys(data, _TRAINING_KEYS, "training")
 
+    epochs = int(data["epochs"])
+    scheduler = parse_learning_rate_scheduler_config(
+        data.get("scheduler", {}),
+        epochs=epochs,
+        legacy_lr_schedule=data.get("lr_schedule"),
+        legacy_decay_start_epoch=data.get("decay_start_epoch"),
+    )
     config = TrainingConfig(
         batch_size=int(data.get("batch_size", 8)),
-        epochs=int(data["epochs"]),
+        epochs=epochs,
         lr_g=float(data.get("lr_g", 2e-4)),
         lr_d=float(data.get("lr_d", 2e-4)),
         beta1=float(data.get("beta1", 0.5)),
@@ -430,6 +444,7 @@ def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
         checkpoint_top_k=int(data.get("checkpoint_top_k", 3)),
         log_rate=int(data.get("log_rate", 15)),
         resume=data.get("resume"),
+        scheduler=scheduler,
     )
     config.validate()
     return config
