@@ -171,8 +171,6 @@ class RunConfig:
                 "num_workers": self.training.num_workers,
                 "validate_rate": self.training.validate_rate,
                 "checkpoint_rate": self.training.checkpoint_rate,
-                "checkpoint_metric": self.training.checkpoint_metric,
-                "checkpoint_mode": self.training.checkpoint_mode,
                 "checkpoint_top_k": self.training.checkpoint_top_k,
                 "log_rate": self.training.log_rate,
                 "resume": self.training.resume,
@@ -189,6 +187,8 @@ class RunConfig:
                 "checkpoint_path": (
                     str(self.inference.checkpoint_path) if self.inference.checkpoint_path else None
                 ),
+                "checkpoint_metric": self.inference.checkpoint_metric,
+                "checkpoint_rank": self.inference.checkpoint_rank,
                 "output_dir": (
                     str(self.inference.output_dir) if self.inference.output_dir else None
                 ),
@@ -411,19 +411,11 @@ def _parse_supported_choice(raw: Any, field: str, choices: set[str]) -> str:
 
 
 def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
-    from virtual_staining.training.config import (
-        _TRAINING_KEYS,
-        CheckpointMetric,
-        CheckpointMode,
-        TrainingConfig,
-        default_checkpoint_mode,
-    )
+    from virtual_staining.training.config import _TRAINING_KEYS, TrainingConfig
 
     data = section_with_shared_fields(raw, "training", set())
     reject_unknown_keys(data, _TRAINING_KEYS, "training")
 
-    checkpoint_metric = str(data.get("checkpoint_metric", "loss_G_val"))
-    checkpoint_mode = str(data.get("checkpoint_mode", default_checkpoint_mode(checkpoint_metric)))
     config = TrainingConfig(
         batch_size=int(data.get("batch_size", 8)),
         epochs=int(data["epochs"]),
@@ -435,8 +427,6 @@ def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
         num_workers=int(data.get("num_workers", min(4, os.cpu_count() or 1))),
         validate_rate=int(data.get("validate_rate", 10)),
         checkpoint_rate=int(data.get("checkpoint_rate", 10)),
-        checkpoint_metric=cast(CheckpointMetric, checkpoint_metric),
-        checkpoint_mode=cast(CheckpointMode, checkpoint_mode),
         checkpoint_top_k=int(data.get("checkpoint_top_k", 3)),
         log_rate=int(data.get("log_rate", 15)),
         resume=data.get("resume"),
@@ -466,6 +456,12 @@ def _parse_inference(raw: dict[str, Any]) -> InferenceConfig:
     config = InferenceConfig(
         checkpoint_policy=data.get("checkpoint_policy"),
         checkpoint_path=Path(data["checkpoint_path"]) if data.get("checkpoint_path") else None,
+        checkpoint_metric=data.get("checkpoint_metric"),
+        checkpoint_rank=(
+            int(data["checkpoint_rank"])
+            if "checkpoint_rank" in data and data["checkpoint_rank"] is not None
+            else None
+        ),
         output_dir=Path(data["output_dir"]) if data.get("output_dir") else None,
     )
     config.validate()

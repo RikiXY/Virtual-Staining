@@ -556,20 +556,18 @@ def test_training_writes_best_checkpoint_record(
 
     best_record = json.loads((run_paths.checkpoints_dir / "best.json").read_text(encoding="utf-8"))
 
-    assert best_record["policy"] == "best_val_loss"
-    assert best_record["metric"] == "loss_G_val"
-    assert best_record["mode"] == "min"
-    assert best_record["epoch"] == 0
-    assert best_record["checkpoint_path"] == "ep000.pth"
-    assert isinstance(best_record["metric_value"], float)
+    loss_selection = best_record["metrics"]["loss_G_val"]
+    assert "default_metric" not in best_record
+    assert loss_selection["mode"] == "min"
+    assert loss_selection["best"]["epoch"] == 0
+    assert loss_selection["best"]["checkpoint_path"] == "ep000.pth"
+    assert isinstance(loss_selection["best"]["metric_value"], float)
     assert result.best_checkpoint_path == run_paths.checkpoints_dir / "ep000.pth"
 
 
 def _make_policy_selection_trainer(
     tmp_path: Path,
     *,
-    checkpoint_metric: str,
-    checkpoint_mode: str,
     checkpoint_top_k: int = 3,
     losses: LossConfig | None = None,
     discriminator: nn.Module | None = None,
@@ -587,8 +585,6 @@ def _make_policy_selection_trainer(
         num_workers=0,
         validate_rate=1,
         checkpoint_rate=1,
-        checkpoint_metric=checkpoint_metric,  # type: ignore[arg-type]
-        checkpoint_mode=checkpoint_mode,  # type: ignore[arg-type]
         checkpoint_top_k=checkpoint_top_k,
         log_rate=1,
     )
@@ -627,8 +623,6 @@ def test_training_best_checkpoint_policy_uses_higher_is_better_metric(
 ) -> None:
     trainer, run_paths = _make_policy_selection_trainer(
         tmp_path,
-        checkpoint_metric="val_ssim",
-        checkpoint_mode="max",
     )
 
     monkeypatch.setattr(trainer, "_train_epoch", lambda *args: _stub_epoch_metrics())
@@ -638,29 +632,30 @@ def test_training_best_checkpoint_policy_uses_higher_is_better_metric(
         lambda epoch: EpochMetrics(
             loss_G=float(10 - epoch),
             loss_D=1.0,
-            image={"val_ssim": [0.2, 0.8][epoch]},
+            image={"val_ssim": [0.2, 0.8][epoch], "val_mae": [0.4, 0.1][epoch]},
         ),
     )
 
     result = trainer.train(seed=0)
 
     best_record = json.loads((run_paths.checkpoints_dir / "best.json").read_text(encoding="utf-8"))
-    top_k_record = json.loads(
-        (run_paths.checkpoints_dir / "top_k.json").read_text(encoding="utf-8")
-    )
-    assert best_record["policy"] == "best_val_ssim"
-    assert best_record["metric"] == "val_ssim"
-    assert best_record["mode"] == "max"
-    assert best_record["epoch"] == 1
-    assert best_record["checkpoint_path"] == "ep001.pth"
-    assert best_record["metric_value"] == pytest.approx(0.8)
-    assert top_k_record["policy"] == "best_val_ssim"
+    ssim_selection = best_record["metrics"]["val_ssim"]
+    mae_selection = best_record["metrics"]["val_mae"]
+    assert "default_metric" not in best_record
+    assert ssim_selection["mode"] == "max"
+    assert ssim_selection["best"]["epoch"] == 1
+    assert ssim_selection["best"]["checkpoint_path"] == "ep001.pth"
+    assert ssim_selection["best"]["metric_value"] == pytest.approx(0.8)
+    assert mae_selection["mode"] == "min"
+    assert mae_selection["best"]["epoch"] == 1
     ranked_values = [
         (record["rank"], record["epoch"], record["metric_value"])
-        for record in top_k_record["records"]
+        for record in ssim_selection["records"]
     ]
     assert ranked_values == [(1, 1, 0.8), (2, 0, 0.2)]
-    assert top_k_record["records"][0]["checkpoint_path"] == best_record["checkpoint_path"]
+    assert (
+        ssim_selection["records"][0]["checkpoint_path"] == ssim_selection["best"]["checkpoint_path"]
+    )
     assert result.best_checkpoint_path == run_paths.checkpoints_dir / "ep001.pth"
 
 
@@ -670,8 +665,6 @@ def test_training_best_checkpoint_policy_uses_lower_is_better_metric(
 ) -> None:
     trainer, run_paths = _make_policy_selection_trainer(
         tmp_path,
-        checkpoint_metric="val_mae",
-        checkpoint_mode="min",
     )
 
     monkeypatch.setattr(trainer, "_train_epoch", lambda *args: _stub_epoch_metrics())
@@ -688,17 +681,14 @@ def test_training_best_checkpoint_policy_uses_lower_is_better_metric(
     trainer.train(seed=0)
 
     best_record = json.loads((run_paths.checkpoints_dir / "best.json").read_text(encoding="utf-8"))
-    top_k_record = json.loads(
-        (run_paths.checkpoints_dir / "top_k.json").read_text(encoding="utf-8")
-    )
-    assert best_record["policy"] == "best_val_mae"
-    assert best_record["metric"] == "val_mae"
-    assert best_record["mode"] == "min"
-    assert best_record["epoch"] == 1
-    assert best_record["metric_value"] == pytest.approx(0.1)
+    mae_selection = best_record["metrics"]["val_mae"]
+    assert "default_metric" not in best_record
+    assert mae_selection["mode"] == "min"
+    assert mae_selection["best"]["epoch"] == 1
+    assert mae_selection["best"]["metric_value"] == pytest.approx(0.1)
     ranked_values = [
         (record["rank"], record["epoch"], record["metric_value"])
-        for record in top_k_record["records"]
+        for record in mae_selection["records"]
     ]
     assert ranked_values == [(1, 1, 0.1), (2, 0, 0.4)]
 
@@ -709,8 +699,6 @@ def test_metric_checkpoint_selection_does_not_require_discriminator_loss(
 ) -> None:
     trainer, run_paths = _make_policy_selection_trainer(
         tmp_path,
-        checkpoint_metric="val_ssim",
-        checkpoint_mode="max",
         losses=LossConfig(generator=(LossTermConfig(name="l1", weight=1.0),), discriminator=()),
         discriminator=_FailingDiscriminator(),
     )
@@ -729,14 +717,11 @@ def test_metric_checkpoint_selection_does_not_require_discriminator_loss(
     trainer.train(seed=0)
 
     best_record = json.loads((run_paths.checkpoints_dir / "best.json").read_text(encoding="utf-8"))
-    top_k_record = json.loads(
-        (run_paths.checkpoints_dir / "top_k.json").read_text(encoding="utf-8")
-    )
-    assert best_record["policy"] == "best_val_ssim"
-    assert best_record["epoch"] == 0
-    assert best_record["metric_value"] == pytest.approx(0.7)
-    assert top_k_record["records"][0]["epoch"] == 0
-    assert top_k_record["records"][0]["metric_value"] == pytest.approx(0.7)
+    ssim_selection = best_record["metrics"]["val_ssim"]
+    assert ssim_selection["best"]["epoch"] == 0
+    assert ssim_selection["best"]["metric_value"] == pytest.approx(0.7)
+    assert ssim_selection["records"][0]["epoch"] == 0
+    assert ssim_selection["records"][0]["metric_value"] == pytest.approx(0.7)
 
 
 def test_load_checkpoint_validates_matching_architecture(

@@ -16,12 +16,13 @@ from torch.amp import GradScaler, autocast
 
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.models.config import ModelConfig
-from virtual_staining.training.checkpoints import (
-    CHECKPOINT_POLICY_BY_METRIC,
-    CheckpointManager,
-    load_best_checkpoint_record,
+from virtual_staining.training.checkpoints import CheckpointManager
+from virtual_staining.training.config import (
+    SUPPORTED_CHECKPOINT_METRICS,
+    LossConfig,
+    TrainingConfig,
+    default_checkpoint_mode,
 )
-from virtual_staining.training.config import LossConfig, TrainingConfig
 from virtual_staining.training.helpers import (
     LossComponentAccumulator,
     component_metric_row,
@@ -70,7 +71,6 @@ class _TrainingStatus:
 @dataclass
 class _BestCheckpointState:
     path: Path | None = None
-    metric_value: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -291,31 +291,8 @@ class Trainer:
         start_epoch: int,
         training_status: _TrainingStatus,
     ) -> _BestCheckpointState:
-        if start_epoch == 0:
-            return _BestCheckpointState()
-
-        try:
-            best_record = load_best_checkpoint_record(
-                self._checkpoints_dir,
-                policy=self._checkpoint_policy(),
-            )
-        except FileNotFoundError:
-            logger.info("No existing best checkpoint record found for resumed training")
-            return _BestCheckpointState()
-
-        training_status.best_checkpoint = best_record.checkpoint_path.name
-        training_status.best_loss_G_val = best_record.metric_value
-        logger.info(
-            "Resumed best checkpoint: %s (%s=%.6f at epoch %s)",
-            best_record.checkpoint_path,
-            best_record.metric,
-            best_record.metric_value,
-            best_record.epoch,
-        )
-        return _BestCheckpointState(
-            path=best_record.checkpoint_path,
-            metric_value=best_record.metric_value,
-        )
+        del start_epoch, training_status
+        return _BestCheckpointState()
 
     def _run_training_epochs(
         self,
@@ -483,13 +460,9 @@ class Trainer:
             loss_D=val_metrics.loss_D,
         )
         training_status.latest_eval_epoch = epoch
-        checkpoint_metric_value = self._checkpoint_metric_value(val_metrics)
-        if not math.isfinite(checkpoint_metric_value):
-            logger.warning(
-                "Skipping checkpoint ranking update for %s because value is non-finite: %s",
-                self.config.checkpoint_metric,
-                checkpoint_metric_value,
-            )
+        checkpoint_metrics = self._checkpoint_selection_metrics(val_metrics)
+        if not checkpoint_metrics:
+            logger.warning("Skipping checkpoint ranking update because all metrics are non-finite")
         else:
             ranked_checkpoint_path = self._ensure_best_checkpoint_path(
                 epoch=epoch,
@@ -499,32 +472,16 @@ class Trainer:
             )
             config_hash = self._read_config_hash()
             loss_config = self.losses.to_yaml_dict() if self.losses is not None else None
-            self._checkpoint_manager.update_top_k_records(
-                policy=self._checkpoint_policy(),
-                metric=self.config.checkpoint_metric,
-                mode=self.config.checkpoint_mode,
+            checkpoint_modes = self._checkpoint_selection_modes()
+            self._checkpoint_manager.update_selection_records(
+                metrics=checkpoint_metrics,
+                modes=checkpoint_modes,
                 top_k=self.config.checkpoint_top_k,
                 epoch=epoch,
                 checkpoint_path=ranked_checkpoint_path,
-                metric_value=checkpoint_metric_value,
                 config_hash=config_hash,
                 loss_config=loss_config,
             )
-            if self._is_better_checkpoint_value(checkpoint_metric_value, best_state.metric_value):
-                self._checkpoint_manager.save_best_record(
-                    policy=self._checkpoint_policy(),
-                    metric=self.config.checkpoint_metric,
-                    mode=self.config.checkpoint_mode,
-                    epoch=epoch,
-                    checkpoint_path=ranked_checkpoint_path,
-                    metric_value=checkpoint_metric_value,
-                    config_hash=config_hash,
-                    loss_config=loss_config,
-                )
-                best_state.metric_value = checkpoint_metric_value
-                best_state.path = ranked_checkpoint_path
-                training_status.best_checkpoint = ranked_checkpoint_path.name
-                training_status.best_loss_G_val = checkpoint_metric_value
         self._emit_epoch_progress(
             epoch=epoch,
             epoch_metrics=epoch_metrics,
@@ -535,24 +492,19 @@ class Trainer:
         )
         return val_metrics
 
-    def _checkpoint_policy(self) -> str:
-        return CHECKPOINT_POLICY_BY_METRIC[self.config.checkpoint_metric]
+    def _checkpoint_selection_metrics(self, val_metrics: EpochMetrics) -> dict[str, float]:
+        metrics = {"loss_G_val": val_metrics.loss_G}
+        metrics.update(
+            {
+                metric: value
+                for metric, value in val_metrics.image.items()
+                if metric in SUPPORTED_CHECKPOINT_METRICS
+            }
+        )
+        return {metric: value for metric, value in metrics.items() if math.isfinite(value)}
 
-    def _checkpoint_metric_value(self, val_metrics: EpochMetrics) -> float:
-        if self.config.checkpoint_metric == "loss_G_val":
-            return val_metrics.loss_G
-        return val_metrics.image.get(self.config.checkpoint_metric, float("nan"))
-
-    def _is_better_checkpoint_value(
-        self,
-        candidate: float,
-        current: float | None,
-    ) -> bool:
-        if current is None:
-            return True
-        if self.config.checkpoint_mode == "max":
-            return candidate > current
-        return candidate < current
+    def _checkpoint_selection_modes(self) -> dict[str, str]:
+        return {metric: default_checkpoint_mode(metric) for metric in SUPPORTED_CHECKPOINT_METRICS}
 
     def _read_config_hash(self) -> str | None:
         if not self._run_paths.config_hash.exists():
@@ -574,10 +526,9 @@ class Trainer:
         checkpoint_path = self._checkpoint_manager.save(epoch)
         training_status.last_checkpoint = checkpoint_path.name
         logger.info(
-            "Checkpoint saved to %s at epoch %s for %s",
+            "Checkpoint saved to %s at epoch %s for checkpoint selection",
             checkpoint_path,
             epoch,
-            self._checkpoint_policy(),
         )
         if reporter is not None:
             reporter.on_checkpoint_saved(checkpoint_path, epoch)

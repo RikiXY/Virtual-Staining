@@ -19,8 +19,6 @@ _TRAINING_KEYS: frozenset[str] = frozenset(
         "num_workers",
         "validate_rate",
         "checkpoint_rate",
-        "checkpoint_metric",
-        "checkpoint_mode",
         "checkpoint_top_k",
         "log_rate",
         "resume",
@@ -76,7 +74,6 @@ SUPPORTED_CHECKPOINT_METRICS: frozenset[str] = frozenset(
         "val_pcc_rgb_mean",
     }
 )
-SUPPORTED_CHECKPOINT_MODES: frozenset[str] = frozenset({"min", "max"})
 
 
 @dataclass(frozen=True)
@@ -490,8 +487,6 @@ class TrainingConfig:
     num_workers: int
     validate_rate: int
     checkpoint_rate: int
-    checkpoint_metric: CheckpointMetric = "loss_G_val"
-    checkpoint_mode: CheckpointMode = "min"
     checkpoint_top_k: int = 3
     log_rate: int = 15
     resume: str | None = None
@@ -515,16 +510,6 @@ class TrainingConfig:
         for field_name, value in (("beta1", self.beta1), ("beta2", self.beta2)):
             if not (0.0 <= value < 1.0):
                 raise ValueError(f"{field_name} must be in [0, 1)")
-        if self.checkpoint_metric not in SUPPORTED_CHECKPOINT_METRICS:
-            raise ValueError(
-                "checkpoint_metric must be one of "
-                f"{sorted(SUPPORTED_CHECKPOINT_METRICS)}. Got {self.checkpoint_metric!r}."
-            )
-        if self.checkpoint_mode not in SUPPORTED_CHECKPOINT_MODES:
-            raise ValueError(
-                "checkpoint_mode must be one of "
-                f"{sorted(SUPPORTED_CHECKPOINT_MODES)}. Got {self.checkpoint_mode!r}."
-            )
 
 
 def default_checkpoint_mode(metric: str) -> CheckpointMode:

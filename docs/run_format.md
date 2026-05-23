@@ -273,20 +273,16 @@ automatically.
 
 ### `checkpoints/best.json`
 
-Machine-readable best-checkpoint selection record written during validation.
-The default training policy records `best_val_loss` using `loss_G_val` in `min`
-mode. Metric-based policies record `best_val_ssim`, `best_val_mae`,
-`best_val_rmse`, `best_val_psnr`, `best_val_pcc_gray`, or
-`best_val_pcc_rgb_mean`, with `metric`, `mode`, `epoch`, `checkpoint_path`, and
-`metric_value` fields.
+Machine-readable checkpoint selection record written during validation. It
+records per-metric `best` and ranked `records` for all finite validation
+checkpoint metrics available at a checkpointed validation epoch. Each record
+includes `rank`, `epoch`, `checkpoint_path`, and `metric_value`, plus
+config/loss context when available.
 
-### `checkpoints/top_k.json`
-
-Ranked checkpoint candidate list for the same policy, metric, and mode used by
-`best.json`. The file records `top_k` and a deterministic `records` array with
-`rank`, `epoch`, `checkpoint_path`, and `metric_value`, plus config/loss context
-when available. It is metadata only; checkpoint files are not deleted by this
-retention record.
+Inference can use `checkpoint_policy: best` with `checkpoint_metric` to load
+rank 1 for that metric. `checkpoint_policy: top_k` additionally uses
+`checkpoint_rank`.
+Checkpoint files are not deleted by this metadata record.
 
 ### `artifacts/output_train/`, `output_val/`, `output_test/`
 

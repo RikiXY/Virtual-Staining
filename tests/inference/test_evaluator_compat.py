@@ -123,6 +123,8 @@ def _run_inference(
     output_folder: str,
     image_size: tuple[int, int] = _IMAGE_SIZE,
     checkpoint_policy: str | None = None,
+    checkpoint_metric: str | None = None,
+    checkpoint_rank: int | None = None,
 ) -> RunConfig:
     dataset_root = Path(test_folder).parent
     _write_test_manifest(dataset_root, Path(test_folder))
@@ -131,6 +133,10 @@ def _run_inference(
         inference_lines.append(f"checkpoint_path: {checkpoint_path}")
     if checkpoint_policy is not None:
         inference_lines.append(f"checkpoint_policy: {checkpoint_policy}")
+    if checkpoint_metric is not None:
+        inference_lines.append(f"checkpoint_metric: {checkpoint_metric}")
+    if checkpoint_rank is not None:
+        inference_lines.append(f"checkpoint_rank: {checkpoint_rank}")
     inference_lines.append(f"output_dir: {Path(output_folder)}")
     section = (
         f"image_size: [{image_size[0]}, {image_size[1]}]\n"
@@ -404,46 +410,9 @@ def test_inference_writes_stage_scoped_snapshot_files(tmp_path: Path) -> None:
     assert not (run_root / "metadata" / "config_hash.txt").exists()
 
 
-def test_inference_resolves_best_val_loss_checkpoint_policy(tmp_path: Path) -> None:
-    test_dir = tmp_path / "test"
-    test_dir.mkdir()
-    output_dir = tmp_path / "output"
-    run_root = tmp_path / "test_run"
-    checkpoints_dir = run_root / "checkpoints"
-    checkpoints_dir.mkdir(parents=True)
-    checkpoint = checkpoints_dir / "ep000.pth"
-
-    _write_pair(test_dir)
-    _save_checkpoint(checkpoint)
-    (checkpoints_dir / "best.json").write_text(
-        """
-{
-  "policy": "best_val_loss",
-  "metric": "loss_G_val",
-  "epoch": 0,
-  "checkpoint_path": "ep000.pth",
-  "metric_value": 0.1234
-}
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
-
-    config = _run_inference(
-        checkpoint_path=None,
-        checkpoint_policy="best_val_loss",
-        test_folder=str(test_dir),
-        output_folder=str(output_dir),
-        image_size=_IMAGE_SIZE,
-    )
-
-    metadata = json.loads(
-        (config.project.run_root / "metadata" / "stages" / "infer.json").read_text(encoding="utf-8")
-    )
-    assert metadata["checkpoint_path"] == str(checkpoint)
-
-
-def test_inference_resolves_metric_best_checkpoint_policy(tmp_path: Path) -> None:
+def test_inference_resolves_generic_best_checkpoint_policy_from_selection(
+    tmp_path: Path,
+) -> None:
     test_dir = tmp_path / "test"
     test_dir.mkdir()
     output_dir = tmp_path / "output"
@@ -455,23 +424,38 @@ def test_inference_resolves_metric_best_checkpoint_policy(tmp_path: Path) -> Non
     _write_pair(test_dir)
     _save_checkpoint(checkpoint)
     (checkpoints_dir / "best.json").write_text(
-        """
-{
-  "policy": "best_val_ssim",
-  "metric": "val_ssim",
-  "mode": "max",
-  "epoch": 1,
-  "checkpoint_path": "ep001.pth",
-  "metric_value": 0.9
-}
-""".strip()
-        + "\n",
+        json.dumps(
+            {
+                "schema_version": 1,
+                "metrics": {
+                    "val_ssim": {
+                        "mode": "max",
+                        "top_k": 1,
+                        "best": {
+                            "rank": 1,
+                            "epoch": 1,
+                            "checkpoint_path": "ep001.pth",
+                            "metric_value": 0.9,
+                        },
+                        "records": [
+                            {
+                                "rank": 1,
+                                "epoch": 1,
+                                "checkpoint_path": "ep001.pth",
+                                "metric_value": 0.9,
+                            }
+                        ],
+                    }
+                },
+            }
+        ),
         encoding="utf-8",
     )
 
     config = _run_inference(
         checkpoint_path=None,
-        checkpoint_policy="best_val_ssim",
+        checkpoint_policy="best",
+        checkpoint_metric="val_ssim",
         test_folder=str(test_dir),
         output_folder=str(output_dir),
         image_size=_IMAGE_SIZE,
@@ -483,7 +467,71 @@ def test_inference_resolves_metric_best_checkpoint_policy(tmp_path: Path) -> Non
     assert metadata["checkpoint_path"] == str(checkpoint)
 
 
-def test_inference_best_val_loss_raises_when_best_record_missing(tmp_path: Path) -> None:
+def test_inference_resolves_top_k_checkpoint_policy_from_selection(tmp_path: Path) -> None:
+    test_dir = tmp_path / "test"
+    test_dir.mkdir()
+    output_dir = tmp_path / "output"
+    run_root = tmp_path / "test_run"
+    checkpoints_dir = run_root / "checkpoints"
+    checkpoints_dir.mkdir(parents=True)
+    checkpoint_1 = checkpoints_dir / "ep001.pth"
+    checkpoint_2 = checkpoints_dir / "ep002.pth"
+
+    _write_pair(test_dir)
+    _save_checkpoint(checkpoint_1)
+    _save_checkpoint(checkpoint_2)
+    (checkpoints_dir / "best.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "metrics": {
+                    "val_ssim": {
+                        "mode": "max",
+                        "top_k": 2,
+                        "best": {
+                            "rank": 1,
+                            "epoch": 1,
+                            "checkpoint_path": "ep001.pth",
+                            "metric_value": 0.9,
+                        },
+                        "records": [
+                            {
+                                "rank": 1,
+                                "epoch": 1,
+                                "checkpoint_path": "ep001.pth",
+                                "metric_value": 0.9,
+                            },
+                            {
+                                "rank": 2,
+                                "epoch": 2,
+                                "checkpoint_path": "ep002.pth",
+                                "metric_value": 0.8,
+                            },
+                        ],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = _run_inference(
+        checkpoint_path=None,
+        checkpoint_policy="top_k",
+        checkpoint_metric="val_ssim",
+        checkpoint_rank=2,
+        test_folder=str(test_dir),
+        output_folder=str(output_dir),
+        image_size=_IMAGE_SIZE,
+    )
+
+    metadata = json.loads(
+        (config.project.run_root / "metadata" / "stages" / "infer.json").read_text(encoding="utf-8")
+    )
+    assert metadata["checkpoint_path"] == str(checkpoint_2)
+
+
+def test_inference_best_raises_when_best_record_missing(tmp_path: Path) -> None:
     test_dir = tmp_path / "test"
     test_dir.mkdir()
     output_dir = tmp_path / "output"
@@ -493,14 +541,15 @@ def test_inference_best_val_loss_raises_when_best_record_missing(tmp_path: Path)
     with pytest.raises(FileNotFoundError, match="best.json"):
         _run_inference(
             checkpoint_path=None,
-            checkpoint_policy="best_val_loss",
+            checkpoint_policy="best",
+            checkpoint_metric="val_ssim",
             test_folder=str(test_dir),
             output_folder=str(output_dir),
             image_size=_IMAGE_SIZE,
         )
 
 
-def test_inference_best_val_loss_raises_when_best_record_invalid(tmp_path: Path) -> None:
+def test_inference_best_raises_when_best_record_invalid(tmp_path: Path) -> None:
     test_dir = tmp_path / "test"
     test_dir.mkdir()
     output_dir = tmp_path / "output"
@@ -514,7 +563,8 @@ def test_inference_best_val_loss_raises_when_best_record_invalid(tmp_path: Path)
     with pytest.raises(ValueError, match="valid JSON"):
         _run_inference(
             checkpoint_path=None,
-            checkpoint_policy="best_val_loss",
+            checkpoint_policy="best",
+            checkpoint_metric="val_ssim",
             test_folder=str(test_dir),
             output_folder=str(output_dir),
             image_size=_IMAGE_SIZE,
