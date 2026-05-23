@@ -18,6 +18,7 @@ from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.models.config import ModelConfig
 from virtual_staining.training.checkpoints import (
     BEST_CHECKPOINT_POLICY,
+    CHECKPOINT_POLICY_BY_METRIC,
     CheckpointManager,
     load_best_checkpoint_record,
 )
@@ -70,7 +71,7 @@ class _TrainingStatus:
 @dataclass
 class _BestCheckpointState:
     path: Path | None = None
-    val_loss: float | None = None
+    metric_value: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +298,7 @@ class Trainer:
         try:
             best_record = load_best_checkpoint_record(
                 self._checkpoints_dir,
-                policy=BEST_CHECKPOINT_POLICY,
+                policy=self._checkpoint_policy(),
             )
         except FileNotFoundError:
             logger.info("No existing best checkpoint record found for resumed training")
@@ -314,7 +315,7 @@ class Trainer:
         )
         return _BestCheckpointState(
             path=best_record.checkpoint_path,
-            val_loss=best_record.metric_value,
+            metric_value=best_record.metric_value,
         )
 
     def _run_training_epochs(
@@ -483,7 +484,14 @@ class Trainer:
             loss_D=val_metrics.loss_D,
         )
         training_status.latest_eval_epoch = epoch
-        if best_state.val_loss is None or val_metrics.loss_G < best_state.val_loss:
+        checkpoint_metric_value = self._checkpoint_metric_value(val_metrics)
+        if not math.isfinite(checkpoint_metric_value):
+            logger.warning(
+                "Skipping best-checkpoint update for %s because value is non-finite: %s",
+                self.config.checkpoint_metric,
+                checkpoint_metric_value,
+            )
+        elif self._is_better_checkpoint_value(checkpoint_metric_value, best_state.metric_value):
             best_checkpoint_path = self._ensure_best_checkpoint_path(
                 epoch=epoch,
                 checkpoint_path=checkpoint_path,
@@ -491,16 +499,19 @@ class Trainer:
                 reporter=reporter,
             )
             self._checkpoint_manager.save_best_record(
-                policy=BEST_CHECKPOINT_POLICY,
-                metric="loss_G_val",
+                policy=self._checkpoint_policy(),
+                metric=self.config.checkpoint_metric,
+                mode=self.config.checkpoint_mode,
                 epoch=epoch,
                 checkpoint_path=best_checkpoint_path,
-                metric_value=val_metrics.loss_G,
+                metric_value=checkpoint_metric_value,
+                config_hash=self._read_config_hash(),
+                loss_config=self.losses.to_yaml_dict() if self.losses is not None else None,
             )
-            best_state.val_loss = val_metrics.loss_G
+            best_state.metric_value = checkpoint_metric_value
             best_state.path = best_checkpoint_path
             training_status.best_checkpoint = best_checkpoint_path.name
-            training_status.best_loss_G_val = val_metrics.loss_G
+            training_status.best_loss_G_val = checkpoint_metric_value
         self._emit_epoch_progress(
             epoch=epoch,
             epoch_metrics=epoch_metrics,
@@ -510,6 +521,31 @@ class Trainer:
             eta_str="0s" if epoch == self.config.epochs - 1 else "--",
         )
         return val_metrics
+
+    def _checkpoint_policy(self) -> str:
+        return CHECKPOINT_POLICY_BY_METRIC[self.config.checkpoint_metric]
+
+    def _checkpoint_metric_value(self, val_metrics: EpochMetrics) -> float:
+        if self.config.checkpoint_metric == "loss_G_val":
+            return val_metrics.loss_G
+        return val_metrics.image.get(self.config.checkpoint_metric, float("nan"))
+
+    def _is_better_checkpoint_value(
+        self,
+        candidate: float,
+        current: float | None,
+    ) -> bool:
+        if current is None:
+            return True
+        if self.config.checkpoint_mode == "max":
+            return candidate > current
+        return candidate < current
+
+    def _read_config_hash(self) -> str | None:
+        if not self._run_paths.config_hash.exists():
+            return None
+        value = self._run_paths.config_hash.read_text(encoding="utf-8").strip()
+        return value or None
 
     def _ensure_best_checkpoint_path(
         self,

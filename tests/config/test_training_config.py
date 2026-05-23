@@ -45,6 +45,8 @@ def _make_training_config(**overrides: object) -> TrainingConfig:
         "num_workers": 4,
         "validate_rate": 10,
         "checkpoint_rate": 10,
+        "checkpoint_metric": "loss_G_val",
+        "checkpoint_mode": "min",
         "log_rate": 15,
         "resume": None,
     }
@@ -60,6 +62,8 @@ def _make_training_config(**overrides: object) -> TrainingConfig:
         num_workers=defaults["num_workers"],  # type: ignore[arg-type]
         validate_rate=defaults["validate_rate"],  # type: ignore[arg-type]
         checkpoint_rate=defaults["checkpoint_rate"],  # type: ignore[arg-type]
+        checkpoint_metric=defaults["checkpoint_metric"],  # type: ignore[arg-type]
+        checkpoint_mode=defaults["checkpoint_mode"],  # type: ignore[arg-type]
         log_rate=defaults["log_rate"],  # type: ignore[arg-type]
         resume=defaults["resume"],  # type: ignore[arg-type]
     )
@@ -95,7 +99,66 @@ def test_run_config_from_yaml(tmp_path: Path) -> None:
     assert run_config.training.epochs == 20
     assert run_config.training.batch_size == 4
     assert run_config.training.seed == 7
+    assert run_config.training.checkpoint_metric == "loss_G_val"
+    assert run_config.training.checkpoint_mode == "min"
     assert run_config.model == ModelConfig()
+
+
+def test_training_checkpoint_metric_and_mode_parse(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "train.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: yaml_run
+        training:
+          epochs: 20
+          checkpoint_metric: val_mae
+          checkpoint_mode: min
+    """,
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+
+    assert run_config.training is not None
+    assert run_config.training.checkpoint_metric == "val_mae"
+    assert run_config.training.checkpoint_mode == "min"
+
+
+def test_training_checkpoint_mode_defaults_from_metric_direction(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "train.yaml"
+    write_yaml(
+        yaml_file,
+        """\
+        dataset_root: /data
+        results_path: /results
+        run_name: yaml_run
+        training:
+          epochs: 20
+          checkpoint_metric: val_ssim
+    """,
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+
+    assert run_config.training is not None
+    assert run_config.training.checkpoint_metric == "val_ssim"
+    assert run_config.training.checkpoint_mode == "max"
+
+
+def test_training_unknown_checkpoint_metric_raises() -> None:
+    config = _make_training_config(checkpoint_metric="val_lpips")
+
+    with pytest.raises(ValueError, match="checkpoint_metric"):
+        config.validate()
+
+
+def test_training_unknown_checkpoint_mode_raises() -> None:
+    config = _make_training_config(checkpoint_mode="auto")
+
+    with pytest.raises(ValueError, match="checkpoint_mode"):
+        config.validate()
 
 
 def test_run_config_model_explicit_contract_parses(tmp_path: Path) -> None:
@@ -717,6 +780,27 @@ def test_inference_best_val_loss_checkpoint_policy(tmp_path: Path) -> None:
     run_config = RunConfig.from_yaml(yaml_file)
     assert run_config.inference is not None
     assert run_config.inference.checkpoint_policy == "best_val_loss"
+
+
+def test_inference_best_val_ssim_checkpoint_policy(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "run.yaml"
+    write_yaml(
+        yaml_file,
+        f"""\
+        dataset_root: {tmp_path / "data"}
+        results_path: {tmp_path / "results"}
+        run_name: section_run
+        image_size: [512, 512]
+        training:
+          epochs: 30
+        inference:
+          checkpoint_policy: best_val_ssim
+    """,
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+    assert run_config.inference is not None
+    assert run_config.inference.checkpoint_policy == "best_val_ssim"
 
 
 def test_inference_unknown_checkpoint_policy_raises(tmp_path: Path) -> None:

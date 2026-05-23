@@ -171,6 +171,8 @@ class RunConfig:
                 "num_workers": self.training.num_workers,
                 "validate_rate": self.training.validate_rate,
                 "checkpoint_rate": self.training.checkpoint_rate,
+                "checkpoint_metric": self.training.checkpoint_metric,
+                "checkpoint_mode": self.training.checkpoint_mode,
                 "log_rate": self.training.log_rate,
                 "resume": self.training.resume,
             }
@@ -408,11 +410,19 @@ def _parse_supported_choice(raw: Any, field: str, choices: set[str]) -> str:
 
 
 def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
-    from virtual_staining.training.config import _TRAINING_KEYS, TrainingConfig
+    from virtual_staining.training.config import (
+        _TRAINING_KEYS,
+        CheckpointMetric,
+        CheckpointMode,
+        TrainingConfig,
+        default_checkpoint_mode,
+    )
 
     data = section_with_shared_fields(raw, "training", set())
     reject_unknown_keys(data, _TRAINING_KEYS, "training")
 
+    checkpoint_metric = str(data.get("checkpoint_metric", "loss_G_val"))
+    checkpoint_mode = str(data.get("checkpoint_mode", default_checkpoint_mode(checkpoint_metric)))
     config = TrainingConfig(
         batch_size=int(data.get("batch_size", 8)),
         epochs=int(data["epochs"]),
@@ -424,6 +434,8 @@ def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
         num_workers=int(data.get("num_workers", min(4, os.cpu_count() or 1))),
         validate_rate=int(data.get("validate_rate", 10)),
         checkpoint_rate=int(data.get("checkpoint_rate", 10)),
+        checkpoint_metric=cast(CheckpointMetric, checkpoint_metric),
+        checkpoint_mode=cast(CheckpointMode, checkpoint_mode),
         log_rate=int(data.get("log_rate", 15)),
         resume=data.get("resume"),
     )

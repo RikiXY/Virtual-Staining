@@ -88,6 +88,13 @@ training:
 
   validate_rate: 10
   checkpoint_rate: 10
+  # Metric used to update checkpoints/best.json when validation runs.
+  # Supported values: loss_G_val, val_ssim, val_mae, val_rmse, val_psnr,
+  # val_pcc_gray, val_pcc_rgb_mean.
+  checkpoint_metric: loss_G_val
+  # Use min for losses/errors such as loss_G_val, val_mae, val_rmse.
+  # Use max for similarity/correlation metrics such as val_ssim and val_psnr.
+  checkpoint_mode: min
   log_rate: 15
   resume: null
 
@@ -131,6 +138,8 @@ inference:
   # Supported policies:
   # - latest: newest ep*.pth file in results_path/run_name/checkpoints
   # - best_val_loss: checkpoint recorded in checkpoints/best.json during training
+  # - best_val_ssim, best_val_mae, best_val_rmse, best_val_psnr,
+  #   best_val_pcc_gray, best_val_pcc_rgb_mean
   checkpoint_policy: latest
   # Or choose a checkpoint explicitly. Relative paths are resolved from
   # the run root (results_path/run_name/).

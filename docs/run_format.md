@@ -271,6 +271,15 @@ The checkpoint contains generator and discriminator state dicts plus the epoch
 number. Use `inference.checkpoint_policy: latest` to load the most recent one
 automatically.
 
+### `checkpoints/best.json`
+
+Machine-readable best-checkpoint selection record written during validation.
+The default training policy records `best_val_loss` using `loss_G_val` in `min`
+mode. Metric-based policies record `best_val_ssim`, `best_val_mae`,
+`best_val_rmse`, `best_val_psnr`, `best_val_pcc_gray`, or
+`best_val_pcc_rgb_mean`, with `metric`, `mode`, `epoch`, `checkpoint_path`, and
+`metric_value` fields.
+
 ### `artifacts/output_train/`, `output_val/`, `output_test/`
 
 Generated images produced during training (train/val) and inference (test).

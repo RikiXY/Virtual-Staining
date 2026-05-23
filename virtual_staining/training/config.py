@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 from virtual_staining.config.validation import parse_bool_strict, reject_unknown_keys
+from virtual_staining.utils.metrics import is_higher_better_metric
 
 _TRAINING_KEYS: frozenset[str] = frozenset(
     {
@@ -18,6 +19,8 @@ _TRAINING_KEYS: frozenset[str] = frozenset(
         "num_workers",
         "validate_rate",
         "checkpoint_rate",
+        "checkpoint_metric",
+        "checkpoint_mode",
         "log_rate",
         "resume",
     }
@@ -51,6 +54,28 @@ LossScheduleType = Literal[
 ]
 LossRole = Literal["generator", "discriminator"]
 LossMaskSource = Literal["foreground_mask"]
+CheckpointMetric = Literal[
+    "loss_G_val",
+    "val_ssim",
+    "val_mae",
+    "val_rmse",
+    "val_psnr",
+    "val_pcc_gray",
+    "val_pcc_rgb_mean",
+]
+CheckpointMode = Literal["min", "max"]
+SUPPORTED_CHECKPOINT_METRICS: frozenset[str] = frozenset(
+    {
+        "loss_G_val",
+        "val_ssim",
+        "val_mae",
+        "val_rmse",
+        "val_psnr",
+        "val_pcc_gray",
+        "val_pcc_rgb_mean",
+    }
+)
+SUPPORTED_CHECKPOINT_MODES: frozenset[str] = frozenset({"min", "max"})
 
 
 @dataclass(frozen=True)
@@ -464,6 +489,8 @@ class TrainingConfig:
     num_workers: int
     validate_rate: int
     checkpoint_rate: int
+    checkpoint_metric: CheckpointMetric = "loss_G_val"
+    checkpoint_mode: CheckpointMode = "min"
     log_rate: int = 15
     resume: str | None = None
 
@@ -485,3 +512,28 @@ class TrainingConfig:
         for field_name, value in (("beta1", self.beta1), ("beta2", self.beta2)):
             if not (0.0 <= value < 1.0):
                 raise ValueError(f"{field_name} must be in [0, 1)")
+        if self.checkpoint_metric not in SUPPORTED_CHECKPOINT_METRICS:
+            raise ValueError(
+                "checkpoint_metric must be one of "
+                f"{sorted(SUPPORTED_CHECKPOINT_METRICS)}. Got {self.checkpoint_metric!r}."
+            )
+        if self.checkpoint_mode not in SUPPORTED_CHECKPOINT_MODES:
+            raise ValueError(
+                "checkpoint_mode must be one of "
+                f"{sorted(SUPPORTED_CHECKPOINT_MODES)}. Got {self.checkpoint_mode!r}."
+            )
+
+
+def default_checkpoint_mode(metric: str) -> CheckpointMode:
+    """Return the default comparison mode for a supported checkpoint metric."""
+    if metric not in SUPPORTED_CHECKPOINT_METRICS:
+        raise ValueError(
+            f"Unsupported checkpoint_metric {metric!r}. "
+            f"Supported metrics: {sorted(SUPPORTED_CHECKPOINT_METRICS)}."
+        )
+    if metric == "loss_G_val":
+        return "min"
+    if metric.startswith("val_"):
+        evaluation_metric = metric.removeprefix("val_")
+        return "max" if is_higher_better_metric(evaluation_metric) else "min"
+    raise AssertionError(f"Unsupported checkpoint_metric slipped through validation: {metric!r}")

@@ -125,18 +125,24 @@ def test_checkpoint_manager_saves_best_record(tmp_path: Path) -> None:
     best_record_path = mgr.save_best_record(
         policy=BEST_CHECKPOINT_POLICY,
         metric="loss_G_val",
+        mode="min",
         epoch=3,
         checkpoint_path=checkpoint_path,
         metric_value=0.1234,
+        config_hash="abc123",
+        loss_config={"generator": [], "discriminator": []},
     )
 
     payload = json.loads(best_record_path.read_text(encoding="utf-8"))
     assert payload == {
         "policy": BEST_CHECKPOINT_POLICY,
         "metric": "loss_G_val",
+        "mode": "min",
         "epoch": 3,
         "checkpoint_path": "ep003.pth",
         "metric_value": 0.1234,
+        "config_hash": "abc123",
+        "loss_config": {"generator": [], "discriminator": []},
     }
 
 
@@ -146,6 +152,7 @@ def test_resolve_best_checkpoint_path_returns_selected_checkpoint(tmp_path: Path
     mgr.save_best_record(
         policy=BEST_CHECKPOINT_POLICY,
         metric="loss_G_val",
+        mode="min",
         epoch=3,
         checkpoint_path=checkpoint_path,
         metric_value=0.1234,
@@ -161,6 +168,7 @@ def test_load_best_checkpoint_record_returns_selected_checkpoint_metadata(tmp_pa
     mgr.save_best_record(
         policy=BEST_CHECKPOINT_POLICY,
         metric="loss_G_val",
+        mode="min",
         epoch=3,
         checkpoint_path=checkpoint_path,
         metric_value=0.1234,
@@ -170,6 +178,7 @@ def test_load_best_checkpoint_record_returns_selected_checkpoint_metadata(tmp_pa
 
     assert record.policy == BEST_CHECKPOINT_POLICY
     assert record.metric == "loss_G_val"
+    assert record.mode == "min"
     assert record.epoch == 3
     assert record.checkpoint_path == checkpoint_path
     assert record.metric_value == pytest.approx(0.1234)
@@ -189,6 +198,65 @@ def test_resolve_best_checkpoint_path_raises_when_record_invalid(tmp_path: Path)
 
     with pytest.raises(ValueError, match="valid JSON"):
         resolve_best_checkpoint_path(mgr.checkpoints_dir, policy=BEST_CHECKPOINT_POLICY)
+
+
+def test_resolve_best_checkpoint_path_raises_on_policy_mismatch(tmp_path: Path) -> None:
+    mgr = _make_manager(tmp_path)
+    checkpoint_path = mgr.save(epoch=3)
+    mgr.save_best_record(
+        policy="best_val_ssim",
+        metric="val_ssim",
+        mode="max",
+        epoch=3,
+        checkpoint_path=checkpoint_path,
+        metric_value=0.9,
+    )
+
+    with pytest.raises(ValueError, match="not requested policy"):
+        resolve_best_checkpoint_path(mgr.checkpoints_dir, policy=BEST_CHECKPOINT_POLICY)
+
+
+def test_resolve_best_checkpoint_path_raises_when_checkpoint_file_missing(
+    tmp_path: Path,
+) -> None:
+    mgr = _make_manager(tmp_path)
+    checkpoint_path = mgr.save(epoch=3)
+    mgr.save_best_record(
+        policy=BEST_CHECKPOINT_POLICY,
+        metric="loss_G_val",
+        mode="min",
+        epoch=3,
+        checkpoint_path=checkpoint_path,
+        metric_value=0.1234,
+    )
+    checkpoint_path.unlink()
+
+    with pytest.raises(FileNotFoundError, match="missing file"):
+        resolve_best_checkpoint_path(mgr.checkpoints_dir, policy=BEST_CHECKPOINT_POLICY)
+
+
+def test_load_best_checkpoint_record_accepts_legacy_record_without_mode(
+    tmp_path: Path,
+) -> None:
+    mgr = _make_manager(tmp_path)
+    checkpoint_path = mgr.save(epoch=3)
+    (mgr.checkpoints_dir / "best.json").write_text(
+        json.dumps(
+            {
+                "policy": BEST_CHECKPOINT_POLICY,
+                "metric": "loss_G_val",
+                "epoch": 3,
+                "checkpoint_path": checkpoint_path.name,
+                "metric_value": 0.1234,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    record = load_best_checkpoint_record(mgr.checkpoints_dir, policy=BEST_CHECKPOINT_POLICY)
+
+    assert record.mode is None
+    assert record.checkpoint_path == checkpoint_path
 
 
 def test_checkpoint_manager_image_size_mismatch_raises(tmp_path: Path) -> None:

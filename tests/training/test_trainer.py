@@ -21,6 +21,7 @@ from virtual_staining.models.config import ModelConfig
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.config import LossConfig, LossTermConfig, TrainingConfig
+from virtual_staining.training.results import EpochMetrics
 from virtual_staining.training.trainer import Trainer
 
 
@@ -557,10 +558,160 @@ def test_training_writes_best_checkpoint_record(
 
     assert best_record["policy"] == "best_val_loss"
     assert best_record["metric"] == "loss_G_val"
+    assert best_record["mode"] == "min"
     assert best_record["epoch"] == 0
     assert best_record["checkpoint_path"] == "ep000.pth"
     assert isinstance(best_record["metric_value"], float)
     assert result.best_checkpoint_path == run_paths.checkpoints_dir / "ep000.pth"
+
+
+def _make_policy_selection_trainer(
+    tmp_path: Path,
+    *,
+    checkpoint_metric: str,
+    checkpoint_mode: str,
+    losses: LossConfig | None = None,
+    discriminator: nn.Module | None = None,
+) -> tuple[Trainer, RunPaths]:
+    dataset_root = tmp_path / "dataset"
+    project = _make_project(dataset_root, tmp_path / "results", "policy_run")
+    config = TrainingConfig(
+        batch_size=1,
+        epochs=2,
+        lr_g=2e-4,
+        lr_d=2e-4,
+        beta1=0.5,
+        beta2=0.999,
+        seed=0,
+        num_workers=0,
+        validate_rate=1,
+        checkpoint_rate=1,
+        checkpoint_metric=checkpoint_metric,  # type: ignore[arg-type]
+        checkpoint_mode=checkpoint_mode,  # type: ignore[arg-type]
+        log_rate=1,
+    )
+    train_loader, val_loader = _make_train_val_loaders(
+        dataset_root,
+        project,
+        train_prefixes=["00000_00000"],
+        val_prefixes=["00256_00000"],
+    )
+    run_paths = RunPaths(project.run_root)
+    run_paths.create_directories()
+    trainer = Trainer(
+        config=config,
+        model_config=ModelConfig(),
+        run_paths=run_paths,
+        generator=UNetGenerator().to("cpu"),
+        discriminator=(discriminator or PatchGANDiscriminator()).to("cpu"),
+        train_loader=train_loader,
+        val_loader=val_loader,
+        device=torch.device("cpu"),
+        image_size=project.image_size,
+        train_dir=dataset_root / "splits" / "train",
+        val_dir=dataset_root / "splits" / "val",
+        losses=losses or _pix2pix_losses(),
+    )
+    return trainer, run_paths
+
+
+def _stub_epoch_metrics() -> EpochMetrics:
+    return EpochMetrics(loss_G=1.0, loss_D=1.0)
+
+
+def test_training_best_checkpoint_policy_uses_higher_is_better_metric(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trainer, run_paths = _make_policy_selection_trainer(
+        tmp_path,
+        checkpoint_metric="val_ssim",
+        checkpoint_mode="max",
+    )
+
+    monkeypatch.setattr(trainer, "_train_epoch", lambda *args: _stub_epoch_metrics())
+    monkeypatch.setattr(
+        trainer,
+        "_validate",
+        lambda epoch: EpochMetrics(
+            loss_G=float(10 - epoch),
+            loss_D=1.0,
+            image={"val_ssim": [0.2, 0.8][epoch]},
+        ),
+    )
+
+    result = trainer.train(seed=0)
+
+    best_record = json.loads((run_paths.checkpoints_dir / "best.json").read_text(encoding="utf-8"))
+    assert best_record["policy"] == "best_val_ssim"
+    assert best_record["metric"] == "val_ssim"
+    assert best_record["mode"] == "max"
+    assert best_record["epoch"] == 1
+    assert best_record["checkpoint_path"] == "ep001.pth"
+    assert best_record["metric_value"] == pytest.approx(0.8)
+    assert result.best_checkpoint_path == run_paths.checkpoints_dir / "ep001.pth"
+
+
+def test_training_best_checkpoint_policy_uses_lower_is_better_metric(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trainer, run_paths = _make_policy_selection_trainer(
+        tmp_path,
+        checkpoint_metric="val_mae",
+        checkpoint_mode="min",
+    )
+
+    monkeypatch.setattr(trainer, "_train_epoch", lambda *args: _stub_epoch_metrics())
+    monkeypatch.setattr(
+        trainer,
+        "_validate",
+        lambda epoch: EpochMetrics(
+            loss_G=float(epoch + 1),
+            loss_D=1.0,
+            image={"val_mae": [0.4, 0.1][epoch]},
+        ),
+    )
+
+    trainer.train(seed=0)
+
+    best_record = json.loads((run_paths.checkpoints_dir / "best.json").read_text(encoding="utf-8"))
+    assert best_record["policy"] == "best_val_mae"
+    assert best_record["metric"] == "val_mae"
+    assert best_record["mode"] == "min"
+    assert best_record["epoch"] == 1
+    assert best_record["metric_value"] == pytest.approx(0.1)
+
+
+def test_metric_checkpoint_selection_does_not_require_discriminator_loss(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trainer, run_paths = _make_policy_selection_trainer(
+        tmp_path,
+        checkpoint_metric="val_ssim",
+        checkpoint_mode="max",
+        losses=LossConfig(generator=(LossTermConfig(name="l1", weight=1.0),), discriminator=()),
+        discriminator=_FailingDiscriminator(),
+    )
+
+    monkeypatch.setattr(trainer, "_train_epoch", lambda *args: _stub_epoch_metrics())
+    monkeypatch.setattr(
+        trainer,
+        "_validate",
+        lambda epoch: EpochMetrics(
+            loss_G=1.0,
+            loss_D=0.0,
+            image={"val_ssim": [0.7, 0.6][epoch]},
+        ),
+    )
+
+    trainer.train(seed=0)
+
+    best_record = json.loads((run_paths.checkpoints_dir / "best.json").read_text(encoding="utf-8"))
+    assert best_record["policy"] == "best_val_ssim"
+    assert best_record["epoch"] == 0
+    assert best_record["metric_value"] == pytest.approx(0.7)
 
 
 def test_load_checkpoint_validates_matching_architecture(

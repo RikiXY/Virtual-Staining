@@ -29,6 +29,7 @@ from virtual_staining.inference.predictor import Predictor
 from virtual_staining.inference.results import InferenceResult
 from virtual_staining.models.factory import build_generator
 from virtual_staining.training.checkpoints import (
+    SUPPORTED_BEST_CHECKPOINT_POLICIES,
     _check_generator_arch,
     _validate_checkpoint_metadata,
     resolve_best_checkpoint_path,
@@ -77,7 +78,7 @@ def _resolve_checkpoint(config: RunConfig, paths: RunPaths) -> Path:
             )
         return candidates[-1]
 
-    if config.inference.checkpoint_policy == "best_val_loss":
+    if config.inference.checkpoint_policy in SUPPORTED_BEST_CHECKPOINT_POLICIES:
         return resolve_best_checkpoint_path(
             paths.checkpoints_dir,
             policy=config.inference.checkpoint_policy,

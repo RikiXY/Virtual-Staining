@@ -20,6 +20,16 @@ NORMALIZATION_CONTRACT = {
     "output_range": "[-1, 1]",
 }
 BEST_CHECKPOINT_POLICY = "best_val_loss"
+CHECKPOINT_POLICY_BY_METRIC: dict[str, str] = {
+    "loss_G_val": BEST_CHECKPOINT_POLICY,
+    "val_ssim": "best_val_ssim",
+    "val_mae": "best_val_mae",
+    "val_rmse": "best_val_rmse",
+    "val_psnr": "best_val_psnr",
+    "val_pcc_gray": "best_val_pcc_gray",
+    "val_pcc_rgb_mean": "best_val_pcc_rgb_mean",
+}
+SUPPORTED_BEST_CHECKPOINT_POLICIES: frozenset[str] = frozenset(CHECKPOINT_POLICY_BY_METRIC.values())
 
 
 @dataclass
@@ -40,6 +50,7 @@ class BestCheckpointRecord:
     epoch: int
     checkpoint_path: Path
     metric_value: float
+    mode: str | None = None
 
 
 def _make_arch_metadata(
@@ -242,19 +253,27 @@ class CheckpointManager:
         *,
         policy: str,
         metric: str,
+        mode: str,
         epoch: int,
         checkpoint_path: Path,
         metric_value: float,
+        config_hash: str | None = None,
+        loss_config: dict[str, Any] | None = None,
     ) -> Path:
         """Write the machine-readable best-checkpoint selection record."""
         self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             "policy": policy,
             "metric": metric,
+            "mode": mode,
             "epoch": epoch,
             "checkpoint_path": checkpoint_path.name,
             "metric_value": metric_value,
         }
+        if config_hash is not None:
+            payload["config_hash"] = config_hash
+        if loss_config is not None:
+            payload["loss_config"] = loss_config
         self.best_record_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         logger.info("Best checkpoint record saved: %s", self.best_record_path)
         return self.best_record_path
@@ -326,6 +345,10 @@ def load_best_checkpoint_record(checkpoints_dir: Path, *, policy: str) -> BestCh
     if not isinstance(metric, str) or not metric.strip():
         raise ValueError(f"Best checkpoint metadata at {best_path} has no valid metric.")
 
+    mode = payload.get("mode")
+    if mode is not None and (not isinstance(mode, str) or mode not in {"min", "max"}):
+        raise ValueError(f"Best checkpoint metadata at {best_path} has no valid mode.")
+
     epoch = payload.get("epoch")
     if not isinstance(epoch, int):
         raise ValueError(f"Best checkpoint metadata at {best_path} has no valid epoch.")
@@ -344,6 +367,7 @@ def load_best_checkpoint_record(checkpoints_dir: Path, *, policy: str) -> BestCh
         epoch=epoch,
         checkpoint_path=checkpoint_path,
         metric_value=float(metric_value),
+        mode=mode,
     )
 
 

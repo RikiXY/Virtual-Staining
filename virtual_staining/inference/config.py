@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-SUPPORTED_CHECKPOINT_POLICIES: frozenset[str] = frozenset({"latest", "best_val_loss"})
+from virtual_staining.training.checkpoints import SUPPORTED_BEST_CHECKPOINT_POLICIES
+
+SUPPORTED_CHECKPOINT_POLICIES: frozenset[str] = frozenset(
+    {"latest", *SUPPORTED_BEST_CHECKPOINT_POLICIES}
+)
 
 _INFERENCE_KEYS: frozenset[str] = frozenset(
     {
