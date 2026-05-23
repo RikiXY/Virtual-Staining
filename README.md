@@ -135,6 +135,11 @@ training:
   l1_weight: 25.0
   seed: 42
 
+augmentation:
+  enabled: false
+  expansion_factor: 1
+  intensity: light
+
 inference:
   checkpoint_policy: latest   # or: checkpoint_path: checkpoints/ep099.pth
 

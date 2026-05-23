@@ -91,6 +91,14 @@ training:
   log_rate: 15
   resume: null
 
+augmentation:
+  # Training-only on-the-fly augmentation. No transformed patches are saved.
+  enabled: false
+  # Effective train epoch length is multiplied by this factor when enabled.
+  expansion_factor: 1
+  # Supported values: light, medium, strong.
+  intensity: light
+
 losses:
   generator:
     - name: adversarial_bce

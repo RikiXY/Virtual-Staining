@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 import torch
@@ -306,6 +307,86 @@ def test_run_training_uses_separate_seeded_loader_generators(
     assert val_generator.initial_seed() == 124
     assert loader_kwargs[0]["shuffle"] is True
     assert loader_kwargs[1]["shuffle"] is False
+
+
+def test_run_training_wires_augmentation_virtual_expansion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_root = tmp_path / "dataset"
+    train_dir = dataset_root / "splits" / "train"
+    val_dir = dataset_root / "splits" / "val"
+    train_dir.mkdir(parents=True)
+    val_dir.mkdir(parents=True)
+    write_rgb_pair(train_dir, size=(32, 32))
+    write_rgb_pair(val_dir, "00256_00000", size=(32, 32))
+    _write_training_manifest(dataset_root)
+
+    config_path = write_run_config(
+        tmp_path,
+        """\
+        image_size: [32, 32]
+        training:
+          epochs: 1
+          seed: 123
+          num_workers: 0
+        augmentation:
+          enabled: true
+          expansion_factor: 3
+          intensity: medium
+        losses:
+          generator:
+            - name: adversarial_bce
+              weight: 1.0
+            - name: l1
+              weight: 25.0
+          discriminator:
+            - name: adversarial_bce
+              weight: 1.0
+        """,
+        filename="train.yaml",
+        dataset_root=dataset_root,
+        results_path=tmp_path / "results",
+        run_name="augmented_run",
+    )
+    config = RunConfig.from_yaml(config_path)
+    loader_datasets: list[Any] = []
+
+    class _FakeDataLoader:
+        def __init__(self, dataset, **_kwargs) -> None:
+            self.dataset = dataset
+            loader_datasets.append(dataset)
+
+    def _fake_train(self, seed: int, start_epoch: int = 0, reporter=None) -> TrainingResult:
+        return TrainingResult(final_epoch=start_epoch, best_checkpoint_path=None)
+
+    def _paired_transform(source, target, mask):
+        return source, target, mask
+
+    monkeypatch.setattr("virtual_staining.training.runner.DataLoader", _FakeDataLoader)
+    monkeypatch.setattr(
+        "virtual_staining.training.runner.build_training_paired_transform",
+        lambda *_args, **_kwargs: _paired_transform,
+    )
+    monkeypatch.setattr("virtual_staining.training.trainer.Trainer.train", _fake_train)
+
+    run_training(config, config_path)
+
+    assert len(loader_datasets) == 2
+    assert len(loader_datasets[0]) == 3
+    assert len(loader_datasets[1]) == 1
+    assert loader_datasets[0].paired_transform is _paired_transform
+
+    stage_metadata = json.loads(
+        (tmp_path / "results" / "augmented_run" / "metadata" / "stages" / "train.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert stage_metadata["train_sample_count"] == 1
+    assert stage_metadata["effective_train_sample_count"] == 3
+    assert stage_metadata["augmentation_enabled"] is True
+    assert stage_metadata["augmentation_intensity"] == "medium"
+    assert stage_metadata["augmentation_expansion_factor"] == 3
 
 
 def test_run_training_writes_failed_stage_metadata_and_events(tmp_path: Path, monkeypatch) -> None:

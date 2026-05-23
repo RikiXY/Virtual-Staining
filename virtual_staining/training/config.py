@@ -22,6 +22,7 @@ _TRAINING_KEYS: frozenset[str] = frozenset(
         "resume",
     }
 )
+_AUGMENTATION_KEYS: frozenset[str] = frozenset({"enabled", "expansion_factor", "intensity"})
 
 _LOSS_CONFIG_KEYS: frozenset[str] = frozenset({"generator", "discriminator"})
 _LOSS_TERM_KEYS: frozenset[str] = frozenset({"name", "weight", "enabled", "params", "schedule"})
@@ -38,6 +39,7 @@ _L1_PARAM_KEYS: frozenset[str] = frozenset({"reduction", "mask"})
 _ADVERSARIAL_BCE_PARAM_KEYS: frozenset[str] = frozenset()
 
 LossName = Literal["adversarial_bce", "l1", "ssim"]
+AugmentationIntensity = Literal["light", "medium", "strong"]
 LossScheduleType = Literal[
     "constant",
     "linear_warmup",
@@ -49,6 +51,55 @@ LossScheduleType = Literal[
 ]
 LossRole = Literal["generator", "discriminator"]
 LossMaskSource = Literal["foreground_mask"]
+
+
+@dataclass(frozen=True)
+class AugmentationConfig:
+    enabled: bool = False
+    expansion_factor: int = 1
+    intensity: AugmentationIntensity = "light"
+
+    def validate(self) -> None:
+        if self.expansion_factor < 1:
+            raise ValueError("augmentation.expansion_factor must be greater than or equal to 1")
+        if self.intensity not in {"light", "medium", "strong"}:
+            raise ValueError("augmentation.intensity must be one of ['light', 'medium', 'strong']")
+
+    @property
+    def effective_expansion_factor(self) -> int:
+        return self.expansion_factor if self.enabled else 1
+
+    def to_yaml_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "expansion_factor": self.expansion_factor,
+            "intensity": self.intensity,
+        }
+
+
+def parse_augmentation_config(raw: Any) -> AugmentationConfig:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise TypeError("augmentation must be a YAML mapping")
+    reject_unknown_keys(raw, _AUGMENTATION_KEYS, "augmentation")
+
+    expansion_factor_raw = raw.get("expansion_factor", 1)
+    if isinstance(expansion_factor_raw, bool) or not isinstance(expansion_factor_raw, int):
+        raise TypeError("augmentation.expansion_factor must be an integer")
+
+    intensity = _parse_choice(
+        raw.get("intensity", "light"),
+        "augmentation.intensity",
+        {"light", "medium", "strong"},
+    )
+    config = AugmentationConfig(
+        enabled=parse_bool_strict(raw.get("enabled", False), "augmentation.enabled"),
+        expansion_factor=expansion_factor_raw,
+        intensity=cast(AugmentationIntensity, intensity),
+    )
+    config.validate()
+    return config
 
 
 @dataclass(frozen=True)

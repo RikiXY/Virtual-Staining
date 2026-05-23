@@ -9,7 +9,12 @@ from tests.config_helpers import write_yaml
 from virtual_staining.config import RunConfig
 from virtual_staining.config.project import ProjectConfig
 from virtual_staining.models.config import ModelConfig
-from virtual_staining.training.config import LossConfig, LossScheduleConfig, TrainingConfig
+from virtual_staining.training.config import (
+    AugmentationConfig,
+    LossConfig,
+    LossScheduleConfig,
+    TrainingConfig,
+)
 
 
 def _make_project(**overrides: object) -> ProjectConfig:
@@ -193,6 +198,84 @@ def test_training_from_run_yaml_defaults(tmp_path: Path) -> None:
     assert config.log_rate == 15
     assert config.resume is None
     assert run_config.losses is None
+
+
+def test_augmentation_config_defaults_to_disabled() -> None:
+    config = AugmentationConfig()
+
+    assert config.enabled is False
+    assert config.expansion_factor == 1
+    assert config.effective_expansion_factor == 1
+    assert config.intensity == "light"
+    assert config.to_yaml_dict() == {
+        "enabled": False,
+        "expansion_factor": 1,
+        "intensity": "light",
+    }
+
+
+@pytest.mark.parametrize("intensity", ["light", "medium", "strong"])
+def test_run_config_parses_augmentation_section(tmp_path: Path, intensity: str) -> None:
+    yaml_file = tmp_path / "augmentation.yaml"
+    write_yaml(
+        yaml_file,
+        f"""\
+        dataset_root: /data
+        results_path: /results
+        run_name: augmented_run
+        training:
+          epochs: 1
+        augmentation:
+          enabled: true
+          expansion_factor: 3
+          intensity: {intensity}
+    """,
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+
+    assert run_config.augmentation.enabled is True
+    assert run_config.augmentation.expansion_factor == 3
+    assert run_config.augmentation.effective_expansion_factor == 3
+    assert run_config.augmentation.intensity == intensity
+    assert run_config.to_yaml_dict()["augmentation"] == {
+        "enabled": True,
+        "expansion_factor": 3,
+        "intensity": intensity,
+    }
+
+
+@pytest.mark.parametrize(
+    ("augmentation_yaml", "match"),
+    [
+        ("enabled: 'true'", "augmentation.enabled"),
+        ("expansion_factor: 0", "expansion_factor"),
+        ("expansion_factor: 1.5", "expansion_factor"),
+        ("intensity: extreme", "augmentation.intensity"),
+        ("unknown: value", "unknown"),
+    ],
+)
+def test_run_config_rejects_invalid_augmentation_section(
+    tmp_path: Path,
+    augmentation_yaml: str,
+    match: str,
+) -> None:
+    yaml_file = tmp_path / "bad_augmentation.yaml"
+    write_yaml(
+        yaml_file,
+        f"""\
+        dataset_root: /data
+        results_path: /results
+        run_name: bad_augmented_run
+        training:
+          epochs: 1
+        augmentation:
+{textwrap.indent(augmentation_yaml, "          ")}
+    """,
+    )
+
+    with pytest.raises((TypeError, ValueError), match=match):
+        RunConfig.from_yaml(yaml_file)
 
 
 def test_loss_config_defaults_to_empty_lists() -> None:

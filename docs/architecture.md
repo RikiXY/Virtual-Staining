@@ -21,7 +21,7 @@ upper layers may import from lower layers, never the reverse.
 | `reporting/` | `Reporter` protocol with `NullReporter`, `LoggingReporter`, and `ConsoleReporter` implementations |
 | `models/` | `UNetGenerator`, `PatchGANDiscriminator`, model factory, model config dataclass |
 | `data/` | `DatasetManifest`, `ManifestRecord`, `DatasetBuilder` (preprocessing pipeline), `PatchDataset` |
-| `training/` | `Trainer`, training runner, per-step logic, adversarial and L1 losses, checkpoint I/O |
+| `training/` | `Trainer`, training runner, augmentation, per-step logic, adversarial and L1 losses, checkpoint I/O |
 | `inference/` | `Predictor`, inference runner, output writers |
 | `evaluation/` | Per-image metrics, `Evaluator`, summary statistics, comparison panels, ranking utilities |
 | `applications/` | Use-case orchestrators (`train.py`, `infer.py`, `evaluate.py`, ...) - no `argparse` |

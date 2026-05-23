@@ -30,6 +30,7 @@ from virtual_staining.experiment.snapshots import (
 from virtual_staining.models.factory import build_discriminator, build_generator
 from virtual_staining.reporting.base import TrainingReporter
 from virtual_staining.reporting.null import NullReporter
+from virtual_staining.training.augmentation import build_training_paired_transform
 from virtual_staining.training.checkpoints import CheckpointManager
 from virtual_staining.training.results import TrainingResult
 from virtual_staining.training.trainer import Trainer
@@ -91,6 +92,8 @@ def run_training(
 
     manifest = load_manifest_or_raise(config.project)
     manifest.validate(check_files_exist=True, require_splits={"train", "val"})
+    train_manifest = manifest.filter_split("train")
+    val_manifest = manifest.filter_split("val")
     manifest_path = config.project.manifest_path
     manifest_hash = compute_manifest_hash(manifest_path)
 
@@ -122,14 +125,21 @@ def run_training(
     save_environment_snapshot(snapshot_paths.environment)
 
     started_at = datetime.now(UTC).isoformat()
+    effective_train_sample_count = (
+        len(train_manifest) * config.augmentation.effective_expansion_factor
+    )
     train_details = {
         "manifest_path": str(manifest_path),
         "manifest_sha256": manifest_hash,
         "seed": seed,
         "device": str(device),
         "cuda_device_name": torch.cuda.get_device_name(device) if device.type == "cuda" else None,
-        "train_sample_count": len(manifest.filter_split("train")),
-        "val_sample_count": len(manifest.filter_split("val")),
+        "train_sample_count": len(train_manifest),
+        "effective_train_sample_count": effective_train_sample_count,
+        "augmentation_enabled": config.augmentation.enabled,
+        "augmentation_intensity": config.augmentation.intensity,
+        "augmentation_expansion_factor": config.augmentation.effective_expansion_factor,
+        "val_sample_count": len(val_manifest),
     }
     save_stage_metadata(
         "train",
@@ -185,21 +195,29 @@ def run_training(
     train_dir = config.project.split_dir("train")
     val_dir = config.project.split_dir("val")
     include_foreground_mask = _requires_foreground_masks(config)
+    train_paired_transform = build_training_paired_transform(
+        config.augmentation,
+        image_size=config.project.image_size,
+        seed=seed,
+    )
 
     train_dataset = PairedManifestDataset(
-        manifest.filter_split("train"),
-        transform=transform,
-        mask_transform=mask_transform,
+        train_manifest,
+        transform=None if train_paired_transform is not None else transform,
+        mask_transform=None if train_paired_transform is not None else mask_transform,
+        paired_transform=train_paired_transform,
         include_foreground_mask=include_foreground_mask,
+        virtual_expansion_factor=config.augmentation.effective_expansion_factor,
     )
     val_dataset = PairedManifestDataset(
-        manifest.filter_split("val"),
+        val_manifest,
         transform=transform,
         mask_transform=mask_transform,
         include_foreground_mask=include_foreground_mask,
     )
     logger.info(
-        "Loaded manifest: %s train, %s val samples",
+        "Loaded manifest: %s train samples (%s effective), %s val samples",
+        len(train_manifest),
         len(train_dataset),
         len(val_dataset),
     )

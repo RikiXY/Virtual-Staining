@@ -92,6 +92,17 @@ explicitly listed, `enabled` is `true`, and its scheduled current weight is
 nonzero. Explicitly listed terms must declare `weight`; unlisted registry
 entries remain absent and inactive.
 
+Training-only augmentation is recorded under top-level `augmentation`. When
+enabled, the training split is virtually expanded in memory; no augmented patch
+files are written, and validation/test data keep deterministic preprocessing.
+
+```yaml
+augmentation:
+  enabled: false
+  expansion_factor: 1
+  intensity: light  # light, medium, or strong
+```
+
 Accepted loss names are:
 
 - `adversarial_bce`: generator or discriminator BCE-with-logits adversarial loss.
@@ -196,7 +207,7 @@ See [run.json Schema](#runjson-schema) below.
 Snapshot of the runtime environment captured for the training stage:
 
 - Python version and platform
-- `torch`, `numpy`, `opencv` package versions
+- `torch`, `numpy`, `opencv`, `albumentations` package versions
 - CUDA availability, CUDA version, GPU name
 
 ### `metadata/config_hash.txt`

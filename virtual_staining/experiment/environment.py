@@ -19,6 +19,7 @@ def collect_environment() -> dict:
         "torch": _pkg_version("torch"),
         "numpy": _pkg_version("numpy"),
         "opencv": _pkg_version("cv2"),
+        "albumentations": _pkg_version("albumentations"),
         "cuda_available": cuda_available,
         "cuda_version": cuda_version,
         "gpu_name": gpu_name,
