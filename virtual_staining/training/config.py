@@ -25,8 +25,6 @@ _TRAINING_KEYS: frozenset[str] = frozenset(
         "resume",
         "scheduler",
         "early_stopping",
-        "lr_schedule",
-        "decay_start_epoch",
     }
 )
 _SCHEDULER_KEYS: frozenset[str] = frozenset(
@@ -537,28 +535,12 @@ def parse_learning_rate_scheduler_config(
     raw: Any,
     *,
     epochs: int,
-    legacy_lr_schedule: Any = None,
-    legacy_decay_start_epoch: Any = None,
 ) -> LearningRateSchedulerConfig:
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
         raise TypeError("training.scheduler must be a YAML mapping")
     reject_unknown_keys(raw, _SCHEDULER_KEYS, "training.scheduler")
-
-    if legacy_lr_schedule is not None:
-        if "name" in raw:
-            raise ValueError("Use either training.scheduler.name or training.lr_schedule, not both")
-        raw = dict(raw)
-        raw["name"] = legacy_lr_schedule
-    if legacy_decay_start_epoch is not None:
-        if "decay_start_epoch" in raw:
-            raise ValueError(
-                "Use either training.scheduler.decay_start_epoch or "
-                "training.decay_start_epoch, not both"
-            )
-        raw = dict(raw)
-        raw["decay_start_epoch"] = legacy_decay_start_epoch
 
     name = _parse_choice(
         raw.get("name", "none"),

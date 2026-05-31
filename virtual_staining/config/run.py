@@ -53,6 +53,33 @@ _FLAT_EVALUATION_KEYS: frozenset[str] = frozenset(
         "output_dir",
     }
 )
+_STRUCTURED_CONFIG_KEYS: frozenset[str] = frozenset(
+    {
+        "training",
+        "augmentation",
+        "losses",
+        "inference",
+        "model",
+        "evaluation",
+        "preprocessing",
+        "compare",
+        "render_panels",
+        "organize",
+    }
+)
+_FLAT_PREPROCESSING_TRIGGERS: frozenset[str] = frozenset({"source_name", "target_name"})
+
+
+def _should_validate_top_level(raw: dict[str, Any]) -> bool:
+    keys = set(raw)
+    if not keys - _TOP_LEVEL_KEYS:
+        return False
+    if keys & _STRUCTURED_CONFIG_KEYS:
+        return True
+    if keys & _FLAT_EVALUATION_KEYS:
+        return False
+    return not keys >= _FLAT_PREPROCESSING_TRIGGERS
+
 
 if TYPE_CHECKING:
     from virtual_staining.data.config import PreprocessingConfig
@@ -81,26 +108,7 @@ class RunConfig:
     @classmethod
     def from_yaml(cls, path: str | Path) -> RunConfig:
         raw = load_yaml_mapping(path)
-        removed_panel_key = "_".join(("compare", "panels"))
-        if removed_panel_key in raw:
-            raise ValueError(
-                f"Unknown key(s) in top level: {removed_panel_key}. Use render_panels instead."
-            )
-        if any(
-            key in raw
-            for key in (
-                "training",
-                "augmentation",
-                "losses",
-                "inference",
-                "model",
-                "evaluation",
-                "preprocessing",
-                "compare",
-                "render_panels",
-                "organize",
-            )
-        ):
+        if _should_validate_top_level(raw):
             reject_unknown_keys(raw, _TOP_LEVEL_KEYS, "top level")
 
         project = _parse_project(raw)
@@ -450,8 +458,6 @@ def _parse_training(raw: dict[str, Any]) -> TrainingConfig:
     scheduler = parse_learning_rate_scheduler_config(
         data.get("scheduler", {}),
         epochs=epochs,
-        legacy_lr_schedule=data.get("lr_schedule"),
-        legacy_decay_start_epoch=data.get("decay_start_epoch"),
     )
     early_stopping = parse_early_stopping_config(data.get("early_stopping"))
     config = TrainingConfig(

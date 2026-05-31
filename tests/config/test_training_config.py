@@ -154,28 +154,6 @@ def test_training_scheduler_parses_linear_decay(tmp_path: Path) -> None:
     }
 
 
-def test_training_scheduler_parses_legacy_linear_decay_keys(tmp_path: Path) -> None:
-    yaml_file = tmp_path / "train.yaml"
-    write_yaml(
-        yaml_file,
-        """\
-        dataset_root: /data
-        results_path: /results
-        run_name: yaml_run
-        training:
-          epochs: 20
-          lr_schedule: linear_decay
-          decay_start_epoch: 10
-    """,
-    )
-
-    run_config = RunConfig.from_yaml(yaml_file)
-
-    assert run_config.training is not None
-    assert run_config.training.scheduler.name == "linear_decay"
-    assert run_config.training.scheduler.decay_start_epoch == 10
-
-
 def test_training_scheduler_parses_reduce_on_plateau(tmp_path: Path) -> None:
     yaml_file = tmp_path / "train.yaml"
     write_yaml(

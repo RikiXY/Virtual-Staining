@@ -390,17 +390,16 @@ def test_render_panels_main_with_config_invokes_render_panels(
     assert request.kinds == ("best", "worst")  # type: ignore[attr-defined]
 
 
-def test_old_panel_config_section_is_rejected(tmp_path: Path) -> None:
-    old_key = "_".join(("compare", "panels"))
+def test_unknown_project_level_section_is_rejected(tmp_path: Path) -> None:
     config_path = _write_config(
         tmp_path,
-        f"""\
-        {old_key}:
-          mode: from_metrics
+        """\
+        extra_tool:
+          enabled: true
         """,
     )
 
-    with pytest.raises(ValueError, match=f"{old_key}.*render_panels"):
+    with pytest.raises(ValueError, match="extra_tool"):
         RunConfig.from_yaml(config_path)
 
 
