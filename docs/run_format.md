@@ -1,5 +1,8 @@
 # Run Output Format
 
+For command responsibilities and when to use each evaluation utility, see
+[`docs/evaluation_tools.md`](evaluation_tools.md).
+
 ## Local Queues
 
 Queue definitions are stored as YAML files under `config/queues/`. Runtime

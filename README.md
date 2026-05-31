@@ -156,8 +156,10 @@ The `CONFIG` variable is the only Make argument accepted for experiment targets.
 Put dataset paths, run names, image sizes, epochs, seeds, and checkpoint selection
 in the YAML - not in Make variables.
 
-See [`docs/architecture.md`](docs/architecture.md) for the full config schema and
-[`docs/run_format.md`](docs/run_format.md) for run output layout.
+See [`docs/architecture.md`](docs/architecture.md) for the full config schema,
+[`docs/evaluation_tools.md`](docs/evaluation_tools.md) for evaluation command
+boundaries, and [`docs/run_format.md`](docs/run_format.md) for run output
+layout.
 
 ## Qualitative Results
 

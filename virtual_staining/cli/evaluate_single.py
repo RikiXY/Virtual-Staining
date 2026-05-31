@@ -15,7 +15,7 @@ from virtual_staining.utils.console import print_info, print_section, style
 from virtual_staining.utils.metrics import color_metric
 
 REMOVED_DATASET_MODE_MESSAGE = (
-    "vs-evaluate-single dataset/config mode was removed. "
+    "dataset/config mode was removed from vs-evaluate-single. "
     "Use 'vs-evaluate --config <run.yaml>' for run-level evaluation, or "
     "'vs-evaluate-single --target-image ... --generated-image ...' "
     "for one target/generated pair."
