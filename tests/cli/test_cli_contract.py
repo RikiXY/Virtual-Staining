@@ -535,6 +535,7 @@ def test_organize_main_with_config_invokes_organize(
     request = captured["request"]
     assert request.metrics_csv == current_run / "evaluation" / "per_image_metrics.csv"  # type: ignore[attr-defined]
     assert request.output_dir == current_run / "evaluation" / "sorted_by_metrics"  # type: ignore[attr-defined]
+    assert request.run_path == current_run  # type: ignore[attr-defined]
     assert request.top_k == 5  # type: ignore[attr-defined]
     assert request.mode == "copy"  # type: ignore[attr-defined]
     assert request.include_all_ranked is True  # type: ignore[attr-defined]

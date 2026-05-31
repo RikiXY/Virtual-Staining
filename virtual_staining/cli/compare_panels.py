@@ -46,6 +46,8 @@ def _print_metric_run_header(result: FromMetricsResult) -> None:
 def _print_metric_saved_files(result: FromMetricsResult) -> None:
     print_section("Saved files")
     print_info("Metric-based comparisons", style(str(result.metrics_dir), "bold", "magenta"))
+    if result.artifact_manifest_path is not None:
+        print_info("Artifact manifest", str(result.artifact_manifest_path))
 
 
 def _cmd_single(args: argparse.Namespace) -> None:

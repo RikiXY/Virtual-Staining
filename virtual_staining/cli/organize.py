@@ -59,6 +59,11 @@ def _resolve_output_dir(args: argparse.Namespace, metrics_csv: Path) -> Path:
 def _build_request(args: argparse.Namespace) -> OrganizeRequest:
     metrics_csv = _resolve_metrics_csv(args)
     output_dir = _resolve_output_dir(args, metrics_csv)
+    run_path = (
+        _resolve_run_path(args.run_path)
+        if args.run_path is not None
+        else _infer_run_path_from_metrics_csv(metrics_csv)
+    )
     return OrganizeRequest(
         metrics_csv=metrics_csv,
         output_dir=output_dir,
@@ -67,6 +72,7 @@ def _build_request(args: argparse.Namespace) -> OrganizeRequest:
         mode=args.mode,
         overwrite=args.overwrite,
         include_all_ranked=args.include_all_ranked,
+        run_path=run_path,
     )
 
 
@@ -182,7 +188,19 @@ def _build_request_from_config(config_path: Path) -> OrganizeRequest:
         overwrite=organize_cfg.overwrite,
         include_all_ranked=organize_cfg.include_all_ranked,
     )
-    return _build_request(args)
+    request = _build_request(args)
+    if request.run_path is None:
+        return OrganizeRequest(
+            metrics_csv=request.metrics_csv,
+            output_dir=request.output_dir,
+            top_k=request.top_k,
+            metrics=request.metrics,
+            mode=request.mode,
+            overwrite=request.overwrite,
+            include_all_ranked=request.include_all_ranked,
+            run_path=config.project.run_root,
+        )
+    return request
 
 
 def main(argv: list[str] | None = None) -> None:

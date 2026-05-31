@@ -378,18 +378,23 @@ Each file is named after its source patch (e.g. `00512_09216_target_generated.ti
 
 ### `evaluation/artifacts.json`
 
-Canonical manifest of core artifacts written by `vs-evaluate`. It is always
-written after evaluation completes and only lists files that exist at manifest
-write time. Paths are relative to the run root when the artifact is under the
-run directory; artifacts written to a custom `evaluation.output_dir` outside the
-run root use absolute paths and set `path_type` to `absolute`.
+Canonical manifest of evaluation artifacts. `vs-evaluate` writes the core
+manifest after evaluation completes. Secondary utilities append their outputs
+when they can identify the source run: `vs-compare-panels from-metrics`
+registers metric panel artifacts and `vs-organize` registers ranked sample file
+exports. If the base file is missing, a secondary utility creates a compatible
+manifest containing its own artifacts. The manifest only lists files or
+directories that exist at manifest write time. Paths are relative to the run
+root when the artifact is under the run directory; artifacts written outside
+the run root use absolute paths and set `path_type` to `absolute`.
 
 Top-level fields:
 
 | Field | Description |
 |---|---|
 | `schema_version` | Manifest schema version. Current value: `1` |
-| `created_at` | ISO-8601 timestamp from the evaluation completion time |
+| `created_at` | ISO-8601 timestamp from the manifest creation time, normally evaluation completion |
+| `updated_at` | ISO-8601 timestamp from the latest secondary manifest update, when present |
 | `path_policy` | Human-readable path policy |
 | `artifacts` | List of artifact records |
 
@@ -397,18 +402,22 @@ Artifact record fields:
 
 | Field | Description |
 |---|---|
-| `stage` | Creation stage, currently `evaluate` |
-| `artifact_type` | Stable artifact type such as `per_image_metrics_csv`, `summary_csv`, `weak_tail_csv`, `skipped_csv`, `metric_histogram`, `metrics_boxplot`, `residual_heatmaps_csv`, or `residual_heatmap_png` |
+| `stage` | Creation stage, such as `evaluate`, `compare_panels`, or `organize` |
+| `artifact_type` | Stable artifact type such as `per_image_metrics_csv`, `summary_csv`, `weak_tail_csv`, `skipped_csv`, `metric_histogram`, `metrics_boxplot`, `residual_heatmaps_csv`, `residual_heatmap_png`, `selection_summary`, `comparison_panel`, `diagnostic_image`, `diagnostic_panel`, `organization_summary`, or `ranked_sample_export` |
 | `path` | Artifact path using the manifest path policy |
 | `path_type` | `run_relative` or `absolute` |
 | `metric` | Metric associated with the artifact, or `null` |
 | `sample_id` | Sample associated with the artifact, or `null` |
 | `description` | Short human-readable description |
-| `metadata` | Artifact-specific key/value metadata |
+| `metadata` | Artifact-specific key/value metadata, including the creating `command` for secondary utility artifacts |
 
-Secondary utilities such as `vs-compare-panels` and `vs-organize` do not write
-to this manifest yet; those artifacts are registered by the follow-up utility
-manifest work.
+Secondary utility metadata includes enough context for consumers to avoid path
+guessing. `compare_panels` entries include the command, source run, selected
+metrics, kind, rank, and metric values where applicable. `organize` entries
+include the command, source run, selected metrics, top-k, export mode,
+rank-count, selected file roles, and exported file counts. Rerunning a
+secondary utility replaces that utility's prior manifest entries while
+preserving artifacts from other stages.
 
 ### `evaluation/per_image_metrics.csv`
 
@@ -593,6 +602,10 @@ better, while MAE, MSE, and RMSE rank lower values as better. Ties use
 | `intensity_overlay_histogram_path` | Saved target/generated intensity overlay histogram |
 | `target_vs_generated_scatter_by_channel_path` | Saved target-vs-generated scatter plot |
 
+When run with a source run path, `vs-compare-panels from-metrics` appends these
+outputs to `evaluation/artifacts.json` using `selection_summary`,
+`comparison_panel`, `diagnostic_image`, and `diagnostic_panel` artifact types.
+
 ### `evaluation/sorted_by_metrics/`
 
 Written by `vs-organize` or `organize` config sections. This utility is a
@@ -629,6 +642,13 @@ when available. File placement mode is controlled by `mode` and may be
 | `selected_file_roles` | Comma-separated exported roles, such as `generated,target,source` |
 | `output_dir` | Directory containing the exported files for this metric/kind |
 | `files_exported` | Number of files placed for this metric/kind |
+
+When `vs-organize` is run with `--run-path`, a run config, or a
+`--metrics-csv` path under `RUN/evaluation/per_image_metrics.csv`, it appends
+`organization_summary` and `ranked_sample_export` entries to
+`evaluation/artifacts.json`. Standalone `--metrics-csv` usage outside a run
+still writes the export folders and summary CSV, but manifest registration is
+skipped because there is no run root to anchor relative paths.
 
 ## run.json Schema
 

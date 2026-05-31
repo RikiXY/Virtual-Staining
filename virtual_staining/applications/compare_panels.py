@@ -4,6 +4,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from virtual_staining.evaluation.artifacts import (
+    EvaluationArtifact,
+    append_artifacts_to_manifest,
+)
 from virtual_staining.evaluation.panels import (
     METRIC_SELECTION_ORDER,
     DiagnosticEntry,
@@ -16,6 +20,14 @@ from virtual_staining.evaluation.panels import (
 )
 from virtual_staining.evaluation.selection import select_ranked_samples
 from virtual_staining.evaluation.summaries import read_per_image_metrics_csv, read_summary_csv
+
+COMPARE_PANELS_STAGE = "compare_panels"
+COMPARE_PANELS_COMMAND = "vs-compare-panels from-metrics"
+DIAGNOSTIC_IMAGE_FIELDS = {
+    "error_histogram_path": "error_histogram",
+    "intensity_overlay_histogram_path": "intensity_overlay_histogram",
+    "target_vs_generated_scatter_by_channel_path": "target_vs_generated_scatter_by_channel",
+}
 
 
 @dataclass(frozen=True)
@@ -46,6 +58,7 @@ class FromMetricsResult:
     saved_aggregated_paths: list[Path]
     metrics_dir: Path
     per_metric_ranked_rows: dict[str, dict[str, list[dict[str, str]]]] = field(default_factory=dict)
+    artifact_manifest_path: Path | None = None
 
 
 def compare_panels(request: ComparePanelsRequest) -> SinglePanelResult | FromMetricsResult:
@@ -151,6 +164,7 @@ def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
     selection_summary_rows: list[dict[str, object]] = []
     saved_aggregated_paths: list[Path] = []
     available_metrics = _resolve_panel_metrics(request.metrics, summary_rows)
+    metric_selection_summary_paths: dict[str, Path] = {}
 
     if not available_metrics:
         raise ValueError(
@@ -198,7 +212,9 @@ def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
                 metric_selection_rows.append(selection_row)
                 metric_diagnostic_entries.append(diagnostic_entry)
 
-        write_metric_selection_summary(metric_selection_rows, metric_dir / "selection_summary.csv")
+        metric_selection_summary_path = metric_dir / "selection_summary.csv"
+        write_metric_selection_summary(metric_selection_rows, metric_selection_summary_path)
+        metric_selection_summary_paths[metric_name] = metric_selection_summary_path
         kind_order = {"best": 0, "median": 1, "worst": 2}
         metric_diagnostic_entries.sort(
             key=lambda entry: (kind_order[entry["kind"]], entry.get("rank", 0))
@@ -210,9 +226,19 @@ def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
         )
         saved_aggregated_paths.extend(aggregated_paths)
 
+    global_selection_summary_path = metrics_dir / "metrics_selection_summary.csv"
     write_metric_selection_summary(
         selection_summary_rows,
-        metrics_dir / "metrics_selection_summary.csv",
+        global_selection_summary_path,
+    )
+    artifact_manifest_path = _register_from_metrics_artifacts(
+        run_path=run_path,
+        global_selection_summary_path=global_selection_summary_path,
+        metric_selection_summary_paths=metric_selection_summary_paths,
+        selection_summary_rows=selection_summary_rows,
+        saved_aggregated_paths=saved_aggregated_paths,
+        available_metrics=available_metrics,
+        request=request,
     )
 
     return FromMetricsResult(
@@ -222,6 +248,171 @@ def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
         saved_aggregated_paths=saved_aggregated_paths,
         metrics_dir=metrics_dir,
         per_metric_ranked_rows=per_metric_ranked_rows,
+        artifact_manifest_path=artifact_manifest_path,
+    )
+
+
+def _base_secondary_metadata(
+    *,
+    run_path: Path,
+    request: ComparePanelsRequest,
+    artifact_format: str,
+) -> dict[str, object]:
+    return {
+        "command": COMPARE_PANELS_COMMAND,
+        "source_run": run_path.name,
+        "artifact_format": artifact_format,
+        "top_k": request.top_k,
+        "kinds": list(request.kinds),
+        "selected_metrics": list(request.metrics) if request.metrics is not None else "default",
+    }
+
+
+def _selection_row_metadata(
+    *,
+    run_path: Path,
+    request: ComparePanelsRequest,
+    row: dict[str, object],
+    artifact_format: str,
+) -> dict[str, object]:
+    metadata = _base_secondary_metadata(
+        run_path=run_path,
+        request=request,
+        artifact_format=artifact_format,
+    )
+    metadata.update(
+        {
+            "kind": row.get("kind"),
+            "rank": row.get("rank"),
+            "metric_value": row.get("metric_value"),
+            "target_value": row.get("target_value"),
+        }
+    )
+    return metadata
+
+
+def _diagnostic_panel_kind(path: Path, metric: str) -> str:
+    return path.stem.removeprefix(f"{metric}_")
+
+
+def _register_from_metrics_artifacts(
+    *,
+    run_path: Path,
+    global_selection_summary_path: Path,
+    metric_selection_summary_paths: dict[str, Path],
+    selection_summary_rows: list[dict[str, object]],
+    saved_aggregated_paths: list[Path],
+    available_metrics: list[str],
+    request: ComparePanelsRequest,
+) -> Path:
+    artifacts: list[EvaluationArtifact] = [
+        EvaluationArtifact(
+            stage=COMPARE_PANELS_STAGE,
+            artifact_type="selection_summary",
+            path=global_selection_summary_path,
+            description="Global compare-panels metric selection summary CSV.",
+            metadata={
+                **_base_secondary_metadata(
+                    run_path=run_path,
+                    request=request,
+                    artifact_format="csv",
+                ),
+                "scope": "global",
+                "selected_metrics": available_metrics,
+            },
+        )
+    ]
+
+    for metric_name, selection_summary_path in metric_selection_summary_paths.items():
+        artifacts.append(
+            EvaluationArtifact(
+                stage=COMPARE_PANELS_STAGE,
+                artifact_type="selection_summary",
+                path=selection_summary_path,
+                metric=metric_name,
+                description="Per-metric compare-panels selection summary CSV.",
+                metadata={
+                    **_base_secondary_metadata(
+                        run_path=run_path,
+                        request=request,
+                        artifact_format="csv",
+                    ),
+                    "scope": "metric",
+                    "selected_metrics": available_metrics,
+                },
+            )
+        )
+
+    for row in selection_summary_rows:
+        metric_name = str(row["metric"])
+        kind = str(row["kind"])
+        rank = row.get("rank")
+        sample_id = str(row["sample_id"])
+        artifacts.append(
+            EvaluationArtifact(
+                stage=COMPARE_PANELS_STAGE,
+                artifact_type="comparison_panel",
+                path=Path(str(row["comparison_path"])),
+                metric=metric_name,
+                sample_id=sample_id,
+                description="Source/generated/target comparison panel for a ranked sample.",
+                metadata=_selection_row_metadata(
+                    run_path=run_path,
+                    request=request,
+                    row=row,
+                    artifact_format="image",
+                ),
+            )
+        )
+
+        for path_column, diagnostic_kind in DIAGNOSTIC_IMAGE_FIELDS.items():
+            artifacts.append(
+                EvaluationArtifact(
+                    stage=COMPARE_PANELS_STAGE,
+                    artifact_type="diagnostic_image",
+                    path=Path(str(row[path_column])),
+                    metric=metric_name,
+                    sample_id=sample_id,
+                    description="Per-case compare-panels diagnostic image.",
+                    metadata={
+                        **_selection_row_metadata(
+                            run_path=run_path,
+                            request=request,
+                            row=row,
+                            artifact_format="image",
+                        ),
+                        "diagnostic_kind": diagnostic_kind,
+                        "kind": kind,
+                        "rank": rank,
+                    },
+                )
+            )
+
+    for path in saved_aggregated_paths:
+        metric_name = path.parent.name
+        artifacts.append(
+            EvaluationArtifact(
+                stage=COMPARE_PANELS_STAGE,
+                artifact_type="diagnostic_panel",
+                path=path,
+                metric=metric_name,
+                description="Aggregate compare-panels diagnostic panel.",
+                metadata={
+                    **_base_secondary_metadata(
+                        run_path=run_path,
+                        request=request,
+                        artifact_format="image",
+                    ),
+                    "diagnostic_kind": _diagnostic_panel_kind(path, metric_name),
+                },
+            )
+        )
+
+    return append_artifacts_to_manifest(
+        artifacts,
+        run_path / "evaluation" / "artifacts.json",
+        run_root=run_path,
+        replace_stages=(COMPARE_PANELS_STAGE,),
     )
 
 

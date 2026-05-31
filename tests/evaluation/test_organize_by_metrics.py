@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
+from virtual_staining.applications.organize import OrganizeRequest, organize
 from virtual_staining.evaluation.ranking import (
     ORGANIZATION_SUMMARY_FIELDNAMES,
     organize_by_metrics,
@@ -201,3 +203,98 @@ def test_organize_by_metrics_writes_ranked_export_summary(tmp_path: Path) -> Non
         str(output_dir / "ssim" / "all_ranked"),
     ]
     assert list(summary["files_exported"]) == [3, 3, 6]
+
+
+def test_organize_registers_ranked_export_artifacts(tmp_path: Path) -> None:
+    run_path = tmp_path / "results" / "organize_run"
+    evaluation_dir = run_path / "evaluation"
+    image_dir = tmp_path / "images"
+    rows = []
+    for sample_id, metric_value in [("low", 0.1), ("high", 0.9)]:
+        source_path = image_dir / f"{sample_id}_source.png"
+        target_path = image_dir / f"{sample_id}_target.png"
+        generated_path = image_dir / f"{sample_id}_generated.png"
+        _touch(source_path)
+        _touch(target_path)
+        _touch(generated_path)
+        rows.append(
+            {
+                "sample_id": sample_id,
+                "source_path": str(source_path),
+                "target_path": str(target_path),
+                "generated_path": str(generated_path),
+                "ssim": metric_value,
+            }
+        )
+
+    evaluation_dir.mkdir(parents=True)
+    metrics_csv = evaluation_dir / "per_image_metrics.csv"
+    pd.DataFrame(rows).to_csv(metrics_csv, index=False)
+
+    organize(
+        OrganizeRequest(
+            metrics_csv=metrics_csv,
+            output_dir=evaluation_dir / "sorted_by_metrics",
+            top_k=1,
+            metrics=("ssim",),
+            mode="copy",
+            overwrite=False,
+            include_all_ranked=True,
+            run_path=run_path,
+        )
+    )
+
+    manifest = json.loads((evaluation_dir / "artifacts.json").read_text(encoding="utf-8"))
+    artifacts = manifest["artifacts"]
+    summary_artifact = next(
+        artifact for artifact in artifacts if artifact["artifact_type"] == "organization_summary"
+    )
+    export_artifacts = [
+        artifact for artifact in artifacts if artifact["artifact_type"] == "ranked_sample_export"
+    ]
+
+    assert summary_artifact["stage"] == "organize"
+    assert summary_artifact["path"] == "evaluation/sorted_by_metrics/organization_summary.csv"
+    assert summary_artifact["path_type"] == "run_relative"
+    assert summary_artifact["metadata"]["command"] == "vs-organize"
+    assert summary_artifact["metadata"]["source_run"] == "organize_run"
+    assert summary_artifact["metadata"]["selected_metrics"] == ["ssim"]
+    assert {artifact["metadata"]["kind"] for artifact in export_artifacts} == {
+        "best",
+        "worst",
+        "all_ranked",
+    }
+    assert all(artifact["metric"] == "ssim" for artifact in export_artifacts)
+    assert all(artifact["path_type"] == "run_relative" for artifact in export_artifacts)
+    assert all(artifact["metadata"]["export_mode"] == "copy" for artifact in export_artifacts)
+
+
+def test_organize_standalone_csv_skips_manifest_registration(tmp_path: Path) -> None:
+    image_path = tmp_path / "images" / "sample.png"
+    _touch(image_path)
+    metrics_csv = tmp_path / "per_image_metrics.csv"
+    pd.DataFrame(
+        [
+            {
+                "sample_id": "sample",
+                "generated_path": str(image_path),
+                "ssim": 0.9,
+            }
+        ]
+    ).to_csv(metrics_csv, index=False)
+
+    organize(
+        OrganizeRequest(
+            metrics_csv=metrics_csv,
+            output_dir=tmp_path / "exports",
+            top_k=1,
+            metrics=("ssim",),
+            mode="copy",
+            overwrite=False,
+            include_all_ranked=False,
+            run_path=None,
+        )
+    )
+
+    assert not (tmp_path / "artifacts.json").exists()
+    assert not (tmp_path / "exports" / "artifacts.json").exists()

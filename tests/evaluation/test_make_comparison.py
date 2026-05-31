@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -268,6 +269,61 @@ def test_compare_panels_top_k_ranks_by_metric_direction(tmp_path: Path) -> None:
     assert "rank" in global_rows[0]
     assert "comparison_path" in global_rows[0]
     assert "error_histogram_path" in global_rows[0]
+
+
+def test_compare_panels_from_metrics_registers_secondary_artifacts(tmp_path: Path) -> None:
+    run_path = _write_compare_panel_run(
+        tmp_path,
+        [
+            ("weak", 0.10, 0.90),
+            ("strong", 0.90, 0.10),
+        ],
+    )
+
+    result = compare_panels(
+        ComparePanelsRequest(
+            mode="from_metrics",
+            run_path=run_path,
+            metrics=("ssim",),
+            kinds=("best",),
+            top_k=1,
+        )
+    )
+
+    assert isinstance(result, FromMetricsResult)
+    artifact_manifest_path = result.artifact_manifest_path
+    assert artifact_manifest_path is not None
+    assert artifact_manifest_path == run_path / "evaluation" / "artifacts.json"
+
+    manifest = json.loads(artifact_manifest_path.read_text(encoding="utf-8"))
+    artifacts = manifest["artifacts"]
+    artifact_types = [artifact["artifact_type"] for artifact in artifacts]
+
+    assert "selection_summary" in artifact_types
+    assert "comparison_panel" in artifact_types
+    assert "diagnostic_image" in artifact_types
+    assert "diagnostic_panel" in artifact_types
+    assert all(artifact["stage"] == "compare_panels" for artifact in artifacts)
+    assert all(artifact["path_type"] == "run_relative" for artifact in artifacts)
+
+    global_summary = next(
+        artifact
+        for artifact in artifacts
+        if artifact["artifact_type"] == "selection_summary"
+        and artifact["path"] == "comparisons/metrics/metrics_selection_summary.csv"
+    )
+    assert global_summary["metadata"]["command"] == "vs-compare-panels from-metrics"
+    assert global_summary["metadata"]["source_run"] == "ranked_run"
+    assert global_summary["metadata"]["selected_metrics"] == ["ssim"]
+
+    comparison_panel = next(
+        artifact for artifact in artifacts if artifact["artifact_type"] == "comparison_panel"
+    )
+    assert comparison_panel["path"] == "comparisons/metrics/ssim/best_strong_comparison.png"
+    assert comparison_panel["metric"] == "ssim"
+    assert comparison_panel["sample_id"] == "strong"
+    assert comparison_panel["metadata"]["kind"] == "best"
+    assert comparison_panel["metadata"]["rank"] == 1
 
 
 def test_compare_panels_and_organize_share_top_k_selection(tmp_path: Path) -> None:

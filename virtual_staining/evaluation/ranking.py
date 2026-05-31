@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,15 @@ ORGANIZATION_SUMMARY_FIELDNAMES = [
     "output_dir",
     "files_exported",
 ]
+
+
+@dataclass(frozen=True)
+class OrganizationResult:
+    output_dir: Path
+    summary_csv: Path | None
+    summary_rows: list[dict[str, Any]]
+    metrics: tuple[str, ...]
+    image_columns: tuple[str, ...]
 
 
 def ensure_parent(path: Path) -> None:
@@ -284,7 +294,7 @@ def organize_by_metrics(
     mode: str = "hardlink",
     overwrite: bool = False,
     include_all_ranked: bool = False,
-) -> None:
+) -> OrganizationResult:
     """
     Read per_image_metrics.csv and export ranked sample files by metric.
     """
@@ -334,9 +344,17 @@ def organize_by_metrics(
         summary_rows.extend(result["summary_rows"])
         print_info("Organized metric", style(metric, "green"))
 
+    summary_csv: Path | None = None
     if summary_rows:
         summary_csv = write_organization_summary(summary_rows, output_dir)
         print_info("Summary CSV", str(summary_csv))
 
     print_section("Done")
     print_info("Output written to", style(str(output_dir), "bold", "magenta"))
+    return OrganizationResult(
+        output_dir=output_dir,
+        summary_csv=summary_csv,
+        summary_rows=summary_rows,
+        metrics=tuple(selected_metrics),
+        image_columns=tuple(image_columns),
+    )
