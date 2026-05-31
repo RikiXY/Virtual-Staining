@@ -12,7 +12,7 @@ from virtual_staining.evaluation.panels import (
     save_comparison_panel,
     save_diagnostic_plots,
     save_metric_diagnostics_summary,
-    select_representative_rows,
+    select_ranked_representative_rows,
     write_metric_selection_summary,
 )
 from virtual_staining.evaluation.summaries import read_per_image_metrics_csv, read_summary_csv
@@ -27,6 +27,9 @@ class ComparePanelsRequest:
     save_path: Path | None = None
     with_diagnostics: bool = False
     run_path: Path | None = None
+    metrics: tuple[str, ...] | None = None
+    kinds: tuple[str, ...] = ("best", "median", "worst")
+    top_k: int = 1
 
 
 @dataclass
@@ -42,6 +45,7 @@ class FromMetricsResult:
     per_metric_representative_rows: dict[str, dict[str, dict[str, str]]]
     saved_aggregated_paths: list[Path]
     metrics_dir: Path
+    per_metric_ranked_rows: dict[str, dict[str, list[dict[str, str]]]] = field(default_factory=dict)
 
 
 def compare_panels(request: ComparePanelsRequest) -> SinglePanelResult | FromMetricsResult:
@@ -134,6 +138,8 @@ def _run_single(request: ComparePanelsRequest) -> SinglePanelResult:
 
 def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
     assert request.run_path is not None
+    if request.top_k <= 0:
+        raise ValueError("compare_panels top_k must be a positive integer.")
     run_path = request.run_path.resolve()
     evaluation_dir = run_path / "evaluation"
     summary_csv = evaluation_dir / "summary.csv"
@@ -144,7 +150,7 @@ def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
     metrics_dir.mkdir(parents=True, exist_ok=True)
     selection_summary_rows: list[dict[str, object]] = []
     saved_aggregated_paths: list[Path] = []
-    available_metrics = [metric for metric in METRIC_SELECTION_ORDER if metric in summary_rows]
+    available_metrics = _resolve_panel_metrics(request.metrics, summary_rows)
 
     if not available_metrics:
         raise ValueError(
@@ -153,35 +159,45 @@ def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
         )
 
     per_metric_representative_rows: dict[str, dict[str, dict[str, str]]] = {}
+    per_metric_ranked_rows: dict[str, dict[str, list[dict[str, str]]]] = {}
 
     for metric_name in available_metrics:
         metric_summary = summary_rows[metric_name]
         metric_dir = metrics_dir / metric_name
         metric_dir.mkdir(parents=True, exist_ok=True)
-        representative_rows = select_representative_rows(
+        ranked_rows = select_ranked_representative_rows(
             metric_name,
             metric_summary,
             per_image_rows,
+            top_k=request.top_k,
+            kinds=request.kinds,
         )
+        per_metric_ranked_rows[metric_name] = ranked_rows
+        representative_rows = {kind: rows[0] for kind, rows in ranked_rows.items() if rows}
         per_metric_representative_rows[metric_name] = representative_rows
         metric_selection_rows: list[dict[str, object]] = []
         metric_diagnostic_entries: list[DiagnosticEntry] = []
 
-        for kind, row in representative_rows.items():
-            selection_row, diagnostic_entry = build_metric_case_artifacts(
-                metric_name=metric_name,
-                kind=kind,
-                row=row,
-                metric_summary=metric_summary,
-                metric_dir=metric_dir,
-            )
-            selection_summary_rows.append(selection_row)
-            metric_selection_rows.append(selection_row)
-            metric_diagnostic_entries.append(diagnostic_entry)
+        for kind in request.kinds:
+            for rank, row in enumerate(ranked_rows.get(kind, []), start=1):
+                selection_row, diagnostic_entry = build_metric_case_artifacts(
+                    metric_name=metric_name,
+                    kind=kind,
+                    row=row,
+                    metric_summary=metric_summary,
+                    metric_dir=metric_dir,
+                    rank=rank,
+                    include_rank_in_filename=request.top_k > 1,
+                )
+                selection_summary_rows.append(selection_row)
+                metric_selection_rows.append(selection_row)
+                metric_diagnostic_entries.append(diagnostic_entry)
 
         write_metric_selection_summary(metric_selection_rows, metric_dir / "selection_summary.csv")
         kind_order = {"best": 0, "median": 1, "worst": 2}
-        metric_diagnostic_entries.sort(key=lambda entry: kind_order[entry["kind"]])
+        metric_diagnostic_entries.sort(
+            key=lambda entry: (kind_order[entry["kind"]], entry.get("rank", 0))
+        )
         aggregated_paths = save_metric_diagnostics_summary(
             metric_name=metric_name,
             metric_dir=metric_dir,
@@ -200,4 +216,21 @@ def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
         per_metric_representative_rows=per_metric_representative_rows,
         saved_aggregated_paths=saved_aggregated_paths,
         metrics_dir=metrics_dir,
+        per_metric_ranked_rows=per_metric_ranked_rows,
     )
+
+
+def _resolve_panel_metrics(
+    requested_metrics: tuple[str, ...] | None,
+    summary_rows: dict[str, dict[str, float]],
+) -> list[str]:
+    if requested_metrics is None:
+        return [metric for metric in METRIC_SELECTION_ORDER if metric in summary_rows]
+
+    missing_metrics = [metric for metric in requested_metrics if metric not in summary_rows]
+    if missing_metrics:
+        raise ValueError(
+            "Configured compare panel metrics were not found in summary.csv: "
+            f"{', '.join(missing_metrics)}"
+        )
+    return list(requested_metrics)

@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 import pytest
 
 from tests.image_helpers import write_rgb_image, write_rgb_pair
+from virtual_staining.applications.compare_panels import (
+    ComparePanelsRequest,
+    FromMetricsResult,
+    compare_panels,
+)
 from virtual_staining.evaluation.panels import (
     DiagnosticEntry,
     build_metric_case_artifacts,
@@ -13,6 +19,68 @@ from virtual_staining.evaluation.panels import (
     save_residual_heatmap,
     select_representative_rows,
 )
+from virtual_staining.evaluation.reports import write_per_image_metrics_csv
+from virtual_staining.evaluation.summaries import write_summary_csv
+
+
+def _metric_row(
+    sample_id: str,
+    target_path: Path,
+    generated_path: Path,
+    *,
+    ssim: float,
+    mae: float,
+) -> dict[str, object]:
+    return {
+        "sample_id": sample_id,
+        "target_path": str(target_path),
+        "generated_path": str(generated_path),
+        "width": 16,
+        "height": 16,
+        "channels": 3,
+        "mae": mae,
+        "mse": mae * mae,
+        "rmse": mae,
+        "psnr": 30.0,
+        "ssim": ssim,
+        "pcc_gray": 0.9,
+        "pcc_r": 0.9,
+        "pcc_g": 0.9,
+        "pcc_b": 0.9,
+        "pcc_rgb_mean": 0.9,
+    }
+
+
+def _write_compare_panel_run(
+    tmp_path: Path,
+    metric_values: list[tuple[str, float, float]],
+) -> Path:
+    run_path = tmp_path / "results" / "ranked_run"
+    target_dir = tmp_path / "data" / "splits" / "test"
+    generated_dir = run_path / "artifacts" / "output_test"
+    evaluation_dir = run_path / "evaluation"
+    rows: list[dict[str, object]] = []
+
+    for index, (sample_id, ssim, mae) in enumerate(metric_values, start=1):
+        _, target_path = write_rgb_pair(target_dir, sample_id, color=(0, 0, 0))
+        generated_path = write_rgb_image(
+            generated_dir / f"{sample_id}_target_generated.png",
+            color=(index * 32, index * 32, index * 32),
+        )
+        rows.append(
+            _metric_row(
+                sample_id,
+                target_path,
+                generated_path,
+                ssim=ssim,
+                mae=mae,
+            )
+        )
+
+    evaluation_dir.mkdir(parents=True, exist_ok=True)
+    write_per_image_metrics_csv(rows, evaluation_dir / "per_image_metrics.csv")
+    write_summary_csv(rows, evaluation_dir)
+    return run_path
 
 
 def test_select_representative_rows_uses_higher_is_better_direction() -> None:
@@ -111,6 +179,123 @@ def test_save_residual_heatmap_raises_for_size_mismatch(tmp_path: Path) -> None:
             target_path=target_path,
             generated_path=generated_path,
             save_path=tmp_path / "heatmap.png",
+        )
+
+
+def test_compare_panels_top_k_one_preserves_default_panel_filenames(tmp_path: Path) -> None:
+    run_path = _write_compare_panel_run(
+        tmp_path,
+        [
+            ("low", 0.10, 0.90),
+            ("mid", 0.50, 0.50),
+            ("high", 0.90, 0.10),
+        ],
+    )
+
+    result = compare_panels(
+        ComparePanelsRequest(
+            mode="from_metrics",
+            run_path=run_path,
+            metrics=("ssim",),
+            top_k=1,
+        )
+    )
+
+    assert isinstance(result, FromMetricsResult)
+    metric_dir = run_path / "comparisons" / "metrics" / "ssim"
+    assert (metric_dir / "best_high_comparison.png").is_file()
+    assert (metric_dir / "median_mid_comparison.png").is_file()
+    assert (metric_dir / "worst_low_comparison.png").is_file()
+    assert not (metric_dir / "best_001_high_comparison.png").exists()
+
+    with (metric_dir / "selection_summary.csv").open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert [row["kind"] for row in rows] == ["best", "median", "worst"]
+    assert [row["rank"] for row in rows] == ["1", "1", "1"]
+    assert [row["sample_id"] for row in rows] == ["high", "mid", "low"]
+
+
+def test_compare_panels_top_k_ranks_by_metric_direction(tmp_path: Path) -> None:
+    run_path = _write_compare_panel_run(
+        tmp_path,
+        [
+            ("weak", 0.10, 0.10),
+            ("strong", 0.90, 0.90),
+            ("runner_up", 0.80, 0.80),
+        ],
+    )
+
+    result = compare_panels(
+        ComparePanelsRequest(
+            mode="from_metrics",
+            run_path=run_path,
+            metrics=("ssim", "mae"),
+            kinds=("best", "worst"),
+            top_k=2,
+        )
+    )
+
+    assert isinstance(result, FromMetricsResult)
+
+    ssim_dir = run_path / "comparisons" / "metrics" / "ssim"
+    assert (ssim_dir / "best_001_strong_comparison.png").is_file()
+    assert (ssim_dir / "best_002_runner_up_comparison.png").is_file()
+    with (ssim_dir / "selection_summary.csv").open(encoding="utf-8", newline="") as handle:
+        ssim_rows = list(csv.DictReader(handle))
+    assert [row["sample_id"] for row in ssim_rows if row["kind"] == "best"] == [
+        "strong",
+        "runner_up",
+    ]
+
+    mae_dir = run_path / "comparisons" / "metrics" / "mae"
+    assert (mae_dir / "worst_001_strong_comparison.png").is_file()
+    assert (mae_dir / "worst_002_runner_up_comparison.png").is_file()
+    with (mae_dir / "selection_summary.csv").open(encoding="utf-8", newline="") as handle:
+        mae_rows = list(csv.DictReader(handle))
+    assert [row["sample_id"] for row in mae_rows if row["kind"] == "worst"] == [
+        "strong",
+        "runner_up",
+    ]
+
+    with (run_path / "comparisons" / "metrics" / "metrics_selection_summary.csv").open(
+        encoding="utf-8", newline=""
+    ) as handle:
+        global_rows = list(csv.DictReader(handle))
+
+    assert "rank" in global_rows[0]
+    assert "comparison_path" in global_rows[0]
+    assert "error_histogram_path" in global_rows[0]
+
+
+def test_compare_panels_missing_source_image_fails_clearly(tmp_path: Path) -> None:
+    run_path = tmp_path / "results" / "missing_source_run"
+    target_dir = tmp_path / "data" / "splits" / "test"
+    generated_dir = run_path / "artifacts" / "output_test"
+    evaluation_dir = run_path / "evaluation"
+    target_path = write_rgb_image(target_dir / "sample_target.png")
+    generated_path = write_rgb_image(generated_dir / "sample_target_generated.png")
+    rows = [
+        _metric_row(
+            "sample",
+            target_path,
+            generated_path,
+            ssim=0.90,
+            mae=0.10,
+        )
+    ]
+    evaluation_dir.mkdir(parents=True, exist_ok=True)
+    write_per_image_metrics_csv(rows, evaluation_dir / "per_image_metrics.csv")
+    write_summary_csv(rows, evaluation_dir)
+
+    with pytest.raises(FileNotFoundError, match="Could not infer source path"):
+        compare_panels(
+            ComparePanelsRequest(
+                mode="from_metrics",
+                run_path=run_path,
+                metrics=("ssim",),
+                kinds=("best",),
+            )
         )
 
 

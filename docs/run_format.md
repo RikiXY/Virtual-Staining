@@ -468,6 +468,45 @@ per skipped sample.
 
 This file is not written when all test samples are evaluated successfully.
 
+### `comparisons/metrics/`
+
+Written by `vs-compare-panels from-metrics` or `compare_panels.mode:
+from_metrics`. The command reads `evaluation/per_image_metrics.csv` and
+`evaluation/summary.csv`, then writes comparison panels and diagnostics under
+one subdirectory per metric:
+
+```text
+comparisons/metrics/
+├── metrics_selection_summary.csv
+└── <metric>/
+    ├── selection_summary.csv
+    ├── best_<sample_id>_comparison.png
+    ├── median_<sample_id>_comparison.png
+    ├── worst_<sample_id>_comparison.png
+    └── diagnostics/
+```
+
+By default, `top_k: 1` preserves the historical best/median/worst filenames.
+When `top_k > 1`, ranked filenames include the rank, for example
+`worst_001_<sample_id>_comparison.png`. Optional `metrics` and `kinds` config
+fields can restrict which metric names and representative kinds are rendered.
+
+| Column | Description |
+|---|---|
+| `metric` | Metric used for ranking |
+| `kind` | Representative kind: `best`, `median`, or `worst` |
+| `rank` | Rank within the metric/kind selection |
+| `sample_id` | Sample identifier from `per_image_metrics.csv` |
+| `metric_value` | Per-image value used for ranking |
+| `target_value` | Summary target for the kind (`max`, `median`, or `min` depending on metric direction) |
+| `source_path` | Source image path inferred from the sample row |
+| `target_path` | Ground-truth target image path |
+| `generated_path` | Generated image path |
+| `comparison_path` | Saved source/generated/target/MAE-map comparison panel |
+| `error_histogram_path` | Saved absolute-error histogram |
+| `intensity_overlay_histogram_path` | Saved target/generated intensity overlay histogram |
+| `target_vs_generated_scatter_by_channel_path` | Saved target-vs-generated scatter plot |
+
 ## run.json Schema
 
 ```json

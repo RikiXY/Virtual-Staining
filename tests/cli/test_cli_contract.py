@@ -255,6 +255,9 @@ def test_compare_panels_main_with_config_invokes_compare_panels(
         compare_panels:
           mode: from_metrics
           hide_graphs_path: true
+          top_k: 2
+          metrics: [ssim, mae]
+          kinds: [best, worst]
         """,
     )
 
@@ -283,6 +286,9 @@ def test_compare_panels_main_with_config_invokes_compare_panels(
     request = captured["request"]
     assert request.mode == "from_metrics"  # type: ignore[attr-defined]
     assert request.run_path == tmp_path / "results" / "current_run"  # type: ignore[attr-defined]
+    assert request.top_k == 2  # type: ignore[attr-defined]
+    assert request.metrics == ("ssim", "mae")  # type: ignore[attr-defined]
+    assert request.kinds == ("best", "worst")  # type: ignore[attr-defined]
 
 
 def test_evaluate_single_help_includes_config() -> None:

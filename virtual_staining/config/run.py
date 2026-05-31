@@ -12,6 +12,7 @@ from virtual_staining.config.utilities import (
     _COMPARE_KEYS,
     _COMPARE_PANELS_KEYS,
     _ORGANIZE_KEYS,
+    COMPARE_PANEL_KINDS,
     CompareConfig,
     ComparePanelsConfig,
     OrganizeConfig,
@@ -276,6 +277,13 @@ class RunConfig:
                     str(self.compare_panels.run_path) if self.compare_panels.run_path else None
                 ),
                 "hide_graphs_path": self.compare_panels.hide_graphs_path,
+                "metrics": (
+                    list(self.compare_panels.metrics)
+                    if self.compare_panels.metrics is not None
+                    else None
+                ),
+                "kinds": list(self.compare_panels.kinds),
+                "top_k": self.compare_panels.top_k,
                 "source_image": (
                     str(self.compare_panels.source_image)
                     if self.compare_panels.source_image
@@ -622,7 +630,9 @@ def _parse_compare_panels(raw: dict[str, Any]) -> ComparePanelsConfig:
     if raw_mode not in {"single", "from_metrics"}:
         raise ValueError("compare_panels.mode must be 'single' or 'from_metrics'")
     mode = cast(Literal["single", "from_metrics"], raw_mode)
-    return ComparePanelsConfig(
+    metrics = _parse_optional_string_tuple(data.get("metrics"), "compare_panels.metrics")
+    kinds = _parse_optional_string_tuple(data.get("kinds"), "compare_panels.kinds")
+    config = ComparePanelsConfig(
         mode=mode,
         run_path=Path(data["run_path"]) if data.get("run_path") else None,
         hide_graphs_path=(
@@ -630,6 +640,9 @@ def _parse_compare_panels(raw: dict[str, Any]) -> ComparePanelsConfig:
             if "hide_graphs_path" in data
             else False
         ),
+        metrics=metrics,
+        kinds=kinds if kinds is not None else COMPARE_PANEL_KINDS,
+        top_k=int(data.get("top_k", 1)),
         source_image=Path(data["source_image"]) if data.get("source_image") else None,
         generated_image=Path(data["generated_image"]) if data.get("generated_image") else None,
         target_image=Path(data["target_image"]) if data.get("target_image") else None,
@@ -640,6 +653,22 @@ def _parse_compare_panels(raw: dict[str, Any]) -> ComparePanelsConfig:
             else False
         ),
     )
+    config.validate()
+    return config
+
+
+def _parse_optional_string_tuple(raw: Any, field: str) -> tuple[str, ...] | None:
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        return (raw,)
+    if not isinstance(raw, list | tuple):
+        raise TypeError(f"{field} must be a string or a list of strings.")
+
+    values = tuple(str(value) for value in raw)
+    if any(not value for value in values):
+        raise ValueError(f"{field} must not contain empty values.")
+    return values
 
 
 def _parse_organize(raw: dict[str, Any]) -> OrganizeConfig:

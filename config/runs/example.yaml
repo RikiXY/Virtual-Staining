@@ -197,6 +197,10 @@ evaluation:
 #   mode: from_metrics
 #   # Defaults run_path to results_path/run_name when omitted.
 #   hide_graphs_path: false
+#   top_k: 1
+#   # Optional subsets. Defaults to all supported metrics and all kinds.
+#   # metrics: [ssim, mae]
+#   # kinds: [best, median, worst]
 #
 # organize:
 #   # Defaults run_path to results_path/run_name when omitted.

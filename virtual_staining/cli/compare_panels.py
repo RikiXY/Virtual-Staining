@@ -23,17 +23,18 @@ def _print_single_summary(result: SinglePanelResult) -> None:
 
 
 def _print_metric_based_selection(
-    metric_name: str, representative_rows: dict[str, dict[str, str]]
+    metric_name: str, ranked_rows: dict[str, list[dict[str, str]]]
 ) -> None:
     print_section(f"Metric {metric_name.upper()}")
-    for kind, row in representative_rows.items():
-        metric_value = float(row[metric_name])
-        sample_id = row["sample_id"]
-        color = color_for_metric(metric_name, metric_value)
-        print_info(
-            f"{kind.upper()} sample",
-            style(f"{sample_id} | value={metric_value:.6f}", color),
-        )
+    for kind, rows in ranked_rows.items():
+        for rank, row in enumerate(rows, start=1):
+            metric_value = float(row[metric_name])
+            sample_id = row["sample_id"]
+            color = color_for_metric(metric_name, metric_value)
+            print_info(
+                f"{kind.upper()} sample #{rank}",
+                style(f"{sample_id} | value={metric_value:.6f}", color),
+            )
 
 
 def _print_metric_run_header(result: FromMetricsResult) -> None:
@@ -64,8 +65,10 @@ def _cmd_single(args: argparse.Namespace) -> None:
 def _print_from_metrics_summary(result: FromMetricsResult, hide_graphs_path: bool) -> None:
     _print_metric_run_header(result)
     for metric_name in result.available_metrics:
-        rows = result.per_metric_representative_rows[metric_name]
-        _print_metric_based_selection(metric_name, rows)
+        ranked_rows = result.per_metric_ranked_rows.get(metric_name) or {
+            kind: [row] for kind, row in result.per_metric_representative_rows[metric_name].items()
+        }
+        _print_metric_based_selection(metric_name, ranked_rows)
     if not hide_graphs_path:
         print_section("Saved aggregated panels")
         for aggregated_path in result.saved_aggregated_paths:
@@ -77,6 +80,9 @@ def _cmd_from_metrics(args: argparse.Namespace) -> None:
     request = ComparePanelsRequest(
         mode="from_metrics",
         run_path=args.run_path,
+        metrics=tuple(args.metrics) if args.metrics is not None else None,
+        kinds=tuple(args.kinds),
+        top_k=args.top_k,
     )
     result = compare_panels(request)
     assert isinstance(result, FromMetricsResult)
@@ -141,6 +147,25 @@ def _add_from_metrics_subparser(subparsers: Any) -> None:
         "--hide-graphs-path",
         action="store_true",
         help="Do not print the full list of saved aggregated graph paths.",
+    )
+    metrics_parser.add_argument(
+        "--metrics",
+        nargs="+",
+        default=None,
+        help="Optional metric names to render. Defaults to all supported metrics in summary.csv.",
+    )
+    metrics_parser.add_argument(
+        "--kinds",
+        nargs="+",
+        choices=("best", "median", "worst"),
+        default=("best", "median", "worst"),
+        help="Representative kinds to render. Defaults to best median worst.",
+    )
+    metrics_parser.add_argument(
+        "--top-k",
+        type=int,
+        default=1,
+        help="Number of ranked samples to render per metric/kind. Defaults to 1.",
     )
     metrics_parser.set_defaults(func=_cmd_from_metrics)
 
@@ -214,6 +239,9 @@ def _run_from_config(config_path: Path) -> None:
         run_path=(
             panels_cfg.run_path if panels_cfg.run_path is not None else config.project.run_root
         ),
+        metrics=panels_cfg.metrics,
+        kinds=panels_cfg.kinds,
+        top_k=panels_cfg.top_k,
     )
     result = compare_panels(request)
     assert isinstance(result, FromMetricsResult)

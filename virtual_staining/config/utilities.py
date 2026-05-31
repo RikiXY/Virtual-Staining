@@ -31,6 +31,9 @@ _COMPARE_PANELS_KEYS: frozenset[str] = frozenset(
         "mode",
         "run_path",
         "hide_graphs_path",
+        "metrics",
+        "kinds",
+        "top_k",
         "source_image",
         "generated_image",
         "target_image",
@@ -38,6 +41,9 @@ _COMPARE_PANELS_KEYS: frozenset[str] = frozenset(
         "with_diagnostics",
     }
 )
+
+COMPARE_PANEL_KINDS: tuple[str, ...] = ("best", "median", "worst")
+_COMPARE_PANEL_KIND_SET = frozenset(COMPARE_PANEL_KINDS)
 
 _ORGANIZE_KEYS: frozenset[str] = frozenset(
     {
@@ -79,11 +85,29 @@ class ComparePanelsConfig:
     mode: Literal["single", "from_metrics"] = "from_metrics"
     run_path: Path | None = None
     hide_graphs_path: bool = False
+    metrics: tuple[str, ...] | None = None
+    kinds: tuple[str, ...] = COMPARE_PANEL_KINDS
+    top_k: int = 1
     source_image: Path | None = None
     generated_image: Path | None = None
     target_image: Path | None = None
     save_path: Path | None = None
     with_diagnostics: bool = False
+
+    def validate(self) -> None:
+        if self.top_k <= 0:
+            raise ValueError("compare_panels.top_k must be a positive integer.")
+        if self.metrics is not None and not self.metrics:
+            raise ValueError("compare_panels.metrics must not be empty when provided.")
+        if not self.kinds:
+            raise ValueError("compare_panels.kinds must not be empty.")
+
+        invalid_kinds = sorted(set(self.kinds) - _COMPARE_PANEL_KIND_SET)
+        if invalid_kinds:
+            raise ValueError(
+                "compare_panels.kinds must contain only "
+                f"{list(COMPARE_PANEL_KINDS)}. Got: {invalid_kinds}"
+            )
 
 
 @dataclass(frozen=True)

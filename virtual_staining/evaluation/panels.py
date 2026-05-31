@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import math
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,6 +16,7 @@ METRIC_SELECTION_ORDER = list(DEFAULT_METRICS)
 SELECTION_SUMMARY_FIELDNAMES = [
     "metric",
     "kind",
+    "rank",
     "sample_id",
     "metric_value",
     "target_value",
@@ -24,6 +25,9 @@ SELECTION_SUMMARY_FIELDNAMES = [
     "target_path",
     "generated_path",
     "comparison_path",
+    "error_histogram_path",
+    "intensity_overlay_histogram_path",
+    "target_vs_generated_scatter_by_channel_path",
 ]
 RESIDUAL_HEATMAP_FIELDNAMES = [
     "rank",
@@ -45,6 +49,7 @@ DiagnosticPathKey = Literal[
 
 class DiagnosticEntry(TypedDict):
     kind: str
+    rank: NotRequired[int]
     sample_id: str
     metric_value: float
     comparison_path: Path
@@ -264,9 +269,60 @@ def select_representative_rows(
     }
 
 
+def select_ranked_representative_rows(
+    metric_name: str,
+    metric_summary: dict[str, float],
+    per_image_rows: list[dict[str, str]],
+    *,
+    top_k: int,
+    kinds: tuple[str, ...] = ("best", "median", "worst"),
+) -> dict[str, list[dict[str, str]]]:
+    """Select ranked best, median-band, and worst samples for a metric."""
+    if top_k <= 0:
+        raise ValueError("top_k must be a positive integer.")
+    if not per_image_rows:
+        raise ValueError("No per-image rows available for representative selection.")
+    invalid_kinds = sorted(set(kinds) - {"best", "median", "worst"})
+    if invalid_kinds:
+        raise ValueError(f"Unsupported representative kinds: {', '.join(invalid_kinds)}")
+
+    if top_k == 1:
+        single_rows = select_representative_rows(metric_name, metric_summary, per_image_rows)
+        return {kind: [single_rows[kind]] for kind in kinds}
+
+    ranked_rows: dict[str, list[dict[str, str]]] = {}
+
+    for kind in kinds:
+        if kind in {"best", "worst"}:
+            ranked_rows[kind] = find_representative_samples(
+                per_image_rows,
+                metric=metric_name,
+                kind=kind,
+                n=top_k,
+            )
+            continue
+
+        if kind == "median":
+            median = metric_summary["median"]
+            ranked_rows[kind] = sorted(
+                per_image_rows,
+                key=lambda row: (
+                    abs(float(row[metric_name]) - median),
+                    float(row[metric_name]),
+                    row["sample_id"],
+                ),
+            )[:top_k]
+            continue
+
+        raise ValueError(f"Unsupported representative kind: {kind}")
+
+    return ranked_rows
+
+
 def build_selection_summary_row(
     metric_name: str,
     kind: str,
+    rank: int | None,
     sample_id: str,
     metric_value: float,
     target_value: float,
@@ -279,6 +335,7 @@ def build_selection_summary_row(
     return {
         "metric": metric_name,
         "kind": kind,
+        "rank": rank,
         "sample_id": sample_id,
         "metric_value": metric_value,
         "target_value": target_value,
@@ -307,6 +364,8 @@ def build_metric_case_artifacts(
     row: dict[str, str],
     metric_summary: dict[str, float],
     metric_dir: Path,
+    rank: int | None = None,
+    include_rank_in_filename: bool = False,
 ) -> tuple[dict[str, object], DiagnosticEntry]:
     """Build and save the artefacts for a representative case."""
     sample_id = row["sample_id"]
@@ -325,7 +384,11 @@ def build_metric_case_artifacts(
     source_path = infer_source_path_from_row(row)
     generated_path = Path(row["generated_path"])
     target_path = Path(row["target_path"])
-    comparison_path = metric_dir / f"{kind}_{sample_id}_comparison.png"
+    if include_rank_in_filename and rank is not None:
+        filename_prefix = f"{kind}_{rank:03d}_{sample_id}"
+    else:
+        filename_prefix = f"{kind}_{sample_id}"
+    comparison_path = metric_dir / f"{filename_prefix}_comparison.png"
     saved_path = save_comparison_panel(
         source_path=source_path,
         generated_path=generated_path,
@@ -334,7 +397,7 @@ def build_metric_case_artifacts(
         suptitle=None,
     )
 
-    diagnostics_case_dir = metric_dir / "diagnostics" / f"{kind}_{sample_id}"
+    diagnostics_case_dir = metric_dir / "diagnostics" / filename_prefix
     diagnostic_paths = save_diagnostic_plots(
         source_path=source_path,
         generated_path=generated_path,
@@ -355,9 +418,13 @@ def build_metric_case_artifacts(
             f"{sample_id}_target_vs_generated_scatter_by_channel.png"
         ],
     }
+    if rank is not None:
+        diagnostic_entry["rank"] = rank
+
     selection_row = build_selection_summary_row(
         metric_name=metric_name,
         kind=kind,
+        rank=rank,
         sample_id=sample_id,
         metric_value=metric_value,
         target_value=target_value,
@@ -365,6 +432,13 @@ def build_metric_case_artifacts(
         target_path=target_path,
         generated_path=generated_path,
         comparison_path=saved_path,
+    )
+    selection_row["error_histogram_path"] = str(diagnostic_entry["error_histogram_path"])
+    selection_row["intensity_overlay_histogram_path"] = str(
+        diagnostic_entry["intensity_overlay_histogram_path"]
+    )
+    selection_row["target_vs_generated_scatter_by_channel_path"] = str(
+        diagnostic_entry["target_vs_generated_scatter_by_channel_path"]
     )
     return selection_row, diagnostic_entry
 
@@ -549,6 +623,14 @@ def save_stacked_image_panel(
     return save_path
 
 
+def _diagnostic_row_title(entry: DiagnosticEntry, metric_name: str) -> str:
+    rank_suffix = f" #{entry['rank']}" if "rank" in entry else ""
+    return (
+        f"{entry['kind'].upper()}{rank_suffix} | sample={entry['sample_id']} | "
+        f"{metric_name}={entry['metric_value']:.6f}"
+    )
+
+
 def save_metric_diagnostics_summary(
     metric_name: str,
     metric_dir: str | Path,
@@ -584,13 +666,7 @@ def save_metric_diagnostics_summary(
 
     for path_key, filename, suptitle in output_specs:
         image_paths: list[str | Path] = [entry[path_key] for entry in diagnostic_entries]
-        row_titles = [
-            (
-                f"{entry['kind'].upper()} | sample={entry['sample_id']} | "
-                f"{metric_name}={entry['metric_value']:.6f}"
-            )
-            for entry in diagnostic_entries
-        ]
+        row_titles = [_diagnostic_row_title(entry, metric_name) for entry in diagnostic_entries]
         saved_path = save_stacked_image_panel(
             image_paths=image_paths,
             save_path=metric_dir / filename,
