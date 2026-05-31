@@ -17,7 +17,7 @@ generation of virtually stained images from label-free microscopy inputs (and vi
 | `vs-infer-images` | Run inference on one image file or a directory of images |
 | `vs-evaluate` | Evaluate generated images with MAE, RMSE, PSNR, SSIM |
 | `vs-compare` | Compare metric distributions across runs |
-| `vs-compare-panels` | Build source / generated / target comparison panels |
+| `vs-render-panels` | Render source / generated / target diagnostic panels |
 | `vs-evaluate-single` | Evaluate a single image pair |
 | `vs-organize` | Export ranked sample files from run metrics |
 
@@ -48,7 +48,7 @@ make evaluate       CONFIG=config/runs/local/my_run.yaml
 make complete-run   CONFIG=config/runs/local/my_run.yaml
 make run-queue      QUEUE=config/queues/example.yaml
 make compare        CONFIG=config/runs/local/my_run.yaml
-make compare-panels CONFIG=config/runs/local/my_run.yaml
+make render-panels  CONFIG=config/runs/local/my_run.yaml
 ```
 
 Or call the CLI directly:
@@ -284,7 +284,7 @@ these.
 - **Model** - Pix2Pix conditional GAN: U-Net generator with skip connections and
   PatchGAN discriminator, trained with adversarial loss + L1 reconstruction loss.
 - **Evaluation** - per-image MAE, RMSE, PSNR, SSIM; summary statistics; optional
-  comparison panels with difference maps.
+  rendered diagnostic panels with difference maps.
 
 ## License
 

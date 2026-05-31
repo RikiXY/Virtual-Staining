@@ -82,7 +82,7 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Export ranked generated, target, and source image files by metric. "
             "This command places files only; visual diagnostics belong in "
-            "vs-compare-panels. By default, it reads "
+            "vs-render-panels. By default, it reads "
             "RUN/evaluation/per_image_metrics.csv and writes to "
             "RUN/evaluation/sorted_by_metrics/."
         ),

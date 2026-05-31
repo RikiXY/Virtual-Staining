@@ -184,7 +184,7 @@ evaluation:
   residual_heatmap_top_k: 25
   # hide_graphs_path: false
 
-# Optional utility targets driven by `make compare`, `make compare-panels`,
+# Optional utility targets driven by `make compare`, `make render-panels`,
 # and `make organize`.
 #
 # compare:
@@ -196,7 +196,7 @@ evaluation:
 #   # column: all
 #   # metrics: [ssim, psnr, mae, rmse, pcc_gray, pcc_rgb_mean]
 #
-# compare_panels:
+# render_panels:
 #   mode: from_metrics
 #   # Defaults run_path to results_path/run_name when omitted.
 #   hide_graphs_path: false

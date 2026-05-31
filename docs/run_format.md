@@ -110,7 +110,7 @@ local_workspace/results/<run_name>/
 │   ├── residual_heatmaps/      # standalone residual heatmap PNGs (optional)
 │   ├── sorted_by_metrics/      # ranked sample file exports from vs-organize (optional)
 │   └── skipped.csv             # samples that could not be evaluated (optional)
-└── comparisons/                # comparison panels produced by vs-compare-panels
+└── comparisons/                # diagnostic panels produced by vs-render-panels
 ```
 
 ## File Descriptions
@@ -380,7 +380,7 @@ Each file is named after its source patch (e.g. `00512_09216_target_generated.ti
 
 Canonical manifest of evaluation artifacts. `vs-evaluate` writes the core
 manifest after evaluation completes. Secondary utilities append their outputs
-when they can identify the source run: `vs-compare-panels from-metrics`
+when they can identify the source run: `vs-render-panels from-metrics`
 registers metric panel artifacts and `vs-organize` registers ranked sample file
 exports. If the base file is missing, a secondary utility creates a compatible
 manifest containing its own artifacts. The manifest only lists files or
@@ -402,7 +402,7 @@ Artifact record fields:
 
 | Field | Description |
 |---|---|
-| `stage` | Creation stage, such as `evaluate`, `compare_panels`, or `organize` |
+| `stage` | Creation stage, such as `evaluate`, `render_panels`, or `organize` |
 | `artifact_type` | Stable artifact type such as `per_image_metrics_csv`, `summary_csv`, `weak_tail_csv`, `skipped_csv`, `metric_histogram`, `metrics_boxplot`, `residual_heatmaps_csv`, `residual_heatmap_png`, `selection_summary`, `comparison_panel`, `diagnostic_image`, `diagnostic_panel`, `organization_summary`, or `ranked_sample_export` |
 | `path` | Artifact path using the manifest path policy |
 | `path_type` | `run_relative` or `absolute` |
@@ -412,7 +412,7 @@ Artifact record fields:
 | `metadata` | Artifact-specific key/value metadata, including the creating `command` for secondary utility artifacts |
 
 Secondary utility metadata includes enough context for consumers to avoid path
-guessing. `compare_panels` entries include the command, source run, selected
+guessing. `render_panels` entries include the command, source run, selected
 metrics, kind, rank, and metric values where applicable. `organize` entries
 include the command, source run, selected metrics, top-k, export mode,
 rank-count, selected file roles, and exported file counts. Rerunning a
@@ -561,9 +561,9 @@ metrics such as MAE and RMSE.
 
 ### `comparisons/metrics/`
 
-Written by `vs-compare-panels from-metrics` or `compare_panels.mode:
+Written by `vs-render-panels from-metrics` or `render_panels.mode:
 from_metrics`. The command reads `evaluation/per_image_metrics.csv` and
-`evaluation/summary.csv`, then writes comparison panels and diagnostics under
+`evaluation/summary.csv`, then writes rendered panels and diagnostics under
 one subdirectory per metric:
 
 ```text
@@ -597,12 +597,12 @@ better, while MAE, MSE, and RMSE rank lower values as better. Ties use
 | `source_path` | Source image path inferred from the sample row |
 | `target_path` | Ground-truth target image path |
 | `generated_path` | Generated image path |
-| `comparison_path` | Saved source/generated/target/MAE-map comparison panel |
+| `comparison_path` | Saved source/generated/target/MAE-map panel |
 | `error_histogram_path` | Saved absolute-error histogram |
 | `intensity_overlay_histogram_path` | Saved target/generated intensity overlay histogram |
 | `target_vs_generated_scatter_by_channel_path` | Saved target-vs-generated scatter plot |
 
-When run with a source run path, `vs-compare-panels from-metrics` appends these
+When run with a source run path, `vs-render-panels from-metrics` appends these
 outputs to `evaluation/artifacts.json` using `selection_summary`,
 `comparison_panel`, `diagnostic_image`, and `diagnostic_panel` artifact types.
 
@@ -611,7 +611,7 @@ outputs to `evaluation/artifacts.json` using `selection_summary`,
 Written by `vs-organize` or `organize` config sections. This utility is a
 ranked file exporter: it places source, target, and generated image files into
 metric-ranked folders for manual inspection or downstream collection. It does
-not render comparison panels, plots, or diagnostics; use `vs-compare-panels`
+not render panels, plots, or diagnostics; use `vs-render-panels`
 for visual diagnostics and `vs-evaluate` for dataset evaluation artifacts.
 
 The default output directory is `RUN/evaluation/sorted_by_metrics/`:
@@ -626,7 +626,7 @@ evaluation/sorted_by_metrics/
 ```
 
 Ranking uses the shared ranked-selection helper also used by
-`vs-compare-panels`: SSIM, PSNR, and PCC metrics rank higher values as better,
+`vs-render-panels`: SSIM, PSNR, and PCC metrics rank higher values as better,
 while MAE, MSE, and RMSE rank lower values as better. Ties use `sample_id`
 when available. File placement mode is controlled by `mode` and may be
 `hardlink`, `symlink`, or `copy`.

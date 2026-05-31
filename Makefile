@@ -15,7 +15,7 @@ help:
 	@printf "  %-24s %s\n" "complete-run" "Run dataset, train, infer, evaluate from CONFIG"
 	@printf "  %-24s %s\n" "run-queue" "Run a queue YAML from QUEUE"
 	@printf "  %-24s %s\n" "compare" "Compare metric distributions from CONFIG"
-	@printf "  %-24s %s\n" "compare-panels" "Build comparison panels from CONFIG"
+	@printf "  %-24s %s\n" "render-panels" "Render diagnostic panels from CONFIG"
 	@printf "  %-24s %s\n" "evaluate-single" "Evaluate one target/generated pair"
 	@printf "  %-24s %s\n" "organize" "Export ranked sample files from CONFIG"
 	@printf "  %-24s %s\n" "sync" "Sync uv dependencies from uv.lock"
@@ -98,8 +98,8 @@ run-queue: require-queue
 compare: require-config
 	$(UV) run vs-compare --config $(CONFIG)
 
-compare-panels: require-config
-	$(UV) run vs-compare-panels --config $(CONFIG)
+render-panels: require-config
+	$(UV) run vs-render-panels --config $(CONFIG)
 
 evaluate-single: require-target-image require-generated-image
 	$(UV) run vs-evaluate-single --target-image "$(TARGET_IMAGE)" --generated-image "$(GENERATED_IMAGE)" $(if $(OUTPUT_DIR),--output-dir "$(OUTPUT_DIR)",)

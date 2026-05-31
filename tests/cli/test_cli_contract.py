@@ -12,11 +12,10 @@ import pytest
 import yaml
 
 from tests.config_helpers import write_run_config
-from virtual_staining.applications.compare_panels import FromMetricsResult
 from virtual_staining.applications.complete_run import complete_run
 from virtual_staining.applications.evaluate_single import SingleEvalResult
+from virtual_staining.applications.render_panels import FromMetricsResult
 from virtual_staining.cli import compare as compare_cli
-from virtual_staining.cli import compare_panels as compare_panels_cli
 from virtual_staining.cli import complete_run as complete_run_cli
 from virtual_staining.cli import evaluate as evaluate_cli
 from virtual_staining.cli import evaluate_single as evaluate_single_cli
@@ -24,6 +23,7 @@ from virtual_staining.cli import infer as infer_cli
 from virtual_staining.cli import infer_images as infer_images_cli
 from virtual_staining.cli import organize as organize_cli
 from virtual_staining.cli import prepare_dataset as prepare_cli
+from virtual_staining.cli import render_panels as render_panels_cli
 from virtual_staining.cli import run_queue as run_queue_cli
 from virtual_staining.cli import train as train_cli
 from virtual_staining.config.run import RunConfig
@@ -39,7 +39,7 @@ CLI_SCRIPTS = {
     "vs-evaluate": "virtual_staining.cli.evaluate:main",
     "vs-compare": "virtual_staining.cli.compare:main",
     "vs-evaluate-single": "virtual_staining.cli.evaluate_single:main",
-    "vs-compare-panels": "virtual_staining.cli.compare_panels:main",
+    "vs-render-panels": "virtual_staining.cli.render_panels:main",
     "vs-organize": "virtual_staining.cli.organize:main",
 }
 RUN_CONFIG_CLI_MODULES = (
@@ -129,6 +129,14 @@ def test_make_complete_run_delegates_to_complete_run_cli() -> None:
     assert "$(MAKE) dataset CONFIG=$(CONFIG)" not in makefile
 
 
+def test_make_render_panels_delegates_to_render_panels_cli() -> None:
+    makefile = Path("Makefile").read_text(encoding="utf-8")
+    assert "render-panels: require-config" in makefile
+    assert "$(UV) run vs-render-panels --config $(CONFIG)" in makefile
+    assert "-".join(("compare", "panels:")) not in makefile
+    assert "vs-" + "-".join(("compare", "panels")) not in makefile
+
+
 def test_make_evaluate_single_fails_without_target_image() -> None:
     env = {**os.environ, "TARGET_IMAGE": "", "GENERATED_IMAGE": ""}
     result = _run_command("make", "evaluate-single", env=env)
@@ -213,7 +221,7 @@ def test_make_run_queue_fails_without_queue() -> None:
     ("main_func", "argv"),
     [
         (compare_cli.main, []),
-        (compare_panels_cli.main, []),
+        (render_panels_cli.main, []),
         (evaluate_single_cli.main, []),
         (organize_cli.main, []),
     ],
@@ -327,23 +335,23 @@ def test_compare_main_with_config_passes_multi_metric_options(
     assert request.output_dir.name == "paired_all_metrics"  # type: ignore[attr-defined]
 
 
-def test_compare_panels_help_includes_config() -> None:
-    assert "--config" in compare_panels_cli._build_parser().format_help()
+def test_render_panels_help_includes_config() -> None:
+    assert "--config" in render_panels_cli._build_parser().format_help()
 
 
-def test_compare_panels_help_uses_artifacts_output_test_path() -> None:
-    help_text = compare_panels_cli._build_parser().format_help()
+def test_render_panels_help_uses_artifacts_output_test_path() -> None:
+    help_text = render_panels_cli._build_parser().format_help()
     assert "artifacts/output_test" in help_text
     assert "results/your_run/output_test" not in help_text
 
 
-def test_compare_panels_main_with_config_invokes_compare_panels(
+def test_render_panels_main_with_config_invokes_render_panels(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config_path = _write_config(
         tmp_path,
         """\
-        compare_panels:
+        render_panels:
           mode: from_metrics
           hide_graphs_path: true
           top_k: 2
@@ -354,7 +362,7 @@ def test_compare_panels_main_with_config_invokes_compare_panels(
 
     captured: dict[str, object] = {}
 
-    def _fake_compare_panels(request: object) -> object:
+    def _fake_render_panels(request: object) -> object:
         captured["request"] = request
         return FromMetricsResult(
             run_path=request.run_path,  # type: ignore[attr-defined]
@@ -370,9 +378,9 @@ def test_compare_panels_main_with_config_invokes_compare_panels(
             metrics_dir=(request.run_path / "comparisons" / "metrics"),  # type: ignore[attr-defined]
         )
 
-    monkeypatch.setattr(compare_panels_cli, "compare_panels", _fake_compare_panels)
+    monkeypatch.setattr(render_panels_cli, "render_panels", _fake_render_panels)
 
-    compare_panels_cli.main(["--config", str(config_path)])
+    render_panels_cli.main(["--config", str(config_path)])
 
     request = captured["request"]
     assert request.mode == "from_metrics"  # type: ignore[attr-defined]
@@ -380,6 +388,20 @@ def test_compare_panels_main_with_config_invokes_compare_panels(
     assert request.top_k == 2  # type: ignore[attr-defined]
     assert request.metrics == ("ssim", "mae")  # type: ignore[attr-defined]
     assert request.kinds == ("best", "worst")  # type: ignore[attr-defined]
+
+
+def test_old_panel_config_section_is_rejected(tmp_path: Path) -> None:
+    old_key = "_".join(("compare", "panels"))
+    config_path = _write_config(
+        tmp_path,
+        f"""\
+        {old_key}:
+          mode: from_metrics
+        """,
+    )
+
+    with pytest.raises(ValueError, match=f"{old_key}.*render_panels"):
+        RunConfig.from_yaml(config_path)
 
 
 def test_evaluate_single_help_is_single_pair_only() -> None:
@@ -504,7 +526,7 @@ def test_organize_help_includes_config() -> None:
     assert "--config" in help_text
     assert "Export ranked generated, target, and source image files by metric" in help_text
     assert "This command places files only" in help_text
-    assert "vs-compare-panels" in help_text
+    assert "vs-render-panels" in help_text
     assert "RUN/evaluation/sorted_by_metrics/" in help_text
 
 

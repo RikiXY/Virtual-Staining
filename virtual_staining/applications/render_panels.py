@@ -21,8 +21,8 @@ from virtual_staining.evaluation.panels import (
 from virtual_staining.evaluation.selection import select_ranked_samples
 from virtual_staining.evaluation.summaries import read_per_image_metrics_csv, read_summary_csv
 
-COMPARE_PANELS_STAGE = "compare_panels"
-COMPARE_PANELS_COMMAND = "vs-compare-panels from-metrics"
+RENDER_PANELS_STAGE = "render_panels"
+RENDER_PANELS_COMMAND = "vs-render-panels from-metrics"
 DIAGNOSTIC_IMAGE_FIELDS = {
     "error_histogram_path": "error_histogram",
     "intensity_overlay_histogram_path": "intensity_overlay_histogram",
@@ -31,7 +31,7 @@ DIAGNOSTIC_IMAGE_FIELDS = {
 
 
 @dataclass(frozen=True)
-class ComparePanelsRequest:
+class RenderPanelsRequest:
     mode: Literal["single", "from_metrics"]
     source_image: Path | None = None
     generated_image: Path | None = None
@@ -61,13 +61,13 @@ class FromMetricsResult:
     artifact_manifest_path: Path | None = None
 
 
-def compare_panels(request: ComparePanelsRequest) -> SinglePanelResult | FromMetricsResult:
-    """Run a single-pair panel comparison or metric-based representative comparisons."""
+def render_panels(request: RenderPanelsRequest) -> SinglePanelResult | FromMetricsResult:
+    """Render a single-pair panel or metric-ranked representative panels."""
     if request.mode == "single":
         return _run_single(request)
     if request.mode == "from_metrics":
         return _run_from_metrics(request)
-    raise ValueError(f"Unsupported compare_panels mode: {request.mode}")
+    raise ValueError(f"Unsupported render_panels mode: {request.mode}")
 
 
 def _infer_run_dir_from_generated_path(generated_path: str | Path) -> Path:
@@ -117,7 +117,7 @@ def _infer_case_diagnostics_dir(save_path: str | Path, generated_image: str | Pa
     return diagnostics_dir / sample_id
 
 
-def _run_single(request: ComparePanelsRequest) -> SinglePanelResult:
+def _run_single(request: RenderPanelsRequest) -> SinglePanelResult:
     assert request.source_image is not None
     assert request.generated_image is not None
     assert request.target_image is not None
@@ -149,10 +149,10 @@ def _run_single(request: ComparePanelsRequest) -> SinglePanelResult:
     return SinglePanelResult(saved_path=saved_path, diagnostic_paths=diagnostic_paths)
 
 
-def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
+def _run_from_metrics(request: RenderPanelsRequest) -> FromMetricsResult:
     assert request.run_path is not None
     if request.top_k <= 0:
-        raise ValueError("compare_panels top_k must be a positive integer.")
+        raise ValueError("render_panels top_k must be a positive integer.")
     run_path = request.run_path.resolve()
     evaluation_dir = run_path / "evaluation"
     summary_csv = evaluation_dir / "summary.csv"
@@ -255,11 +255,11 @@ def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
 def _base_secondary_metadata(
     *,
     run_path: Path,
-    request: ComparePanelsRequest,
+    request: RenderPanelsRequest,
     artifact_format: str,
 ) -> dict[str, object]:
     return {
-        "command": COMPARE_PANELS_COMMAND,
+        "command": RENDER_PANELS_COMMAND,
         "source_run": run_path.name,
         "artifact_format": artifact_format,
         "top_k": request.top_k,
@@ -271,7 +271,7 @@ def _base_secondary_metadata(
 def _selection_row_metadata(
     *,
     run_path: Path,
-    request: ComparePanelsRequest,
+    request: RenderPanelsRequest,
     row: dict[str, object],
     artifact_format: str,
 ) -> dict[str, object]:
@@ -303,14 +303,14 @@ def _register_from_metrics_artifacts(
     selection_summary_rows: list[dict[str, object]],
     saved_aggregated_paths: list[Path],
     available_metrics: list[str],
-    request: ComparePanelsRequest,
+    request: RenderPanelsRequest,
 ) -> Path:
     artifacts: list[EvaluationArtifact] = [
         EvaluationArtifact(
-            stage=COMPARE_PANELS_STAGE,
+            stage=RENDER_PANELS_STAGE,
             artifact_type="selection_summary",
             path=global_selection_summary_path,
-            description="Global compare-panels metric selection summary CSV.",
+            description="Global render-panels metric selection summary CSV.",
             metadata={
                 **_base_secondary_metadata(
                     run_path=run_path,
@@ -326,11 +326,11 @@ def _register_from_metrics_artifacts(
     for metric_name, selection_summary_path in metric_selection_summary_paths.items():
         artifacts.append(
             EvaluationArtifact(
-                stage=COMPARE_PANELS_STAGE,
+                stage=RENDER_PANELS_STAGE,
                 artifact_type="selection_summary",
                 path=selection_summary_path,
                 metric=metric_name,
-                description="Per-metric compare-panels selection summary CSV.",
+                description="Per-metric render-panels selection summary CSV.",
                 metadata={
                     **_base_secondary_metadata(
                         run_path=run_path,
@@ -350,12 +350,12 @@ def _register_from_metrics_artifacts(
         sample_id = str(row["sample_id"])
         artifacts.append(
             EvaluationArtifact(
-                stage=COMPARE_PANELS_STAGE,
+                stage=RENDER_PANELS_STAGE,
                 artifact_type="comparison_panel",
                 path=Path(str(row["comparison_path"])),
                 metric=metric_name,
                 sample_id=sample_id,
-                description="Source/generated/target comparison panel for a ranked sample.",
+                description="Source/generated/target panel for a ranked sample.",
                 metadata=_selection_row_metadata(
                     run_path=run_path,
                     request=request,
@@ -368,12 +368,12 @@ def _register_from_metrics_artifacts(
         for path_column, diagnostic_kind in DIAGNOSTIC_IMAGE_FIELDS.items():
             artifacts.append(
                 EvaluationArtifact(
-                    stage=COMPARE_PANELS_STAGE,
+                    stage=RENDER_PANELS_STAGE,
                     artifact_type="diagnostic_image",
                     path=Path(str(row[path_column])),
                     metric=metric_name,
                     sample_id=sample_id,
-                    description="Per-case compare-panels diagnostic image.",
+                    description="Per-case render-panels diagnostic image.",
                     metadata={
                         **_selection_row_metadata(
                             run_path=run_path,
@@ -392,11 +392,11 @@ def _register_from_metrics_artifacts(
         metric_name = path.parent.name
         artifacts.append(
             EvaluationArtifact(
-                stage=COMPARE_PANELS_STAGE,
+                stage=RENDER_PANELS_STAGE,
                 artifact_type="diagnostic_panel",
                 path=path,
                 metric=metric_name,
-                description="Aggregate compare-panels diagnostic panel.",
+                description="Aggregate render-panels diagnostic panel.",
                 metadata={
                     **_base_secondary_metadata(
                         run_path=run_path,
@@ -412,7 +412,7 @@ def _register_from_metrics_artifacts(
         artifacts,
         run_path / "evaluation" / "artifacts.json",
         run_root=run_path,
-        replace_stages=(COMPARE_PANELS_STAGE,),
+        replace_stages=(RENDER_PANELS_STAGE,),
     )
 
 
@@ -426,7 +426,7 @@ def _resolve_panel_metrics(
     missing_metrics = [metric for metric in requested_metrics if metric not in summary_rows]
     if missing_metrics:
         raise ValueError(
-            "Configured compare panel metrics were not found in summary.csv: "
+            "Configured render panel metrics were not found in summary.csv: "
             f"{', '.join(missing_metrics)}"
         )
     return list(requested_metrics)

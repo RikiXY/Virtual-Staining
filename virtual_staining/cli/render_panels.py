@@ -4,11 +4,11 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from virtual_staining.applications.compare_panels import (
-    ComparePanelsRequest,
+from virtual_staining.applications.render_panels import (
     FromMetricsResult,
+    RenderPanelsRequest,
     SinglePanelResult,
-    compare_panels,
+    render_panels,
 )
 from virtual_staining.config.run import RunConfig
 from virtual_staining.utils.console import print_info, print_section, style
@@ -16,8 +16,8 @@ from virtual_staining.utils.metrics import color_for_metric
 
 
 def _print_single_summary(result: SinglePanelResult) -> None:
-    print_section("Single comparison")
-    print_info("Saved comparison image", style(str(result.saved_path), "green"))
+    print_section("Single panel")
+    print_info("Saved panel image", style(str(result.saved_path), "green"))
     for diagnostic_path in result.diagnostic_paths:
         print_info("Saved diagnostic plot", style(str(diagnostic_path), "magenta"))
 
@@ -38,20 +38,20 @@ def _print_metric_based_selection(
 
 
 def _print_metric_run_header(result: FromMetricsResult) -> None:
-    print_section("Metric-based representative comparisons")
+    print_section("Metric-ranked panel rendering")
     print_info("Run path", str(result.run_path))
     print_info("Metrics found", ", ".join(result.available_metrics))
 
 
 def _print_metric_saved_files(result: FromMetricsResult) -> None:
     print_section("Saved files")
-    print_info("Metric-based comparisons", style(str(result.metrics_dir), "bold", "magenta"))
+    print_info("Metric-ranked panels", style(str(result.metrics_dir), "bold", "magenta"))
     if result.artifact_manifest_path is not None:
         print_info("Artifact manifest", str(result.artifact_manifest_path))
 
 
 def _cmd_single(args: argparse.Namespace) -> None:
-    request = ComparePanelsRequest(
+    request = RenderPanelsRequest(
         mode="single",
         source_image=args.source_image,
         generated_image=args.generated_image,
@@ -59,7 +59,7 @@ def _cmd_single(args: argparse.Namespace) -> None:
         save_path=args.save_path,
         with_diagnostics=args.with_diagnostics,
     )
-    result = compare_panels(request)
+    result = render_panels(request)
     assert isinstance(result, SinglePanelResult)
     _print_single_summary(result)
 
@@ -79,14 +79,14 @@ def _print_from_metrics_summary(result: FromMetricsResult, hide_graphs_path: boo
 
 
 def _cmd_from_metrics(args: argparse.Namespace) -> None:
-    request = ComparePanelsRequest(
+    request = RenderPanelsRequest(
         mode="from_metrics",
         run_path=args.run_path,
         metrics=tuple(args.metrics) if args.metrics is not None else None,
         kinds=tuple(args.kinds),
         top_k=args.top_k,
     )
-    result = compare_panels(request)
+    result = render_panels(request)
     assert isinstance(result, FromMetricsResult)
     _print_from_metrics_summary(result, args.hide_graphs_path)
 
@@ -94,8 +94,8 @@ def _cmd_from_metrics(args: argparse.Namespace) -> None:
 def _add_single_subparser(subparsers: Any) -> None:
     single_parser = subparsers.add_parser(
         "single",
-        help="Create one comparison panel from source/generated/target images.",
-        description="Create one comparison panel from source/generated/target images. "
+        help="Render one source/generated/target panel.",
+        description="Render one source/generated/target panel. "
         "Supported image extensions: .tif, .tiff, .png.",
     )
     single_parser.add_argument(
@@ -121,14 +121,14 @@ def _add_single_subparser(subparsers: Any) -> None:
         type=Path,
         default=None,
         help=(
-            "Path where the comparison panel will be saved. If omitted, the script "
+            "Path where the rendered panel will be saved. If omitted, the script "
             "tries to infer .../results/NAME_RUN/comparisons from --generated-image."
         ),
     )
     single_parser.add_argument(
         "--with-diagnostics",
         action="store_true",
-        help="Also save single-case diagnostic plots alongside the comparison panel.",
+        help="Also save single-case diagnostic plots alongside the rendered panel.",
     )
     single_parser.set_defaults(func=_cmd_single)
 
@@ -136,8 +136,8 @@ def _add_single_subparser(subparsers: Any) -> None:
 def _add_from_metrics_subparser(subparsers: Any) -> None:
     metrics_parser = subparsers.add_parser(
         "from-metrics",
-        help="Generate representative comparison panels from evaluation CSV files.",
-        description="Generate representative comparison panels from evaluation CSV files.",
+        help="Render representative panels from evaluation CSV files.",
+        description="Render representative panels from evaluation CSV files.",
     )
     metrics_parser.add_argument(
         "--run-path",
@@ -174,23 +174,23 @@ def _add_from_metrics_subparser(subparsers: Any) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="vs-compare-panels",
+        prog="vs-render-panels",
         description=(
-            "Create side-by-side comparison panels for paired histology images, "
-            "or generate representative panels from evaluation CSV files. "
+            "Render side-by-side panels for paired histology images, "
+            "or render representative panels from evaluation CSV files. "
             "Supported image extensions: .tif, .tiff, .png."
         ),
         epilog=(
             "Examples:\n"
-            "  vs-compare-panels single\n"
+            "  vs-render-panels single\n"
             "      --source-image local_workspace/datasets/your_run/splits/test/00512_09216_source.tif\n"  # noqa: E501
             "      --generated-image local_workspace/results/your_run/artifacts/output_test/00512_09216_target_generated.tif\n"  # noqa: E501
             "      --target-image local_workspace/datasets/your_run/splits/test/00512_09216_target.tif\n"  # noqa: E501
             "      --with-diagnostics\n"
             "\n"
-            "  vs-compare-panels from-metrics\n"
+            "  vs-render-panels from-metrics\n"
             "      --run-path local_workspace/results/your_run\n\n"
-            "Use 'vs-compare-panels <command> --help' to see the options "
+            "Use 'vs-render-panels <command> --help' to see the options "
             "for a specific command."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
@@ -200,7 +200,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--config",
         type=Path,
         default=None,
-        help="Path to run config YAML. Uses the config's compare_panels section.",
+        help="Path to run config YAML. Uses the config's render_panels section.",
     )
     subparsers = parser.add_subparsers(dest="mode")
     _add_single_subparser(subparsers)
@@ -210,9 +210,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _run_from_config(config_path: Path) -> None:
     config = RunConfig.from_yaml(config_path.resolve())
-    panels_cfg = config.compare_panels
+    panels_cfg = config.render_panels
     if panels_cfg is None:
-        raise SystemExit("Config has no 'compare_panels' section.")
+        raise SystemExit("Config has no 'render_panels' section.")
 
     if panels_cfg.mode == "single":
         if (
@@ -221,9 +221,9 @@ def _run_from_config(config_path: Path) -> None:
             or panels_cfg.target_image is None
         ):
             raise SystemExit(
-                "compare_panels.single requires source_image, generated_image, and target_image."
+                "render_panels.single requires source_image, generated_image, and target_image."
             )
-        request = ComparePanelsRequest(
+        request = RenderPanelsRequest(
             mode="single",
             source_image=panels_cfg.source_image,
             generated_image=panels_cfg.generated_image,
@@ -231,12 +231,12 @@ def _run_from_config(config_path: Path) -> None:
             save_path=panels_cfg.save_path,
             with_diagnostics=panels_cfg.with_diagnostics,
         )
-        result = compare_panels(request)
+        result = render_panels(request)
         assert isinstance(result, SinglePanelResult)
         _print_single_summary(result)
         return
 
-    request = ComparePanelsRequest(
+    request = RenderPanelsRequest(
         mode="from_metrics",
         run_path=(
             panels_cfg.run_path if panels_cfg.run_path is not None else config.project.run_root
@@ -245,7 +245,7 @@ def _run_from_config(config_path: Path) -> None:
         kinds=panels_cfg.kinds,
         top_k=panels_cfg.top_k,
     )
-    result = compare_panels(request)
+    result = render_panels(request)
     assert isinstance(result, FromMetricsResult)
     _print_from_metrics_summary(result, panels_cfg.hide_graphs_path)
 
@@ -257,5 +257,5 @@ def main(argv: list[str] | None = None) -> None:
         _run_from_config(args.config)
         return
     if not hasattr(args, "func"):
-        parser.error("either --config or a compare-panels mode is required")
+        parser.error("either --config or a render-panels mode is required")
     args.func(args)

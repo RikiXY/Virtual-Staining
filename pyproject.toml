@@ -28,7 +28,7 @@ vs-infer-images = "virtual_staining.cli.infer_images:main"
 vs-evaluate = "virtual_staining.cli.evaluate:main"
 vs-compare = "virtual_staining.cli.compare:main"
 vs-evaluate-single = "virtual_staining.cli.evaluate_single:main"
-vs-compare-panels = "virtual_staining.cli.compare_panels:main"
+vs-render-panels = "virtual_staining.cli.render_panels:main"
 vs-organize = "virtual_staining.cli.organize:main"
 
 [build-system]

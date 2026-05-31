@@ -8,10 +8,10 @@ import pandas as pd
 import pytest
 
 from tests.image_helpers import write_rgb_image, write_rgb_pair
-from virtual_staining.applications.compare_panels import (
-    ComparePanelsRequest,
+from virtual_staining.applications.render_panels import (
     FromMetricsResult,
-    compare_panels,
+    RenderPanelsRequest,
+    render_panels,
 )
 from virtual_staining.evaluation.panels import (
     DiagnosticEntry,
@@ -54,7 +54,7 @@ def _metric_row(
     }
 
 
-def _write_compare_panel_run(
+def _write_render_panel_run(
     tmp_path: Path,
     metric_values: list[tuple[str, float, float]],
 ) -> Path:
@@ -185,8 +185,8 @@ def test_save_residual_heatmap_raises_for_size_mismatch(tmp_path: Path) -> None:
         )
 
 
-def test_compare_panels_top_k_one_preserves_default_panel_filenames(tmp_path: Path) -> None:
-    run_path = _write_compare_panel_run(
+def test_render_panels_top_k_one_preserves_default_panel_filenames(tmp_path: Path) -> None:
+    run_path = _write_render_panel_run(
         tmp_path,
         [
             ("low", 0.10, 0.90),
@@ -195,8 +195,8 @@ def test_compare_panels_top_k_one_preserves_default_panel_filenames(tmp_path: Pa
         ],
     )
 
-    result = compare_panels(
-        ComparePanelsRequest(
+    result = render_panels(
+        RenderPanelsRequest(
             mode="from_metrics",
             run_path=run_path,
             metrics=("ssim",),
@@ -219,8 +219,8 @@ def test_compare_panels_top_k_one_preserves_default_panel_filenames(tmp_path: Pa
     assert [row["sample_id"] for row in rows] == ["high", "mid", "low"]
 
 
-def test_compare_panels_top_k_ranks_by_metric_direction(tmp_path: Path) -> None:
-    run_path = _write_compare_panel_run(
+def test_render_panels_top_k_ranks_by_metric_direction(tmp_path: Path) -> None:
+    run_path = _write_render_panel_run(
         tmp_path,
         [
             ("weak", 0.10, 0.10),
@@ -229,8 +229,8 @@ def test_compare_panels_top_k_ranks_by_metric_direction(tmp_path: Path) -> None:
         ],
     )
 
-    result = compare_panels(
-        ComparePanelsRequest(
+    result = render_panels(
+        RenderPanelsRequest(
             mode="from_metrics",
             run_path=run_path,
             metrics=("ssim", "mae"),
@@ -271,8 +271,8 @@ def test_compare_panels_top_k_ranks_by_metric_direction(tmp_path: Path) -> None:
     assert "error_histogram_path" in global_rows[0]
 
 
-def test_compare_panels_from_metrics_registers_secondary_artifacts(tmp_path: Path) -> None:
-    run_path = _write_compare_panel_run(
+def test_render_panels_from_metrics_registers_secondary_artifacts(tmp_path: Path) -> None:
+    run_path = _write_render_panel_run(
         tmp_path,
         [
             ("weak", 0.10, 0.90),
@@ -280,8 +280,8 @@ def test_compare_panels_from_metrics_registers_secondary_artifacts(tmp_path: Pat
         ],
     )
 
-    result = compare_panels(
-        ComparePanelsRequest(
+    result = render_panels(
+        RenderPanelsRequest(
             mode="from_metrics",
             run_path=run_path,
             metrics=("ssim",),
@@ -303,7 +303,7 @@ def test_compare_panels_from_metrics_registers_secondary_artifacts(tmp_path: Pat
     assert "comparison_panel" in artifact_types
     assert "diagnostic_image" in artifact_types
     assert "diagnostic_panel" in artifact_types
-    assert all(artifact["stage"] == "compare_panels" for artifact in artifacts)
+    assert all(artifact["stage"] == "render_panels" for artifact in artifacts)
     assert all(artifact["path_type"] == "run_relative" for artifact in artifacts)
 
     global_summary = next(
@@ -312,7 +312,7 @@ def test_compare_panels_from_metrics_registers_secondary_artifacts(tmp_path: Pat
         if artifact["artifact_type"] == "selection_summary"
         and artifact["path"] == "comparisons/metrics/metrics_selection_summary.csv"
     )
-    assert global_summary["metadata"]["command"] == "vs-compare-panels from-metrics"
+    assert global_summary["metadata"]["command"] == "vs-render-panels from-metrics"
     assert global_summary["metadata"]["source_run"] == "ranked_run"
     assert global_summary["metadata"]["selected_metrics"] == ["ssim"]
 
@@ -326,8 +326,8 @@ def test_compare_panels_from_metrics_registers_secondary_artifacts(tmp_path: Pat
     assert comparison_panel["metadata"]["rank"] == 1
 
 
-def test_compare_panels_and_organize_share_top_k_selection(tmp_path: Path) -> None:
-    run_path = _write_compare_panel_run(
+def test_render_panels_and_organize_share_top_k_selection(tmp_path: Path) -> None:
+    run_path = _write_render_panel_run(
         tmp_path,
         [
             ("weak", 0.10, 0.90),
@@ -336,8 +336,8 @@ def test_compare_panels_and_organize_share_top_k_selection(tmp_path: Path) -> No
         ],
     )
 
-    panel_result = compare_panels(
-        ComparePanelsRequest(
+    panel_result = render_panels(
+        RenderPanelsRequest(
             mode="from_metrics",
             run_path=run_path,
             metrics=("ssim",),
@@ -370,7 +370,7 @@ def test_compare_panels_and_organize_share_top_k_selection(tmp_path: Path) -> No
     assert organized_sample_ids == panel_sample_ids
 
 
-def test_compare_panels_missing_source_image_fails_clearly(tmp_path: Path) -> None:
+def test_render_panels_missing_source_image_fails_clearly(tmp_path: Path) -> None:
     run_path = tmp_path / "results" / "missing_source_run"
     target_dir = tmp_path / "data" / "splits" / "test"
     generated_dir = run_path / "artifacts" / "output_test"
@@ -391,8 +391,8 @@ def test_compare_panels_missing_source_image_fails_clearly(tmp_path: Path) -> No
     write_summary_csv(rows, evaluation_dir)
 
     with pytest.raises(FileNotFoundError, match="Could not infer source path"):
-        compare_panels(
-            ComparePanelsRequest(
+        render_panels(
+            RenderPanelsRequest(
                 mode="from_metrics",
                 run_path=run_path,
                 metrics=("ssim",),

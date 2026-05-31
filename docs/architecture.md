@@ -23,7 +23,7 @@ upper layers may import from lower layers, never the reverse.
 | `data/` | `DatasetManifest`, `ManifestRecord`, `DatasetBuilder` (preprocessing pipeline), `PatchDataset` |
 | `training/` | `Trainer`, training runner, augmentation, per-step logic, adversarial and L1 losses, checkpoint I/O |
 | `inference/` | `Predictor`, inference runner, output writers |
-| `evaluation/` | Per-image metrics, `Evaluator`, summary statistics, comparison panels, ranking utilities |
+| `evaluation/` | Per-image metrics, `Evaluator`, summary statistics, panel rendering, ranking utilities |
 | `applications/` | Use-case orchestrators (`train.py`, `infer.py`, `evaluate.py`, ...) - no `argparse` |
 | `cli/` | `argparse` entrypoints (`vs-prepare`, `vs-train`, `vs-infer`, `vs-evaluate`, ...) - thin adapters over `applications/` |
 

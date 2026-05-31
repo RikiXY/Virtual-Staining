@@ -43,17 +43,17 @@ def test_append_artifacts_preserves_core_entries_and_replaces_stage(tmp_path: Pa
     append_artifacts_to_manifest(
         [
             EvaluationArtifact(
-                stage="compare_panels",
+                stage="render_panels",
                 artifact_type="selection_summary",
                 path=ssim_summary,
                 metric="ssim",
-                description="Per-metric compare-panels selection summary CSV.",
-                metadata={"command": "vs-compare-panels from-metrics"},
+                description="Per-metric render-panels selection summary CSV.",
+                metadata={"command": "vs-render-panels from-metrics"},
             )
         ],
         manifest_path,
         run_root=run_root,
-        replace_stages=("compare_panels",),
+        replace_stages=("render_panels",),
         updated_at="2026-05-31T10:01:00+00:00",
     )
 
@@ -63,17 +63,17 @@ def test_append_artifacts_preserves_core_entries_and_replaces_stage(tmp_path: Pa
     append_artifacts_to_manifest(
         [
             EvaluationArtifact(
-                stage="compare_panels",
+                stage="render_panels",
                 artifact_type="selection_summary",
                 path=mae_summary,
                 metric="mae",
-                description="Per-metric compare-panels selection summary CSV.",
-                metadata={"command": "vs-compare-panels from-metrics"},
+                description="Per-metric render-panels selection summary CSV.",
+                metadata={"command": "vs-render-panels from-metrics"},
             )
         ],
         manifest_path,
         run_root=run_root,
-        replace_stages=("compare_panels",),
+        replace_stages=("render_panels",),
         updated_at="2026-05-31T10:02:00+00:00",
     )
 
@@ -83,7 +83,7 @@ def test_append_artifacts_preserves_core_entries_and_replaces_stage(tmp_path: Pa
     assert manifest["created_at"] == "2026-05-31T10:00:00+00:00"
     assert manifest["updated_at"] == "2026-05-31T10:02:00+00:00"
     assert isinstance(artifacts, list)
-    assert [artifact["stage"] for artifact in artifacts] == ["evaluate", "compare_panels"]
+    assert [artifact["stage"] for artifact in artifacts] == ["evaluate", "render_panels"]
     assert [artifact["path"] for artifact in artifacts] == [
         "evaluation/summary.csv",
         "comparisons/metrics/mae/selection_summary.csv",

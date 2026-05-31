@@ -27,7 +27,7 @@ _COMPARE_KEYS: frozenset[str] = frozenset(
     }
 )
 
-_COMPARE_PANELS_KEYS: frozenset[str] = frozenset(
+_RENDER_PANELS_KEYS: frozenset[str] = frozenset(
     {
         "mode",
         "run_path",
@@ -43,8 +43,8 @@ _COMPARE_PANELS_KEYS: frozenset[str] = frozenset(
     }
 )
 
-COMPARE_PANEL_KINDS: tuple[str, ...] = ("best", "median", "worst")
-_COMPARE_PANEL_KIND_SET = frozenset(COMPARE_PANEL_KINDS)
+RENDER_PANEL_KINDS: tuple[str, ...] = ("best", "median", "worst")
+_RENDER_PANEL_KIND_SET = frozenset(RENDER_PANEL_KINDS)
 
 _ORGANIZE_KEYS: frozenset[str] = frozenset(
     {
@@ -83,12 +83,12 @@ class CompareConfig:
 
 
 @dataclass(frozen=True)
-class ComparePanelsConfig:
+class RenderPanelsConfig:
     mode: Literal["single", "from_metrics"] = "from_metrics"
     run_path: Path | None = None
     hide_graphs_path: bool = False
     metrics: tuple[str, ...] | None = None
-    kinds: tuple[str, ...] = COMPARE_PANEL_KINDS
+    kinds: tuple[str, ...] = RENDER_PANEL_KINDS
     top_k: int = 1
     source_image: Path | None = None
     generated_image: Path | None = None
@@ -98,17 +98,17 @@ class ComparePanelsConfig:
 
     def validate(self) -> None:
         if self.top_k <= 0:
-            raise ValueError("compare_panels.top_k must be a positive integer.")
+            raise ValueError("render_panels.top_k must be a positive integer.")
         if self.metrics is not None and not self.metrics:
-            raise ValueError("compare_panels.metrics must not be empty when provided.")
+            raise ValueError("render_panels.metrics must not be empty when provided.")
         if not self.kinds:
-            raise ValueError("compare_panels.kinds must not be empty.")
+            raise ValueError("render_panels.kinds must not be empty.")
 
-        invalid_kinds = sorted(set(self.kinds) - _COMPARE_PANEL_KIND_SET)
+        invalid_kinds = sorted(set(self.kinds) - _RENDER_PANEL_KIND_SET)
         if invalid_kinds:
             raise ValueError(
-                "compare_panels.kinds must contain only "
-                f"{list(COMPARE_PANEL_KINDS)}. Got: {invalid_kinds}"
+                "render_panels.kinds must contain only "
+                f"{list(RENDER_PANEL_KINDS)}. Got: {invalid_kinds}"
             )
 
 

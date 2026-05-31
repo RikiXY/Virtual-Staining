@@ -10,12 +10,12 @@ from virtual_staining.config.project import ProjectConfig
 from virtual_staining.config.sections import section_with_shared_fields
 from virtual_staining.config.utilities import (
     _COMPARE_KEYS,
-    _COMPARE_PANELS_KEYS,
     _ORGANIZE_KEYS,
-    COMPARE_PANEL_KINDS,
+    _RENDER_PANELS_KEYS,
+    RENDER_PANEL_KINDS,
     CompareConfig,
-    ComparePanelsConfig,
     OrganizeConfig,
+    RenderPanelsConfig,
 )
 from virtual_staining.config.validation import (
     _TOP_LEVEL_KEYS,
@@ -75,12 +75,17 @@ class RunConfig:
     preprocessing: PreprocessingConfig | None
     evaluation: EvaluationConfig | None
     compare: CompareConfig | None
-    compare_panels: ComparePanelsConfig | None
+    render_panels: RenderPanelsConfig | None
     organize: OrganizeConfig | None
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> RunConfig:
         raw = load_yaml_mapping(path)
+        removed_panel_key = "_".join(("compare", "panels"))
+        if removed_panel_key in raw:
+            raise ValueError(
+                f"Unknown key(s) in top level: {removed_panel_key}. Use render_panels instead."
+            )
         if any(
             key in raw
             for key in (
@@ -92,7 +97,7 @@ class RunConfig:
                 "evaluation",
                 "preprocessing",
                 "compare",
-                "compare_panels",
+                "render_panels",
                 "organize",
             )
         ):
@@ -115,7 +120,7 @@ class RunConfig:
             else None
         )
         compare = _parse_compare(raw) if "compare" in raw else None
-        compare_panels = _parse_compare_panels(raw) if "compare_panels" in raw else None
+        render_panels = _parse_render_panels(raw) if "render_panels" in raw else None
         organize = _parse_organize(raw) if "organize" in raw else None
 
         return cls(
@@ -128,7 +133,7 @@ class RunConfig:
             preprocessing=preprocessing,
             evaluation=evaluation,
             compare=compare,
-            compare_panels=compare_panels,
+            render_panels=render_panels,
             organize=organize,
         )
 
@@ -271,39 +276,39 @@ class RunConfig:
                 "metrics": list(self.compare.metrics) if self.compare.metrics else None,
             }
 
-        if self.compare_panels is not None:
-            data["compare_panels"] = {
-                "mode": self.compare_panels.mode,
+        if self.render_panels is not None:
+            data["render_panels"] = {
+                "mode": self.render_panels.mode,
                 "run_path": (
-                    str(self.compare_panels.run_path) if self.compare_panels.run_path else None
+                    str(self.render_panels.run_path) if self.render_panels.run_path else None
                 ),
-                "hide_graphs_path": self.compare_panels.hide_graphs_path,
+                "hide_graphs_path": self.render_panels.hide_graphs_path,
                 "metrics": (
-                    list(self.compare_panels.metrics)
-                    if self.compare_panels.metrics is not None
+                    list(self.render_panels.metrics)
+                    if self.render_panels.metrics is not None
                     else None
                 ),
-                "kinds": list(self.compare_panels.kinds),
-                "top_k": self.compare_panels.top_k,
+                "kinds": list(self.render_panels.kinds),
+                "top_k": self.render_panels.top_k,
                 "source_image": (
-                    str(self.compare_panels.source_image)
-                    if self.compare_panels.source_image
+                    str(self.render_panels.source_image)
+                    if self.render_panels.source_image
                     else None
                 ),
                 "generated_image": (
-                    str(self.compare_panels.generated_image)
-                    if self.compare_panels.generated_image
+                    str(self.render_panels.generated_image)
+                    if self.render_panels.generated_image
                     else None
                 ),
                 "target_image": (
-                    str(self.compare_panels.target_image)
-                    if self.compare_panels.target_image
+                    str(self.render_panels.target_image)
+                    if self.render_panels.target_image
                     else None
                 ),
                 "save_path": (
-                    str(self.compare_panels.save_path) if self.compare_panels.save_path else None
+                    str(self.render_panels.save_path) if self.render_panels.save_path else None
                 ),
-                "with_diagnostics": self.compare_panels.with_diagnostics,
+                "with_diagnostics": self.render_panels.with_diagnostics,
             }
 
         if self.organize is not None:
@@ -630,16 +635,16 @@ def _parse_compare(raw: dict[str, Any]) -> CompareConfig:
     )
 
 
-def _parse_compare_panels(raw: dict[str, Any]) -> ComparePanelsConfig:
-    data = section_with_shared_fields(raw, "compare_panels", set())
-    reject_unknown_keys(data, _COMPARE_PANELS_KEYS, "compare_panels")
+def _parse_render_panels(raw: dict[str, Any]) -> RenderPanelsConfig:
+    data = section_with_shared_fields(raw, "render_panels", set())
+    reject_unknown_keys(data, _RENDER_PANELS_KEYS, "render_panels")
     raw_mode = str(data.get("mode", "from_metrics"))
     if raw_mode not in {"single", "from_metrics"}:
-        raise ValueError("compare_panels.mode must be 'single' or 'from_metrics'")
+        raise ValueError("render_panels.mode must be 'single' or 'from_metrics'")
     mode = cast(Literal["single", "from_metrics"], raw_mode)
-    metrics = _parse_optional_string_tuple(data.get("metrics"), "compare_panels.metrics")
-    kinds = _parse_optional_string_tuple(data.get("kinds"), "compare_panels.kinds")
-    config = ComparePanelsConfig(
+    metrics = _parse_optional_string_tuple(data.get("metrics"), "render_panels.metrics")
+    kinds = _parse_optional_string_tuple(data.get("kinds"), "render_panels.kinds")
+    config = RenderPanelsConfig(
         mode=mode,
         run_path=Path(data["run_path"]) if data.get("run_path") else None,
         hide_graphs_path=(
@@ -648,7 +653,7 @@ def _parse_compare_panels(raw: dict[str, Any]) -> ComparePanelsConfig:
             else False
         ),
         metrics=metrics,
-        kinds=kinds if kinds is not None else COMPARE_PANEL_KINDS,
+        kinds=kinds if kinds is not None else RENDER_PANEL_KINDS,
         top_k=int(data.get("top_k", 1)),
         source_image=Path(data["source_image"]) if data.get("source_image") else None,
         generated_image=Path(data["generated_image"]) if data.get("generated_image") else None,
