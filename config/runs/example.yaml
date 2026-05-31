@@ -185,7 +185,7 @@ evaluation:
   # hide_graphs_path: false
 
 # Optional utility targets driven by `make compare`, `make compare-panels`,
-# `make evaluate-single`, and `make organize`.
+# and `make organize`.
 #
 # compare:
 #   mode: paired

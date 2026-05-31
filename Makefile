@@ -16,7 +16,7 @@ help:
 	@printf "  %-24s %s\n" "run-queue" "Run a queue YAML from QUEUE"
 	@printf "  %-24s %s\n" "compare" "Compare metric distributions from CONFIG"
 	@printf "  %-24s %s\n" "compare-panels" "Build comparison panels from CONFIG"
-	@printf "  %-24s %s\n" "evaluate-single" "Evaluate dataset image pairs from CONFIG"
+	@printf "  %-24s %s\n" "evaluate-single" "Evaluate one target/generated pair"
 	@printf "  %-24s %s\n" "organize" "Sort run outputs by metrics from CONFIG"
 	@printf "  %-24s %s\n" "sync" "Sync uv dependencies from uv.lock"
 	@printf "  %-24s %s\n" "format" "Format Python files with ruff"
@@ -28,12 +28,15 @@ help:
 	@printf "  %-24s %s\n" "qa" "Run checks and tests"
 	@printf "  %-24s %s\n" "clean" "Remove local caches"
 	@printf "\nExperiment configuration policy:\n"
-	@printf "  %-24s %s\n" "CONFIG" "Required for experiment and utility targets"
+	@printf "  %-24s %s\n" "CONFIG" "Required for experiment and config-driven utility targets"
 	@printf "  %-24s %s\n" "INPUT_PATH" "Required for infer-images"
 	@printf "  %-24s %s\n" "OUTPUT_PATH" "Optional for infer-images"
 	@printf "  %-24s %s\n" "MODE" "Optional image mode: auto|resize|tile"
 	@printf "  %-24s %s\n" "TILE_OVERLAP" "Optional tile overlap"
 	@printf "  %-24s %s\n" "OUTPUT_FORMAT" "Optional image output format"
+	@printf "  %-24s %s\n" "TARGET_IMAGE" "Required for evaluate-single"
+	@printf "  %-24s %s\n" "GENERATED_IMAGE" "Required for evaluate-single"
+	@printf "  %-24s %s\n" "OUTPUT_DIR" "Optional for evaluate-single"
 	@printf "  Put dataset paths, run names, image sizes, epochs, seeds,"
 	@printf " checkpoints, and evaluation paths in YAML.\n"
 	@printf "  Accepted patches are written under dataset_root/splits/<split>/.\n"
@@ -43,6 +46,7 @@ help:
 	@printf "  make infer CONFIG=config/runs/local/my_run.yaml\n"
 	@printf "  make infer-images CONFIG=config/runs/local/my_run.yaml INPUT_PATH=examples\n"
 	@printf "  make evaluate CONFIG=config/runs/local/my_run.yaml\n"
+	@printf "  make evaluate-single TARGET_IMAGE=..._target.tif GENERATED_IMAGE=..._target_generated.tif\n"
 	@printf "  make complete-run CONFIG=config/runs/local/my_run.yaml\n"
 	@printf "  make run-queue QUEUE=config/queues/example.yaml\n"
 	@printf "\n"
@@ -58,6 +62,14 @@ require-input-path:
 require-queue:
 	@test -n "$(QUEUE)" || (echo "QUEUE is required, e.g. QUEUE=config/queues/example.yaml"; exit 1)
 	@test -f "$(QUEUE)" || (echo "QUEUE file not found: $(QUEUE)"; exit 1)
+
+require-target-image:
+	@test -n "$(TARGET_IMAGE)" || (echo "TARGET_IMAGE is required, e.g. TARGET_IMAGE=local_workspace/datasets/my_run/splits/test/00512_09216_target.tif"; exit 1)
+	@test -f "$(TARGET_IMAGE)" || (echo "TARGET_IMAGE file not found: $(TARGET_IMAGE)"; exit 1)
+
+require-generated-image:
+	@test -n "$(GENERATED_IMAGE)" || (echo "GENERATED_IMAGE is required, e.g. GENERATED_IMAGE=local_workspace/results/my_run/artifacts/output_test/00512_09216_target_generated.tif"; exit 1)
+	@test -f "$(GENERATED_IMAGE)" || (echo "GENERATED_IMAGE file not found: $(GENERATED_IMAGE)"; exit 1)
 
 sync:
 	$(UV) sync --frozen
@@ -89,8 +101,8 @@ compare: require-config
 compare-panels: require-config
 	$(UV) run vs-compare-panels --config $(CONFIG)
 
-evaluate-single: require-config
-	$(UV) run vs-evaluate-single --config $(CONFIG)
+evaluate-single: require-target-image require-generated-image
+	$(UV) run vs-evaluate-single --target-image "$(TARGET_IMAGE)" --generated-image "$(GENERATED_IMAGE)" $(if $(OUTPUT_DIR),--output-dir "$(OUTPUT_DIR)",)
 
 organize: require-config
 	$(UV) run vs-organize --config $(CONFIG)

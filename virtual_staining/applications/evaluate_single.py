@@ -1,20 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
-from virtual_staining.evaluation.evaluator import evaluate_pairs
-from virtual_staining.evaluation.io import (
-    build_evaluation_pairs,
-    collect_image_files,
-)
-from virtual_staining.evaluation.plotting import save_dataset_plots
+from virtual_staining.evaluation.io import collect_image_files
 from virtual_staining.evaluation.reports import (
     build_metric_row,
     write_single_case_csv,
-    write_skipped_csv,
 )
-from virtual_staining.evaluation.summaries import write_summary_csv
 
 
 @dataclass(frozen=True)
@@ -22,8 +15,7 @@ class EvaluateSingleRequest:
     target_dir: Path
     generated_dir: Path
     output_dir: Path
-    sample_id: str | None  # None → dataset mode
-    save_graphs: bool = False
+    sample_id: str
 
 
 @dataclass
@@ -35,24 +27,40 @@ class SingleEvalResult:
     single_case_csv: Path
 
 
-@dataclass
-class DatasetEvalResult:
-    target_files: dict[str, Path]
-    generated_files: dict[str, Path]
-    per_image_rows: list[dict[str, object]]
-    skipped_rows: list[dict[str, str]]
-    output_dir: Path
-    per_image_csv: Path
-    summary_csv: Path
-    skipped_csv: Path
-    plot_paths: list[Path] = field(default_factory=list)
+def evaluate_single(request: EvaluateSingleRequest) -> SingleEvalResult:
+    """Evaluate one generated image against its target image."""
+    from virtual_staining.evaluation.metrics import evaluate_pair
 
+    target_files = collect_image_files(request.target_dir, "_target", "Target")
+    generated_files = collect_image_files(request.generated_dir, "_target_generated", "Generated")
 
-def evaluate_single(request: EvaluateSingleRequest) -> SingleEvalResult | DatasetEvalResult:
-    """Evaluate a single pair or a full dataset of generated images against targets."""
-    if request.sample_id is not None:
-        return _run_single(request)
-    return _run_dataset(request)
+    if request.sample_id not in target_files:
+        raise ValueError(
+            f"Sample '{request.sample_id}' not found in target dir {request.target_dir}"
+        )
+    if request.sample_id not in generated_files:
+        raise ValueError(
+            f"Sample '{request.sample_id}' not found in generated dir {request.generated_dir}"
+        )
+
+    target_path = target_files[request.sample_id]
+    generated_path = generated_files[request.sample_id]
+    metrics, shape = evaluate_pair(target_path, generated_path)
+
+    individual_cases_dir = request.output_dir / "individual_cases"
+    individual_cases_dir.mkdir(parents=True, exist_ok=True)
+
+    row = build_metric_row(request.sample_id, target_path, generated_path, shape, metrics)
+    single_case_csv = individual_cases_dir / f"{request.sample_id}_evaluation.csv"
+    write_single_case_csv(row, single_case_csv)
+
+    return SingleEvalResult(
+        target=target_path,
+        generated=generated_path,
+        metrics=metrics,
+        shape=shape,
+        single_case_csv=single_case_csv,
+    )
 
 
 def _infer_default_output_dir(generated_path: str | Path) -> Path:
@@ -96,88 +104,3 @@ def _resolve_output_dir(output_dir: str | None, generated_path: str | Path) -> P
     if output_dir is not None:
         return Path(output_dir)
     return _infer_default_output_dir(generated_path)
-
-
-def _run_single(request: EvaluateSingleRequest) -> SingleEvalResult:
-    from virtual_staining.evaluation.metrics import evaluate_pair
-
-    assert request.sample_id is not None
-    target_files = collect_image_files(request.target_dir, "_target", "Target")
-    generated_files = collect_image_files(request.generated_dir, "_target_generated", "Generated")
-
-    if request.sample_id not in target_files:
-        raise ValueError(
-            f"Sample '{request.sample_id}' not found in target dir {request.target_dir}"
-        )
-    if request.sample_id not in generated_files:
-        raise ValueError(
-            f"Sample '{request.sample_id}' not found in generated dir {request.generated_dir}"
-        )
-
-    target_path = target_files[request.sample_id]
-    generated_path = generated_files[request.sample_id]
-    metrics, shape = evaluate_pair(target_path, generated_path)
-
-    individual_cases_dir = request.output_dir / "individual_cases"
-    individual_cases_dir.mkdir(parents=True, exist_ok=True)
-
-    row = build_metric_row(request.sample_id, target_path, generated_path, shape, metrics)
-    single_case_csv = individual_cases_dir / f"{request.sample_id}_evaluation.csv"
-    write_single_case_csv(row, single_case_csv)
-
-    return SingleEvalResult(
-        target=target_path,
-        generated=generated_path,
-        metrics=metrics,
-        shape=shape,
-        single_case_csv=single_case_csv,
-    )
-
-
-def _run_dataset(request: EvaluateSingleRequest) -> DatasetEvalResult:
-    target_files = collect_image_files(request.target_dir, "_target", "Target")
-    generated_files = collect_image_files(request.generated_dir, "_target_generated", "Generated")
-    request.output_dir.mkdir(parents=True, exist_ok=True)
-
-    paired_samples, skipped_ids = build_evaluation_pairs(request.target_dir, request.generated_dir)
-    skipped_rows: list[dict[str, str]] = [
-        {
-            "sample_id": sid,
-            "reason": "missing_target" if sid not in target_files else "missing_generated",
-            "target_path": str(target_files.get(sid, "")),
-            "generated_path": str(generated_files.get(sid, "")),
-        }
-        for sid in skipped_ids
-    ]
-
-    evaluation = evaluate_pairs(paired_samples, request.output_dir)
-    per_image_rows = evaluation.rows
-    skipped_rows.extend(evaluation.skipped_rows)
-
-    per_image_csv = request.output_dir / "per_image_metrics.csv"
-    skipped_csv = request.output_dir / "skipped.csv"
-    summary_csv = write_summary_csv(
-        per_image_rows,
-        request.output_dir,
-        num_targets_found=len(target_files),
-        num_generated_found=len(generated_files),
-        num_pairs_evaluated=len(per_image_rows),
-        num_skipped=len(skipped_rows),
-    )
-    write_skipped_csv(skipped_rows, skipped_csv)
-
-    plot_paths: list[Path] = []
-    if request.save_graphs and per_image_rows:
-        plot_paths = save_dataset_plots(per_image_rows, request.output_dir)
-
-    return DatasetEvalResult(
-        target_files=target_files,
-        generated_files=generated_files,
-        per_image_rows=per_image_rows,
-        skipped_rows=skipped_rows,
-        output_dir=request.output_dir,
-        per_image_csv=per_image_csv,
-        summary_csv=summary_csv,
-        skipped_csv=skipped_csv,
-        plot_paths=plot_paths,
-    )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import os
 import subprocess
 import tomllib
@@ -13,7 +14,7 @@ import yaml
 from tests.config_helpers import write_run_config
 from virtual_staining.applications.compare_panels import FromMetricsResult
 from virtual_staining.applications.complete_run import complete_run
-from virtual_staining.applications.evaluate_single import DatasetEvalResult
+from virtual_staining.applications.evaluate_single import SingleEvalResult
 from virtual_staining.cli import compare as compare_cli
 from virtual_staining.cli import compare_panels as compare_panels_cli
 from virtual_staining.cli import complete_run as complete_run_cli
@@ -126,6 +127,47 @@ def test_make_complete_run_delegates_to_complete_run_cli() -> None:
     makefile = Path("Makefile").read_text(encoding="utf-8")
     assert "$(UV) run vs-complete-run --config $(CONFIG)" in makefile
     assert "$(MAKE) dataset CONFIG=$(CONFIG)" not in makefile
+
+
+def test_make_evaluate_single_fails_without_target_image() -> None:
+    env = {**os.environ, "TARGET_IMAGE": "", "GENERATED_IMAGE": ""}
+    result = _run_command("make", "evaluate-single", env=env)
+
+    assert result.returncode != 0
+    assert "TARGET_IMAGE is required" in result.stdout + result.stderr
+
+
+def test_make_evaluate_single_fails_without_generated_image(tmp_path: Path) -> None:
+    target_path = tmp_path / "00001_target.png"
+    target_path.write_text("not an actual image", encoding="utf-8")
+    env = {**os.environ, "TARGET_IMAGE": str(target_path), "GENERATED_IMAGE": ""}
+    result = _run_command("make", "evaluate-single", env=env)
+
+    assert result.returncode != 0
+    assert "GENERATED_IMAGE is required" in result.stdout + result.stderr
+
+
+def test_make_evaluate_single_delegates_to_flat_cli_with_image_vars(tmp_path: Path) -> None:
+    target_path = tmp_path / "00001_target.png"
+    generated_path = tmp_path / "00001_target_generated.png"
+    output_dir = tmp_path / "evaluation"
+    target_path.write_text("not an actual image", encoding="utf-8")
+    generated_path.write_text("not an actual image", encoding="utf-8")
+    env = {
+        **os.environ,
+        "UV": "true",
+        "TARGET_IMAGE": str(target_path),
+        "GENERATED_IMAGE": str(generated_path),
+        "OUTPUT_DIR": str(output_dir),
+    }
+    result = _run_command("make", "evaluate-single", env=env)
+
+    assert result.returncode == 0
+    assert "true run vs-evaluate-single" in result.stdout
+    assert f'--target-image "{target_path}"' in result.stdout
+    assert f'--generated-image "{generated_path}"' in result.stdout
+    assert f'--output-dir "{output_dir}"' in result.stdout
+    assert "--config" not in result.stdout
 
 
 def test_example_yaml_is_valid_mapping() -> None:
@@ -340,8 +382,15 @@ def test_compare_panels_main_with_config_invokes_compare_panels(
     assert request.kinds == ("best", "worst")  # type: ignore[attr-defined]
 
 
-def test_evaluate_single_help_includes_config() -> None:
-    assert "--config" in evaluate_single_cli._build_parser().format_help()
+def test_evaluate_single_help_is_single_pair_only() -> None:
+    help_text = evaluate_single_cli._build_parser().format_help()
+
+    assert "--config" not in help_text
+    assert "{single}" not in help_text
+    assert "--target-image" in help_text
+    assert "--generated-image" in help_text
+    assert "vs-evaluate-single dataset" not in help_text
+    assert "vs-evaluate-single single" not in help_text
 
 
 def test_evaluate_single_help_uses_artifacts_output_test_path() -> None:
@@ -350,42 +399,103 @@ def test_evaluate_single_help_uses_artifacts_output_test_path() -> None:
     assert "results/your_run/output_test" not in help_text
 
 
-def test_evaluate_single_main_with_config_invokes_dataset_mode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_evaluate_single_main_invokes_single_pair_evaluation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    config_path = _write_config(
-        tmp_path,
-        """\
-        evaluation:
-          save_graphs: true
-        """,
+    target_path = tmp_path / "datasets" / "run" / "splits" / "test" / "00512_09216_target.tif"
+    generated_path = (
+        tmp_path
+        / "results"
+        / "current_run"
+        / "artifacts"
+        / "output_test"
+        / "00512_09216_target_generated.tif"
     )
 
     captured: dict[str, object] = {}
 
     def _fake_evaluate_single(request: object) -> object:
         captured["request"] = request
-        output_dir = request.output_dir  # type: ignore[attr-defined]
-        return DatasetEvalResult(
-            target_files={},
-            generated_files={},
-            per_image_rows=[],
-            skipped_rows=[],
-            output_dir=output_dir,
-            per_image_csv=output_dir / "per_image_metrics.csv",
-            summary_csv=output_dir / "summary.csv",
-            skipped_csv=output_dir / "skipped.csv",
-            plot_paths=[],
+        return SingleEvalResult(
+            target=target_path,
+            generated=generated_path,
+            metrics={
+                "mae": 0.0,
+                "mse": 0.0,
+                "rmse": 0.0,
+                "psnr": float("inf"),
+                "ssim": 1.0,
+                "pcc_gray": 1.0,
+                "pcc_rgb_mean": 1.0,
+            },
+            shape=(8, 8, 3),
+            single_case_csv=(
+                request.output_dir  # type: ignore[attr-defined]
+                / "individual_cases"
+                / "00512_09216_evaluation.csv"
+            ),
         )
 
     monkeypatch.setattr(evaluate_single_cli, "evaluate_single", _fake_evaluate_single)
 
-    evaluate_single_cli.main(["--config", str(config_path)])
+    evaluate_single_cli.main(
+        [
+            "--target-image",
+            str(target_path),
+            "--generated-image",
+            str(generated_path),
+        ]
+    )
+    output = capsys.readouterr().out
 
     request = captured["request"]
-    assert request.sample_id is None  # type: ignore[attr-defined]
-    assert request.save_graphs is True  # type: ignore[attr-defined]
+    assert request.sample_id == "00512_09216"  # type: ignore[attr-defined]
+    assert request.target_dir == target_path.parent  # type: ignore[attr-defined]
+    assert request.generated_dir == generated_path.parent  # type: ignore[attr-defined]
     assert request.output_dir == tmp_path / "results" / "current_run" / "evaluation"  # type: ignore[attr-defined]
+    assert "Single evaluation CSV" in output
+
+
+def test_evaluate_single_build_request_rejects_mismatched_sample_ids(tmp_path: Path) -> None:
+    args = argparse.Namespace(
+        target=str(tmp_path / "00001_target.png"),
+        generated=str(tmp_path / "00002_target_generated.png"),
+        output_dir=str(tmp_path / "evaluation"),
+    )
+
+    with pytest.raises(ValueError, match="different sample ids"):
+        evaluate_single_cli._build_request(args)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--config", "config/runs/example.yaml"],
+        ["dataset", "--config", "config/runs/example.yaml"],
+    ],
+)
+def test_evaluate_single_removed_dataset_invocations_fail_clearly(
+    argv: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as exc:
+        evaluate_single_cli.main(argv)
+
+    err = capsys.readouterr().err
+    assert exc.value.code != 0
+    assert "dataset/config mode was removed" in err
+    assert "vs-evaluate --config" in err
+
+
+def test_evaluate_single_removed_single_subcommand_fails_clearly(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc:
+        evaluate_single_cli.main(["single", "--target-image", "a_target.png"])
+
+    err = capsys.readouterr().err
+    assert exc.value.code != 0
+    assert "'single' subcommand was removed" in err
+    assert "vs-evaluate-single --target-image" in err
 
 
 def test_organize_help_includes_config() -> None:
