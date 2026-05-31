@@ -4,7 +4,7 @@ import argparse
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import numpy as np
 import pandas as pd
@@ -19,6 +19,18 @@ from virtual_staining.utils.metrics import (
     get_metric_plot_range as get_default_metric_plot_range,
 )
 
+DECISION_QUANTILES = (0.10, 0.25, 0.50, 0.75, 0.90)
+
+
+class DecisionSummary(TypedDict):
+    better_label: str
+    score_a: float
+    score_b: float
+    score_difference: float
+    total_score: float
+    decision_strength: str
+    decision_reason: str
+
 
 @dataclass
 class UnpairedGroupStats:
@@ -28,6 +40,9 @@ class UnpairedGroupStats:
     median: float
     iqr: float
     threshold_shares: dict[str, float]
+    decision_score: float = 0.0
+    decision_favored_count: int = 0
+    decision_counter_count: int = 0
 
 
 @dataclass
@@ -41,6 +56,14 @@ class UnpairedComparison:
     ks_pvalue: float
     mannwhitney_u: float
     mannwhitney_pvalue: float
+    score_a: float = 0.0
+    score_b: float = 0.0
+    score_difference: float = 0.0
+    total_score: float = 0.0
+    decision_strength: str = "tie"
+    decision_reason: str = "No score-based suggestion; criteria are tied."
+    common_language_a_better: float = 0.5
+    common_language_b_better: float = 0.5
 
 
 @dataclass
@@ -57,6 +80,149 @@ class PairedSummary:
     wilcoxon_statistic: float
     wilcoxon_pvalue: float
     better_label: str
+    score_a: float = 0.0
+    score_b: float = 0.0
+    score_difference: float = 0.0
+    total_score: float = 0.0
+    decision_strength: str = "tie"
+    decision_reason: str = "No score-based suggestion; criteria are tied."
+    signed_delta_q10: float = 0.0
+    signed_delta_q25: float = 0.0
+    signed_delta_q50: float = 0.0
+    signed_delta_q75: float = 0.0
+    signed_delta_q90: float = 0.0
+    mean_relative_signed_delta: float = float("nan")
+    median_relative_signed_delta: float = float("nan")
+    relative_delta_count: int = 0
+
+
+def metric_direction_name(higher_is_better: bool) -> str:
+    """Return the stable direction label used in compare artifacts."""
+    return "higher_is_better" if higher_is_better else "lower_is_better"
+
+
+def signed_metric_difference(
+    value_a: float,
+    value_b: float,
+    higher_is_better: bool,
+) -> float:
+    """Return a direction-aware B-vs-A difference where positive favors B."""
+    return value_b - value_a if higher_is_better else value_a - value_b
+
+
+def _favor_from_signed_difference(
+    signed_difference: float,
+    label_a: str,
+    label_b: str,
+    *,
+    tolerance: float = 0.0,
+) -> str:
+    if signed_difference > tolerance:
+        return label_b
+    if signed_difference < -tolerance:
+        return label_a
+    return "tie"
+
+
+def _decision_breakdown_row(
+    *,
+    mode: str,
+    criterion: str,
+    description: str,
+    label_a: str,
+    label_b: str,
+    value_a: float,
+    value_b: float,
+    signed_difference: float,
+    weight: float = 1.0,
+    tolerance: float = 0.0,
+) -> dict[str, object]:
+    favors = _favor_from_signed_difference(
+        signed_difference,
+        label_a,
+        label_b,
+        tolerance=tolerance,
+    )
+    return {
+        "mode": mode,
+        "criterion": criterion,
+        "description": description,
+        "label_a": label_a,
+        "label_b": label_b,
+        "value_a": value_a,
+        "value_b": value_b,
+        "signed_difference": signed_difference,
+        "weight": weight,
+        "favors": favors,
+        "score_a": weight if favors == label_a else 0.0,
+        "score_b": weight if favors == label_b else 0.0,
+    }
+
+
+def _decision_row_float(row: dict[str, object], key: str) -> float:
+    value = row[key]
+    if isinstance(value, int | float):
+        return float(value)
+    raise TypeError(f"Decision row field '{key}' must be numeric.")
+
+
+def classify_decision_strength(score_difference: float, total_score: float) -> str:
+    """Classify score margin as tie, weak, moderate, or strong."""
+    if total_score <= 0 or score_difference == 0:
+        return "tie"
+
+    margin = abs(score_difference) / total_score
+    if margin >= 0.75:
+        return "strong"
+    if margin >= 0.40:
+        return "moderate"
+    return "weak"
+
+
+def _decision_from_rows(
+    rows: Iterable[dict[str, object]],
+    *,
+    label_a: str,
+    label_b: str,
+) -> DecisionSummary:
+    row_list = list(rows)
+    score_a = float(sum(_decision_row_float(row, "score_a") for row in row_list))
+    score_b = float(sum(_decision_row_float(row, "score_b") for row in row_list))
+    total_score = float(sum(_decision_row_float(row, "weight") for row in row_list))
+    score_difference = abs(score_b - score_a)
+
+    if score_b > score_a:
+        better_label = label_b
+        favored_count = sum(1 for row in row_list if row["favors"] == label_b)
+        counter_count = sum(1 for row in row_list if row["favors"] == label_a)
+    elif score_a > score_b:
+        better_label = label_a
+        favored_count = sum(1 for row in row_list if row["favors"] == label_a)
+        counter_count = sum(1 for row in row_list if row["favors"] == label_b)
+    else:
+        better_label = "tie"
+        favored_count = 0
+        counter_count = 0
+
+    decision_strength = classify_decision_strength(score_difference, total_score)
+    if better_label == "tie":
+        reason = f"No score-based suggestion; criteria are tied ({score_a:.1f} vs {score_b:.1f})."
+    else:
+        reason = (
+            f"{better_label} has a {decision_strength} score-based advantage "
+            f"({score_a:.1f} vs {score_b:.1f}); {favored_count} criteria favored "
+            f"{better_label} and {counter_count} opposed it."
+        )
+
+    return {
+        "better_label": better_label,
+        "score_a": score_a,
+        "score_b": score_b,
+        "score_difference": score_difference,
+        "total_score": total_score,
+        "decision_strength": decision_strength,
+        "decision_reason": reason,
+    }
 
 
 def resolve_input_csv(path_like: str | Path) -> Path:
@@ -119,6 +285,11 @@ def choose_unpaired_better_label(
     comparison: UnpairedComparison,
 ) -> str:
     """Chooses the better group by combining the main signals from the comparison."""
+    if comparison.score_b > comparison.score_a:
+        return group_b.label
+    if comparison.score_a > comparison.score_b:
+        return group_a.label
+
     score_a = 0
     score_b = 0
 
@@ -171,6 +342,191 @@ def choose_paired_better_label(
     if score_a > score_b:
         return label_a
     return "tie"
+
+
+def common_language_effect_size(
+    a: np.ndarray,
+    b: np.ndarray,
+    higher_is_better: bool,
+) -> float:
+    """Return P(B beats A) + 0.5 * P(tie), respecting metric direction."""
+    sorted_a = np.sort(a)
+    left = np.searchsorted(sorted_a, b, side="left")
+    right = np.searchsorted(sorted_a, b, side="right")
+    ties = right - left
+
+    wins = left if higher_is_better else sorted_a.size - right
+
+    denominator = float(sorted_a.size * b.size)
+    if denominator == 0.0:
+        return float("nan")
+    return float((np.sum(wins) + 0.5 * np.sum(ties)) / denominator)
+
+
+def build_unpaired_quantile_comparison_rows(
+    a: np.ndarray,
+    b: np.ndarray,
+    *,
+    label_a: str,
+    label_b: str,
+    higher_is_better: bool,
+    quantiles: Iterable[float] = DECISION_QUANTILES,
+) -> list[dict[str, object]]:
+    """Build direction-aware quantile comparison rows for unpaired distributions."""
+    rows: list[dict[str, object]] = []
+    direction = metric_direction_name(higher_is_better)
+
+    for quantile in quantiles:
+        value_a = float(np.quantile(a, quantile))
+        value_b = float(np.quantile(b, quantile))
+        raw_delta = value_b - value_a
+        signed_delta = signed_metric_difference(value_a, value_b, higher_is_better)
+        rows.append(
+            {
+                "quantile": f"q{int(round(quantile * 100)):02d}",
+                "quantile_probability": float(quantile),
+                "direction": direction,
+                "value_a": value_a,
+                "value_b": value_b,
+                "raw_delta_b_minus_a": raw_delta,
+                "signed_delta": signed_delta,
+                "favors": _favor_from_signed_difference(
+                    signed_delta,
+                    label_a,
+                    label_b,
+                ),
+            }
+        )
+
+    return rows
+
+
+def build_unpaired_threshold_share_rows(
+    group_a: UnpairedGroupStats,
+    group_b: UnpairedGroupStats,
+    *,
+    higher_is_better: bool,
+) -> list[dict[str, object]]:
+    """Build threshold share rows using the favorable side of each threshold."""
+    rows: list[dict[str, object]] = []
+    operator = ">=" if higher_is_better else "<="
+
+    for threshold_name, share_a in group_a.threshold_shares.items():
+        share_b = group_b.threshold_shares.get(threshold_name, float("nan"))
+        threshold = threshold_name.split("_", maxsplit=1)[1]
+        share_delta = share_b - share_a
+        rows.append(
+            {
+                "threshold_name": threshold_name,
+                "rule": f"value {operator} {threshold}",
+                "threshold": threshold,
+                "share_a": share_a,
+                "share_b": share_b,
+                "share_delta_b_minus_a": share_delta,
+                "favors": _favor_from_signed_difference(
+                    share_delta,
+                    group_a.label,
+                    group_b.label,
+                ),
+            }
+        )
+
+    return rows
+
+
+def build_unpaired_decision_breakdown_rows(
+    a: np.ndarray,
+    b: np.ndarray,
+    group_a: UnpairedGroupStats,
+    group_b: UnpairedGroupStats,
+    higher_is_better: bool,
+) -> list[dict[str, object]]:
+    """Build deterministic score criteria for an unpaired comparison."""
+    tail_quantile = 0.10 if higher_is_better else 0.90
+    tail_a = float(np.quantile(a, tail_quantile))
+    tail_b = float(np.quantile(b, tail_quantile))
+    threshold_mean_a = (
+        float(np.mean(list(group_a.threshold_shares.values())))
+        if group_a.threshold_shares
+        else float("nan")
+    )
+    threshold_mean_b = (
+        float(np.mean(list(group_b.threshold_shares.values())))
+        if group_b.threshold_shares
+        else float("nan")
+    )
+    common_language_b = common_language_effect_size(a, b, higher_is_better)
+    common_language_a = 1.0 - common_language_b
+
+    rows = [
+        _decision_breakdown_row(
+            mode="unpaired",
+            criterion="mean",
+            description="Direction-aware difference between group means.",
+            label_a=group_a.label,
+            label_b=group_b.label,
+            value_a=group_a.mean,
+            value_b=group_b.mean,
+            signed_difference=signed_metric_difference(
+                group_a.mean,
+                group_b.mean,
+                higher_is_better,
+            ),
+        ),
+        _decision_breakdown_row(
+            mode="unpaired",
+            criterion="median",
+            description="Direction-aware difference between group medians.",
+            label_a=group_a.label,
+            label_b=group_b.label,
+            value_a=group_a.median,
+            value_b=group_b.median,
+            signed_difference=signed_metric_difference(
+                group_a.median,
+                group_b.median,
+                higher_is_better,
+            ),
+        ),
+        _decision_breakdown_row(
+            mode="unpaired",
+            criterion=f"worst_tail_q{int(round(tail_quantile * 100)):02d}",
+            description="Worst-tail quantile comparison using metric direction.",
+            label_a=group_a.label,
+            label_b=group_b.label,
+            value_a=tail_a,
+            value_b=tail_b,
+            signed_difference=signed_metric_difference(tail_a, tail_b, higher_is_better),
+        ),
+    ]
+
+    if group_a.threshold_shares:
+        rows.append(
+            _decision_breakdown_row(
+                mode="unpaired",
+                criterion="threshold_mean",
+                description="Mean favorable-threshold share difference.",
+                label_a=group_a.label,
+                label_b=group_b.label,
+                value_a=threshold_mean_a,
+                value_b=threshold_mean_b,
+                signed_difference=threshold_mean_b - threshold_mean_a,
+            )
+        )
+
+    rows.append(
+        _decision_breakdown_row(
+            mode="unpaired",
+            criterion="common_language_effect",
+            description="Probability that a random B sample beats a random A sample.",
+            label_a=group_a.label,
+            label_b=group_b.label,
+            value_a=common_language_a,
+            value_b=common_language_b,
+            signed_difference=common_language_b - 0.5,
+        )
+    )
+
+    return rows
 
 
 def compute_unpaired_group_stats(
@@ -249,9 +605,32 @@ def compute_unpaired_comparison(
         group_a.label,
         group_b.label,
     )
+    common_language_b = common_language_effect_size(a, b, higher_is_better)
+    decision_rows = build_unpaired_decision_breakdown_rows(
+        a,
+        b,
+        group_a,
+        group_b,
+        higher_is_better,
+    )
+    decision = _decision_from_rows(
+        decision_rows,
+        label_a=group_a.label,
+        label_b=group_b.label,
+    )
+    group_a.decision_score = float(decision["score_a"])
+    group_b.decision_score = float(decision["score_b"])
+    group_a.decision_favored_count = sum(
+        1 for row in decision_rows if row["favors"] == group_a.label
+    )
+    group_b.decision_favored_count = sum(
+        1 for row in decision_rows if row["favors"] == group_b.label
+    )
+    group_a.decision_counter_count = group_b.decision_favored_count
+    group_b.decision_counter_count = group_a.decision_favored_count
 
     comparison = UnpairedComparison(
-        better_label="tie",
+        better_label=str(decision["better_label"]),
         mean_favors=mean_favors,
         median_favors=median_favors,
         threshold_favors=threshold_favors,
@@ -260,8 +639,15 @@ def compute_unpaired_comparison(
         ks_pvalue=float(ks.pvalue),
         mannwhitney_u=float(mann_whitney.statistic),
         mannwhitney_pvalue=float(mann_whitney.pvalue),
+        score_a=float(decision["score_a"]),
+        score_b=float(decision["score_b"]),
+        score_difference=float(decision["score_difference"]),
+        total_score=float(decision["total_score"]),
+        decision_strength=str(decision["decision_strength"]),
+        decision_reason=str(decision["decision_reason"]),
+        common_language_a_better=1.0 - common_language_b,
+        common_language_b_better=common_language_b,
     )
-    comparison.better_label = choose_unpaired_better_label(group_a, group_b, comparison)
     return comparison
 
 
@@ -408,6 +794,117 @@ def build_paired_multi_metric_delta_reports(
     return sample_report, pd.DataFrame(summary_rows)
 
 
+def _paired_delta_arrays(
+    merged: pd.DataFrame,
+    higher_is_better: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    values_a = merged["value_a"].to_numpy(dtype=float)
+    values_b = merged["value_b"].to_numpy(dtype=float)
+    raw_delta = values_b - values_a
+    signed_delta = raw_delta if higher_is_better else -raw_delta
+    relative_delta = np.full_like(signed_delta, np.nan, dtype=float)
+    denominator = np.abs(values_a)
+    valid_denominator = denominator > 0.0
+    relative_delta[valid_denominator] = (
+        signed_delta[valid_denominator] / denominator[valid_denominator]
+    )
+    return raw_delta, signed_delta, relative_delta
+
+
+def build_paired_decision_breakdown_rows(summary: PairedSummary) -> list[dict[str, object]]:
+    """Build deterministic score criteria for a paired comparison."""
+    return [
+        _decision_breakdown_row(
+            mode="paired",
+            criterion="mean_signed_delta",
+            description="Mean direction-aware paired delta.",
+            label_a=summary.label_a,
+            label_b=summary.label_b,
+            value_a=0.0,
+            value_b=summary.mean_signed_delta,
+            signed_difference=summary.mean_signed_delta,
+        ),
+        _decision_breakdown_row(
+            mode="paired",
+            criterion="median_signed_delta",
+            description="Median direction-aware paired delta.",
+            label_a=summary.label_a,
+            label_b=summary.label_b,
+            value_a=0.0,
+            value_b=summary.median_signed_delta,
+            signed_difference=summary.median_signed_delta,
+        ),
+        _decision_breakdown_row(
+            mode="paired",
+            criterion="share_improved",
+            description="Share of paired samples improved versus worsened.",
+            label_a=summary.label_a,
+            label_b=summary.label_b,
+            value_a=summary.share_a_better,
+            value_b=summary.share_b_better,
+            signed_difference=summary.share_b_better - summary.share_a_better,
+        ),
+        _decision_breakdown_row(
+            mode="paired",
+            criterion="q25_signed_delta",
+            description="Lower-middle quantile of direction-aware paired deltas.",
+            label_a=summary.label_a,
+            label_b=summary.label_b,
+            value_a=0.0,
+            value_b=summary.signed_delta_q25,
+            signed_difference=summary.signed_delta_q25,
+        ),
+        _decision_breakdown_row(
+            mode="paired",
+            criterion="worst_tail_q10_signed_delta",
+            description="Worst-tail quantile of direction-aware paired deltas.",
+            label_a=summary.label_a,
+            label_b=summary.label_b,
+            value_a=0.0,
+            value_b=summary.signed_delta_q10,
+            signed_difference=summary.signed_delta_q10,
+        ),
+    ]
+
+
+def build_paired_delta_summary_row(
+    summary: PairedSummary,
+    *,
+    metric: str,
+    higher_is_better: bool,
+) -> dict[str, object]:
+    """Build the one-row paired_delta_summary.csv payload."""
+    return {
+        "mode": "paired",
+        "metric": metric,
+        "direction": metric_direction_name(higher_is_better),
+        "label_a": summary.label_a,
+        "label_b": summary.label_b,
+        "n_pairs": summary.n_pairs,
+        "tolerance": summary.tolerance,
+        "mean_signed_delta": summary.mean_signed_delta,
+        "median_signed_delta": summary.median_signed_delta,
+        "signed_delta_q10": summary.signed_delta_q10,
+        "signed_delta_q25": summary.signed_delta_q25,
+        "signed_delta_q50": summary.signed_delta_q50,
+        "signed_delta_q75": summary.signed_delta_q75,
+        "signed_delta_q90": summary.signed_delta_q90,
+        "mean_relative_signed_delta": summary.mean_relative_signed_delta,
+        "median_relative_signed_delta": summary.median_relative_signed_delta,
+        "relative_delta_count": summary.relative_delta_count,
+        "share_b_better": summary.share_b_better,
+        "share_a_better": summary.share_a_better,
+        "share_equal": summary.share_equal,
+        "score_a": summary.score_a,
+        "score_b": summary.score_b,
+        "score_difference": summary.score_difference,
+        "total_score": summary.total_score,
+        "decision_strength": summary.decision_strength,
+        "decision_reason": summary.decision_reason,
+        "better_label": summary.better_label,
+    }
+
+
 def compute_paired_summary(
     merged: pd.DataFrame,
     label_a: str,
@@ -416,8 +913,7 @@ def compute_paired_summary(
     higher_is_better: bool,
 ) -> PairedSummary:
     """Computes the main summary for the paired comparison."""
-    raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(dtype=float)
-    signed_delta = raw_delta if higher_is_better else -raw_delta
+    _, signed_delta, relative_delta = _paired_delta_arrays(merged, higher_is_better)
 
     share_b_better = float(np.mean(signed_delta > tolerance))
     share_a_better = float(np.mean(signed_delta < -tolerance))
@@ -434,6 +930,41 @@ def compute_paired_summary(
 
     mean_signed_delta = float(np.mean(signed_delta))
     median_signed_delta = float(np.median(signed_delta))
+    q10, q25, q50, q75, q90 = np.quantile(signed_delta, DECISION_QUANTILES)
+    finite_relative_delta = relative_delta[np.isfinite(relative_delta)]
+    mean_relative_delta = (
+        float(np.mean(finite_relative_delta)) if finite_relative_delta.size else float("nan")
+    )
+    median_relative_delta = (
+        float(np.median(finite_relative_delta)) if finite_relative_delta.size else float("nan")
+    )
+    preliminary_summary = PairedSummary(
+        label_a=label_a,
+        label_b=label_b,
+        n_pairs=int(merged.shape[0]),
+        tolerance=tolerance,
+        mean_signed_delta=mean_signed_delta,
+        median_signed_delta=median_signed_delta,
+        share_b_better=share_b_better,
+        share_a_better=share_a_better,
+        share_equal=share_equal,
+        wilcoxon_statistic=wilcoxon_statistic,
+        wilcoxon_pvalue=wilcoxon_pvalue,
+        better_label="tie",
+        signed_delta_q10=float(q10),
+        signed_delta_q25=float(q25),
+        signed_delta_q50=float(q50),
+        signed_delta_q75=float(q75),
+        signed_delta_q90=float(q90),
+        mean_relative_signed_delta=mean_relative_delta,
+        median_relative_signed_delta=median_relative_delta,
+        relative_delta_count=int(finite_relative_delta.size),
+    )
+    decision = _decision_from_rows(
+        build_paired_decision_breakdown_rows(preliminary_summary),
+        label_a=label_a,
+        label_b=label_b,
+    )
 
     return PairedSummary(
         label_a=label_a,
@@ -447,14 +978,21 @@ def compute_paired_summary(
         share_equal=share_equal,
         wilcoxon_statistic=wilcoxon_statistic,
         wilcoxon_pvalue=wilcoxon_pvalue,
-        better_label=choose_paired_better_label(
-            mean_signed_delta=mean_signed_delta,
-            median_signed_delta=median_signed_delta,
-            share_b_better=share_b_better,
-            share_a_better=share_a_better,
-            label_a=label_a,
-            label_b=label_b,
-        ),
+        better_label=str(decision["better_label"]),
+        score_a=float(decision["score_a"]),
+        score_b=float(decision["score_b"]),
+        score_difference=float(decision["score_difference"]),
+        total_score=float(decision["total_score"]),
+        decision_strength=str(decision["decision_strength"]),
+        decision_reason=str(decision["decision_reason"]),
+        signed_delta_q10=float(q10),
+        signed_delta_q25=float(q25),
+        signed_delta_q50=float(q50),
+        signed_delta_q75=float(q75),
+        signed_delta_q90=float(q90),
+        mean_relative_signed_delta=mean_relative_delta,
+        median_relative_signed_delta=median_relative_delta,
+        relative_delta_count=int(finite_relative_delta.size),
     )
 
 

@@ -117,15 +117,19 @@ def _print_unpaired_cli_summary(
     print_info("KS p-value", _color_pvalue(comparison.ks_pvalue))
     print_info("Mann-Whitney U", f"{comparison.mannwhitney_u:.6f}")
     print_info("Mann-Whitney p-value", _color_pvalue(comparison.mannwhitney_pvalue))
+    print_info(
+        f"Common-language {group_b.label} better",
+        _color_share(comparison.common_language_b_better),
+    )
 
     print_section("Conclusion")
-    print(
-        style(
-            f"Overall unpaired comparison favors: {comparison.better_label}",
-            "bold",
-            comparison_color,
-        )
+    print_info(
+        "Score",
+        f"{group_a.label}={comparison.score_a:.1f}, {group_b.label}={comparison.score_b:.1f}",
     )
+    print_info("Decision strength", comparison.decision_strength)
+    print_info("Reason", comparison.decision_reason)
+    print(style(f"Score-based suggestion: {comparison.better_label}", "bold", comparison_color))
     print(style(f"Saved outputs to: {output_dir}", "bold", "magenta"))
 
 
@@ -148,18 +152,21 @@ def _print_paired_cli_summary(
     print_info(f"Share {summary.label_b} better", _color_share(summary.share_b_better))
     print_info(f"Share {summary.label_a} better", _color_share(summary.share_a_better))
     print_info("Share equal", _color_share(summary.share_equal))
+    print_info("Signed delta q10", _color_signed_delta(summary.signed_delta_q10))
+    print_info("Signed delta q25", _color_signed_delta(summary.signed_delta_q25))
+    print_info("Signed delta q90", _color_signed_delta(summary.signed_delta_q90))
     print_info("Wilcoxon statistic", f"{summary.wilcoxon_statistic:.6f}")
     print_info("Wilcoxon p-value", _color_pvalue(summary.wilcoxon_pvalue))
 
     conclusion_color = "green" if summary.better_label != "tie" else "yellow"
     print_section("Conclusion")
-    print(
-        style(
-            f"Overall paired comparison favors: {summary.better_label}",
-            "bold",
-            conclusion_color,
-        )
+    print_info(
+        "Score",
+        f"{summary.label_a}={summary.score_a:.1f}, {summary.label_b}={summary.score_b:.1f}",
     )
+    print_info("Decision strength", summary.decision_strength)
+    print_info("Reason", summary.decision_reason)
+    print(style(f"Score-based suggestion: {summary.better_label}", "bold", conclusion_color))
     print(style(f"Saved outputs to: {output_dir}", "bold", "magenta"))
 
 

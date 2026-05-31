@@ -187,7 +187,7 @@ def test_compare_help_includes_config() -> None:
 
 
 def test_compare_main_with_config_invokes_compare(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     current_run = tmp_path / "results" / "current_run"
     baseline_run = tmp_path / "results" / "baseline_run"
@@ -229,11 +229,13 @@ def test_compare_main_with_config_invokes_compare(
     monkeypatch.setattr(compare_cli, "compare", _fake_compare)
 
     compare_cli.main(["--config", str(config_path)])
+    output = capsys.readouterr().out
 
     request = captured["request"]
     assert request.csv_a == current_run / "evaluation" / "per_image_metrics.csv"  # type: ignore[attr-defined]
     assert request.csv_b == baseline_run / "evaluation" / "per_image_metrics.csv"  # type: ignore[attr-defined]
     assert request.mode == "paired"  # type: ignore[attr-defined]
+    assert "Score-based suggestion" in output
 
 
 def test_compare_main_with_config_passes_multi_metric_options(

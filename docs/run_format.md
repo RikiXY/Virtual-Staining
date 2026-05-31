@@ -503,6 +503,35 @@ per skipped sample.
 
 This file is not written when all test samples are evaluated successfully.
 
+### `comparisons/<run_a>_vs_<run_b>/<mode>_<metric>/`
+
+Written by single-metric `vs-compare unpaired` and `vs-compare paired` runs.
+Existing artifacts such as `comparison_summary.csv`, `group_statistics.csv`,
+`paired_sample_deltas.csv`, `summary.json`, `report.txt`, and plot PNGs remain
+available. The compare report also writes decision-scoring artifacts that make
+the score-based suggestion transparent. These scores are engineering summaries,
+not formal statistical conclusions.
+
+Additional unpaired files:
+
+| File | Description |
+|---|---|
+| `unpaired_decision_breakdown.csv` | Ordered scoring criteria with values for run A and B, direction-aware signed difference, favored label, criterion weight, and per-run score contribution |
+| `unpaired_quantile_comparison.csv` | q10/q25/q50/q75/q90 values for both runs, raw B-A deltas, direction-aware signed deltas, and favored label |
+| `unpaired_threshold_shares.csv` | Favorable threshold shares for each configured threshold and the share delta favoring A or B |
+
+Additional paired files:
+
+| File | Description |
+|---|---|
+| `paired_decision_breakdown.csv` | Ordered scoring criteria based on mean/median signed deltas, share improved, q25 signed delta, and worst-tail q10 signed delta |
+| `paired_delta_summary.csv` | One-row summary with signed-delta quantiles, relative signed-delta aggregates, improved/worsened/equal shares, score fields, decision strength, reason, and score-based suggestion |
+
+Decision fields use `score_a`, `score_b`, `score_difference`,
+`decision_strength`, and `decision_reason`. `decision_strength` is one of
+`tie`, `weak`, `moderate`, or `strong`. For all signed deltas, positive means
+run B improved after applying the metric direction.
+
 ### `comparisons/<run_a>_vs_<run_b>/paired_all_metrics/`
 
 Written by `vs-compare paired --column all`, by `vs-compare paired --metrics

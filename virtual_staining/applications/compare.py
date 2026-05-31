@@ -12,11 +12,13 @@ from virtual_staining.evaluation.comparison import (
     plot_paired_delta_histogram,
     plot_paired_scatter,
     save_paired_comparison_summary,
+    save_paired_decision_reports,
     save_paired_multi_metric_reports,
     save_paired_report_txt,
     save_paired_sample_deltas,
     save_paired_summary_json,
     save_unpaired_comparison_summary,
+    save_unpaired_decision_reports,
     save_unpaired_group_statistics,
     save_unpaired_report_txt,
     save_unpaired_summary_json,
@@ -27,7 +29,11 @@ from virtual_staining.evaluation.statistics import (
     UnpairedGroupStats,
     align_paired_frames,
     align_paired_metric_frames,
+    build_paired_decision_breakdown_rows,
     build_paired_multi_metric_delta_reports,
+    build_unpaired_decision_breakdown_rows,
+    build_unpaired_quantile_comparison_rows,
+    build_unpaired_threshold_share_rows,
     compute_paired_summary,
     compute_unpaired_comparison,
     compute_unpaired_group_stats,
@@ -62,6 +68,11 @@ class CompareResult:
     group_b: UnpairedGroupStats | None = None
     unpaired_comparison: UnpairedComparison | None = None
     paired_summary: PairedSummary | None = None
+    unpaired_decision_breakdown_csv: Path | None = None
+    unpaired_quantile_comparison_csv: Path | None = None
+    unpaired_threshold_shares_csv: Path | None = None
+    paired_decision_breakdown_csv: Path | None = None
+    paired_delta_summary_csv: Path | None = None
     paired_sample_deltas_all_metrics_csv: Path | None = None
     paired_metric_delta_summary_csv: Path | None = None
 
@@ -102,6 +113,28 @@ def _compare_unpaired(request: CompareRequest) -> CompareResult:
         group_a=group_a,
         group_b=group_b,
         higher_is_better=request.higher_is_better,
+    )
+    decision_path, quantile_path, threshold_path = save_unpaired_decision_reports(
+        build_unpaired_decision_breakdown_rows(
+            values_a,
+            values_b,
+            group_a,
+            group_b,
+            request.higher_is_better,
+        ),
+        build_unpaired_quantile_comparison_rows(
+            values_a,
+            values_b,
+            label_a=request.label_a,
+            label_b=request.label_b,
+            higher_is_better=request.higher_is_better,
+        ),
+        build_unpaired_threshold_share_rows(
+            group_a,
+            group_b,
+            higher_is_better=request.higher_is_better,
+        ),
+        request.output_dir,
     )
 
     save_unpaired_group_statistics(group_a, group_b, request.output_dir)
@@ -148,6 +181,9 @@ def _compare_unpaired(request: CompareRequest) -> CompareResult:
         group_a=group_a,
         group_b=group_b,
         unpaired_comparison=comparison,
+        unpaired_decision_breakdown_csv=decision_path,
+        unpaired_quantile_comparison_csv=quantile_path,
+        unpaired_threshold_shares_csv=threshold_path,
     )
 
 
@@ -191,6 +227,13 @@ def _compare_paired(request: CompareRequest) -> CompareResult:
         label_b=request.label_b,
         tolerance=request.tolerance,
         higher_is_better=request.higher_is_better,
+    )
+    decision_path, delta_summary_path = save_paired_decision_reports(
+        build_paired_decision_breakdown_rows(summary),
+        summary,
+        column=request.column,
+        higher_is_better=request.higher_is_better,
+        output_dir=request.output_dir,
     )
 
     save_paired_comparison_summary(
@@ -246,4 +289,6 @@ def _compare_paired(request: CompareRequest) -> CompareResult:
         mode="paired",
         output_dir=request.output_dir,
         paired_summary=summary,
+        paired_decision_breakdown_csv=decision_path,
+        paired_delta_summary_csv=delta_summary_path,
     )
