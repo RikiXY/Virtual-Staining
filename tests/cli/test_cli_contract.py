@@ -408,11 +408,8 @@ def test_evaluate_single_help_is_single_pair_only() -> None:
     help_text = evaluate_single_cli._build_parser().format_help()
 
     assert "--config" not in help_text
-    assert "{single}" not in help_text
     assert "--target-image" in help_text
     assert "--generated-image" in help_text
-    assert "vs-evaluate-single dataset" not in help_text
-    assert "vs-evaluate-single single" not in help_text
 
 
 def test_evaluate_single_help_uses_artifacts_output_test_path() -> None:
@@ -487,37 +484,6 @@ def test_evaluate_single_build_request_rejects_mismatched_sample_ids(tmp_path: P
 
     with pytest.raises(ValueError, match="different sample ids"):
         evaluate_single_cli._build_request(args)
-
-
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["--config", "config/runs/example.yaml"],
-        ["dataset", "--config", "config/runs/example.yaml"],
-    ],
-)
-def test_evaluate_single_removed_dataset_invocations_fail_clearly(
-    argv: list[str], capsys: pytest.CaptureFixture[str]
-) -> None:
-    with pytest.raises(SystemExit) as exc:
-        evaluate_single_cli.main(argv)
-
-    err = capsys.readouterr().err
-    assert exc.value.code != 0
-    assert "dataset/config mode was removed" in err
-    assert "vs-evaluate --config" in err
-
-
-def test_evaluate_single_removed_single_subcommand_fails_clearly(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    with pytest.raises(SystemExit) as exc:
-        evaluate_single_cli.main(["single", "--target-image", "a_target.png"])
-
-    err = capsys.readouterr().err
-    assert exc.value.code != 0
-    assert "'single' subcommand was removed" in err
-    assert "vs-evaluate-single --target-image" in err
 
 
 def test_organize_help_includes_config() -> None:
