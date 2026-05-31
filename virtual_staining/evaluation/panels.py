@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import csv
-import math
 from pathlib import Path
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 
+from virtual_staining.evaluation.selection import select_ranked_samples
 from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS, open_rgb, to_float01
 from virtual_staining.utils.metrics import DEFAULT_METRICS, is_higher_better_metric
 
@@ -120,19 +120,14 @@ def select_worst_metric_rows(
     top_k: int,
 ) -> list[dict[str, object]]:
     """Select the worst finite metric rows for residual heatmap export."""
-    if top_k <= 0:
-        raise ValueError("top_k must be a positive integer.")
-
-    higher_is_better = is_higher_better_metric(metric_name)
-    ranked_rows: list[tuple[float, dict[str, object]]] = []
-
-    for row in rows:
-        metric_value = _row_metric_value(row, metric_name)
-        if math.isfinite(metric_value):
-            ranked_rows.append((metric_value, row))
-
-    ranked_rows.sort(key=lambda item: item[0], reverse=not higher_is_better)
-    return [row for _, row in ranked_rows[:top_k]]
+    selected = select_ranked_samples(
+        rows,
+        metric_name,
+        kinds=("worst",),
+        top_k=top_k,
+        finite_only=True,
+    )
+    return [sample.row for sample in selected["worst"]]
 
 
 def write_residual_heatmap_artifacts(
@@ -243,29 +238,14 @@ def select_representative_rows(
     """Selects the best, median and worst samples for a metric."""
     if not per_image_rows:
         raise ValueError("No per-image rows available for representative selection.")
-
-    def metric_value(row: dict[str, str]) -> float:
-        return float(row[metric_name])
-
-    higher_is_better = is_higher_better_metric(metric_name)
-    best_row = (
-        max(per_image_rows, key=metric_value)
-        if higher_is_better
-        else min(per_image_rows, key=metric_value)
+    selected = select_ranked_samples(
+        per_image_rows,
+        metric_name,
+        top_k=1,
+        median_value=metric_summary["median"],
     )
-    worst_row = (
-        min(per_image_rows, key=metric_value)
-        if higher_is_better
-        else max(per_image_rows, key=metric_value)
-    )
-
     return {
-        "best": best_row,
-        "median": min(
-            per_image_rows,
-            key=lambda row: abs(metric_value(row) - metric_summary["median"]),
-        ),
-        "worst": worst_row,
+        kind: cast(dict[str, str], samples[0].row) for kind, samples in selected.items() if samples
     }
 
 
@@ -282,41 +262,17 @@ def select_ranked_representative_rows(
         raise ValueError("top_k must be a positive integer.")
     if not per_image_rows:
         raise ValueError("No per-image rows available for representative selection.")
-    invalid_kinds = sorted(set(kinds) - {"best", "median", "worst"})
-    if invalid_kinds:
-        raise ValueError(f"Unsupported representative kinds: {', '.join(invalid_kinds)}")
-
-    if top_k == 1:
-        single_rows = select_representative_rows(metric_name, metric_summary, per_image_rows)
-        return {kind: [single_rows[kind]] for kind in kinds}
-
-    ranked_rows: dict[str, list[dict[str, str]]] = {}
-
-    for kind in kinds:
-        if kind in {"best", "worst"}:
-            ranked_rows[kind] = find_representative_samples(
-                per_image_rows,
-                metric=metric_name,
-                kind=kind,
-                n=top_k,
-            )
-            continue
-
-        if kind == "median":
-            median = metric_summary["median"]
-            ranked_rows[kind] = sorted(
-                per_image_rows,
-                key=lambda row: (
-                    abs(float(row[metric_name]) - median),
-                    float(row[metric_name]),
-                    row["sample_id"],
-                ),
-            )[:top_k]
-            continue
-
-        raise ValueError(f"Unsupported representative kind: {kind}")
-
-    return ranked_rows
+    selected = select_ranked_samples(
+        per_image_rows,
+        metric_name,
+        kinds=kinds,
+        top_k=top_k,
+        median_value=metric_summary["median"],
+    )
+    return {
+        kind: [cast(dict[str, str], sample.row) for sample in samples]
+        for kind, samples in selected.items()
+    }
 
 
 def build_selection_summary_row(
@@ -805,23 +761,10 @@ def find_representative_samples(
     kind: str,
     n: int,
 ) -> list[dict[str, str]]:
-    sorted_rows = sorted(
-        rows,
-        key=lambda row: float(row[metric]),
-        reverse=is_higher_better_metric(metric),
-    )
-    if kind == "best":
-        return sorted_rows[:n]
-    if kind == "worst":
-        return list(reversed(sorted_rows[-n:])) if n > 0 else []
-    if kind == "median":
-        if n <= 0:
-            return []
-        middle = len(sorted_rows) // 2
-        start = max(0, middle - n // 2)
-        end = min(len(sorted_rows), start + n)
-        return sorted_rows[start:end]
-    raise ValueError(f"Unsupported representative kind: {kind}")
+    if n <= 0:
+        return []
+    selected = select_ranked_samples(rows, metric, kinds=(kind,), top_k=n)
+    return [cast(dict[str, str], sample.row) for sample in selected[cast(Any, kind)]]
 
 
 def save_selection_summary_csv(entries: list[dict[str, object]], output_path: str | Path) -> None:

@@ -78,3 +78,33 @@ def test_organize_metric_exports_best_and_worst_for_lower_metric(
     assert result["worst_files"] == 1
     assert (output_dir / "mae" / "best" / "0001_low_generated.png").exists()
     assert (output_dir / "mae" / "worst" / "0001_high_generated.png").exists()
+
+
+def test_organize_metric_uses_sample_id_tie_breaker(tmp_path: Path) -> None:
+    a_path = tmp_path / "images" / "a.png"
+    b_path = tmp_path / "images" / "b.png"
+    _touch(a_path)
+    _touch(b_path)
+
+    df = pd.DataFrame(
+        [
+            {"sample_id": "b", "generated_path": str(b_path), "ssim": 0.9},
+            {"sample_id": "a", "generated_path": str(a_path), "ssim": 0.9},
+        ]
+    )
+    output_dir = tmp_path / "sorted"
+
+    result = organize_metric(
+        df=df,
+        metric="ssim",
+        output_dir=output_dir,
+        image_columns=["generated_path"],
+        top_k=2,
+        mode="copy",
+        overwrite=False,
+        include_all_ranked=False,
+    )
+
+    assert result is not None
+    assert (output_dir / "ssim" / "best" / "0001_a_generated.png").exists()
+    assert (output_dir / "ssim" / "best" / "0002_b_generated.png").exists()

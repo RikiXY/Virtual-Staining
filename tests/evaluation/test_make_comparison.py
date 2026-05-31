@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from tests.image_helpers import write_rgb_image, write_rgb_pair
@@ -19,6 +20,7 @@ from virtual_staining.evaluation.panels import (
     save_residual_heatmap,
     select_representative_rows,
 )
+from virtual_staining.evaluation.ranking import organize_metric
 from virtual_staining.evaluation.reports import write_per_image_metrics_csv
 from virtual_staining.evaluation.summaries import write_summary_csv
 
@@ -266,6 +268,50 @@ def test_compare_panels_top_k_ranks_by_metric_direction(tmp_path: Path) -> None:
     assert "rank" in global_rows[0]
     assert "comparison_path" in global_rows[0]
     assert "error_histogram_path" in global_rows[0]
+
+
+def test_compare_panels_and_organize_share_top_k_selection(tmp_path: Path) -> None:
+    run_path = _write_compare_panel_run(
+        tmp_path,
+        [
+            ("weak", 0.10, 0.90),
+            ("strong", 0.90, 0.10),
+            ("runner_up", 0.80, 0.20),
+        ],
+    )
+
+    panel_result = compare_panels(
+        ComparePanelsRequest(
+            mode="from_metrics",
+            run_path=run_path,
+            metrics=("ssim",),
+            kinds=("best",),
+            top_k=2,
+        )
+    )
+    assert isinstance(panel_result, FromMetricsResult)
+
+    organize_dir = run_path / "evaluation" / "sorted_by_metrics"
+    organization = organize_metric(
+        df=pd.read_csv(run_path / "evaluation" / "per_image_metrics.csv"),
+        metric="ssim",
+        output_dir=organize_dir,
+        image_columns=["generated_path"],
+        top_k=2,
+        mode="copy",
+        overwrite=False,
+        include_all_ranked=False,
+    )
+
+    assert organization is not None
+    panel_sample_ids = [
+        row["sample_id"] for row in panel_result.per_metric_ranked_rows["ssim"]["best"]
+    ]
+    organized_sample_ids = [
+        path.name.split("_generated", maxsplit=1)[0].split("_", maxsplit=1)[1]
+        for path in sorted((organize_dir / "ssim" / "best").glob("*_generated.png"))
+    ]
+    assert organized_sample_ids == panel_sample_ids
 
 
 def test_compare_panels_missing_source_image_fails_clearly(tmp_path: Path) -> None:

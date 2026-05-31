@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, cast
 
 from virtual_staining.evaluation.panels import (
     METRIC_SELECTION_ORDER,
@@ -12,9 +12,9 @@ from virtual_staining.evaluation.panels import (
     save_comparison_panel,
     save_diagnostic_plots,
     save_metric_diagnostics_summary,
-    select_ranked_representative_rows,
     write_metric_selection_summary,
 )
+from virtual_staining.evaluation.selection import select_ranked_samples
 from virtual_staining.evaluation.summaries import read_per_image_metrics_csv, read_summary_csv
 
 
@@ -165,13 +165,17 @@ def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
         metric_summary = summary_rows[metric_name]
         metric_dir = metrics_dir / metric_name
         metric_dir.mkdir(parents=True, exist_ok=True)
-        ranked_rows = select_ranked_representative_rows(
-            metric_name,
-            metric_summary,
+        selected_samples = select_ranked_samples(
             per_image_rows,
+            metric_name,
             top_k=request.top_k,
             kinds=request.kinds,
+            median_value=metric_summary["median"],
         )
+        ranked_rows = {
+            kind: [cast(dict[str, str], sample.row) for sample in samples]
+            for kind, samples in selected_samples.items()
+        }
         per_metric_ranked_rows[metric_name] = ranked_rows
         representative_rows = {kind: rows[0] for kind, rows in ranked_rows.items() if rows}
         per_metric_representative_rows[metric_name] = representative_rows
@@ -179,14 +183,15 @@ def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
         metric_diagnostic_entries: list[DiagnosticEntry] = []
 
         for kind in request.kinds:
-            for rank, row in enumerate(ranked_rows.get(kind, []), start=1):
+            for selected_sample in selected_samples.get(cast(Any, kind), []):
+                row = cast(dict[str, str], selected_sample.row)
                 selection_row, diagnostic_entry = build_metric_case_artifacts(
                     metric_name=metric_name,
                     kind=kind,
                     row=row,
                     metric_summary=metric_summary,
                     metric_dir=metric_dir,
-                    rank=rank,
+                    rank=selected_sample.rank,
                     include_rank_in_filename=request.top_k > 1,
                 )
                 selection_summary_rows.append(selection_row)

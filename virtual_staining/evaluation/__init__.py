@@ -6,6 +6,7 @@ from virtual_staining.evaluation.panels import (
     write_residual_heatmap_artifacts,
 )
 from virtual_staining.evaluation.ranking import organize_by_metrics
+from virtual_staining.evaluation.selection import RankedSample, select_ranked_samples
 from virtual_staining.evaluation.summaries import (
     build_summary_rows,
     build_weak_tail_rows,
@@ -25,4 +26,6 @@ __all__ = [
     "write_residual_heatmap_artifacts",
     "find_representative_samples",
     "organize_by_metrics",
+    "RankedSample",
+    "select_ranked_samples",
 ]

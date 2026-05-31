@@ -571,6 +571,10 @@ By default, `top_k: 1` preserves the historical best/median/worst filenames.
 When `top_k > 1`, ranked filenames include the rank, for example
 `worst_001_<sample_id>_comparison.png`. Optional `metrics` and `kinds` config
 fields can restrict which metric names and representative kinds are rendered.
+Metric direction and sample tie-breaking use the shared ranked-selection helper
+also used by `vs-organize`: SSIM, PSNR, and PCC metrics rank higher values as
+better, while MAE, MSE, and RMSE rank lower values as better. Ties use
+`sample_id` when available.
 
 | Column | Description |
 |---|---|

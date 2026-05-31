@@ -7,8 +7,9 @@ from typing import Any
 
 import pandas as pd
 
+from virtual_staining.evaluation.selection import RankedSample, select_ranked_samples
 from virtual_staining.utils.console import print_info, print_section, style
-from virtual_staining.utils.metrics import DEFAULT_METRICS, is_higher_better_metric
+from virtual_staining.utils.metrics import DEFAULT_METRICS
 
 IMAGE_COLUMNS = [
     "generated_path",
@@ -105,6 +106,10 @@ def export_ranked_subset(
     return placed_files
 
 
+def _samples_to_dataframe(samples: list[RankedSample]) -> pd.DataFrame:
+    return pd.DataFrame([sample.row for sample in samples])
+
+
 def organize_metric(
     df: pd.DataFrame,
     metric: str,
@@ -120,8 +125,14 @@ def organize_metric(
         print_info("Warning", style(f"Metric '{metric}' not found in CSV. Skipping.", "yellow"))
         return None
 
+    rows = df.to_dict("records")
     try:
-        higher_is_better = is_higher_better_metric(metric)
+        all_ranked_samples = select_ranked_samples(
+            rows,
+            metric,
+            kinds=("best",),
+            top_k=max(len(rows), 1),
+        )["best"]
     except ValueError:
         print_info(
             "Warning",
@@ -129,19 +140,23 @@ def organize_metric(
         )
         return None
 
-    metric_values = pd.to_numeric(df[metric], errors="coerce")
-    valid_df = df.loc[metric_values.notna()].copy()
-    valid_df[metric] = metric_values[metric_values.notna()]
-
-    if valid_df.empty:
+    if not all_ranked_samples:
         print_info(
             "Warning",
             style(f"No valid numeric values for metric '{metric}'. Skipping.", "yellow"),
         )
         return None
 
-    best_df = valid_df.sort_values(metric, ascending=not higher_is_better).head(top_k)
-    worst_df = valid_df.sort_values(metric, ascending=higher_is_better).head(top_k)
+    ranked_samples = select_ranked_samples(
+        rows,
+        metric,
+        kinds=("best", "worst"),
+        top_k=top_k,
+    )
+    best_samples = ranked_samples["best"]
+    worst_samples = ranked_samples["worst"]
+    best_df = _samples_to_dataframe(best_samples)
+    worst_df = _samples_to_dataframe(worst_samples)
     metric_dir = output_dir / metric
 
     best_files = export_ranked_subset(
@@ -161,7 +176,7 @@ def organize_metric(
 
     all_ranked_files = 0
     if include_all_ranked:
-        ranked_df = valid_df.sort_values(metric, ascending=not higher_is_better)
+        ranked_df = _samples_to_dataframe(all_ranked_samples)
         all_ranked_files = export_ranked_subset(
             ranked_df,
             destination_dir=metric_dir / "all_ranked",
@@ -172,9 +187,9 @@ def organize_metric(
 
     return {
         "metric": metric,
-        "valid_samples": len(valid_df),
-        "best_samples": len(best_df),
-        "worst_samples": len(worst_df),
+        "valid_samples": len(all_ranked_samples),
+        "best_samples": len(best_samples),
+        "worst_samples": len(worst_samples),
         "best_files": best_files,
         "worst_files": worst_files,
         "all_ranked_files": all_ranked_files,
