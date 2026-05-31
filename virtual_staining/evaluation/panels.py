@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import math
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
@@ -23,6 +24,15 @@ SELECTION_SUMMARY_FIELDNAMES = [
     "target_path",
     "generated_path",
     "comparison_path",
+]
+RESIDUAL_HEATMAP_FIELDNAMES = [
+    "rank",
+    "sample_id",
+    "metric",
+    "metric_value",
+    "target_path",
+    "generated_path",
+    "heatmap_path",
 ]
 
 DiagnosticPathKey = Literal[
@@ -48,9 +58,7 @@ def validate_same_size(*images: Image.Image) -> None:
     sizes = {image.size for image in images}
 
     if len(sizes) != 1:
-        raise ValueError(
-            f"All images must have the same size to build a comparison panel. Got: {sorted(sizes)}"
-        )
+        raise ValueError(f"All images must have the same size. Got: {sorted(sizes)}")
 
 
 def compute_absolute_difference_map(
@@ -60,6 +68,114 @@ def compute_absolute_difference_map(
     generated_float = to_float01(generated_img)
     target_float = to_float01(target_img)
     return np.mean(np.abs(target_float - generated_float), axis=2)
+
+
+def save_residual_heatmap(
+    target_path: str | Path,
+    generated_path: str | Path,
+    save_path: str | Path,
+) -> Path:
+    """Save a standalone absolute-error heatmap for one target/generated pair."""
+    generated_img = open_rgb(generated_path)
+    target_img = open_rgb(target_path)
+    validate_same_size(generated_img, target_img)
+    diff_map = compute_absolute_difference_map(generated_img, target_img)
+
+    fig, ax = plt.subplots(figsize=(5, 4))
+    im = ax.imshow(diff_map, cmap="inferno", vmin=0.0, vmax=1.0)
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    ax.set_title("MAE map")
+    ax.axis("off")
+
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return save_path
+
+
+def _safe_filename_part(value: object) -> str:
+    safe = "".join(
+        char if char.isalnum() or char in {"-", "_", "."} else "_" for char in str(value)
+    )
+    return safe or "sample"
+
+
+def _row_metric_value(row: dict[str, object], metric_name: str) -> float:
+    value = row[metric_name]
+    if isinstance(value, str | int | float):
+        return float(value)
+    raise TypeError(f"Metric '{metric_name}' must be a scalar value, got {type(value).__name__}.")
+
+
+def select_worst_metric_rows(
+    rows: list[dict[str, object]],
+    metric_name: str,
+    top_k: int,
+) -> list[dict[str, object]]:
+    """Select the worst finite metric rows for residual heatmap export."""
+    if top_k <= 0:
+        raise ValueError("top_k must be a positive integer.")
+
+    higher_is_better = is_higher_better_metric(metric_name)
+    ranked_rows: list[tuple[float, dict[str, object]]] = []
+
+    for row in rows:
+        metric_value = _row_metric_value(row, metric_name)
+        if math.isfinite(metric_value):
+            ranked_rows.append((metric_value, row))
+
+    ranked_rows.sort(key=lambda item: item[0], reverse=not higher_is_better)
+    return [row for _, row in ranked_rows[:top_k]]
+
+
+def write_residual_heatmap_artifacts(
+    rows: list[dict[str, object]],
+    output_dir: str | Path,
+    *,
+    metric_name: str,
+    top_k: int,
+    filename: str = "residual_heatmaps.csv",
+) -> Path:
+    """Write residual heatmaps for the worst-ranked rows and record them in a CSV."""
+    output_dir = Path(output_dir)
+    heatmap_dir = output_dir / "residual_heatmaps"
+    csv_path = output_dir / filename
+    selected_rows = select_worst_metric_rows(rows, metric_name, top_k)
+    artifact_rows: list[dict[str, object]] = []
+
+    for rank, row in enumerate(selected_rows, start=1):
+        sample_id = str(row["sample_id"])
+        target_path = Path(str(row["target_path"]))
+        generated_path = Path(str(row["generated_path"]))
+        heatmap_path = heatmap_dir / (
+            f"{rank:03d}_{_safe_filename_part(sample_id)}_{metric_name}_residual_heatmap.png"
+        )
+        saved_path = save_residual_heatmap(
+            target_path=target_path,
+            generated_path=generated_path,
+            save_path=heatmap_path,
+        )
+        artifact_rows.append(
+            {
+                "rank": rank,
+                "sample_id": sample_id,
+                "metric": metric_name,
+                "metric_value": _row_metric_value(row, metric_name),
+                "target_path": str(target_path),
+                "generated_path": str(generated_path),
+                "heatmap_path": str(saved_path),
+            }
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=RESIDUAL_HEATMAP_FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(artifact_rows)
+
+    return csv_path
 
 
 def extract_generated_sample_id(path: str | Path) -> str:

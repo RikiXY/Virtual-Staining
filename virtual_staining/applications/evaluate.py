@@ -7,6 +7,7 @@ from pathlib import Path
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.manifest import load_manifest_or_raise
 from virtual_staining.evaluation.evaluator import evaluate_pairs
+from virtual_staining.evaluation.panels import write_residual_heatmap_artifacts
 from virtual_staining.evaluation.plotting import save_dataset_plots
 from virtual_staining.evaluation.reports import write_skipped_csv
 from virtual_staining.evaluation.summaries import write_summary_csv, write_weak_tail_csv
@@ -76,6 +77,9 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
         eval_cfg.output_dir if eval_cfg and eval_cfg.output_dir else run_root / "evaluation"
     )
     save_graphs = eval_cfg.save_graphs if eval_cfg else False
+    save_residual_heatmaps = eval_cfg.save_residual_heatmaps if eval_cfg else False
+    residual_heatmap_metric = eval_cfg.residual_heatmap_metric if eval_cfg else "ssim"
+    residual_heatmap_top_k = eval_cfg.residual_heatmap_top_k if eval_cfg else 25
 
     manifest = load_manifest_or_raise(project)
     manifest.validate(check_files_exist=True, require_splits={"test"})
@@ -100,6 +104,11 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
         "generated_dir": str(generated_dir),
         "output_dir": str(output_dir),
         "metric_config": _METRIC_CONFIG,
+        "residual_heatmap_config": {
+            "enabled": save_residual_heatmaps,
+            "metric": residual_heatmap_metric,
+            "top_k": residual_heatmap_top_k,
+        },
     }
     _write_evaluation_stage_metadata(
         paths,
@@ -179,6 +188,13 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
     if result.rows:
         result.summary_csv = write_summary_csv(result.rows, output_dir)
         result.weak_tail_csv = write_weak_tail_csv(result.rows, output_dir)
+        if save_residual_heatmaps:
+            result.residual_heatmaps_csv = write_residual_heatmap_artifacts(
+                result.rows,
+                output_dir,
+                metric_name=residual_heatmap_metric,
+                top_k=residual_heatmap_top_k,
+            )
 
     if save_graphs and result.rows:
         save_dataset_plots(result.rows, output_dir)
@@ -202,6 +218,11 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
             "weak_tail_csv_path": (
                 str(result.weak_tail_csv) if result.weak_tail_csv is not None else None
             ),
+            "residual_heatmaps_csv_path": (
+                str(result.residual_heatmaps_csv)
+                if result.residual_heatmaps_csv is not None
+                else None
+            ),
         },
     )
     append_run_event(
@@ -222,6 +243,11 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
                 ),
                 "weak_tail_csv_path": (
                     str(result.weak_tail_csv) if result.weak_tail_csv is not None else None
+                ),
+                "residual_heatmaps_csv_path": (
+                    str(result.residual_heatmaps_csv)
+                    if result.residual_heatmaps_csv is not None
+                    else None
                 ),
             },
         },

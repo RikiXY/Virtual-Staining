@@ -44,6 +44,9 @@ _DISCRIMINATOR_KEYS: frozenset[str] = frozenset(
 _FLAT_EVALUATION_KEYS: frozenset[str] = frozenset(
     {
         "save_graphs",
+        "save_residual_heatmaps",
+        "residual_heatmap_metric",
+        "residual_heatmap_top_k",
         "target_dir",
         "generated_dir",
         "output_dir",
@@ -231,6 +234,9 @@ class RunConfig:
         if self.evaluation is not None:
             data["evaluation"] = {
                 "save_graphs": self.evaluation.save_graphs,
+                "save_residual_heatmaps": self.evaluation.save_residual_heatmaps,
+                "residual_heatmap_metric": self.evaluation.residual_heatmap_metric,
+                "residual_heatmap_top_k": self.evaluation.residual_heatmap_top_k,
                 "target_dir": (
                     str(self.evaluation.target_dir) if self.evaluation.target_dir else None
                 ),
@@ -556,12 +562,20 @@ def _parse_evaluation(raw: dict[str, Any]) -> EvaluationConfig:
     )
     reject_unknown_keys(data, _EVALUATION_KEYS, "evaluation")
 
-    return EvaluationConfig(
+    config = EvaluationConfig(
         save_graphs=parse_bool_strict(data.get("save_graphs", False), "save_graphs"),
+        save_residual_heatmaps=parse_bool_strict(
+            data.get("save_residual_heatmaps", False),
+            "save_residual_heatmaps",
+        ),
+        residual_heatmap_metric=str(data.get("residual_heatmap_metric", "ssim")),
+        residual_heatmap_top_k=int(data.get("residual_heatmap_top_k", 25)),
         target_dir=Path(data["target_dir"]) if data.get("target_dir") else None,
         generated_dir=Path(data["generated_dir"]) if data.get("generated_dir") else None,
         output_dir=Path(data["output_dir"]) if data.get("output_dir") else None,
     )
+    config.validate()
+    return config
 
 
 def _parse_compare(raw: dict[str, Any]) -> CompareConfig:

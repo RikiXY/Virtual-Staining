@@ -10,6 +10,7 @@ from virtual_staining.evaluation.panels import (
     build_metric_case_artifacts,
     save_comparison_panel,
     save_metric_diagnostics_summary,
+    save_residual_heatmap,
     select_representative_rows,
 )
 
@@ -86,6 +87,31 @@ def test_build_metric_case_artifacts_saves_panel_without_metric_suptitle(
     assert Path(str(selection_row["comparison_path"])).is_file()
     assert diagnostic_entry["comparison_path"].is_file()
     assert diagnostic_entry["error_histogram_path"].is_file()
+
+
+def test_save_residual_heatmap_writes_file_for_same_size_pair(tmp_path: Path) -> None:
+    target_path = write_rgb_image(tmp_path / "target.png", color=(0, 0, 0))
+    generated_path = write_rgb_image(tmp_path / "generated.png", color=(255, 255, 255))
+
+    saved_path = save_residual_heatmap(
+        target_path=target_path,
+        generated_path=generated_path,
+        save_path=tmp_path / "heatmaps" / "sample_residual_heatmap.png",
+    )
+
+    assert saved_path.is_file()
+
+
+def test_save_residual_heatmap_raises_for_size_mismatch(tmp_path: Path) -> None:
+    target_path = write_rgb_image(tmp_path / "target.png", size=(16, 16))
+    generated_path = write_rgb_image(tmp_path / "generated.png", size=(8, 8))
+
+    with pytest.raises(ValueError, match="same size"):
+        save_residual_heatmap(
+            target_path=target_path,
+            generated_path=generated_path,
+            save_path=tmp_path / "heatmap.png",
+        )
 
 
 def test_save_metric_diagnostics_summary_labels_best_median_worst_rows(

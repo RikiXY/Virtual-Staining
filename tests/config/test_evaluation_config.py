@@ -62,6 +62,9 @@ def test_evaluation_config_defaults_to_run_dirs(tmp_path: Path) -> None:
         tmp_path / "results" / "section_run" / "evaluation"
     )
     assert run_config.evaluation.save_graphs is False
+    assert run_config.evaluation.save_residual_heatmaps is False
+    assert run_config.evaluation.residual_heatmap_metric == "ssim"
+    assert run_config.evaluation.residual_heatmap_top_k == 25
     assert run_config.evaluation.target_dir is None
     assert run_config.evaluation.generated_dir is None
     assert run_config.evaluation.output_dir is None
@@ -87,6 +90,45 @@ def test_evaluation_config_accepts_explicit_dirs(tmp_path: Path) -> None:
     assert run_config.evaluation.target_dir == Path("/custom/targets")
     assert run_config.evaluation.generated_dir == Path("/custom/generated")
     assert run_config.evaluation.output_dir == Path("/custom/evaluation")
+
+
+def test_evaluation_config_accepts_residual_heatmap_fields(tmp_path: Path) -> None:
+    yaml_file = write_run_config(
+        tmp_path,
+        """\
+        evaluation:
+          save_residual_heatmaps: true
+          residual_heatmap_metric: mae
+          residual_heatmap_top_k: 3
+        """,
+        dataset_root=tmp_path / "data",
+        results_path=tmp_path / "results",
+        run_name="section_run",
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+    assert run_config.evaluation is not None
+    assert run_config.evaluation.save_residual_heatmaps is True
+    assert run_config.evaluation.residual_heatmap_metric == "mae"
+    assert run_config.evaluation.residual_heatmap_top_k == 3
+
+
+def test_evaluation_config_rejects_invalid_residual_heatmap_top_k(tmp_path: Path) -> None:
+    yaml_file = write_run_config(
+        tmp_path,
+        """\
+        evaluation:
+          save_residual_heatmaps: true
+          residual_heatmap_top_k: 0
+        """,
+        filename="bad_heatmap_top_k.yaml",
+        dataset_root=tmp_path / "data",
+        results_path=tmp_path / "results",
+        run_name="section_run",
+    )
+
+    with pytest.raises(ValueError, match="residual_heatmap_top_k"):
+        RunConfig.from_yaml(yaml_file)
 
 
 def test_evaluation_from_yaml_unknown_section_key_raises(tmp_path: Path) -> None:
@@ -306,6 +348,7 @@ def test_evaluate_pairs_from_manifest_test_split(tmp_path: Path) -> None:
     assert len(rows) == 3
     assert "99999_99999" not in per_image_metrics.read_text(encoding="utf-8")
     assert not (output_dir / "skipped.csv").exists()
+    assert not (output_dir / "residual_heatmaps.csv").exists()
 
 
 def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
@@ -349,6 +392,12 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
     assert metadata["metrics_csv_path"] == str(output_dir / "per_image_metrics.csv")
     assert metadata["summary_csv_path"] == str(output_dir / "summary.csv")
     assert metadata["weak_tail_csv_path"] == str(output_dir / "weak_tail.csv")
+    assert metadata["residual_heatmaps_csv_path"] is None
+    assert metadata["residual_heatmap_config"] == {
+        "enabled": False,
+        "metric": "ssim",
+        "top_k": 25,
+    }
     assert metadata["metric_config"]["ssim"] is True
     assert (output_dir / "weak_tail.csv").exists()
     with (output_dir / "weak_tail.csv").open(encoding="utf-8", newline="") as handle:
@@ -369,6 +418,60 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
     assert [event["event_type"] for event in events] == ["stage_started", "stage_completed"]
     assert all(event["stage"] == "evaluate" for event in events)
     assert events[-1]["details"]["weak_tail_csv_path"] == str(output_dir / "weak_tail.csv")
+    assert events[-1]["details"]["residual_heatmaps_csv_path"] is None
+
+
+def test_evaluate_writes_residual_heatmaps_csv_when_enabled(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "data"
+    target_dir = dataset_root / "splits" / "test"
+    generated_dir = tmp_path / "generated"
+    target_dir.mkdir(parents=True)
+    generated_dir.mkdir()
+    sample_ids = ["00000_00000", "00256_00000"]
+    _write_test_manifest(dataset_root, sample_ids)
+
+    for sample_id in sample_ids:
+        write_rgb_pair(target_dir, sample_id, color=(0, 0, 0))
+    write_rgb_image(
+        generated_dir / generated_filename_for_sample("00000_00000", ".png"),
+        color=(0, 0, 0),
+    )
+    write_rgb_image(
+        generated_dir / generated_filename_for_sample("00256_00000", ".png"),
+        color=(255, 255, 255),
+    )
+
+    output_dir = tmp_path / "results" / "eval_run" / "evaluation"
+    yaml_file = _write_evaluate_config(
+        tmp_path,
+        dataset_root,
+        f"""\
+          generated_dir: {generated_dir}
+          output_dir: {output_dir}
+          save_residual_heatmaps: true
+          residual_heatmap_metric: mae
+          residual_heatmap_top_k: 1
+        """,
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+    evaluate(run_config, yaml_file)
+
+    residual_csv = output_dir / "residual_heatmaps.csv"
+    assert residual_csv.exists()
+    with residual_csv.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert len(rows) == 1
+    assert rows[0]["rank"] == "1"
+    assert rows[0]["sample_id"] == "00256_00000"
+    assert rows[0]["metric"] == "mae"
+    assert Path(rows[0]["heatmap_path"]).is_file()
+    assert "00256_00000" in Path(rows[0]["heatmap_path"]).name
+
+    metadata_path = tmp_path / "results" / "eval_run" / "metadata" / "stages" / "evaluate.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["residual_heatmaps_csv_path"] == str(residual_csv)
 
 
 def test_evaluate_writes_skipped_csv_for_missing_generated(tmp_path: Path) -> None:

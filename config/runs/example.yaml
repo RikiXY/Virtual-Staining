@@ -177,6 +177,11 @@ evaluation:
   # generated_dir: local_workspace/results/example_run/artifacts/output_test
   # output_dir: local_workspace/results/example_run/evaluation
   save_graphs: true
+  # Optional: export standalone residual heatmaps for the worst-ranked test
+  # samples by the selected metric.
+  save_residual_heatmaps: false
+  residual_heatmap_metric: ssim
+  residual_heatmap_top_k: 25
   # hide_graphs_path: false
 
 # Optional utility targets driven by `make compare`, `make compare-panels`,

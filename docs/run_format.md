@@ -105,6 +105,8 @@ local_workspace/results/<run_name>/
 │   ├── per_image_metrics.csv   # per-image metrics for all evaluated test samples
 │   ├── summary.csv             # aggregate statistics across the test split
 │   ├── weak_tail.csv           # weak-tail threshold counts and percentiles (non-empty evaluations)
+│   ├── residual_heatmaps.csv   # standalone residual heatmap manifest (optional)
+│   ├── residual_heatmaps/      # standalone residual heatmap PNGs (optional)
 │   └── skipped.csv             # samples that could not be evaluated (optional)
 └── comparisons/                # comparison panels produced by vs-compare-panels
 ```
@@ -310,7 +312,8 @@ contain fields such as:
 - stage-specific provenance such as checkpoint path, manifest hash, counts, and output paths
 
 For `evaluate`, output paths include `metrics_csv_path`, `summary_csv_path`,
-and `weak_tail_csv_path` when metric rows are available.
+`weak_tail_csv_path`, and `residual_heatmaps_csv_path` when the corresponding
+artifacts are available.
 
 ### `metadata/events.jsonl`
 
@@ -432,6 +435,24 @@ Default weak-tail thresholds are:
 | `weak_share` | `weak_count / finite_count`; `nan` when no finite values exist |
 | `worst_value` | Minimum value for higher-is-better metrics, maximum value for lower-is-better metrics |
 | `p05`, `p10`, `p90`, `p95` | Percentiles computed over finite values |
+
+### `evaluation/residual_heatmaps.csv`
+
+Written only when `evaluation.save_residual_heatmaps: true`. The evaluator
+ranks finite per-image metric rows by `evaluation.residual_heatmap_metric`,
+exports the worst `evaluation.residual_heatmap_top_k` samples, and writes each
+PNG under `evaluation/residual_heatmaps/`. Defaults are disabled export,
+metric `ssim`, and top-k `25`.
+
+| Column | Description |
+|---|---|
+| `rank` | Worst-case rank for the selected metric |
+| `sample_id` | Sample identifier from `per_image_metrics.csv` |
+| `metric` | Metric used for ranking |
+| `metric_value` | Per-image value used for ranking |
+| `target_path` | Absolute path to the ground-truth target image |
+| `generated_path` | Absolute path to the generated image |
+| `heatmap_path` | Absolute path to the standalone residual heatmap PNG |
 
 ### `evaluation/skipped.csv`
 

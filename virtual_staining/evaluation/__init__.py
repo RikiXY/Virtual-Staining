@@ -2,6 +2,8 @@ from virtual_staining.evaluation.evaluator import EvaluationResult, evaluate_pai
 from virtual_staining.evaluation.panels import (
     find_representative_samples,
     make_comparison_panel,
+    save_residual_heatmap,
+    write_residual_heatmap_artifacts,
 )
 from virtual_staining.evaluation.ranking import organize_by_metrics
 from virtual_staining.evaluation.summaries import (
@@ -19,6 +21,8 @@ __all__ = [
     "build_summary_rows",
     "build_weak_tail_rows",
     "make_comparison_panel",
+    "save_residual_heatmap",
+    "write_residual_heatmap_artifacts",
     "find_representative_samples",
     "organize_by_metrics",
 ]
