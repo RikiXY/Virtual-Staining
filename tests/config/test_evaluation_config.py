@@ -348,7 +348,17 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
     assert metadata["skipped_count"] == 0
     assert metadata["metrics_csv_path"] == str(output_dir / "per_image_metrics.csv")
     assert metadata["summary_csv_path"] == str(output_dir / "summary.csv")
+    assert metadata["weak_tail_csv_path"] == str(output_dir / "weak_tail.csv")
     assert metadata["metric_config"]["ssim"] is True
+    assert (output_dir / "weak_tail.csv").exists()
+    with (output_dir / "weak_tail.csv").open(encoding="utf-8", newline="") as handle:
+        weak_tail_reader = csv.DictReader(handle)
+        assert weak_tail_reader.fieldnames is not None
+        assert "metric" in weak_tail_reader.fieldnames
+        assert "threshold" in weak_tail_reader.fieldnames
+        assert "direction" in weak_tail_reader.fieldnames
+        assert "weak_count" in weak_tail_reader.fieldnames
+        assert "weak_share" in weak_tail_reader.fieldnames
 
     events = [
         json.loads(line)
@@ -358,6 +368,7 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
     ]
     assert [event["event_type"] for event in events] == ["stage_started", "stage_completed"]
     assert all(event["stage"] == "evaluate" for event in events)
+    assert events[-1]["details"]["weak_tail_csv_path"] == str(output_dir / "weak_tail.csv")
 
 
 def test_evaluate_writes_skipped_csv_for_missing_generated(tmp_path: Path) -> None:

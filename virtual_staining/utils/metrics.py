@@ -38,6 +38,19 @@ METRIC_THRESHOLDS: dict[str, list[tuple[float, str]]] = {
     "pcc_b": [(0.95, "green"), (0.90, "yellow"), (0.80, "orange")],
 }
 
+DEFAULT_WEAK_TAIL_THRESHOLDS: dict[str, float] = {
+    "ssim": 0.60,
+    "psnr": 20.0,
+    "mae": 0.08,
+    "rmse": 0.12,
+    "mse": 0.0100,
+    "pcc_gray": 0.80,
+    "pcc_rgb_mean": 0.80,
+    "pcc_r": 0.80,
+    "pcc_g": 0.80,
+    "pcc_b": 0.80,
+}
+
 METRIC_PLOT_RANGES = {
     "mae": (0.0, 1.0),
     "mse": (0.0, 1.0),

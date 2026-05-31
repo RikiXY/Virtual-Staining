@@ -3,11 +3,32 @@ from __future__ import annotations
 import csv
 import math
 import statistics
+from collections.abc import Mapping
 from pathlib import Path
 
-from virtual_staining.utils.metrics import DEFAULT_METRICS
+from virtual_staining.utils.metrics import (
+    DEFAULT_METRICS,
+    DEFAULT_WEAK_TAIL_THRESHOLDS,
+    is_higher_better_metric,
+)
 
 SUMMARY_METRIC_NAMES = list(DEFAULT_METRICS)
+WEAK_TAIL_FIELDNAMES = [
+    "metric",
+    "direction",
+    "weak_rule",
+    "threshold",
+    "count",
+    "finite_count",
+    "non_finite_count",
+    "weak_count",
+    "weak_share",
+    "worst_value",
+    "p05",
+    "p10",
+    "p90",
+    "p95",
+]
 
 
 def metric_value(row: dict[str, object], metric: str) -> float:
@@ -51,6 +72,75 @@ def build_summary_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]
         )
 
     return summary_rows
+
+
+def _percentile(sorted_values: list[float], percentile: float) -> float:
+    if not sorted_values:
+        return float("nan")
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+
+    rank = (len(sorted_values) - 1) * percentile / 100.0
+    lower_idx = math.floor(rank)
+    upper_idx = math.ceil(rank)
+    if lower_idx == upper_idx:
+        return sorted_values[lower_idx]
+
+    lower = sorted_values[lower_idx]
+    upper = sorted_values[upper_idx]
+    fraction = rank - lower_idx
+    return lower + (upper - lower) * fraction
+
+
+def build_weak_tail_rows(
+    rows: list[dict[str, object]],
+    thresholds: Mapping[str, float] | None = None,
+) -> list[dict[str, object]]:
+    """Build weak-tail rows from per-image metric rows using finite values only."""
+    threshold_map = DEFAULT_WEAK_TAIL_THRESHOLDS if thresholds is None else thresholds
+    weak_tail_rows: list[dict[str, object]] = []
+
+    for metric, threshold in threshold_map.items():
+        values = [metric_value(row, metric) for row in rows if metric in row]
+        if rows and not values:
+            continue
+
+        finite = [v for v in values if math.isfinite(v)]
+        non_finite_count = len(values) - len(finite)
+        sorted_finite = sorted(finite)
+        higher_is_better = is_higher_better_metric(metric)
+        direction = "higher_is_better" if higher_is_better else "lower_is_better"
+        weak_rule = "<" if higher_is_better else ">"
+
+        if higher_is_better:
+            weak_count = sum(value < threshold for value in finite)
+            worst_value = sorted_finite[0] if sorted_finite else float("nan")
+        else:
+            weak_count = sum(value > threshold for value in finite)
+            worst_value = sorted_finite[-1] if sorted_finite else float("nan")
+
+        weak_share = weak_count / len(finite) if finite else float("nan")
+
+        weak_tail_rows.append(
+            {
+                "metric": metric,
+                "direction": direction,
+                "weak_rule": weak_rule,
+                "threshold": float(threshold),
+                "count": len(values),
+                "finite_count": len(finite),
+                "non_finite_count": non_finite_count,
+                "weak_count": weak_count,
+                "weak_share": weak_share,
+                "worst_value": worst_value,
+                "p05": _percentile(sorted_finite, 5.0),
+                "p10": _percentile(sorted_finite, 10.0),
+                "p90": _percentile(sorted_finite, 90.0),
+                "p95": _percentile(sorted_finite, 95.0),
+            }
+        )
+
+    return weak_tail_rows
 
 
 def write_summary_csv(
@@ -99,6 +189,25 @@ def write_summary_csv(
             dict_writer = csv.DictWriter(file, fieldnames=fieldnames)
             dict_writer.writeheader()
             dict_writer.writerows(summary_rows)
+
+    return path
+
+
+def write_weak_tail_csv(
+    rows: list[dict[str, object]],
+    output_dir: Path,
+    filename: str = "weak_tail.csv",
+    thresholds: Mapping[str, float] | None = None,
+) -> Path:
+    """Write weak-tail metric summaries to CSV."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / filename
+    weak_tail_rows = build_weak_tail_rows(rows, thresholds=thresholds)
+
+    with path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=WEAK_TAIL_FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(weak_tail_rows)
 
     return path
 

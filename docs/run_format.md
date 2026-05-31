@@ -104,6 +104,7 @@ local_workspace/results/<run_name>/
 ├── evaluation/
 │   ├── per_image_metrics.csv   # per-image metrics for all evaluated test samples
 │   ├── summary.csv             # aggregate statistics across the test split
+│   ├── weak_tail.csv           # weak-tail threshold counts and percentiles (non-empty evaluations)
 │   └── skipped.csv             # samples that could not be evaluated (optional)
 └── comparisons/                # comparison panels produced by vs-compare-panels
 ```
@@ -308,6 +309,9 @@ contain fields such as:
 - `config_hash`
 - stage-specific provenance such as checkpoint path, manifest hash, counts, and output paths
 
+For `evaluate`, output paths include `metrics_csv_path`, `summary_csv_path`,
+and `weak_tail_csv_path` when metric rows are available.
+
 ### `metadata/events.jsonl`
 
 Append-only execution log. Each line is a JSON object representing a lifecycle
@@ -394,6 +398,40 @@ One row per evaluated test image.
 
 Aggregate statistics (mean, std, min, max) for each metric across the full
 test split.
+
+### `evaluation/weak_tail.csv`
+
+Weak-tail statistics for thresholded metric failures. Written for non-empty
+evaluations. Non-finite metric values are excluded from `finite_count` and from
+the `weak_share` denominator, and are reported in `non_finite_count`.
+Higher-is-better metrics are weak when their finite value is below the
+threshold; lower-is-better metrics are weak when their finite value is above the
+threshold.
+
+Default weak-tail thresholds are:
+
+| Metric | Direction | Weak rule |
+|---|---|---|
+| `ssim` | higher is better | `< 0.60` |
+| `psnr` | higher is better | `< 20.0` |
+| `mae` | lower is better | `> 0.08` |
+| `rmse` | lower is better | `> 0.12` |
+| `mse` | lower is better | `> 0.0100` |
+| `pcc_gray`, `pcc_rgb_mean`, `pcc_r`, `pcc_g`, `pcc_b` | higher is better | `< 0.80` |
+
+| Column | Description |
+|---|---|
+| `metric` | Metric name |
+| `direction` | `higher_is_better` or `lower_is_better` |
+| `weak_rule` | Threshold comparison used for weak samples (`<` or `>`) |
+| `threshold` | Weak-tail threshold |
+| `count` | Number of metric values present in the input rows |
+| `finite_count` | Number of finite metric values used for weak-tail statistics |
+| `non_finite_count` | Number of NaN or infinite values excluded from weak-tail statistics |
+| `weak_count` | Number of finite values on the weak side of the threshold |
+| `weak_share` | `weak_count / finite_count`; `nan` when no finite values exist |
+| `worst_value` | Minimum value for higher-is-better metrics, maximum value for lower-is-better metrics |
+| `p05`, `p10`, `p90`, `p95` | Percentiles computed over finite values |
 
 ### `evaluation/skipped.csv`
 

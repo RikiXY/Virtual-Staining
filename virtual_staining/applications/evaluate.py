@@ -9,7 +9,7 @@ from virtual_staining.data.manifest import load_manifest_or_raise
 from virtual_staining.evaluation.evaluator import evaluate_pairs
 from virtual_staining.evaluation.plotting import save_dataset_plots
 from virtual_staining.evaluation.reports import write_skipped_csv
-from virtual_staining.evaluation.summaries import write_summary_csv
+from virtual_staining.evaluation.summaries import write_summary_csv, write_weak_tail_csv
 from virtual_staining.experiment.metadata import (
     append_run_event,
     ensure_run_metadata,
@@ -178,6 +178,7 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
 
     if result.rows:
         result.summary_csv = write_summary_csv(result.rows, output_dir)
+        result.weak_tail_csv = write_weak_tail_csv(result.rows, output_dir)
 
     if save_graphs and result.rows:
         save_dataset_plots(result.rows, output_dir)
@@ -198,6 +199,9 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
             "summary_csv_path": (
                 str(result.summary_csv) if result.summary_csv is not None else None
             ),
+            "weak_tail_csv_path": (
+                str(result.weak_tail_csv) if result.weak_tail_csv is not None else None
+            ),
         },
     )
     append_run_event(
@@ -215,6 +219,9 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
                 "metrics_csv_path": str(output_dir / "per_image_metrics.csv"),
                 "summary_csv_path": (
                     str(result.summary_csv) if result.summary_csv is not None else None
+                ),
+                "weak_tail_csv_path": (
+                    str(result.weak_tail_csv) if result.weak_tail_csv is not None else None
                 ),
             },
         },

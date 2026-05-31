@@ -15,6 +15,7 @@ class EvaluationResult:
     output_dir: Path
     metrics_csv: Path | None = None
     summary_csv: Path | None = None
+    weak_tail_csv: Path | None = None
     num_evaluated: int = 0
     num_skipped: int = 0
     rows: list[dict[str, object]] = field(default_factory=list)

@@ -8,9 +8,12 @@ import pytest
 
 from virtual_staining.evaluation.summaries import (
     SUMMARY_METRIC_NAMES,
+    build_weak_tail_rows,
     read_summary_csv,
     write_summary_csv,
+    write_weak_tail_csv,
 )
+from virtual_staining.utils.metrics import DEFAULT_WEAK_TAIL_THRESHOLDS
 
 
 def _make_rows(n: int) -> list[dict[str, object]]:
@@ -121,3 +124,91 @@ def test_read_summary_csv_roundtrip_with_preamble(tmp_path: Path) -> None:
     assert psnr["std"] == pytest.approx(math.sqrt(0.5))
     assert psnr["min"] == pytest.approx(30.0)
     assert psnr["max"] == pytest.approx(31.0)
+
+
+def test_default_weak_tail_thresholds_cover_core_metrics() -> None:
+    assert DEFAULT_WEAK_TAIL_THRESHOLDS["ssim"] == 0.60
+    assert DEFAULT_WEAK_TAIL_THRESHOLDS["mae"] == 0.08
+    assert "rmse" in DEFAULT_WEAK_TAIL_THRESHOLDS
+    assert "psnr" in DEFAULT_WEAK_TAIL_THRESHOLDS
+    assert "pcc_gray" in DEFAULT_WEAK_TAIL_THRESHOLDS
+    assert "pcc_rgb_mean" in DEFAULT_WEAK_TAIL_THRESHOLDS
+
+
+def test_build_weak_tail_rows_counts_higher_is_better_values_below_threshold() -> None:
+    rows: list[dict[str, object]] = [
+        {"ssim": 0.70},
+        {"ssim": 0.60},
+        {"ssim": 0.59},
+        {"ssim": 0.20},
+    ]
+
+    weak_tail = build_weak_tail_rows(rows, thresholds={"ssim": 0.60})
+    ssim = weak_tail[0]
+
+    assert ssim["metric"] == "ssim"
+    assert ssim["direction"] == "higher_is_better"
+    assert ssim["weak_rule"] == "<"
+    assert ssim["threshold"] == pytest.approx(0.60)
+    assert ssim["count"] == 4
+    assert ssim["finite_count"] == 4
+    assert ssim["weak_count"] == 2
+    assert ssim["weak_share"] == pytest.approx(0.5)
+    assert ssim["worst_value"] == pytest.approx(0.20)
+    assert ssim["p05"] == pytest.approx(0.2585)
+
+
+def test_build_weak_tail_rows_counts_lower_is_better_values_above_threshold() -> None:
+    rows: list[dict[str, object]] = [
+        {"mae": 0.07},
+        {"mae": 0.08},
+        {"mae": 0.09},
+        {"mae": 0.20},
+    ]
+
+    weak_tail = build_weak_tail_rows(rows, thresholds={"mae": 0.08})
+    mae = weak_tail[0]
+
+    assert mae["metric"] == "mae"
+    assert mae["direction"] == "lower_is_better"
+    assert mae["weak_rule"] == ">"
+    assert mae["count"] == 4
+    assert mae["finite_count"] == 4
+    assert mae["weak_count"] == 2
+    assert mae["weak_share"] == pytest.approx(0.5)
+    assert mae["worst_value"] == pytest.approx(0.20)
+    assert mae["p95"] == pytest.approx(0.1835)
+
+
+def test_build_weak_tail_rows_excludes_non_finite_values_from_denominator() -> None:
+    rows: list[dict[str, object]] = [
+        {"ssim": 0.50},
+        {"ssim": float("inf")},
+        {"ssim": float("nan")},
+        {"ssim": 0.70},
+    ]
+
+    weak_tail = build_weak_tail_rows(rows, thresholds={"ssim": 0.60})
+    ssim = weak_tail[0]
+
+    assert ssim["count"] == 4
+    assert ssim["finite_count"] == 2
+    assert ssim["non_finite_count"] == 2
+    assert ssim["weak_count"] == 1
+    assert ssim["weak_share"] == pytest.approx(0.5)
+
+
+def test_write_weak_tail_csv_empty_rows_writes_zero_counts(tmp_path: Path) -> None:
+    path = write_weak_tail_csv([], tmp_path, thresholds={"ssim": 0.60})
+
+    with path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert path.exists()
+    assert len(rows) == 1
+    assert rows[0]["metric"] == "ssim"
+    assert rows[0]["count"] == "0"
+    assert rows[0]["finite_count"] == "0"
+    assert rows[0]["non_finite_count"] == "0"
+    assert rows[0]["weak_count"] == "0"
+    assert math.isnan(float(rows[0]["weak_share"]))
