@@ -12,6 +12,7 @@ from virtual_staining.evaluation.comparison import (
     plot_paired_delta_histogram,
     plot_paired_scatter,
     save_paired_comparison_summary,
+    save_paired_multi_metric_reports,
     save_paired_report_txt,
     save_paired_sample_deltas,
     save_paired_summary_json,
@@ -25,6 +26,8 @@ from virtual_staining.evaluation.statistics import (
     UnpairedComparison,
     UnpairedGroupStats,
     align_paired_frames,
+    align_paired_metric_frames,
+    build_paired_multi_metric_delta_reports,
     compute_paired_summary,
     compute_unpaired_comparison,
     compute_unpaired_group_stats,
@@ -48,6 +51,7 @@ class CompareRequest:
     thresholds: tuple[float, ...]
     tolerance: float
     sample_id_column: str
+    metrics: tuple[str, ...] | None = None
 
 
 @dataclass
@@ -58,6 +62,8 @@ class CompareResult:
     group_b: UnpairedGroupStats | None = None
     unpaired_comparison: UnpairedComparison | None = None
     paired_summary: PairedSummary | None = None
+    paired_sample_deltas_all_metrics_csv: Path | None = None
+    paired_metric_delta_summary_csv: Path | None = None
 
 
 def compare(request: CompareRequest) -> CompareResult:
@@ -71,6 +77,9 @@ def compare(request: CompareRequest) -> CompareResult:
 
 
 def _compare_unpaired(request: CompareRequest) -> CompareResult:
+    if request.metrics is not None:
+        raise ValueError("Multi-metric comparison is only supported for paired mode.")
+
     values_a = load_metric_values(request.csv_a, request.column)
     values_b = load_metric_values(request.csv_b, request.column)
     thresholds = list(request.thresholds)
@@ -143,6 +152,33 @@ def _compare_unpaired(request: CompareRequest) -> CompareResult:
 
 
 def _compare_paired(request: CompareRequest) -> CompareResult:
+    if request.metrics is not None:
+        merged = align_paired_metric_frames(
+            csv_a=request.csv_a,
+            csv_b=request.csv_b,
+            sample_id_column=request.sample_id_column,
+            metric_columns=request.metrics,
+        )
+        sample_deltas, metric_summary = build_paired_multi_metric_delta_reports(
+            merged,
+            request.metrics,
+            sample_id_column=request.sample_id_column,
+            label_a=request.label_a,
+            label_b=request.label_b,
+            tolerance=request.tolerance,
+        )
+        sample_path, summary_path = save_paired_multi_metric_reports(
+            sample_deltas,
+            metric_summary,
+            request.output_dir,
+        )
+        return CompareResult(
+            mode="paired",
+            output_dir=request.output_dir,
+            paired_sample_deltas_all_metrics_csv=sample_path,
+            paired_metric_delta_summary_csv=summary_path,
+        )
+
     merged = align_paired_frames(
         csv_a=request.csv_a,
         csv_b=request.csv_b,

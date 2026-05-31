@@ -11,11 +11,12 @@ import pandas as pd
 from scipy.stats import ks_2samp, mannwhitneyu, wasserstein_distance, wilcoxon
 
 from virtual_staining.utils.metrics import (
-    get_metric_plot_range as get_default_metric_plot_range,
-)
-from virtual_staining.utils.metrics import (
+    DEFAULT_METRICS,
     get_metric_thresholds,
     is_higher_better_metric,
+)
+from virtual_staining.utils.metrics import (
+    get_metric_plot_range as get_default_metric_plot_range,
 )
 
 
@@ -293,6 +294,120 @@ def align_paired_frames(
     return merged
 
 
+def align_paired_metric_frames(
+    csv_a: str | Path,
+    csv_b: str | Path,
+    sample_id_column: str,
+    metric_columns: Iterable[str] = DEFAULT_METRICS,
+) -> pd.DataFrame:
+    """Align two metric CSVs by sample id for multi-metric paired reporting."""
+    frame_a = load_metric_frame(csv_a)
+    frame_b = load_metric_frame(csv_b)
+    metrics = tuple(metric_columns)
+
+    if not metrics:
+        raise ValueError("At least one metric column is required for paired reporting.")
+
+    for frame_name, frame in [("A", frame_a), ("B", frame_b)]:
+        if sample_id_column not in frame.columns:
+            raise ValueError(f"Column '{sample_id_column}' not found in CSV {frame_name}")
+
+        missing_metrics = [metric for metric in metrics if metric not in frame.columns]
+        if missing_metrics:
+            raise ValueError(
+                f"Metric columns not found in CSV {frame_name}: {', '.join(missing_metrics)}"
+            )
+
+    subset_a = frame_a[[sample_id_column, *metrics]].rename(
+        columns={metric: f"{metric}_a" for metric in metrics}
+    )
+    subset_b = frame_b[[sample_id_column, *metrics]].rename(
+        columns={metric: f"{metric}_b" for metric in metrics}
+    )
+    merged = subset_a.merge(subset_b, on=sample_id_column, how="inner")
+
+    if merged.empty:
+        raise ValueError("No paired samples found after aligning the two CSV files.")
+
+    for metric in metrics:
+        merged[f"{metric}_a"] = pd.to_numeric(merged[f"{metric}_a"], errors="coerce")
+        merged[f"{metric}_b"] = pd.to_numeric(merged[f"{metric}_b"], errors="coerce")
+
+    return merged
+
+
+def build_paired_multi_metric_delta_reports(
+    merged: pd.DataFrame,
+    metrics: Iterable[str],
+    *,
+    sample_id_column: str,
+    label_a: str,
+    label_b: str,
+    tolerance: float,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Build per-sample and per-metric paired delta reports."""
+    metric_names = tuple(metrics)
+    sample_report = pd.DataFrame({sample_id_column: merged[sample_id_column]})
+    summary_rows: list[dict[str, object]] = []
+    total_common_count = int(merged.shape[0])
+
+    for metric in metric_names:
+        higher_is_better = is_higher_better_metric(metric)
+        direction = "higher_is_better" if higher_is_better else "lower_is_better"
+        values_a = merged[f"{metric}_a"]
+        values_b = merged[f"{metric}_b"]
+        raw_delta = values_b - values_a
+        signed_delta = raw_delta if higher_is_better else -raw_delta
+        valid_mask = pd.Series(
+            np.isfinite(signed_delta.to_numpy(dtype=float)),
+            index=merged.index,
+        )
+        valid_signed_delta = signed_delta[valid_mask]
+        valid_raw_delta = raw_delta[valid_mask]
+
+        winners = pd.Series("", index=merged.index, dtype=object)
+        winners[signed_delta > tolerance] = label_b
+        winners[signed_delta < -tolerance] = label_a
+        winners[(signed_delta.abs() <= tolerance) & valid_mask] = "equal"
+
+        sample_report[f"{metric}_a"] = values_a
+        sample_report[f"{metric}_b"] = values_b
+        sample_report[f"{metric}_raw_delta_b_minus_a"] = raw_delta
+        sample_report[f"{metric}_signed_delta"] = signed_delta
+        sample_report[f"{metric}_winner"] = winners
+
+        finite_pair_count = int(valid_mask.sum())
+        improved_count = int((valid_signed_delta > tolerance).sum())
+        worsened_count = int((valid_signed_delta < -tolerance).sum())
+        equal_count = int((valid_signed_delta.abs() <= tolerance).sum())
+        denominator = finite_pair_count or float("nan")
+
+        summary_rows.append(
+            {
+                "metric": metric,
+                "direction": direction,
+                "label_a": label_a,
+                "label_b": label_b,
+                "tolerance": tolerance,
+                "total_common_count": total_common_count,
+                "finite_pair_count": finite_pair_count,
+                "missing_pair_count": total_common_count - finite_pair_count,
+                "improved_count": improved_count,
+                "worsened_count": worsened_count,
+                "equal_count": equal_count,
+                "improved_share": improved_count / denominator,
+                "worsened_share": worsened_count / denominator,
+                "equal_share": equal_count / denominator,
+                "mean_raw_delta_b_minus_a": float(valid_raw_delta.mean()),
+                "median_raw_delta_b_minus_a": float(valid_raw_delta.median()),
+                "mean_signed_delta": float(valid_signed_delta.mean()),
+                "median_signed_delta": float(valid_signed_delta.median()),
+            }
+        )
+
+    return sample_report, pd.DataFrame(summary_rows)
+
+
 def compute_paired_summary(
     merged: pd.DataFrame,
     label_a: str,
@@ -461,7 +576,12 @@ def resolve_comparison_output_dir(args: argparse.Namespace) -> Path:
 
     results_root = infer_results_root_from_inputs(args)
     comparison_name = f"{args.resolved_label_a}_vs_{args.resolved_label_b}"
-    metric_dir_name = f"{args.mode}_{args.column}"
+    if args.mode == "paired" and (
+        getattr(args, "resolved_metrics", None) is not None or args.column == "all"
+    ):
+        metric_dir_name = "paired_all_metrics"
+    else:
+        metric_dir_name = f"{args.mode}_{args.column}"
     return results_root / "comparisons" / comparison_name / metric_dir_name
 
 

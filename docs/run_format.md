@@ -468,6 +468,23 @@ per skipped sample.
 
 This file is not written when all test samples are evaluated successfully.
 
+### `comparisons/<run_a>_vs_<run_b>/paired_all_metrics/`
+
+Written by `vs-compare paired --column all`, by `vs-compare paired --metrics
+...`, or by `compare.mode: paired` with `column: all` or `metrics` in YAML.
+The command aligns `evaluation/per_image_metrics.csv` files by `sample_id` and
+writes multi-metric paired delta reports without changing the existing
+single-metric comparison artifacts.
+
+| File | Description |
+|---|---|
+| `paired_sample_deltas_all_metrics.csv` | Wide per-sample report with `<metric>_a`, `<metric>_b`, `<metric>_raw_delta_b_minus_a`, `<metric>_signed_delta`, and `<metric>_winner` columns |
+| `paired_metric_delta_summary.csv` | One row per metric with direction, tolerance, matched counts, missing/non-finite counts, improved/worsened/equal counts and shares, and mean/median raw and signed deltas |
+
+`raw_delta_b_minus_a` is always run B minus run A. `signed_delta` is direction
+aware: positive means run B improved for that metric, including lower-is-better
+metrics such as MAE and RMSE.
+
 ### `comparisons/metrics/`
 
 Written by `vs-compare-panels from-metrics` or `compare_panels.mode:

@@ -140,6 +140,19 @@ def save_paired_sample_deltas(
     result.to_csv(output_dir / "paired_sample_deltas.csv", index=False)
 
 
+def save_paired_multi_metric_reports(
+    sample_deltas: pd.DataFrame,
+    metric_summary: pd.DataFrame,
+    output_dir: Path,
+) -> tuple[Path, Path]:
+    """Save wide per-sample deltas and per-metric delta summary CSVs."""
+    sample_path = output_dir / "paired_sample_deltas_all_metrics.csv"
+    summary_path = output_dir / "paired_metric_delta_summary.csv"
+    sample_deltas.to_csv(sample_path, index=False)
+    metric_summary.to_csv(summary_path, index=False)
+    return sample_path, summary_path
+
+
 def save_unpaired_report_txt(
     group_a: UnpairedGroupStats,
     group_b: UnpairedGroupStats,

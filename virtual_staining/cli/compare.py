@@ -20,7 +20,7 @@ from virtual_staining.evaluation.statistics import (
     resolve_thresholds,
 )
 from virtual_staining.utils.console import print_info, print_section, style
-from virtual_staining.utils.metrics import color_metric_value
+from virtual_staining.utils.metrics import DEFAULT_METRICS, color_metric_value
 
 
 def _color_distance(value: float, good: float, warn: float) -> str:
@@ -163,6 +163,17 @@ def _print_paired_cli_summary(
     print(style(f"Saved outputs to: {output_dir}", "bold", "magenta"))
 
 
+def _print_multi_metric_paired_cli_summary(result: Any, request: CompareRequest) -> None:
+    print_section("Input")
+    print_info("Mode", "paired multi-metric")
+    print_info("Metrics", ", ".join(request.metrics or ()))
+    print_info("Output dir", str(result.output_dir))
+
+    print_section("Saved reports")
+    print_info("Per-sample deltas", str(result.paired_sample_deltas_all_metrics_csv))
+    print_info("Metric summary", str(result.paired_metric_delta_summary_csv))
+
+
 def _add_direction_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--higher-is-better",
@@ -224,7 +235,7 @@ def _add_common_comparison_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--column",
         default="ssim",
-        help="Metric column to compare.",
+        help="Metric column to compare. Use 'all' with paired mode for multi-metric reports.",
     )
     parser.add_argument(
         "--output-dir",
@@ -329,6 +340,15 @@ def _add_paired_subparser(subparsers: Any) -> None:
         default=30,
         help="Number of bins for the comparison histogram.",
     )
+    parser.add_argument(
+        "--metrics",
+        nargs="+",
+        default=None,
+        help=(
+            "Metric columns for paired multi-metric reports. "
+            "If omitted and --column all is used, defaults to all supported metrics."
+        ),
+    )
     parser.set_defaults(mode="paired")
 
 
@@ -375,10 +395,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _build_request(args: argparse.Namespace) -> CompareRequest:
+    args.resolved_metrics = _resolve_requested_metrics(args)
     resolve_comparison_inputs(args)
     output_dir = resolve_comparison_output_dir(args)
-    min_value, max_value = resolve_plot_range(args)
-    thresholds = tuple(resolve_thresholds(args))
+    if args.resolved_metrics is None:
+        min_value, max_value = resolve_plot_range(args)
+        thresholds = tuple(resolve_thresholds(args))
+        higher_is_better = args.resolved_higher_is_better
+    else:
+        min_value, max_value = 0.0, 1.0
+        thresholds = ()
+        higher_is_better = True
+
     return CompareRequest(
         mode=args.mode,
         csv_a=args.resolved_csv_a,
@@ -387,13 +415,14 @@ def _build_request(args: argparse.Namespace) -> CompareRequest:
         label_b=args.resolved_label_b,
         column=args.column,
         output_dir=output_dir,
-        higher_is_better=args.resolved_higher_is_better,
+        higher_is_better=higher_is_better,
         bins=args.bins,
         min_value=min_value,
         max_value=max_value,
         thresholds=thresholds,
         tolerance=getattr(args, "tolerance", 0.0),
         sample_id_column=getattr(args, "sample_id_column", "sample_id"),
+        metrics=args.resolved_metrics,
     )
 
 
@@ -427,9 +456,22 @@ def _build_request_from_config(config_path: Path) -> CompareRequest:
         thresholds=list(compare_cfg.thresholds) if compare_cfg.thresholds is not None else None,
         tolerance=compare_cfg.tolerance,
         sample_id_column=compare_cfg.sample_id_column,
+        metrics=list(compare_cfg.metrics) if compare_cfg.metrics is not None else None,
     )
-    args.resolved_higher_is_better = resolve_metric_direction(args)
+    args.resolved_metrics = _resolve_requested_metrics(args)
+    args.resolved_higher_is_better = (
+        True if args.resolved_metrics is not None else resolve_metric_direction(args)
+    )
     return _build_request(args)
+
+
+def _resolve_requested_metrics(args: argparse.Namespace) -> tuple[str, ...] | None:
+    metrics = getattr(args, "metrics", None)
+    if metrics is not None:
+        return tuple(str(metric) for metric in metrics)
+    if args.mode == "paired" and args.column == "all":
+        return tuple(DEFAULT_METRICS)
+    return None
 
 
 def _print_result(result: Any, request: CompareRequest) -> None:
@@ -445,6 +487,9 @@ def _print_result(result: Any, request: CompareRequest) -> None:
             result.output_dir,
         )
     elif result.mode == "paired":
+        if request.metrics is not None:
+            _print_multi_metric_paired_cli_summary(result, request)
+            return
         assert result.paired_summary is not None
         _print_paired_cli_summary(result.paired_summary, request, result.output_dir)
     else:
@@ -464,10 +509,14 @@ def main(argv: list[str] | None = None) -> None:
     if args.mode is None:
         parser.error("either --config or a comparison mode is required")
 
-    try:
-        args.resolved_higher_is_better = resolve_metric_direction(args)
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
+    args.resolved_metrics = _resolve_requested_metrics(args)
+    if args.resolved_metrics is None:
+        try:
+            args.resolved_higher_is_better = resolve_metric_direction(args)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+    else:
+        args.resolved_higher_is_better = True
 
     request = _build_request(args)
     result = compare(request)

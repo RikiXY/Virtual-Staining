@@ -192,6 +192,9 @@ evaluation:
 #   # Defaults run_a to results_path/run_name when omitted.
 #   run_b: local_workspace/results/baseline_run
 #   column: ssim
+#   # For paired multi-metric deltas, use either column: all or metrics.
+#   # column: all
+#   # metrics: [ssim, psnr, mae, rmse, pcc_gray, pcc_rgb_mean]
 #
 # compare_panels:
 #   mode: from_metrics

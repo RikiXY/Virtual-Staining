@@ -23,6 +23,7 @@ _COMPARE_KEYS: frozenset[str] = frozenset(
         "thresholds",
         "tolerance",
         "sample_id_column",
+        "metrics",
     }
 )
 
@@ -78,6 +79,7 @@ class CompareConfig:
     thresholds: tuple[float, ...] | None = None
     tolerance: float = 0.0
     sample_id_column: str = "sample_id"
+    metrics: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)

@@ -236,6 +236,53 @@ def test_compare_main_with_config_invokes_compare(
     assert request.mode == "paired"  # type: ignore[attr-defined]
 
 
+def test_compare_main_with_config_passes_multi_metric_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current_run = tmp_path / "results" / "current_run"
+    baseline_run = tmp_path / "results" / "baseline_run"
+    _write_metrics_csv(current_run)
+    _write_metrics_csv(baseline_run)
+    config_path = _write_config(
+        tmp_path,
+        f"""\
+        compare:
+          mode: paired
+          run_b: {baseline_run}
+          column: all
+          metrics: [ssim, mae]
+          tolerance: 0.001
+        """,
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_compare(request: object) -> object:
+        captured["request"] = request
+        return SimpleNamespace(
+            mode="paired",
+            output_dir=request.output_dir,  # type: ignore[attr-defined]
+            paired_summary=None,
+            paired_sample_deltas_all_metrics_csv=(
+                request.output_dir / "paired_sample_deltas_all_metrics.csv"  # type: ignore[attr-defined]
+            ),
+            paired_metric_delta_summary_csv=(
+                request.output_dir / "paired_metric_delta_summary.csv"  # type: ignore[attr-defined]
+            ),
+        )
+
+    monkeypatch.setattr(compare_cli, "compare", _fake_compare)
+
+    compare_cli.main(["--config", str(config_path)])
+
+    request = captured["request"]
+    assert request.mode == "paired"  # type: ignore[attr-defined]
+    assert request.column == "all"  # type: ignore[attr-defined]
+    assert request.metrics == ("ssim", "mae")  # type: ignore[attr-defined]
+    assert request.tolerance == pytest.approx(0.001)  # type: ignore[attr-defined]
+    assert request.output_dir.name == "paired_all_metrics"  # type: ignore[attr-defined]
+
+
 def test_compare_panels_help_includes_config() -> None:
     assert "--config" in compare_panels_cli._build_parser().format_help()
 

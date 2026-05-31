@@ -268,6 +268,7 @@ class RunConfig:
                 "thresholds": list(self.compare.thresholds) if self.compare.thresholds else None,
                 "tolerance": self.compare.tolerance,
                 "sample_id_column": self.compare.sample_id_column,
+                "metrics": list(self.compare.metrics) if self.compare.metrics else None,
             }
 
         if self.compare_panels is not None:
@@ -594,6 +595,11 @@ def _parse_compare(raw: dict[str, Any]) -> CompareConfig:
         raise ValueError("compare.mode must be 'paired' or 'unpaired'")
     mode = cast(Literal["paired", "unpaired"], raw_mode)
     thresholds = data.get("thresholds")
+    metrics = _parse_optional_string_tuple(data.get("metrics"), "compare.metrics")
+    if metrics is not None and not metrics:
+        raise ValueError("compare.metrics must not be empty when provided.")
+    if metrics is not None and mode != "paired":
+        raise ValueError("compare.metrics is only supported when compare.mode is paired.")
     return CompareConfig(
         mode=mode,
         run_a=Path(data["run_a"]) if data.get("run_a") else None,
@@ -620,6 +626,7 @@ def _parse_compare(raw: dict[str, Any]) -> CompareConfig:
         thresholds=tuple(float(value) for value in thresholds) if thresholds is not None else None,
         tolerance=float(data.get("tolerance", 0.0)),
         sample_id_column=str(data.get("sample_id_column", "sample_id")),
+        metrics=metrics,
     )
 
 
