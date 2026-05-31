@@ -499,7 +499,13 @@ def test_evaluate_single_removed_single_subcommand_fails_clearly(
 
 
 def test_organize_help_includes_config() -> None:
-    assert "--config" in organize_cli._build_parser().format_help()
+    help_text = organize_cli._build_parser().format_help()
+
+    assert "--config" in help_text
+    assert "Export ranked generated, target, and source image files by metric" in help_text
+    assert "This command places files only" in help_text
+    assert "vs-compare-panels" in help_text
+    assert "RUN/evaluation/sorted_by_metrics/" in help_text
 
 
 def test_organize_main_with_config_invokes_organize(

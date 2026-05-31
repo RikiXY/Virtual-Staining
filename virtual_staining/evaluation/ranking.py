@@ -16,6 +16,15 @@ IMAGE_COLUMNS = [
     "target_path",
     "source_path",
 ]
+ORGANIZATION_SUMMARY_FIELDNAMES = [
+    "metric",
+    "kind",
+    "rank_count",
+    "export_mode",
+    "selected_file_roles",
+    "output_dir",
+    "files_exported",
+]
 
 
 def ensure_parent(path: Path) -> None:
@@ -110,6 +119,31 @@ def _samples_to_dataframe(samples: list[RankedSample]) -> pd.DataFrame:
     return pd.DataFrame([sample.row for sample in samples])
 
 
+def _selected_file_roles(image_columns: list[str]) -> str:
+    return ",".join(infer_role_from_column(column) for column in image_columns)
+
+
+def _export_summary_row(
+    *,
+    metric: str,
+    kind: str,
+    rank_count: int,
+    export_mode: str,
+    image_columns: list[str],
+    output_dir: Path,
+    files_exported: int,
+) -> dict[str, Any]:
+    return {
+        "metric": metric,
+        "kind": kind,
+        "rank_count": rank_count,
+        "export_mode": export_mode,
+        "selected_file_roles": _selected_file_roles(image_columns),
+        "output_dir": str(output_dir),
+        "files_exported": files_exported,
+    }
+
+
 def organize_metric(
     df: pd.DataFrame,
     metric: str,
@@ -120,7 +154,7 @@ def organize_metric(
     overwrite: bool,
     include_all_ranked: bool,
 ) -> dict[str, Any] | None:
-    """Organizes files for a single metric."""
+    """Export ranked files for a single metric."""
     if metric not in df.columns:
         print_info("Warning", style(f"Metric '{metric}' not found in CSV. Skipping.", "yellow"))
         return None
@@ -158,31 +192,65 @@ def organize_metric(
     best_df = _samples_to_dataframe(best_samples)
     worst_df = _samples_to_dataframe(worst_samples)
     metric_dir = output_dir / metric
+    best_dir = metric_dir / "best"
+    worst_dir = metric_dir / "worst"
 
     best_files = export_ranked_subset(
         best_df,
-        destination_dir=metric_dir / "best",
+        destination_dir=best_dir,
         image_columns=image_columns,
         mode=mode,
         overwrite=overwrite,
     )
     worst_files = export_ranked_subset(
         worst_df,
-        destination_dir=metric_dir / "worst",
+        destination_dir=worst_dir,
         image_columns=image_columns,
         mode=mode,
         overwrite=overwrite,
     )
+    summary_rows = [
+        _export_summary_row(
+            metric=metric,
+            kind="best",
+            rank_count=len(best_samples),
+            export_mode=mode,
+            image_columns=image_columns,
+            output_dir=best_dir,
+            files_exported=best_files,
+        ),
+        _export_summary_row(
+            metric=metric,
+            kind="worst",
+            rank_count=len(worst_samples),
+            export_mode=mode,
+            image_columns=image_columns,
+            output_dir=worst_dir,
+            files_exported=worst_files,
+        ),
+    ]
 
     all_ranked_files = 0
     if include_all_ranked:
+        all_ranked_dir = metric_dir / "all_ranked"
         ranked_df = _samples_to_dataframe(all_ranked_samples)
         all_ranked_files = export_ranked_subset(
             ranked_df,
-            destination_dir=metric_dir / "all_ranked",
+            destination_dir=all_ranked_dir,
             image_columns=image_columns,
             mode=mode,
             overwrite=overwrite,
+        )
+        summary_rows.append(
+            _export_summary_row(
+                metric=metric,
+                kind="all_ranked",
+                rank_count=len(all_ranked_samples),
+                export_mode=mode,
+                image_columns=image_columns,
+                output_dir=all_ranked_dir,
+                files_exported=all_ranked_files,
+            )
         )
 
     return {
@@ -193,13 +261,17 @@ def organize_metric(
         "best_files": best_files,
         "worst_files": worst_files,
         "all_ranked_files": all_ranked_files,
+        "summary_rows": summary_rows,
     }
 
 
 def write_organization_summary(rows: list[dict[str, Any]], output_dir: Path) -> Path:
-    """Writes the organization summary CSV."""
+    """Write the ranked file export summary CSV."""
     summary_path = output_dir / "organization_summary.csv"
-    pd.DataFrame(rows).to_csv(summary_path, index=False)
+    pd.DataFrame(rows, columns=ORGANIZATION_SUMMARY_FIELDNAMES).to_csv(
+        summary_path,
+        index=False,
+    )
     return summary_path
 
 
@@ -214,8 +286,7 @@ def organize_by_metrics(
     include_all_ranked: bool = False,
 ) -> None:
     """
-    Read a per_image_metrics.csv and copy/link the top-N and worst-N images
-    per metric into <output_dir>/<metric>/best/ and <output_dir>/<metric>/worst/.
+    Read per_image_metrics.csv and export ranked sample files by metric.
     """
     df = pd.read_csv(csv_path)
     image_columns = get_existing_image_columns(df)
@@ -236,7 +307,7 @@ def organize_by_metrics(
 
     selected_metrics = metrics if metrics is not None else list(DEFAULT_METRICS)
 
-    print_section("Organize outputs by metric")
+    print_section("Ranked sample export")
     print_info("Metrics CSV", str(csv_path))
     print_info("Output dir", style(str(output_dir), "bold", "magenta"))
     print_info("Mode", mode)
@@ -260,7 +331,7 @@ def organize_by_metrics(
         if result is None:
             continue
 
-        summary_rows.append(result)
+        summary_rows.extend(result["summary_rows"])
         print_info("Organized metric", style(metric, "green"))
 
     if summary_rows:

@@ -17,7 +17,7 @@ help:
 	@printf "  %-24s %s\n" "compare" "Compare metric distributions from CONFIG"
 	@printf "  %-24s %s\n" "compare-panels" "Build comparison panels from CONFIG"
 	@printf "  %-24s %s\n" "evaluate-single" "Evaluate one target/generated pair"
-	@printf "  %-24s %s\n" "organize" "Sort run outputs by metrics from CONFIG"
+	@printf "  %-24s %s\n" "organize" "Export ranked sample files from CONFIG"
 	@printf "  %-24s %s\n" "sync" "Sync uv dependencies from uv.lock"
 	@printf "  %-24s %s\n" "format" "Format Python files with ruff"
 	@printf "  %-24s %s\n" "lint" "Check Python files with ruff"

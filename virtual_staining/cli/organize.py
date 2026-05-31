@@ -74,9 +74,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vs-organize",
         description=(
-            "Organize generated, target and source images by metric ranking. "
-            "By default, the script reads RUN/evaluation/per_image_metrics.csv "
-            "and writes to RUN/evaluation/sorted_by_metrics/."
+            "Export ranked generated, target, and source image files by metric. "
+            "This command places files only; visual diagnostics belong in "
+            "vs-compare-panels. By default, it reads "
+            "RUN/evaluation/per_image_metrics.csv and writes to "
+            "RUN/evaluation/sorted_by_metrics/."
         ),
         epilog=(
             "Examples:\n"
@@ -96,7 +98,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--config",
         type=Path,
         default=None,
-        help="Path to run config YAML. Uses the config's organize section.",
+        help="Path to run config YAML. Uses the config's organize ranked-export section.",
     )
 
     parser.add_argument(
@@ -119,7 +121,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help=(
-            "Directory where sorted metric folders will be created. "
+            "Directory where ranked metric export folders will be created. "
             "If omitted, defaults to RUN/evaluation/sorted_by_metrics/."
         ),
     )
@@ -127,24 +129,24 @@ def _build_parser() -> argparse.ArgumentParser:
         "--metrics",
         nargs="+",
         default=DEFAULT_METRICS,
-        help="Metrics to use for sorting.",
+        help="Metrics to use for ranked sample export.",
     )
     parser.add_argument(
         "--top-k",
         type=int,
         default=20,
-        help="Number of best/worst samples to export for each metric.",
+        help="Number of best/worst ranked samples to export for each metric.",
     )
     parser.add_argument(
         "--mode",
         choices=["hardlink", "symlink", "copy"],
         default="hardlink",
-        help="How to place files in the output folders.",
+        help="How to place files in ranked export folders.",
     )
     parser.add_argument(
         "--include-all-ranked",
         action="store_true",
-        help="Also create a full ranked folder for each metric.",
+        help="Also export a full ranked file folder for each metric.",
     )
     parser.add_argument(
         "--overwrite",

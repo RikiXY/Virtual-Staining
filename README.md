@@ -19,7 +19,7 @@ generation of virtually stained images from label-free microscopy inputs (and vi
 | `vs-compare` | Compare metric distributions across runs |
 | `vs-compare-panels` | Build source / generated / target comparison panels |
 | `vs-evaluate-single` | Evaluate a single image pair |
-| `vs-organize` | Organise run outputs |
+| `vs-organize` | Export ranked sample files from run metrics |
 
 ## Quick Start
 

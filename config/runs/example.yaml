@@ -206,6 +206,9 @@ evaluation:
 #   # kinds: [best, median, worst]
 #
 # organize:
-#   # Defaults run_path to results_path/run_name when omitted.
+#   # Ranked file export only. Defaults run_path to results_path/run_name
+#   # and output_dir to RUN/evaluation/sorted_by_metrics when omitted.
 #   top_k: 20
 #   mode: hardlink
+#   # metrics: [ssim, mae]
+#   # include_all_ranked: false

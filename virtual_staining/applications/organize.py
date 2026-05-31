@@ -18,7 +18,7 @@ class OrganizeRequest:
 
 
 def organize(request: OrganizeRequest) -> None:
-    """Organize generated, target, and source images by metric ranking."""
+    """Export generated, target, and source image files by metric ranking."""
     request.output_dir.mkdir(parents=True, exist_ok=True)
     organize_by_metrics(
         csv_path=request.metrics_csv,

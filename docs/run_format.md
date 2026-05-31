@@ -108,6 +108,7 @@ local_workspace/results/<run_name>/
 │   ├── weak_tail.csv           # weak-tail threshold counts and percentiles (non-empty evaluations)
 │   ├── residual_heatmaps.csv   # standalone residual heatmap manifest (optional)
 │   ├── residual_heatmaps/      # standalone residual heatmap PNGs (optional)
+│   ├── sorted_by_metrics/      # ranked sample file exports from vs-organize (optional)
 │   └── skipped.csv             # samples that could not be evaluated (optional)
 └── comparisons/                # comparison panels produced by vs-compare-panels
 ```
@@ -591,6 +592,43 @@ better, while MAE, MSE, and RMSE rank lower values as better. Ties use
 | `error_histogram_path` | Saved absolute-error histogram |
 | `intensity_overlay_histogram_path` | Saved target/generated intensity overlay histogram |
 | `target_vs_generated_scatter_by_channel_path` | Saved target-vs-generated scatter plot |
+
+### `evaluation/sorted_by_metrics/`
+
+Written by `vs-organize` or `organize` config sections. This utility is a
+ranked file exporter: it places source, target, and generated image files into
+metric-ranked folders for manual inspection or downstream collection. It does
+not render comparison panels, plots, or diagnostics; use `vs-compare-panels`
+for visual diagnostics and `vs-evaluate` for dataset evaluation artifacts.
+
+The default output directory is `RUN/evaluation/sorted_by_metrics/`:
+
+```text
+evaluation/sorted_by_metrics/
+├── organization_summary.csv
+└── <metric>/
+    ├── best/
+    ├── worst/
+    └── all_ranked/             # optional, when include_all_ranked is enabled
+```
+
+Ranking uses the shared ranked-selection helper also used by
+`vs-compare-panels`: SSIM, PSNR, and PCC metrics rank higher values as better,
+while MAE, MSE, and RMSE rank lower values as better. Ties use `sample_id`
+when available. File placement mode is controlled by `mode` and may be
+`hardlink`, `symlink`, or `copy`.
+
+`organization_summary.csv` has one row per metric/kind export:
+
+| Column | Description |
+|---|---|
+| `metric` | Metric used for ranking |
+| `kind` | Export kind: `best`, `worst`, or `all_ranked` |
+| `rank_count` | Number of ranked samples selected for that kind |
+| `export_mode` | File placement mode: `hardlink`, `symlink`, or `copy` |
+| `selected_file_roles` | Comma-separated exported roles, such as `generated,target,source` |
+| `output_dir` | Directory containing the exported files for this metric/kind |
+| `files_exported` | Number of files placed for this metric/kind |
 
 ## run.json Schema
 
