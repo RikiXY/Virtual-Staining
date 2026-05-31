@@ -393,6 +393,7 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
     assert metadata["summary_csv_path"] == str(output_dir / "summary.csv")
     assert metadata["weak_tail_csv_path"] == str(output_dir / "weak_tail.csv")
     assert metadata["residual_heatmaps_csv_path"] is None
+    assert metadata["artifact_manifest_path"] == str(output_dir / "artifacts.json")
     assert metadata["residual_heatmap_config"] == {
         "enabled": False,
         "metric": "ssim",
@@ -409,6 +410,20 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
         assert "weak_count" in weak_tail_reader.fieldnames
         assert "weak_share" in weak_tail_reader.fieldnames
 
+    artifact_manifest = json.loads((output_dir / "artifacts.json").read_text(encoding="utf-8"))
+    assert artifact_manifest["schema_version"] == 1
+    artifacts = artifact_manifest["artifacts"]
+    artifacts_by_type = {artifact["artifact_type"]: artifact for artifact in artifacts}
+    assert artifacts_by_type["per_image_metrics_csv"]["path"] == (
+        "evaluation/per_image_metrics.csv"
+    )
+    assert artifacts_by_type["per_image_metrics_csv"]["path_type"] == "run_relative"
+    assert artifacts_by_type["summary_csv"]["path"] == "evaluation/summary.csv"
+    assert artifacts_by_type["weak_tail_csv"]["path"] == "evaluation/weak_tail.csv"
+    assert "skipped_csv" not in artifacts_by_type
+    assert all(artifact["stage"] == "evaluate" for artifact in artifacts)
+    assert all(artifact["path"] for artifact in artifacts)
+
     events = [
         json.loads(line)
         for line in (tmp_path / "results" / "eval_run" / "metadata" / "events.jsonl")
@@ -419,6 +434,7 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
     assert all(event["stage"] == "evaluate" for event in events)
     assert events[-1]["details"]["weak_tail_csv_path"] == str(output_dir / "weak_tail.csv")
     assert events[-1]["details"]["residual_heatmaps_csv_path"] is None
+    assert events[-1]["details"]["artifact_manifest_path"] == str(output_dir / "artifacts.json")
 
 
 def test_evaluate_writes_residual_heatmaps_csv_when_enabled(tmp_path: Path) -> None:
@@ -473,6 +489,18 @@ def test_evaluate_writes_residual_heatmaps_csv_when_enabled(tmp_path: Path) -> N
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert metadata["residual_heatmaps_csv_path"] == str(residual_csv)
 
+    artifact_manifest = json.loads((output_dir / "artifacts.json").read_text(encoding="utf-8"))
+    artifacts = artifact_manifest["artifacts"]
+    artifact_types = [artifact["artifact_type"] for artifact in artifacts]
+    assert "residual_heatmaps_csv" in artifact_types
+    heatmap_artifacts = [
+        artifact for artifact in artifacts if artifact["artifact_type"] == "residual_heatmap_png"
+    ]
+    assert len(heatmap_artifacts) == 1
+    assert heatmap_artifacts[0]["sample_id"] == "00256_00000"
+    assert heatmap_artifacts[0]["metric"] == "mae"
+    assert heatmap_artifacts[0]["path"].startswith("evaluation/residual_heatmaps/")
+
 
 def test_evaluate_writes_skipped_csv_for_missing_generated(tmp_path: Path) -> None:
     dataset_root = tmp_path / "data"
@@ -499,6 +527,54 @@ def test_evaluate_writes_skipped_csv_for_missing_generated(tmp_path: Path) -> No
     skipped_csv = output_dir / "skipped.csv"
     assert skipped_csv.exists()
     assert "missing_generated" in skipped_csv.read_text(encoding="utf-8")
+
+    artifact_manifest = json.loads((output_dir / "artifacts.json").read_text(encoding="utf-8"))
+    artifacts_by_type = {
+        artifact["artifact_type"]: artifact for artifact in artifact_manifest["artifacts"]
+    }
+    assert artifacts_by_type["per_image_metrics_csv"]["path"] == (
+        "evaluation/per_image_metrics.csv"
+    )
+    assert artifacts_by_type["skipped_csv"]["path"] == "evaluation/skipped.csv"
+    assert "summary_csv" not in artifacts_by_type
+    assert "weak_tail_csv" not in artifacts_by_type
+
+
+def test_evaluate_artifact_manifest_includes_saved_plots(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "data"
+    target_dir = dataset_root / "splits" / "test"
+    generated_dir = tmp_path / "generated"
+    target_dir.mkdir(parents=True)
+    generated_dir.mkdir()
+    _write_test_manifest(dataset_root, ["00000_00000"])
+    write_rgb_pair(target_dir, "00000_00000")
+    write_rgb_image(generated_dir / "00000_00000_target_generated.png")
+
+    output_dir = tmp_path / "results" / "eval_run" / "evaluation"
+    yaml_file = _write_evaluate_config(
+        tmp_path,
+        dataset_root,
+        f"""\
+          generated_dir: {generated_dir}
+          output_dir: {output_dir}
+          save_graphs: true
+        """,
+    )
+
+    run_config = RunConfig.from_yaml(yaml_file)
+    evaluate(run_config, yaml_file)
+
+    artifact_manifest = json.loads((output_dir / "artifacts.json").read_text(encoding="utf-8"))
+    artifacts = artifact_manifest["artifacts"]
+    histogram_artifacts = [
+        artifact for artifact in artifacts if artifact["artifact_type"] == "metric_histogram"
+    ]
+    assert any(artifact["metric"] == "ssim" for artifact in histogram_artifacts)
+    assert any(
+        artifact["artifact_type"] == "metrics_boxplot"
+        and artifact["path"] == "evaluation/metrics_boxplot.png"
+        for artifact in artifacts
+    )
 
 
 def test_evaluate_skipped_csv_has_correct_columns(tmp_path: Path) -> None:

@@ -6,6 +6,11 @@ from pathlib import Path
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.manifest import load_manifest_or_raise
+from virtual_staining.evaluation.artifacts import (
+    EvaluationArtifact,
+    residual_heatmap_artifacts_from_csv,
+    write_artifact_manifest,
+)
 from virtual_staining.evaluation.evaluator import evaluate_pairs
 from virtual_staining.evaluation.panels import write_residual_heatmap_artifacts
 from virtual_staining.evaluation.plotting import save_dataset_plots
@@ -45,6 +50,100 @@ def _write_evaluation_stage_metadata(paths: RunPaths, payload: dict[str, object]
     stage_path = save_stage_metadata("evaluate", payload, paths.metadata_dir)
     if stage_path is not None:
         logger.info("Evaluation metadata written -> %s", stage_path)
+
+
+def _plot_artifact(path: Path) -> EvaluationArtifact:
+    if path.name == "metrics_boxplot.png":
+        return EvaluationArtifact(
+            stage="evaluate",
+            artifact_type="metrics_boxplot",
+            path=path,
+            description="Boxplot summary of finite evaluation metrics.",
+        )
+
+    if path.name.endswith("_histogram.png"):
+        metric = path.name.removesuffix("_histogram.png")
+        return EvaluationArtifact(
+            stage="evaluate",
+            artifact_type="metric_histogram",
+            path=path,
+            metric=metric,
+            description="Histogram of finite per-image metric values.",
+        )
+
+    return EvaluationArtifact(
+        stage="evaluate",
+        artifact_type="evaluation_plot",
+        path=path,
+        description="Evaluation diagnostic plot.",
+    )
+
+
+def _build_evaluation_artifacts(
+    *,
+    result_metrics_csv: Path | None,
+    summary_csv: Path | None,
+    weak_tail_csv: Path | None,
+    skipped_csv: Path | None,
+    plot_paths: list[Path],
+    residual_heatmaps_csv: Path | None,
+) -> list[EvaluationArtifact]:
+    artifacts: list[EvaluationArtifact] = []
+
+    if result_metrics_csv is not None:
+        artifacts.append(
+            EvaluationArtifact(
+                stage="evaluate",
+                artifact_type="per_image_metrics_csv",
+                path=result_metrics_csv,
+                description="Per-image evaluation metrics for evaluated test samples.",
+            )
+        )
+
+    if summary_csv is not None:
+        artifacts.append(
+            EvaluationArtifact(
+                stage="evaluate",
+                artifact_type="summary_csv",
+                path=summary_csv,
+                description="Aggregate evaluation metric summary.",
+            )
+        )
+
+    if weak_tail_csv is not None:
+        artifacts.append(
+            EvaluationArtifact(
+                stage="evaluate",
+                artifact_type="weak_tail_csv",
+                path=weak_tail_csv,
+                description="Weak-tail threshold counts and percentiles.",
+            )
+        )
+
+    if skipped_csv is not None:
+        artifacts.append(
+            EvaluationArtifact(
+                stage="evaluate",
+                artifact_type="skipped_csv",
+                path=skipped_csv,
+                description="Samples that could not be evaluated.",
+            )
+        )
+
+    artifacts.extend(_plot_artifact(path) for path in plot_paths)
+
+    if residual_heatmaps_csv is not None:
+        artifacts.append(
+            EvaluationArtifact(
+                stage="evaluate",
+                artifact_type="residual_heatmaps_csv",
+                path=residual_heatmaps_csv,
+                description="Manifest of standalone residual heatmap PNGs.",
+            )
+        )
+        artifacts.extend(residual_heatmap_artifacts_from_csv(residual_heatmaps_csv))
+
+    return artifacts
 
 
 def evaluate(config: RunConfig, config_path: Path) -> None:
@@ -181,6 +280,7 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
         raise
 
     all_skipped = pairing_skipped + result.skipped_rows
+    skipped_path: Path | None = None
     if all_skipped:
         skipped_path = write_skipped_csv(all_skipped, output_dir / "skipped.csv")
         logger.info("Skipped samples written to %s", skipped_path)
@@ -196,10 +296,24 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
                 top_k=residual_heatmap_top_k,
             )
 
+    plot_paths: list[Path] = []
     if save_graphs and result.rows:
-        save_dataset_plots(result.rows, output_dir)
+        plot_paths = save_dataset_plots(result.rows, output_dir)
 
     completed_at = datetime.now(UTC).isoformat()
+    artifact_manifest_path = write_artifact_manifest(
+        _build_evaluation_artifacts(
+            result_metrics_csv=result.metrics_csv,
+            summary_csv=result.summary_csv,
+            weak_tail_csv=result.weak_tail_csv,
+            skipped_csv=skipped_path,
+            plot_paths=plot_paths,
+            residual_heatmaps_csv=result.residual_heatmaps_csv,
+        ),
+        output_dir / "artifacts.json",
+        run_root=run_root,
+        created_at=completed_at,
+    )
     _write_evaluation_stage_metadata(
         paths,
         {
@@ -223,6 +337,7 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
                 if result.residual_heatmaps_csv is not None
                 else None
             ),
+            "artifact_manifest_path": str(artifact_manifest_path),
         },
     )
     append_run_event(
@@ -249,6 +364,7 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
                     if result.residual_heatmaps_csv is not None
                     else None
                 ),
+                "artifact_manifest_path": str(artifact_manifest_path),
             },
         },
         paths.metadata_dir,

@@ -102,6 +102,7 @@ local_workspace/results/<run_name>/
 │   ├── output_val/             # generated images for validation-split samples
 │   └── output_test/            # generated images for test-split samples (from vs-infer)
 ├── evaluation/
+│   ├── artifacts.json          # manifest of core evaluation artifacts
 │   ├── per_image_metrics.csv   # per-image metrics for all evaluated test samples
 │   ├── summary.csv             # aggregate statistics across the test split
 │   ├── weak_tail.csv           # weak-tail threshold counts and percentiles (non-empty evaluations)
@@ -312,8 +313,8 @@ contain fields such as:
 - stage-specific provenance such as checkpoint path, manifest hash, counts, and output paths
 
 For `evaluate`, output paths include `metrics_csv_path`, `summary_csv_path`,
-`weak_tail_csv_path`, and `residual_heatmaps_csv_path` when the corresponding
-artifacts are available.
+`weak_tail_csv_path`, `residual_heatmaps_csv_path`, and
+`artifact_manifest_path` when the corresponding artifacts are available.
 
 ### `metadata/events.jsonl`
 
@@ -373,6 +374,40 @@ Checkpoint files are not deleted by this metadata record.
 
 Generated images produced during training (train/val) and inference (test).
 Each file is named after its source patch (e.g. `00512_09216_target_generated.tif`).
+
+### `evaluation/artifacts.json`
+
+Canonical manifest of core artifacts written by `vs-evaluate`. It is always
+written after evaluation completes and only lists files that exist at manifest
+write time. Paths are relative to the run root when the artifact is under the
+run directory; artifacts written to a custom `evaluation.output_dir` outside the
+run root use absolute paths and set `path_type` to `absolute`.
+
+Top-level fields:
+
+| Field | Description |
+|---|---|
+| `schema_version` | Manifest schema version. Current value: `1` |
+| `created_at` | ISO-8601 timestamp from the evaluation completion time |
+| `path_policy` | Human-readable path policy |
+| `artifacts` | List of artifact records |
+
+Artifact record fields:
+
+| Field | Description |
+|---|---|
+| `stage` | Creation stage, currently `evaluate` |
+| `artifact_type` | Stable artifact type such as `per_image_metrics_csv`, `summary_csv`, `weak_tail_csv`, `skipped_csv`, `metric_histogram`, `metrics_boxplot`, `residual_heatmaps_csv`, or `residual_heatmap_png` |
+| `path` | Artifact path using the manifest path policy |
+| `path_type` | `run_relative` or `absolute` |
+| `metric` | Metric associated with the artifact, or `null` |
+| `sample_id` | Sample associated with the artifact, or `null` |
+| `description` | Short human-readable description |
+| `metadata` | Artifact-specific key/value metadata |
+
+Secondary utilities such as `vs-compare-panels` and `vs-organize` do not write
+to this manifest yet; those artifacts are registered by the follow-up utility
+manifest work.
 
 ### `evaluation/per_image_metrics.csv`
 
