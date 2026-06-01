@@ -44,6 +44,9 @@ build/
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
 
+# Marimo
+docs/marimo/**/__marimo__/session/
+
 # Pytest
 .pytest_tmp/
 .pytest_cache/
