@@ -106,6 +106,37 @@ queue preflight compares resolved configs and fails before training if a field
 differs outside the declared `variable_fields`. Summary metadata is written to
 `local_workspace/queues/<queue-name>.ablation.summary.json`.
 
+### Optional Marimo analysis
+
+Marimo is an optional analysis and reporting layer. It is not installed by the
+core runtime dependency set and is not required by training, inference,
+evaluation, or `make qa`.
+
+Install the optional analysis group when you want to edit or export Marimo
+notebooks:
+
+```bash
+uv sync --frozen --group analysis
+```
+
+Open the Marimo editor:
+
+```bash
+make marimo
+```
+
+Once a Marimo file exists under `docs/marimo/`, launch or export it with:
+
+```bash
+make marimo MARIMO_APP=docs/marimo/evaluation_explorer.py
+make marimo-run MARIMO_APP=docs/marimo/evaluation_explorer.py
+make marimo-export MARIMO_APP=docs/marimo/evaluation_explorer.py
+```
+
+Static HTML exports are written to `docs/marimo/exports/<app>.html` by default.
+Exporting executes the notebook to produce its visible outputs, so committed
+exports must use public fixture data or documented empty states only.
+
 ## Configuration
 
 All experiment parameters live in a single YAML file. Copy
@@ -196,6 +227,7 @@ Virtual-Staining/
 │   └── runs/                   # run YAML files (example.yaml template)
 ├── docs/
 │   ├── assets/                 # qualitative result images
+│   ├── marimo/                 # optional Marimo docs and apps
 │   ├── notebooks/
 │   └── reports/
 ├── examples/                   # example input images

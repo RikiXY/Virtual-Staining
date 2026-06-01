@@ -39,6 +39,9 @@ build-backend = "hatchling.build"
 packages = ["virtual_staining"]
 
 [dependency-groups]
+analysis = [
+    "marimo>=0.13",
+]
 dev = [
     "pyright>=1.1",
     "pytest>=8.0",
