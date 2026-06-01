@@ -3,6 +3,8 @@
 This directory is the user-facing home for optional Marimo documentation and
 apps. Marimo is installed only through the `analysis` dependency group; it is
 not part of the core training, inference, or evaluation runtime.
+Plotly is also installed through this group and is used only inside Marimo apps,
+for example the interactive histograms in `research/alignment.py`.
 
 ```bash
 uv sync --frozen --group analysis

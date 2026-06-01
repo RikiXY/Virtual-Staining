@@ -6,14 +6,16 @@ app = marimo.App(width="full")
 
 @app.cell
 def _():
+    from io import BytesIO
     from pathlib import Path
 
     import cv2
     import marimo as mo
-    import matplotlib.pyplot as plt
     import numpy as np
     import pandas as pd
+    import plotly.graph_objects as go
     from PIL import Image
+    from plotly.subplots import make_subplots
 
     from virtual_staining.data.preprocessing import (
         ALLOWED_MASK_STRATEGIES,
@@ -31,6 +33,7 @@ def _():
 
     return (
         ALLOWED_MASK_STRATEGIES,
+        BytesIO,
         Image,
         LOWE_RATIO_THRESHOLD,
         MASK_PARAMETER_GRID,
@@ -44,10 +47,11 @@ def _():
         RANSAC_REPROJECTION_THRESHOLD,
         calculate_mask_by_strategy,
         cv2,
+        go,
+        make_subplots,
         mo,
         np,
         pd,
-        plt,
     )
 
 
@@ -57,7 +61,7 @@ def _(Path):
     DEFAULT_SOURCE_IMAGE = "examples/label_free_0.png"
     DEFAULT_TARGET_IMAGE = "examples/stained_0.png"
 
-    DEMO_MAX_SIDE = 900
+    DEMO_MAX_SIDE = None
     CLAHE_TILE_GRID = (8, 8)
     PACKAGE_CLAHE_CLIP_LIMIT = 18.0
     CLAHE_COMPARISON_CLIP_LIMITS = (2.0, 4.0, 6.0, 8.0, 16.0, PACKAGE_CLAHE_CLIP_LIMIT)
@@ -67,9 +71,17 @@ def _(Path):
     COMPONENT_TOP_COUNT = 10
     SIFT_NFEATURES = 10000
     KEYPOINT_PREVIEW_LIMIT = 120
+    KEYPOINT_MARKER_MIN_RADIUS = 18
+    KEYPOINT_MARKER_MAX_RADIUS = 42
+    KEYPOINT_MARKER_HALO_THICKNESS = 8
+    KEYPOINT_MARKER_RING_THICKNESS = 5
+    KEYPOINT_MARKER_CROSS_THICKNESS = 4
     MATCH_PREVIEW_LIMIT = 80
     MATCH_PREVIEW_LINE_THICKNESS = 3
     DEFAULT_MATCH_STRATEGY = "connected_components"
+    PLOTLY_IMAGE_MAX_SIDE = 1200
+    PLOTLY_DETAIL_IMAGE_MAX_SIDE = 2400
+    PLOTLY_JPEG_QUALITY = 85
     return (
         CLAHE_COMPARISON_CLIP_LIMITS,
         CLAHE_TILE_GRID,
@@ -78,6 +90,11 @@ def _(Path):
         DEFAULT_SOURCE_IMAGE,
         DEFAULT_TARGET_IMAGE,
         DEMO_MAX_SIDE,
+        KEYPOINT_MARKER_CROSS_THICKNESS,
+        KEYPOINT_MARKER_HALO_THICKNESS,
+        KEYPOINT_MARKER_MAX_RADIUS,
+        KEYPOINT_MARKER_MIN_RADIUS,
+        KEYPOINT_MARKER_RING_THICKNESS,
         KEYPOINT_PREVIEW_LIMIT,
         MATCH_PREVIEW_LINE_THICKNESS,
         MATCH_PREVIEW_LIMIT,
@@ -85,6 +102,9 @@ def _(Path):
         COMPONENT_MIN_SIDE,
         COMPONENT_TOP_COUNT,
         PACKAGE_CLAHE_CLIP_LIMIT,
+        PLOTLY_DETAIL_IMAGE_MAX_SIDE,
+        PLOTLY_IMAGE_MAX_SIDE,
+        PLOTLY_JPEG_QUALITY,
         REPO_ROOT,
         SIFT_NFEATURES,
     )
@@ -130,11 +150,17 @@ def _(DEFAULT_SOURCE_IMAGE, DEFAULT_TARGET_IMAGE, mo):
 
 @app.cell
 def _(
+    BytesIO,
     CLAHE_TILE_GRID,
     CONNECTED_COMPONENT_THRESHOLD,
     DEFAULT_MATCH_STRATEGY,
     DEMO_MAX_SIDE,
     Image,
+    KEYPOINT_MARKER_CROSS_THICKNESS,
+    KEYPOINT_MARKER_HALO_THICKNESS,
+    KEYPOINT_MARKER_MAX_RADIUS,
+    KEYPOINT_MARKER_MIN_RADIUS,
+    KEYPOINT_MARKER_RING_THICKNESS,
     KEYPOINT_PREVIEW_LIMIT,
     LOWE_RATIO_THRESHOLD,
     MATCH_PREVIEW_LINE_THICKNESS,
@@ -145,6 +171,9 @@ def _(
     COMPONENT_MIN_SIDE,
     COMPONENT_TOP_COUNT,
     PACKAGE_CLAHE_CLIP_LIMIT,
+    PLOTLY_DETAIL_IMAGE_MAX_SIDE,
+    PLOTLY_IMAGE_MAX_SIDE,
+    PLOTLY_JPEG_QUALITY,
     Path,
     RANSAC_CONFIDENCE,
     RANSAC_MAX_ITERS,
@@ -153,10 +182,11 @@ def _(
     SIFT_NFEATURES,
     calculate_mask_by_strategy,
     cv2,
+    go,
+    make_subplots,
     mo,
     np,
     pd,
-    plt,
 ):
     def resolve_repo_path(value: object, repo_root: Path) -> Path:
         path = Path(str(value).strip()).expanduser()
@@ -194,10 +224,11 @@ def _(
             kwargs["max_height"] = max_height
         return mo.ui.table(_table_records(frame), **kwargs)
 
-    def load_preview_rgb(path, *, max_side: int = DEMO_MAX_SIDE) -> np.ndarray:
+    def load_preview_rgb(path, *, max_side: int | None = DEMO_MAX_SIDE) -> np.ndarray:
         with Image.open(path) as image:
             image = image.convert("RGB")
-            image.thumbnail((max_side, max_side))
+            if max_side is not None:
+                image.thumbnail((max_side, max_side))
             return np.asarray(image, dtype=np.uint8)
 
     def grayscale(rgb: np.ndarray) -> np.ndarray:
@@ -330,13 +361,134 @@ def _(
                 "message": str(exc),
             }
 
+    def plotly_config() -> dict[str, object]:
+        return {"responsive": True, "displaylogo": False}
+
+    def as_rgb_image(image: np.ndarray) -> np.ndarray:
+        image_array = np.asarray(image)
+        if image_array.ndim == 2:
+            clipped = np.clip(image_array, 0, 255).astype(np.uint8)
+            return np.stack([clipped, clipped, clipped], axis=-1)
+        if image_array.ndim == 3 and image_array.shape[2] == 3:
+            return np.clip(image_array, 0, 255).astype(np.uint8)
+        raise ValueError(f"Expected 2D grayscale or 3-channel RGB image, got {image_array.shape}")
+
+    def labels_to_rgb(labels: np.ndarray) -> np.ndarray:
+        label_array = np.asarray(labels)
+        max_label = float(label_array.max()) if label_array.size else 0.0
+        if max_label <= 0:
+            normalized = np.zeros_like(label_array, dtype=np.uint8)
+        else:
+            normalized = np.clip(label_array / max_label * 255.0, 0, 255).astype(np.uint8)
+        return cv2.cvtColor(cv2.applyColorMap(normalized, cv2.COLORMAP_TURBO), cv2.COLOR_BGR2RGB)
+
+    def heatmap_to_rgb(image: np.ndarray) -> np.ndarray:
+        clipped = np.clip(image, 0, 255).astype(np.uint8)
+        return cv2.cvtColor(cv2.applyColorMap(clipped, cv2.COLORMAP_MAGMA), cv2.COLOR_BGR2RGB)
+
+    def image_data_uri(
+        rendered: np.ndarray,
+        *,
+        image_format: str,
+        max_side: int | None = PLOTLY_IMAGE_MAX_SIDE,
+    ) -> str:
+        import base64
+
+        pil_image = Image.fromarray(rendered)
+        if max_side is not None:
+            pil_image.thumbnail(
+                (max_side, max_side),
+                Image.Resampling.LANCZOS,
+            )
+        buffer = BytesIO()
+        if image_format == "JPEG":
+            pil_image.save(
+                buffer,
+                format="JPEG",
+                quality=PLOTLY_JPEG_QUALITY,
+                optimize=True,
+            )
+            mime_type = "image/jpeg"
+        else:
+            pil_image.save(buffer, format="PNG", optimize=True)
+            mime_type = "image/png"
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+        return f"data:{mime_type};base64,{encoded}"
+
+    def add_image_panel(
+        fig,
+        image: np.ndarray,
+        *,
+        row: int,
+        col: int,
+        color_mode: str = "rgb",
+        max_side: int | None = PLOTLY_IMAGE_MAX_SIDE,
+    ) -> None:
+        if color_mode == "labels":
+            rendered = labels_to_rgb(image)
+        elif color_mode == "heatmap":
+            rendered = heatmap_to_rgb(image)
+        else:
+            rendered = as_rgb_image(image)
+        image_format = "PNG" if color_mode in {"labels", "mask"} else "JPEG"
+        fig.add_trace(
+            go.Image(source=image_data_uri(rendered, image_format=image_format, max_side=max_side)),
+            row=row,
+            col=col,
+        )
+        fig.update_xaxes(showticklabels=False, row=row, col=col)
+        fig.update_yaxes(showticklabels=False, row=row, col=col)
+
+    def add_empty_panel(fig, message: str, *, row: int, col: int) -> None:
+        fig.add_annotation(
+            text=message,
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+            row=row,
+            col=col,
+        )
+        fig.update_xaxes(visible=False, row=row, col=col)
+        fig.update_yaxes(visible=False, row=row, col=col)
+
+    def intensity_histogram_trace(gray: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        counts, edges = np.histogram(gray.ravel(), bins=64, range=(0, 256))
+        centers = (edges[:-1] + edges[1:]) / 2.0
+        return centers, counts
+
+    def add_histogram_trace(
+        fig,
+        image: np.ndarray,
+        *,
+        name: str,
+        row: int,
+        col: int,
+        fill: str | None = None,
+    ) -> None:
+        x, y = intensity_histogram_trace(image)
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=y,
+                mode="lines",
+                fill=fill,
+                name=name,
+                hovertemplate="intensity=%{x}<br>pixels=%{y}<extra></extra>",
+            ),
+            row=row,
+            col=col,
+        )
+
     def image_overview_figure(source_rgb: np.ndarray, target_rgb: np.ndarray):
-        fig, axes = plt.subplots(1, 2, figsize=(10, 4.8), constrained_layout=True)
+        fig = make_subplots(
+            rows=1,
+            cols=2,
+            subplot_titles=("Source demo image", "Target demo image"),
+        )
         panels = [(source_rgb, "Source demo image"), (target_rgb, "Target demo image")]
-        for axis, (image, title) in zip(axes, panels, strict=True):
-            axis.imshow(image)
-            axis.set_title(title)
-            axis.axis("off")
+        for col, (image, _title) in enumerate(panels, start=1):
+            add_image_panel(fig, image, row=1, col=col)
+        fig.update_layout(height=480, showlegend=False)
         return fig
 
     def contrast_grid_figure(
@@ -345,23 +497,31 @@ def _(
         clip_limits: tuple[float, ...],
     ):
         columns = 1 + len(clip_limits)
-        fig, axes = plt.subplots(
-            2,
-            columns,
-            figsize=(2.45 * columns, 5.4),
-            constrained_layout=True,
+        column_titles = ["Original<br>grayscale"] + [
+            f"CLAHE<br>clipLimit={clip_limit:g}" for clip_limit in clip_limits
+        ]
+        fig = make_subplots(
+            rows=2,
+            cols=columns,
+            column_titles=column_titles,
+            row_titles=("Source", "Target"),
+            horizontal_spacing=0.012,
+            vertical_spacing=0.06,
         )
-        for row, (name, rgb) in enumerate([("Source", source_rgb), ("Target", target_rgb)]):
+        for row, (_name, rgb) in enumerate([("Source", source_rgb), ("Target", target_rgb)]):
             gray = grayscale(rgb)
             variants = [("original grayscale", gray)] + [
                 (f"CLAHE clip {clip_limit:g}", apply_clahe(gray, clip_limit=clip_limit))
                 for clip_limit in clip_limits
             ]
-            for col, (title, image) in enumerate(variants):
-                axis = axes[row, col]
-                axis.imshow(image, cmap="gray", vmin=0, vmax=255)
-                axis.set_title(f"{name}\n{title}", fontsize=9)
-                axis.axis("off")
+            for col, (_title, image) in enumerate(variants):
+                add_image_panel(fig, image, row=row + 1, col=col + 1)
+        fig.update_annotations(font_size=13)
+        fig.update_layout(
+            height=560,
+            margin={"t": 50, "r": 44, "b": 8, "l": 8},
+            showlegend=False,
+        )
         return fig
 
     def custom_clahe_figure(
@@ -369,58 +529,48 @@ def _(
         target_rgb: np.ndarray,
         clip_limit: float,
     ):
-        fig, axes = plt.subplots(2, 3, figsize=(13.5, 7), constrained_layout=True)
+        fig = make_subplots(
+            rows=2,
+            cols=3,
+            subplot_titles=(
+                "Source<br>original",
+                f"Source<br>CLAHE<br>clipLimit={clip_limit:g}",
+                "Source<br>histogram overlay",
+                "Target<br>original",
+                f"Target<br>CLAHE<br>clipLimit={clip_limit:g}",
+                "Target<br>histogram overlay",
+            ),
+            horizontal_spacing=0.05,
+            vertical_spacing=0.16,
+        )
         for row, (name, rgb) in enumerate([("Source", source_rgb), ("Target", target_rgb)]):
             gray = grayscale(rgb)
             normalized = apply_clahe(gray, clip_limit=clip_limit)
-            panels = [
-                (gray, "original grayscale"),
-                (normalized, f"CLAHE clip {clip_limit:g}"),
-            ]
-            for col, (image, title) in enumerate(panels):
-                axis = axes[row, col]
-                axis.imshow(image, cmap="gray", vmin=0, vmax=255)
-                axis.set_title(f"{name}\n{title}", fontsize=9)
-                axis.axis("off")
-            histogram_axis = axes[row, 2]
-            histogram_axis.hist(
-                gray.ravel(),
-                bins=64,
-                range=(0, 256),
-                histtype="stepfilled",
-                alpha=0.3,
-                color="tab:blue",
-                label="original grayscale",
+            plot_row = row + 1
+            add_image_panel(fig, gray, row=plot_row, col=1)
+            add_image_panel(fig, normalized, row=plot_row, col=2)
+            add_histogram_trace(
+                fig,
+                gray,
+                name=f"{name} original grayscale",
+                row=plot_row,
+                col=3,
+                fill="tozeroy",
             )
-            histogram_axis.hist(
-                normalized.ravel(),
-                bins=64,
-                range=(0, 256),
-                histtype="stepfilled",
-                alpha=0.3,
-                color="tab:orange",
-                label=f"CLAHE clip {clip_limit:g}",
+            add_histogram_trace(
+                fig,
+                normalized,
+                name=f"{name} CLAHE clip {clip_limit:g}",
+                row=plot_row,
+                col=3,
+                fill="tozeroy",
             )
-            histogram_axis.hist(
-                gray.ravel(),
-                bins=64,
-                range=(0, 256),
-                histtype="step",
-                linewidth=1.5,
-                color="tab:blue",
-            )
-            histogram_axis.hist(
-                normalized.ravel(),
-                bins=64,
-                range=(0, 256),
-                histtype="step",
-                linewidth=1.5,
-                color="tab:orange",
-            )
-            histogram_axis.set_title(f"{name}\noverlaid intensity histogram", fontsize=9)
-            histogram_axis.set_xlabel("intensity")
-            histogram_axis.set_ylabel("pixels")
-            histogram_axis.legend(fontsize=8)
+            fig.update_xaxes(range=[0, 255], row=plot_row, col=3)
+            if plot_row == 2:
+                fig.update_xaxes(title_text="intensity", row=plot_row, col=3)
+            fig.update_yaxes(title_text="pixels", row=plot_row, col=3)
+        fig.update_annotations(font_size=12)
+        fig.update_layout(height=760, legend_title_text="Image and transform")
         return fig
 
     def clahe_histogram_grid_figure(
@@ -428,35 +578,58 @@ def _(
         target_rgb: np.ndarray,
         clip_limits: tuple[float, ...],
     ):
-        fig, axes = plt.subplots(2, 1, figsize=(11, 7), constrained_layout=True)
-        for axis, (name, rgb) in zip(
-            axes,
+        return clahe_histogram_plotly(source_rgb, target_rgb, clip_limits)
+
+    def clahe_histogram_plotly(
+        source_rgb: np.ndarray,
+        target_rgb: np.ndarray,
+        clip_limits: tuple[float, ...],
+    ):
+        fig = make_subplots(
+            rows=2,
+            cols=1,
+            subplot_titles=(
+                "Source intensity histograms",
+                "Target intensity histograms",
+            ),
+            vertical_spacing=0.16,
+        )
+        for row, (name, rgb) in enumerate(
             [("Source", source_rgb), ("Target", target_rgb)],
-            strict=True,
+            start=1,
         ):
             gray = grayscale(rgb)
-            axis.hist(
-                gray.ravel(),
-                bins=64,
-                range=(0, 256),
-                histtype="step",
-                linewidth=1.8,
-                label="original grayscale",
+            x, y = intensity_histogram_trace(gray)
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=y,
+                    mode="lines",
+                    name=f"{name} original grayscale",
+                    hovertemplate="intensity=%{x}<br>pixels=%{y}<extra></extra>",
+                ),
+                row=row,
+                col=1,
             )
             for clip_limit in clip_limits:
                 normalized = apply_clahe(gray, clip_limit=clip_limit)
-                axis.hist(
-                    normalized.ravel(),
-                    bins=64,
-                    range=(0, 256),
-                    histtype="step",
-                    linewidth=1.2,
-                    label=f"CLAHE clip {clip_limit:g}",
+                x, y = intensity_histogram_trace(normalized)
+                fig.add_trace(
+                    go.Scatter(
+                        x=x,
+                        y=y,
+                        mode="lines",
+                        name=f"{name} CLAHE clip {clip_limit:g}",
+                        hovertemplate="intensity=%{x}<br>pixels=%{y}<extra></extra>",
+                    ),
+                    row=row,
+                    col=1,
                 )
-            axis.set_title(f"{name}: original and CLAHE intensity histograms")
-            axis.set_xlabel("intensity")
-            axis.set_ylabel("pixels")
-            axis.legend(ncols=2, fontsize=8)
+        fig.update_xaxes(range=[0, 255])
+        fig.update_xaxes(title_text="intensity", row=2, col=1)
+        fig.update_yaxes(title_text="pixels")
+        fig.update_annotations(font_size=12)
+        fig.update_layout(height=760, legend_title_text="Image and transform")
         return fig
 
     def mask_statistics_frame(
@@ -518,29 +691,48 @@ def _(
         source_steps: dict[str, object],
         target_steps: dict[str, object],
     ):
-        fig, axes = plt.subplots(2, 5, figsize=(15, 6.4), constrained_layout=True)
+        fig = make_subplots(
+            rows=2,
+            cols=5,
+            subplot_titles=(
+                "Source<br>grayscale",
+                f"Source<br>threshold >= {CONNECTED_COMPONENT_THRESHOLD}",
+                "Source<br>all connected-component labels",
+                f"Source<br>low-std background (< {COMPONENT_BACKGROUND_STD_DEV:g})",
+                "Source<br>foreground after inversion",
+                "Target<br>grayscale",
+                f"Target<br>threshold >= {CONNECTED_COMPONENT_THRESHOLD}",
+                "Target<br>all connected-component labels",
+                f"Target<br>low-std background (< {COMPONENT_BACKGROUND_STD_DEV:g})",
+                "Target<br>foreground after inversion",
+            ),
+            horizontal_spacing=0.012,
+            vertical_spacing=0.1,
+        )
         rows = [
             ("Source", source_rgb, source_steps),
             ("Target", target_rgb, target_steps),
         ]
-        for row_index, (name, rgb, steps) in enumerate(rows):
+        for row_index, (_name, rgb, steps) in enumerate(rows):
             panels = [
-                (grayscale(rgb), "grayscale", "gray", None),
-                (steps["binary"], f"threshold >= {CONNECTED_COMPONENT_THRESHOLD}", "gray", None),
-                (steps["labels"], "all connected-component labels", "nipy_spectral", "nearest"),
+                (grayscale(rgb), "gray"),
+                (steps["binary"], "mask"),
+                (steps["labels"], "labels"),
                 (
                     steps["background_mask"],
-                    f"low-std background (< {COMPONENT_BACKGROUND_STD_DEV:g})",
-                    "gray",
-                    None,
+                    "mask",
                 ),
-                (steps["foreground_mask"], "foreground after inversion", "gray", None),
+                (steps["foreground_mask"], "mask"),
             ]
-            for col_index, (image, title, cmap, interpolation) in enumerate(panels):
-                axis = axes[row_index, col_index]
-                axis.imshow(image, cmap=cmap, interpolation=interpolation)
-                axis.set_title(f"{name}\n{title}", fontsize=9)
-                axis.axis("off")
+            for col_index, (image, color_mode) in enumerate(panels):
+                add_image_panel(
+                    fig,
+                    image,
+                    row=row_index + 1,
+                    col=col_index + 1,
+                    color_mode=color_mode,
+                )
+        fig.update_layout(height=650, showlegend=False)
         return fig
 
     def mask_strategy_figure(
@@ -550,16 +742,25 @@ def _(
     ):
         rows_per_strategy = 2
         total_rows = len(strategies) * rows_per_strategy
-        fig, axes = plt.subplots(
-            total_rows,
-            3,
-            figsize=(12, 3.1 * total_rows),
-            constrained_layout=True,
+        subplot_titles = []
+        for strategy in strategies:
+            for role in ("source", "target"):
+                subplot_titles.extend(
+                    [
+                        f"{strategy}<br>{role} original RGB",
+                        f"{strategy}<br>{role} CLAHE grayscale",
+                        f"{strategy}<br>{role} foreground mask",
+                    ]
+                )
+        fig = make_subplots(
+            rows=total_rows,
+            cols=3,
+            subplot_titles=subplot_titles,
+            horizontal_spacing=0.04,
+            vertical_spacing=0.055,
         )
-        if total_rows == 1:
-            axes = np.asarray([axes])
         for strategy_index, strategy in enumerate(strategies):
-            for role_index, (role, rgb) in enumerate(
+            for role_index, (_role, rgb) in enumerate(
                 [("source", source_rgb), ("target", target_rgb)]
             ):
                 row = strategy_index * rows_per_strategy + role_index
@@ -568,18 +769,15 @@ def _(
                 mask = foreground_mask(rgb, strategy)
                 _, components = component_labels(mask)
                 panels = [
-                    (rgb, f"{role} original RGB", None),
-                    (normalized, f"{role} CLAHE grayscale", "gray"),
-                    (mask, f"{role} foreground mask ({components} components)", "gray"),
+                    (rgb, "rgb"),
+                    (normalized, "gray"),
+                    (mask, "mask"),
                 ]
-                for col, (image, title, cmap) in enumerate(panels):
-                    axis = axes[row, col]
-                    if cmap is None:
-                        axis.imshow(image)
-                    else:
-                        axis.imshow(image, cmap=cmap, vmin=0, vmax=255)
-                    axis.set_title(f"{strategy}\n{title}", fontsize=9)
-                    axis.axis("off")
+                for col, (image, color_mode) in enumerate(panels):
+                    add_image_panel(fig, image, row=row + 1, col=col + 1, color_mode=color_mode)
+                    if col == 2:
+                        fig.layout.annotations[row * 3 + col].text += f" ({components} components)"
+        fig.update_layout(height=max(420, 310 * total_rows), showlegend=False)
         return fig
 
     def _detect_keypoints(
@@ -629,23 +827,41 @@ def _(
         preview = cv2.cvtColor(rgb.copy(), cv2.COLOR_RGB2BGR)
         for keypoint in selected:
             x, y = (int(round(value)) for value in keypoint.pt)
-            radius = max(5, min(14, int(round(keypoint.size / 2))))
-            cv2.circle(preview, (x, y), radius + 2, (0, 0, 0), thickness=3, lineType=cv2.LINE_AA)
-            cv2.circle(preview, (x, y), radius, (0, 255, 255), thickness=2, lineType=cv2.LINE_AA)
-            cv2.line(
+            radius = max(
+                KEYPOINT_MARKER_MIN_RADIUS,
+                min(KEYPOINT_MARKER_MAX_RADIUS, int(round(keypoint.size * 1.2))),
+            )
+            cross_radius = radius + KEYPOINT_MARKER_MIN_RADIUS // 2
+            cv2.circle(
                 preview,
-                (x - radius, y),
-                (x + radius, y),
-                (255, 0, 255),
-                thickness=2,
+                (x, y),
+                radius + KEYPOINT_MARKER_HALO_THICKNESS // 2,
+                (0, 0, 0),
+                thickness=KEYPOINT_MARKER_HALO_THICKNESS,
+                lineType=cv2.LINE_AA,
+            )
+            cv2.circle(
+                preview,
+                (x, y),
+                radius,
+                (0, 255, 255),
+                thickness=KEYPOINT_MARKER_RING_THICKNESS,
                 lineType=cv2.LINE_AA,
             )
             cv2.line(
                 preview,
-                (x, y - radius),
-                (x, y + radius),
+                (x - cross_radius, y),
+                (x + cross_radius, y),
                 (255, 0, 255),
-                thickness=2,
+                thickness=KEYPOINT_MARKER_CROSS_THICKNESS,
+                lineType=cv2.LINE_AA,
+            )
+            cv2.line(
+                preview,
+                (x, y - cross_radius),
+                (x, y + cross_radius),
+                (255, 0, 255),
+                thickness=KEYPOINT_MARKER_CROSS_THICKNESS,
                 lineType=cv2.LINE_AA,
             )
         return cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
@@ -675,31 +891,41 @@ def _(
 
     def keypoint_figure(bundles: dict[str, dict[str, object]]):
         strategies = list(bundles)
-        fig, axes = plt.subplots(
-            len(strategies),
-            2,
-            figsize=(13, 5.2 * len(strategies)),
-            constrained_layout=True,
+        subplot_titles = []
+        for strategy in strategies:
+            subplot_titles.extend(
+                [
+                    f"{strategy}<br>source SIFT keypoints",
+                    f"{strategy}<br>target SIFT keypoints",
+                ]
+            )
+        fig = make_subplots(
+            rows=len(strategies),
+            cols=2,
+            subplot_titles=subplot_titles,
+            horizontal_spacing=0.04,
+            vertical_spacing=0.08,
         )
-        if len(strategies) == 1:
-            axes = np.asarray([axes])
         for row, strategy in enumerate(strategies):
             bundle = bundles[strategy]
             for col, role in enumerate(["source", "target"]):
-                axis = axes[row, col]
                 if bundle.get("error"):
-                    axis.text(0.5, 0.5, str(bundle["error"]), ha="center", va="center")
-                    axis.axis("off")
+                    add_empty_panel(fig, str(bundle["error"]), row=row + 1, col=col + 1)
                     continue
                 rgb = bundle[f"{role}_rgb"]
                 keypoints = bundle[f"{role}_keypoints"]
-                axis.imshow(draw_keypoints_preview(rgb, keypoints))
-                axis.set_title(
-                    f"{strategy}\n{role} SIFT keypoints: top "
-                    f"{min(KEYPOINT_PREVIEW_LIMIT, len(keypoints))} of {len(keypoints)}",
-                    fontsize=9,
+                add_image_panel(
+                    fig,
+                    draw_keypoints_preview(rgb, keypoints),
+                    row=row + 1,
+                    col=col + 1,
+                    max_side=PLOTLY_DETAIL_IMAGE_MAX_SIDE,
                 )
-                axis.axis("off")
+                fig.layout.annotations[row * 2 + col].text = (
+                    f"{strategy}<br>{role} SIFT keypoints: top "
+                    f"{min(KEYPOINT_PREVIEW_LIMIT, len(keypoints))} of {len(keypoints)}"
+                )
+        fig.update_layout(height=max(420, 480 * len(strategies)), showlegend=False)
         return fig
 
     def _ratio_test_matches(knn_matches: list[list[object]]) -> list[object]:
@@ -849,22 +1075,32 @@ def _(
             ),
             ("RANSAC inlier matches", match_bundle.get("inlier_matches", [])),
         ]
-        fig, axes = plt.subplots(3, 1, figsize=(13.5, 11.2), constrained_layout=True)
-        for axis, (title, matches) in zip(axes, panels, strict=True):
+        fig = make_subplots(
+            rows=3,
+            cols=1,
+            subplot_titles=[
+                f"{title} (showing up to {MATCH_PREVIEW_LIMIT})" for title, _matches in panels
+            ],
+            vertical_spacing=0.07,
+        )
+        for row, (_title, matches) in enumerate(panels, start=1):
             if matches:
-                axis.imshow(
+                add_image_panel(
+                    fig,
                     draw_matches_preview(
                         match_bundle["source_gray"],
                         match_bundle["source_keypoints"],
                         match_bundle["target_gray"],
                         match_bundle["target_keypoints"],
                         matches,
-                    )
+                    ),
+                    row=row,
+                    col=1,
+                    max_side=PLOTLY_DETAIL_IMAGE_MAX_SIDE,
                 )
             else:
-                axis.text(0.5, 0.5, "No matches to display.", ha="center", va="center")
-            axis.set_title(f"{title} (showing up to {MATCH_PREVIEW_LIMIT})", fontsize=10)
-            axis.axis("off")
+                add_empty_panel(fig, "No matches to display.", row=row, col=1)
+        fig.update_layout(height=1120, showlegend=False)
         return fig
 
     def resize_to_source(
@@ -932,61 +1168,44 @@ def _(
         before = arrays["residual_before"]
         after = arrays["residual_after"]
 
-        fig, axes = plt.subplots(2, 3, figsize=(14, 8.6), constrained_layout=True)
-        axes[0, 0].imshow(arrays["source_rgb"])
-        axes[0, 0].set_title("Source original RGB")
-        axes[0, 1].imshow(arrays["target_rgb_before"])
-        axes[0, 1].set_title("Target original RGB before transform")
-        axes[0, 2].imshow(arrays["target_rgb_warped"])
-        axes[0, 2].set_title("Target original RGB after transform")
-        for axis in axes[0]:
-            axis.axis("off")
-
-        axes[1, 0].imshow(before, cmap="magma", vmin=0, vmax=255)
-        axes[1, 0].set_title(f"CLAHE abs diff before, mean={before.mean():.1f}")
-        axes[1, 0].axis("off")
-        axes[1, 1].imshow(after, cmap="magma", vmin=0, vmax=255)
-        axes[1, 1].set_title(f"CLAHE abs diff after, mean={after.mean():.1f}")
-        axes[1, 1].axis("off")
-
-        axes[1, 2].hist(
-            before.ravel(),
-            bins=64,
-            range=(0, 256),
-            histtype="stepfilled",
-            alpha=0.35,
-            color="tab:blue",
-            label=f"before, mean={before.mean():.1f}",
+        fig = make_subplots(
+            rows=2,
+            cols=3,
+            subplot_titles=(
+                "Source original RGB",
+                "Target original RGB before transform",
+                "Target original RGB after transform",
+                f"CLAHE abs diff before, mean={before.mean():.1f}",
+                f"CLAHE abs diff after, mean={after.mean():.1f}",
+                "Residual histogram overlay",
+            ),
+            horizontal_spacing=0.04,
+            vertical_spacing=0.1,
         )
-        axes[1, 2].hist(
-            after.ravel(),
-            bins=64,
-            range=(0, 256),
-            histtype="stepfilled",
-            alpha=0.35,
-            color="tab:green",
-            label=f"after, mean={after.mean():.1f}",
+        add_image_panel(fig, arrays["source_rgb"], row=1, col=1)
+        add_image_panel(fig, arrays["target_rgb_before"], row=1, col=2)
+        add_image_panel(fig, arrays["target_rgb_warped"], row=1, col=3)
+        add_image_panel(fig, before, row=2, col=1, color_mode="heatmap")
+        add_image_panel(fig, after, row=2, col=2, color_mode="heatmap")
+        add_histogram_trace(
+            fig,
+            before,
+            name=f"before, mean={before.mean():.1f}",
+            row=2,
+            col=3,
+            fill="tozeroy",
         )
-        axes[1, 2].hist(
-            before.ravel(),
-            bins=64,
-            range=(0, 256),
-            histtype="step",
-            linewidth=1.5,
-            color="tab:blue",
+        add_histogram_trace(
+            fig,
+            after,
+            name=f"after, mean={after.mean():.1f}",
+            row=2,
+            col=3,
+            fill="tozeroy",
         )
-        axes[1, 2].hist(
-            after.ravel(),
-            bins=64,
-            range=(0, 256),
-            histtype="step",
-            linewidth=1.5,
-            color="tab:green",
-        )
-        axes[1, 2].set_title("Overlaid CLAHE residual histograms")
-        axes[1, 2].set_xlabel("absolute difference")
-        axes[1, 2].set_ylabel("pixels")
-        axes[1, 2].legend(fontsize=8)
+        fig.update_xaxes(title_text="absolute difference", range=[0, 255], row=2, col=3)
+        fig.update_yaxes(title_text="pixels", row=2, col=3)
+        fig.update_layout(height=860, legend_title_text="Residual")
         return fig
 
     def residual_summary_frame(match_bundle: dict[str, object]) -> pd.DataFrame:
@@ -1026,6 +1245,7 @@ def _(
         build_keypoint_bundles,
         build_match_diagnostics,
         clahe_histogram_grid_figure,
+        clahe_histogram_plotly,
         contrast_grid_figure,
         component_mask_construction_figure,
         component_mask_statistics_frame,
@@ -1041,6 +1261,7 @@ def _(
         mask_strategy_figure,
         matching_count_frame,
         matching_figure,
+        plotly_config,
         residual_figure,
         residual_summary_frame,
         resolve_repo_path,
@@ -1080,7 +1301,7 @@ def _(component_mask_steps, demo_state, source_rgb, target_rgb):
 
 
 @app.cell
-def _(demo_state, image_overview_figure, mo, source_rgb, target_rgb):
+def _(demo_state, image_overview_figure, mo, plotly_config, source_rgb, target_rgb):
     if demo_state["status"] == "present":
         demo_view = mo.vstack(
             [
@@ -1089,7 +1310,11 @@ def _(demo_state, image_overview_figure, mo, source_rgb, target_rgb):
                     "The figures below use the selected images in memory only. "
                     "The default paths are committed repository examples."
                 ),
-                image_overview_figure(source_rgb, target_rgb),
+                mo.ui.plotly(
+                    image_overview_figure(source_rgb, target_rgb),
+                    config=plotly_config(),
+                    label="demo_image_pair",
+                ),
             ]
         )
     else:
@@ -1150,6 +1375,7 @@ def _(
     custom_clahe_figure,
     demo_state,
     mo,
+    plotly_config,
     source_rgb,
     target_rgb,
 ):
@@ -1170,17 +1396,25 @@ def _(
                     changing a control.
                     """
                 ),
-                contrast_grid_figure(
-                    source_rgb,
-                    target_rgb,
-                    CLAHE_COMPARISON_CLIP_LIMITS,
+                mo.ui.plotly(
+                    contrast_grid_figure(
+                        source_rgb,
+                        target_rgb,
+                        CLAHE_COMPARISON_CLIP_LIMITS,
+                    ),
+                    config=plotly_config(),
+                    label="clahe_comparison_grid",
                 ),
                 mo.md("### Custom CLAHE Output"),
                 custom_clahe_clip_limit,
-                custom_clahe_figure(
-                    source_rgb,
-                    target_rgb,
-                    float(selected_clip_limit),
+                mo.ui.plotly(
+                    custom_clahe_figure(
+                        source_rgb,
+                        target_rgb,
+                        float(selected_clip_limit),
+                    ),
+                    config=plotly_config(),
+                    label="custom_clahe_output",
                 ),
             ]
         )
@@ -1196,6 +1430,7 @@ def _(
     clahe_histogram_grid_figure,
     demo_state,
     mo,
+    plotly_config,
     source_rgb,
     target_rgb,
 ):
@@ -1212,10 +1447,14 @@ def _(
                     without changing controls.
                     """
                 ),
-                clahe_histogram_grid_figure(
-                    source_rgb,
-                    target_rgb,
-                    CLAHE_COMPARISON_CLIP_LIMITS,
+                mo.ui.plotly(
+                    clahe_histogram_grid_figure(
+                        source_rgb,
+                        target_rgb,
+                        CLAHE_COMPARISON_CLIP_LIMITS,
+                    ),
+                    config=plotly_config(),
+                    label="clahe_intensity_histograms",
                 ),
             ]
         )
@@ -1242,6 +1481,7 @@ def _(
     mask_statistics_frame,
     mask_strategy_figure,
     mo,
+    plotly_config,
     source_component_mask_steps,
     source_rgb,
     target_component_mask_steps,
@@ -1263,11 +1503,15 @@ def _(
                     as background, then inverts that background mask into foreground.
                     """
                 ),
-                component_mask_construction_figure(
-                    source_rgb,
-                    target_rgb,
-                    source_component_mask_steps,
-                    target_component_mask_steps,
+                mo.ui.plotly(
+                    component_mask_construction_figure(
+                        source_rgb,
+                        target_rgb,
+                        source_component_mask_steps,
+                        target_component_mask_steps,
+                    ),
+                    config=plotly_config(),
+                    label="component_mask_construction",
                 ),
                 mo.md("### Component Mask Statistics"),
                 display_table(
@@ -1297,7 +1541,11 @@ def _(
                     for both source and target.
                     """
                 ),
-                mask_strategy_figure(source_rgb, target_rgb, ALLOWED_MASK_STRATEGIES),
+                mo.ui.plotly(
+                    mask_strategy_figure(source_rgb, target_rgb, ALLOWED_MASK_STRATEGIES),
+                    config=plotly_config(),
+                    label="mask_strategy_comparison",
+                ),
                 mo.md("### Mask Strategy Statistics"),
                 display_table(
                     mask_statistics_frame(source_rgb, target_rgb, ALLOWED_MASK_STRATEGIES)
@@ -1311,7 +1559,15 @@ def _(
 
 
 @app.cell
-def _(demo_state, display_table, keypoint_bundles, keypoint_count_frame, keypoint_figure, mo):
+def _(
+    demo_state,
+    display_table,
+    keypoint_bundles,
+    keypoint_count_frame,
+    keypoint_figure,
+    mo,
+    plotly_config,
+):
     if demo_state["status"] == "present":
         keypoint_view = mo.vstack(
             [
@@ -1325,7 +1581,11 @@ def _(demo_state, display_table, keypoint_bundles, keypoint_count_frame, keypoin
                     table reports the full detected counts for both mask strategies.
                     """
                 ),
-                keypoint_figure(keypoint_bundles),
+                mo.ui.plotly(
+                    keypoint_figure(keypoint_bundles),
+                    config=plotly_config(),
+                    label="keypoint_detection",
+                ),
                 display_table(keypoint_count_frame(keypoint_bundles)),
             ]
         )
@@ -1349,6 +1609,7 @@ def _(
     matching_count_frame,
     matching_figure,
     mo,
+    plotly_config,
 ):
     if demo_state["status"] == "present":
         match_plot = matching_figure(match_bundle)
@@ -1372,7 +1633,13 @@ def _(
         if match_bundle.get("error"):
             match_items.append(mo.md(f"Diagnostic note: `{match_bundle['error']}`"))
         if match_plot is not None:
-            match_items.append(match_plot)
+            match_items.append(
+                mo.ui.plotly(
+                    match_plot,
+                    config=plotly_config(),
+                    label="matching_and_filtering",
+                )
+            )
         match_view = mo.vstack(match_items)
     else:
         match_view = mo.md("## Matching and Filtering\n\nDemo images are unavailable.")
@@ -1388,6 +1655,7 @@ def _(
     display_table,
     match_bundle,
     mo,
+    plotly_config,
     residual_figure,
     residual_summary_frame,
 ):
@@ -1405,33 +1673,38 @@ def _(
                 """
             )
         else:
-            diagnostic_view = mo.vstack(
-                [
-                    mo.md(
-                        f"""
-                        ## Alignment Diagnostics
+            residual_items = [
+                mo.md(
+                    f"""
+                    ## Alignment Diagnostics
 
-                        These residual previews are lightweight diagnostics only. They
-                        show the in-memory estimated demo transform on the original RGB
-                        image previews. The absolute-difference maps and histogram are
-                        computed on the CLAHE-normalized grayscale images used for SIFT.
-                        The package quality gates require at least `{MIN_INLIERS}`
-                        RANSAC inliers and an inlier ratio of at least
-                        `{MIN_INLIER_RATIO:.2f}` before accepting an alignment.
-                        """
-                    ),
-                    display_table(residual_summary_frame(match_bundle)),
+                    These residual previews are lightweight diagnostics only. They
+                    show the in-memory estimated demo transform on the original RGB
+                    image previews. The absolute-difference maps and histogram are
+                    computed on the CLAHE-normalized grayscale images used for SIFT.
+                    The package quality gates require at least `{MIN_INLIERS}`
+                    RANSAC inliers and an inlier ratio of at least
+                    `{MIN_INLIER_RATIO:.2f}` before accepting an alignment.
+                    """
+                ),
+                display_table(residual_summary_frame(match_bundle)),
+                mo.ui.plotly(
                     residual_plot,
-                    mo.md(
-                        "The target-after panel is the result of running the estimated "
-                        "demo transform in memory on the original target preview. The "
-                        "overlaid histogram makes the CLAHE before/after residual "
-                        "distribution comparable at a glance. Because the modalities "
-                        "have different appearance, this is a visual sanity check "
-                        "rather than an optimization objective."
-                    ),
-                ]
+                    config=plotly_config(),
+                    label="alignment_residuals",
+                ),
+            ]
+            residual_items.append(
+                mo.md(
+                    "The target-after panel is the result of running the estimated "
+                    "demo transform in memory on the original target preview. The "
+                    "overlaid histogram makes the CLAHE before/after residual "
+                    "distribution comparable at a glance. Because the modalities "
+                    "have different appearance, this is a visual sanity check "
+                    "rather than an optimization objective."
+                )
             )
+            diagnostic_view = mo.vstack(residual_items)
     else:
         diagnostic_view = mo.md("## Alignment Diagnostics\n\nDemo images are unavailable.")
     mo.output.replace(diagnostic_view)
