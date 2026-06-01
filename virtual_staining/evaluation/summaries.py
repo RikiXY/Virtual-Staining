@@ -13,6 +13,17 @@ from virtual_staining.utils.metrics import (
 )
 
 SUMMARY_METRIC_NAMES = list(DEFAULT_METRICS)
+SUMMARY_FIELDNAMES = [
+    "metric",
+    "count",
+    "finite_count",
+    "non_finite_count",
+    "mean",
+    "median",
+    "std",
+    "min",
+    "max",
+]
 WEAK_TAIL_FIELDNAMES = [
     "metric",
     "direction",
@@ -157,18 +168,6 @@ def write_summary_csv(
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / filename
     summary_rows = build_summary_rows(rows)
-    fieldnames = [
-        "metric",
-        "count",
-        "finite_count",
-        "non_finite_count",
-        "mean",
-        "median",
-        "std",
-        "min",
-        "max",
-    ]
-
     with path.open("w", newline="", encoding="utf-8") as file:
         if None not in (
             num_targets_found,
@@ -182,11 +181,11 @@ def write_summary_csv(
             writer.writerow(["num_pairs_evaluated", num_pairs_evaluated])
             writer.writerow(["num_skipped", num_skipped])
             writer.writerow([])
-            writer.writerow(fieldnames)
-            dict_writer = csv.DictWriter(file, fieldnames=fieldnames)
+            writer.writerow(SUMMARY_FIELDNAMES)
+            dict_writer = csv.DictWriter(file, fieldnames=SUMMARY_FIELDNAMES)
             dict_writer.writerows(summary_rows)
         else:
-            dict_writer = csv.DictWriter(file, fieldnames=fieldnames)
+            dict_writer = csv.DictWriter(file, fieldnames=SUMMARY_FIELDNAMES)
             dict_writer.writeheader()
             dict_writer.writerows(summary_rows)
 
@@ -220,18 +219,6 @@ def read_summary_csv(path: str | Path) -> dict[str, dict[str, float]]:
         raise FileNotFoundError(f"Summary CSV not found: {summary_path}")
 
     rows: dict[str, dict[str, float]] = {}
-    fieldnames = [
-        "metric",
-        "count",
-        "finite_count",
-        "non_finite_count",
-        "mean",
-        "median",
-        "std",
-        "min",
-        "max",
-    ]
-
     with summary_path.open("r", newline="", encoding="utf-8") as file:
         raw_reader = csv.reader(file)
 
@@ -241,7 +228,7 @@ def read_summary_csv(path: str | Path) -> dict[str, dict[str, float]]:
         else:
             return rows
 
-        dict_reader = csv.DictReader(file, fieldnames=fieldnames)
+        dict_reader = csv.DictReader(file, fieldnames=SUMMARY_FIELDNAMES)
         for row in dict_reader:
             if not row["metric"]:
                 continue

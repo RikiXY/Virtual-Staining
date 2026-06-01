@@ -1,3 +1,18 @@
+from virtual_staining.evaluation.artifact_readers import (
+    ArtifactManifest,
+    ArtifactManifestRecord,
+    ArtifactReaderError,
+    ComparisonArtifacts,
+    CsvArtifact,
+    EvaluationRunArtifacts,
+    MalformedArtifactError,
+    PairedEvaluationArtifacts,
+    read_artifact_manifest,
+    read_comparison_artifacts,
+    read_csv_artifact,
+    read_evaluation_run_artifacts,
+    read_paired_evaluation_artifacts,
+)
 from virtual_staining.evaluation.evaluator import EvaluationResult, evaluate_pairs
 from virtual_staining.evaluation.panels import (
     find_representative_samples,
@@ -17,6 +32,19 @@ from virtual_staining.evaluation.summaries import (
 __all__ = [
     "evaluate_pairs",
     "EvaluationResult",
+    "ArtifactManifest",
+    "ArtifactManifestRecord",
+    "ArtifactReaderError",
+    "ComparisonArtifacts",
+    "CsvArtifact",
+    "EvaluationRunArtifacts",
+    "MalformedArtifactError",
+    "PairedEvaluationArtifacts",
+    "read_artifact_manifest",
+    "read_comparison_artifacts",
+    "read_csv_artifact",
+    "read_evaluation_run_artifacts",
+    "read_paired_evaluation_artifacts",
     "write_summary_csv",
     "write_weak_tail_csv",
     "build_summary_rows",
