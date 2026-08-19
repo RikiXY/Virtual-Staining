@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.panels import (
     METRIC_SELECTION_ORDER,
     DiagnosticEntry,
@@ -53,42 +52,6 @@ def compare_panels(request: ComparePanelsRequest) -> SinglePanelResult | FromMet
     if request.mode == "from_metrics":
         return _run_from_metrics(request)
     raise ValueError(f"Unsupported compare_panels mode: {request.mode}")
-
-
-def compare_panels_from_config(config_path: Path) -> SinglePanelResult | FromMetricsResult:
-    """Build comparison panels selected by a run config."""
-    config = RunConfig.from_yaml(config_path.resolve())
-    panels = config.compare_panels
-    if panels is None:
-        raise ValueError("Config has no 'compare_panels' section.")
-    if panels.mode == "single":
-        if (
-            panels.source_image is None
-            or panels.generated_image is None
-            or panels.target_image is None
-        ):
-            raise ValueError(
-                "compare_panels.single requires source_image, generated_image, and target_image."
-            )
-        return compare_panels(
-            ComparePanelsRequest(
-                mode="single",
-                source_image=panels.source_image,
-                generated_image=panels.generated_image,
-                target_image=panels.target_image,
-                save_path=panels.save_path,
-                with_diagnostics=panels.with_diagnostics,
-            )
-        )
-    result = compare_panels(
-        ComparePanelsRequest(
-            mode="from_metrics",
-            run_path=panels.run_path or config.project.run_root,
-        )
-    )
-    assert isinstance(result, FromMetricsResult)
-    result.hide_graphs_path = panels.hide_graphs_path
-    return result
 
 
 def _infer_run_dir_from_generated_path(generated_path: str | Path) -> Path:

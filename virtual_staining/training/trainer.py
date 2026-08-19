@@ -318,7 +318,7 @@ class Trainer:
             self.config.lr_d,
             self.config.beta1,
             self.config.beta2,
-            self.config.scheduler.to_yaml_dict(),
+            self.config.scheduler.to_dict(),
         )
         logger.info("Training started")
 
@@ -584,7 +584,7 @@ class Trainer:
                 reporter=reporter,
             )
             config_hash = self._read_config_hash()
-            loss_config = self.losses.to_yaml_dict() if self.losses is not None else None
+            loss_config = self.losses.to_dict() if self.losses is not None else None
             checkpoint_modes = self._checkpoint_selection_modes()
             self._checkpoint_manager.update_selection_records(
                 metrics=checkpoint_metrics,

@@ -9,7 +9,6 @@ from virtual_staining.applications.compare_panels import (
     FromMetricsResult,
     SinglePanelResult,
     compare_panels,
-    compare_panels_from_config,
 )
 from virtual_staining.cli._output import color_for_metric, print_info, print_section, style
 
@@ -168,36 +167,15 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
         add_help=True,
     )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=None,
-        help="Path to run config YAML. Uses the config's compare_panels section.",
-    )
     subparsers = parser.add_subparsers(dest="mode")
     _add_single_subparser(subparsers)
     _add_from_metrics_subparser(subparsers)
     return parser
 
 
-def _run_from_config(config_path: Path) -> None:
-    try:
-        result = compare_panels_from_config(config_path)
-    except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
-        raise SystemExit(str(exc)) from exc
-    if isinstance(result, SinglePanelResult):
-        _print_single_summary(result)
-        return
-    assert isinstance(result, FromMetricsResult)
-    _print_from_metrics_summary(result, result.hide_graphs_path)
-
-
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    if args.config is not None:
-        _run_from_config(args.config)
-        return
     if not hasattr(args, "func"):
-        parser.error("either --config or a compare-panels mode is required")
+        parser.error("a compare-panels mode is required")
     args.func(args)

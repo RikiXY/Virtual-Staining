@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
@@ -25,8 +26,8 @@ _TRAINING_KEYS: frozenset[str] = frozenset(
         "resume",
         "scheduler",
         "early_stopping",
-        "lr_schedule",
-        "decay_start_epoch",
+        "augmentation",
+        "losses",
     }
 )
 _SCHEDULER_KEYS: frozenset[str] = frozenset(
@@ -139,7 +140,7 @@ class LearningRateSchedulerConfig:
             if self.min_lr < 0:
                 raise ValueError("training.scheduler.min_lr must be >= 0")
 
-    def to_yaml_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {"name": self.name}
         if self.name == "linear_decay":
             data["decay_start_epoch"] = self.decay_start_epoch
@@ -177,7 +178,7 @@ class EarlyStoppingConfig:
         if self.min_delta < 0:
             raise ValueError("training.early_stopping.min_delta must be >= 0")
 
-    def to_yaml_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "monitor": self.monitor,
             "mode": self.mode,
@@ -202,7 +203,7 @@ class AugmentationConfig:
     def effective_expansion_factor(self) -> int:
         return self.expansion_factor if self.enabled else 1
 
-    def to_yaml_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "enabled": self.enabled,
             "expansion_factor": self.expansion_factor,
@@ -309,7 +310,7 @@ class LossScheduleConfig:
     ) -> float:
         return base_weight * self.multiplier(epoch=epoch, global_step=global_step)
 
-    def to_yaml_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {"type": self.type}
         if self.type in {"linear_warmup", "linear_decay", "cosine"}:
             data["start_epoch"] = self.start_epoch
@@ -337,7 +338,7 @@ class LossMaskConfig:
         if self.background_weight < 0:
             raise ValueError("loss mask background_weight must be greater than or equal to 0")
 
-    def to_yaml_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "enabled": self.enabled,
             "source": self.source,
@@ -393,13 +394,13 @@ class LossTermConfig:
     def requires_mask(self) -> bool:
         return self.mask.enabled
 
-    def to_yaml_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "weight": self.weight,
             "enabled": self.enabled,
             "params": dict(self.params),
-            "schedule": self.schedule.to_yaml_dict(),
+            "schedule": self.schedule.to_dict(),
         }
 
 
@@ -424,10 +425,10 @@ class LossConfig:
     def active_discriminator(self) -> tuple[LossTermConfig, ...]:
         return tuple(term for term in self.discriminator if term.is_active)
 
-    def to_yaml_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
-            "generator": [term.to_yaml_dict() for term in self.generator],
-            "discriminator": [term.to_yaml_dict() for term in self.discriminator],
+            "generator": [term.to_dict() for term in self.generator],
+            "discriminator": [term.to_dict() for term in self.discriminator],
         }
 
 
@@ -537,28 +538,12 @@ def parse_learning_rate_scheduler_config(
     raw: Any,
     *,
     epochs: int,
-    legacy_lr_schedule: Any = None,
-    legacy_decay_start_epoch: Any = None,
 ) -> LearningRateSchedulerConfig:
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
         raise TypeError("training.scheduler must be a YAML mapping")
     reject_unknown_keys(raw, _SCHEDULER_KEYS, "training.scheduler")
-
-    if legacy_lr_schedule is not None:
-        if "name" in raw:
-            raise ValueError("Use either training.scheduler.name or training.lr_schedule, not both")
-        raw = dict(raw)
-        raw["name"] = legacy_lr_schedule
-    if legacy_decay_start_epoch is not None:
-        if "decay_start_epoch" in raw:
-            raise ValueError(
-                "Use either training.scheduler.decay_start_epoch or "
-                "training.decay_start_epoch, not both"
-            )
-        raw = dict(raw)
-        raw["decay_start_epoch"] = legacy_decay_start_epoch
 
     name = _parse_choice(
         raw.get("name", "none"),
@@ -691,11 +676,69 @@ class TrainingConfig:
     num_workers: int
     validate_rate: int
     checkpoint_rate: int
+    losses: LossConfig = field(default_factory=LossConfig)
     checkpoint_top_k: int = 3
     log_rate: int = 15
     resume: str | None = None
     scheduler: LearningRateSchedulerConfig = field(default_factory=LearningRateSchedulerConfig)
     early_stopping: EarlyStoppingConfig | None = None
+    augmentation: AugmentationConfig = field(default_factory=AugmentationConfig)
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    @classmethod
+    def from_mapping(cls, data: dict[str, Any]) -> TrainingConfig:
+        reject_unknown_keys(data, _TRAINING_KEYS, "training")
+        if "epochs" not in data:
+            raise ValueError("training.epochs is required")
+        if "losses" not in data:
+            raise ValueError("training.losses is required")
+        epochs = int(data["epochs"])
+        return cls(
+            batch_size=int(data.get("batch_size", 8)),
+            epochs=epochs,
+            lr_g=float(data.get("lr_g", 2e-4)),
+            lr_d=float(data.get("lr_d", 2e-4)),
+            beta1=float(data.get("beta1", 0.5)),
+            beta2=float(data.get("beta2", 0.999)),
+            seed=data.get("seed"),
+            num_workers=int(data.get("num_workers", min(4, os.cpu_count() or 1))),
+            validate_rate=int(data.get("validate_rate", 10)),
+            checkpoint_rate=int(data.get("checkpoint_rate", 10)),
+            checkpoint_top_k=int(data.get("checkpoint_top_k", 3)),
+            log_rate=int(data.get("log_rate", 15)),
+            resume=data.get("resume"),
+            scheduler=parse_learning_rate_scheduler_config(
+                data.get("scheduler", {}), epochs=epochs
+            ),
+            early_stopping=parse_early_stopping_config(data.get("early_stopping")),
+            augmentation=parse_augmentation_config(data.get("augmentation", {})),
+            losses=parse_loss_config(data["losses"]),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "batch_size": self.batch_size,
+            "epochs": self.epochs,
+            "lr_g": self.lr_g,
+            "lr_d": self.lr_d,
+            "beta1": self.beta1,
+            "beta2": self.beta2,
+            "seed": self.seed,
+            "num_workers": self.num_workers,
+            "validate_rate": self.validate_rate,
+            "checkpoint_rate": self.checkpoint_rate,
+            "checkpoint_top_k": self.checkpoint_top_k,
+            "log_rate": self.log_rate,
+            "resume": self.resume,
+            "scheduler": self.scheduler.to_dict(),
+            "augmentation": self.augmentation.to_dict(),
+            "losses": self.losses.to_dict(),
+        }
+        if self.early_stopping is not None:
+            data["early_stopping"] = self.early_stopping.to_dict()
+        return {key: value for key, value in data.items() if value is not None}
 
     def validate(self) -> None:
         for field_name, value in (
@@ -719,6 +762,8 @@ class TrainingConfig:
         self.scheduler.validate(epochs=self.epochs)
         if self.early_stopping is not None:
             self.early_stopping.validate()
+        self.augmentation.validate()
+        self.losses.validate()
 
 
 def default_checkpoint_mode(metric: str) -> CheckpointMode:

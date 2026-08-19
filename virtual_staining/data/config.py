@@ -1,29 +1,17 @@
 from __future__ import annotations
 
-import argparse
 from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isclose
 from pathlib import Path
+from typing import Any
 
-from virtual_staining.config import (
-    load_yaml_mapping,
-    parse_bool_strict,
-    reject_unknown_keys,
-    section_with_shared_fields,
-)
-from virtual_staining.config.validation import _TOP_LEVEL_KEYS
+from virtual_staining.config.validation import parse_bool_strict, reject_unknown_keys
 from virtual_staining.data.preprocessing import ALLOWED_MASK_STRATEGIES
-from virtual_staining.utils.dimensions import (
-    parse_wh_size,
-    parse_wh_size_from_aliases,
-)
+from virtual_staining.utils.dimensions import parse_wh_size
 
 _PREPROCESSING_KEYS: frozenset[str] = frozenset(
     {
-        # shared fields and size aliases
-        "dataset_root",
-        "image_size",
         "patch_size",
         # section-specific
         "source_name",
@@ -159,44 +147,62 @@ class PreprocessingConfig:
         _optional_strategy(self.target_mask_strategy, "target_mask_strategy")
 
     @classmethod
-    def from_args(cls, args: argparse.Namespace) -> PreprocessingConfig:
-        config = cls(
-            dataset_root=Path(args.path),
-            source_name=args.source_name,
-            target_name=args.target_name,
-            image_size=parse_wh_size(getattr(args, "image_size", (256, 256)), (256, 256)),
-            grid_movement=_pair(getattr(args, "grid_movement", (256, 256)), (256, 256)),
-            margin=getattr(args, "margin", 200),
-            seed=getattr(args, "seed", None),
-            save_masks=getattr(args, "save_masks", False),
-            save_discarded_patches=getattr(args, "save_discarded_patches", False),
-            mask_strategy=getattr(args, "mask_strategy", "connected_components"),
-            source_mask_strategy=getattr(args, "source_mask_strategy", None),
-            target_mask_strategy=getattr(args, "target_mask_strategy", None),
-            mask_scale=getattr(args, "mask_scale", 1.0),
-            lowres_mask_filtering=getattr(args, "lowres_mask_filtering", False),
-            tiled_io=getattr(args, "tiled_io", False),
-            max_memory_gb=getattr(args, "max_memory_gb", None),
-            train_ratio=getattr(args, "train_ratio", 0.8),
-            val_ratio=getattr(args, "val_ratio", 0.05),
-            test_ratio=getattr(args, "test_ratio", 0.15),
-            min_foreground_ratio=getattr(args, "min_foreground_ratio", 0.25),
-            max_white_ratio=getattr(args, "max_white_ratio", 0.7),
-            white_threshold=getattr(args, "white_threshold", 250),
-            max_largest_white_component_ratio=getattr(
-                args, "max_largest_white_component_ratio", 0.20
+    def from_mapping(
+        cls,
+        data: dict[str, Any],
+        *,
+        dataset_root: Path,
+        default_image_size: tuple[int, int],
+    ) -> PreprocessingConfig:
+        reject_unknown_keys(data, _PREPROCESSING_KEYS, "preprocessing")
+        max_memory_gb = data.get("max_memory_gb")
+        return cls(
+            dataset_root=dataset_root,
+            source_name=data["source_name"],
+            target_name=data["target_name"],
+            image_size=parse_wh_size(data.get("patch_size"), default_image_size),
+            grid_movement=_pair(data.get("grid_movement"), default_image_size),
+            margin=int(data.get("margin", 200)),
+            seed=data.get("seed"),
+            save_masks=parse_bool_strict(data.get("save_masks", False), "preprocessing.save_masks"),
+            save_discarded_patches=parse_bool_strict(
+                data.get("save_discarded_patches", False),
+                "preprocessing.save_discarded_patches",
+            ),
+            mask_strategy=_optional_strategy(
+                data.get("mask_strategy", "connected_components"),
+                "preprocessing.mask_strategy",
+            )
+            or "connected_components",
+            source_mask_strategy=_optional_strategy(
+                data.get("source_mask_strategy"), "preprocessing.source_mask_strategy"
+            ),
+            target_mask_strategy=_optional_strategy(
+                data.get("target_mask_strategy"), "preprocessing.target_mask_strategy"
+            ),
+            mask_scale=float(data.get("mask_scale", 1.0)),
+            lowres_mask_filtering=parse_bool_strict(
+                data.get("lowres_mask_filtering", False),
+                "preprocessing.lowres_mask_filtering",
+            ),
+            tiled_io=parse_bool_strict(data.get("tiled_io", False), "preprocessing.tiled_io"),
+            max_memory_gb=None if max_memory_gb is None else float(max_memory_gb),
+            train_ratio=float(data.get("train_ratio", 0.8)),
+            val_ratio=float(data.get("val_ratio", 0.05)),
+            test_ratio=float(data.get("test_ratio", 0.15)),
+            min_foreground_ratio=float(data.get("min_foreground_ratio", 0.25)),
+            max_white_ratio=float(data.get("max_white_ratio", 0.7)),
+            white_threshold=int(data.get("white_threshold", 250)),
+            max_largest_white_component_ratio=float(
+                data.get("max_largest_white_component_ratio", 0.20)
             ),
         )
-        return config
 
-    def to_yaml(self, path: str | Path) -> None:
-        import yaml
-
-        data = {
-            "dataset_root": str(self.dataset_root),
+    def to_dict(self) -> dict[str, Any]:
+        return {
             "source_name": self.source_name,
             "target_name": self.target_name,
-            "image_size": list(self.image_size),
+            "patch_size": list(self.image_size),
             "grid_movement": list(self.grid_movement),
             "margin": self.margin,
             "seed": self.seed,
@@ -217,60 +223,3 @@ class PreprocessingConfig:
             "white_threshold": self.white_threshold,
             "max_largest_white_component_ratio": self.max_largest_white_component_ratio,
         }
-        with open(path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(data, f, default_flow_style=False)
-
-
-def load_preprocessing_config(path: str | Path) -> PreprocessingConfig:
-    """Load a standalone preprocessing config file."""
-    raw_data = load_yaml_mapping(path)
-    if "preprocessing" in raw_data:
-        reject_unknown_keys(raw_data, _TOP_LEVEL_KEYS, "top level")
-    data = section_with_shared_fields(raw_data, "preprocessing", {"dataset_root", "image_size"})
-    reject_unknown_keys(data, _PREPROCESSING_KEYS, "preprocessing")
-    raw_max_memory_gb = data.get("max_memory_gb")
-
-    config = PreprocessingConfig(
-        dataset_root=Path(data["dataset_root"]),
-        source_name=data["source_name"],
-        target_name=data["target_name"],
-        image_size=parse_wh_size_from_aliases(data, ("patch_size", "image_size"), (256, 256)),
-        grid_movement=_pair(data.get("grid_movement"), (256, 256)),
-        margin=int(data.get("margin", 200)),
-        seed=data.get("seed"),
-        save_masks=parse_bool_strict(data.get("save_masks", False), "save_masks"),
-        save_discarded_patches=parse_bool_strict(
-            data.get("save_discarded_patches", False),
-            "save_discarded_patches",
-        ),
-        mask_strategy=_optional_strategy(
-            data.get("mask_strategy", "connected_components"),
-            "mask_strategy",
-        )
-        or "connected_components",
-        source_mask_strategy=_optional_strategy(
-            data.get("source_mask_strategy"),
-            "source_mask_strategy",
-        ),
-        target_mask_strategy=_optional_strategy(
-            data.get("target_mask_strategy"),
-            "target_mask_strategy",
-        ),
-        mask_scale=float(data.get("mask_scale", 1.0)),
-        lowres_mask_filtering=parse_bool_strict(
-            data.get("lowres_mask_filtering", False),
-            "lowres_mask_filtering",
-        ),
-        tiled_io=parse_bool_strict(data.get("tiled_io", False), "tiled_io"),
-        max_memory_gb=None if raw_max_memory_gb is None else float(raw_max_memory_gb),
-        train_ratio=float(data.get("train_ratio", 0.8)),
-        val_ratio=float(data.get("val_ratio", 0.05)),
-        test_ratio=float(data.get("test_ratio", 0.15)),
-        min_foreground_ratio=float(data.get("min_foreground_ratio", 0.25)),
-        max_white_ratio=float(data.get("max_white_ratio", 0.7)),
-        white_threshold=int(data.get("white_threshold", 250)),
-        max_largest_white_component_ratio=float(
-            data.get("max_largest_white_component_ratio", 0.20)
-        ),
-    )
-    return config

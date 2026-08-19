@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.ranking import organize_by_metrics
 from virtual_staining.utils.metrics import DEFAULT_METRICS
 
@@ -53,27 +52,6 @@ def organize(request: OrganizeRequest) -> OrganizeResult:
         metric_summaries=tuple(summaries),
         summary_csv=summary_csv,
         image_columns=image_columns,
-    )
-
-
-def organize_from_config(config_path: Path) -> OrganizeResult:
-    """Organize outputs selected by a run config."""
-    config = RunConfig.from_yaml(config_path.resolve())
-    value = config.organize
-    if value is None:
-        raise ValueError("Config has no 'organize' section.")
-    return organize(
-        OrganizeRequest(
-            run_path=value.run_path
-            or (config.project.run_root if value.metrics_csv is None else None),
-            metrics_csv=value.metrics_csv,
-            output_dir=value.output_dir,
-            metrics=tuple(value.metrics) if value.metrics is not None else tuple(DEFAULT_METRICS),
-            top_k=value.top_k,
-            mode=value.mode,
-            overwrite=value.overwrite,
-            include_all_ranked=value.include_all_ranked,
-        )
     )
 
 

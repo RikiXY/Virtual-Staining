@@ -14,10 +14,7 @@ help:
 	@printf "  %-24s %s\n" "evaluate" "Evaluate outputs via vs-evaluate CLI from CONFIG"
 	@printf "  %-24s %s\n" "complete-run" "Run dataset, train, infer, evaluate from CONFIG"
 	@printf "  %-24s %s\n" "run-queue" "Run a queue YAML from QUEUE"
-	@printf "  %-24s %s\n" "compare" "Compare metric distributions from CONFIG"
-	@printf "  %-24s %s\n" "compare-panels" "Build comparison panels from CONFIG"
 	@printf "  %-24s %s\n" "evaluate-single" "Evaluate dataset image pairs from CONFIG"
-	@printf "  %-24s %s\n" "organize" "Sort run outputs by metrics from CONFIG"
 	@printf "  %-24s %s\n" "sync" "Sync uv dependencies from uv.lock"
 	@printf "  %-24s %s\n" "format" "Format Python files with ruff"
 	@printf "  %-24s %s\n" "lint" "Check Python files with ruff"
@@ -28,7 +25,7 @@ help:
 	@printf "  %-24s %s\n" "qa" "Run checks and tests"
 	@printf "  %-24s %s\n" "clean" "Remove local caches"
 	@printf "\nExperiment configuration policy:\n"
-	@printf "  %-24s %s\n" "CONFIG" "Required for experiment and utility targets"
+	@printf "  %-24s %s\n" "CONFIG" "Required for experiment targets"
 	@printf "  %-24s %s\n" "INPUT_PATH" "Required for infer-images"
 	@printf "  %-24s %s\n" "OUTPUT_PATH" "Optional for infer-images"
 	@printf "  %-24s %s\n" "MODE" "Optional image mode: auto|resize|tile"
@@ -83,17 +80,8 @@ complete-run: require-config
 run-queue: require-queue
 	$(UV) run vs-run-queue --queue $(QUEUE)
 
-compare: require-config
-	$(UV) run vs-compare --config $(CONFIG)
-
-compare-panels: require-config
-	$(UV) run vs-compare-panels --config $(CONFIG)
-
 evaluate-single: require-config
 	$(UV) run vs-evaluate-single --config $(CONFIG)
-
-organize: require-config
-	$(UV) run vs-organize --config $(CONFIG)
 
 format:
 	$(RUFF) format .

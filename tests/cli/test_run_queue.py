@@ -221,8 +221,8 @@ def test_run_queue_ablation_validation_passes_and_writes_summary(
             - training.epochs
           variable_fields:
             - run_name
-            - losses.generator
-            - losses.discriminator
+            - training.losses.generator
+            - training.losses.discriminator
         jobs:
           - config_path: {config_a}
             label: baseline
@@ -254,10 +254,10 @@ def test_run_queue_ablation_validation_passes_and_writes_summary(
     assert summary["fixed_values"]["training.epochs"] == 1
     assert summary["jobs"][0]["run_name"] == "ablation_baseline"
     assert summary["jobs"][1]["run_name"] == "ablation_ssim_only"
-    assert summary["jobs"][0]["variable_values"]["losses.generator"][0]["name"] == (
+    assert summary["jobs"][0]["variable_values"]["training.losses.generator"][0]["name"] == (
         "adversarial_bce"
     )
-    assert summary["jobs"][1]["variable_values"]["losses.discriminator"] == []
+    assert summary["jobs"][1]["variable_values"]["training.losses.discriminator"] == []
     assert summary["jobs"][0]["config_hash"].startswith("sha256:")
 
 

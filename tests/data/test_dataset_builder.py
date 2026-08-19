@@ -1065,8 +1065,8 @@ def test_prepare_rebuilds_when_preprocessing_changes(builder_config: Preprocessi
     config_path = _write_prepare_config(builder_config, preprocessing_image_size=(32, 64))
     original_config_path = builder_config.dataset_root.parent / "original.yaml"
     original_config_text = config_path.read_text(encoding="utf-8").replace(
-        "image_size: [32, 64]",
-        "image_size: [64, 64]",
+        "  patch_size:\n  - 32\n  - 64",
+        "  patch_size:\n  - 64\n  - 64",
         1,
     )
     original_config_path.write_text(
@@ -1314,7 +1314,7 @@ def test_run_all_writes_dataset_fingerprint_metadata(builder_config: Preprocessi
     assert data["dataset_root"] == str(builder_config.dataset_root.resolve())
     assert data["preprocessing"]["source_name"] == builder_config.source_name
     assert data["preprocessing"]["target_name"] == builder_config.target_name
-    assert data["preprocessing"]["image_size"] == list(builder_config.image_size)
+    assert data["preprocessing"]["patch_size"] == list(builder_config.image_size)
     assert data["source"]["path"] == str((builder_config.dataset_root / "source.png").resolve())
     assert data["target"]["path"] == str((builder_config.dataset_root / "target.png").resolve())
     assert data["source"]["size"] > 0

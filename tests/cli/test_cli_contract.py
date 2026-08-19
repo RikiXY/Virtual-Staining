@@ -11,9 +11,7 @@ import yaml
 
 from tests.config_helpers import write_run_config
 from virtual_staining.applications import pipeline
-from virtual_staining.applications.compare_panels import FromMetricsResult
 from virtual_staining.applications.evaluate_single import DatasetEvalResult
-from virtual_staining.applications.organize import OrganizeResult
 from virtual_staining.cli import compare as compare_cli
 from virtual_staining.cli import compare_panels as compare_panels_cli
 from virtual_staining.cli import complete_run as complete_run_cli
@@ -26,7 +24,6 @@ from virtual_staining.cli import prepare_dataset as prepare_cli
 from virtual_staining.cli import run_queue as run_queue_cli
 from virtual_staining.cli import train as train_cli
 from virtual_staining.config.run import RunConfig
-from virtual_staining.evaluation.statistics import PairedSummary
 
 CLI_SCRIPTS = {
     "vs-prepare": "virtual_staining.cli.prepare_dataset:main",
@@ -182,106 +179,15 @@ def test_utility_clis_without_args_exit_non_zero(main_func: object, argv: list[s
     assert exc.value.code != 0
 
 
-def test_compare_help_includes_config() -> None:
-    assert "--config" in compare_cli._build_parser().format_help()
-
-
-def test_compare_main_with_config_invokes_compare_application(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    current_run = tmp_path / "results" / "current_run"
-    baseline_run = tmp_path / "results" / "baseline_run"
-    _write_metrics_csv(current_run)
-    _write_metrics_csv(baseline_run)
-    config_path = _write_config(
-        tmp_path,
-        f"""\
-        compare:
-          mode: paired
-          run_b: {baseline_run}
-          column: ssim
-        """,
-    )
-
-    captured: list[Path] = []
-
-    def _fake_compare(config: Path) -> object:
-        captured.append(config)
-        return SimpleNamespace(
-            mode="paired",
-            output_dir=current_run / "comparisons",
-            column="ssim",
-            higher_is_better=True,
-            paired_summary=PairedSummary(
-                label_a="current_run",
-                label_b="baseline_run",
-                n_pairs=1,
-                tolerance=0.0,
-                mean_signed_delta=0.0,
-                median_signed_delta=0.0,
-                share_b_better=0.0,
-                share_a_better=0.0,
-                share_equal=1.0,
-                wilcoxon_statistic=0.0,
-                wilcoxon_pvalue=1.0,
-                better_label="tie",
-            ),
-        )
-
-    monkeypatch.setattr(compare_cli, "compare_from_config", _fake_compare)
-
-    compare_cli.main(["--config", str(config_path)])
-
-    assert captured == [config_path]
-
-
-def test_compare_panels_help_includes_config() -> None:
-    assert "--config" in compare_panels_cli._build_parser().format_help()
+def test_utility_help_omits_config() -> None:
+    for module in (compare_cli, compare_panels_cli, organize_cli):
+        assert "--config" not in module._build_parser().format_help()
 
 
 def test_compare_panels_help_uses_artifacts_output_test_path() -> None:
     help_text = compare_panels_cli._build_parser().format_help()
     assert "artifacts/output_test" in help_text
     assert "results/your_run/output_test" not in help_text
-
-
-def test_compare_panels_main_with_config_invokes_compare_panels(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config_path = _write_config(
-        tmp_path,
-        """\
-        compare_panels:
-          mode: from_metrics
-          hide_graphs_path: true
-        """,
-    )
-
-    captured: list[Path] = []
-
-    def _fake_compare_panels(path: Path) -> object:
-        captured.append(path)
-        run_path = tmp_path / "results" / "current_run"
-        return FromMetricsResult(
-            run_path=run_path,
-            available_metrics=["ssim"],
-            per_metric_representative_rows={
-                "ssim": {
-                    "best": {"sample_id": "best", "ssim": "0.95"},
-                    "median": {"sample_id": "median", "ssim": "0.50"},
-                    "worst": {"sample_id": "worst", "ssim": "0.10"},
-                }
-            },
-            saved_aggregated_paths=[],
-            metrics_dir=run_path / "comparisons" / "metrics",
-            hide_graphs_path=True,
-        )
-
-    monkeypatch.setattr(compare_panels_cli, "compare_panels_from_config", _fake_compare_panels)
-
-    compare_panels_cli.main(["--config", str(config_path)])
-
-    assert captured == [config_path]
 
 
 def test_evaluate_single_help_includes_config() -> None:
@@ -329,51 +235,13 @@ def test_evaluate_single_main_with_config_invokes_dataset_mode(
     assert captured == [config_path]
 
 
-def test_organize_help_includes_config() -> None:
-    assert "--config" in organize_cli._build_parser().format_help()
-
-
-def test_organize_main_with_config_invokes_organize(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    current_run = tmp_path / "results" / "current_run"
-    _write_metrics_csv(current_run)
-    config_path = _write_config(
-        tmp_path,
-        """\
-        organize:
-          top_k: 5
-          mode: copy
-          include_all_ranked: true
-        """,
-    )
-
-    captured: list[Path] = []
-
-    def _fake_organize(path: Path) -> OrganizeResult:
-        captured.append(path)
-        return OrganizeResult(
-            metrics_csv=current_run / "evaluation" / "per_image_metrics.csv",
-            output_dir=current_run / "evaluation" / "sorted_by_metrics",
-            mode="copy",
-            top_k=5,
-            metric_summaries=(),
-            summary_csv=None,
-        )
-
-    monkeypatch.setattr(organize_cli, "organize_from_config", _fake_organize)
-
-    organize_cli.main(["--config", str(config_path)])
-
-    assert captured == [config_path]
-
-
 def test_train_main_calls_train_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _write_config(
         tmp_path,
         """\
         training:
           epochs: 1
+          losses: {}
         """,
     )
     captured: list[tuple[Path, str]] = []
@@ -515,6 +383,7 @@ def test_complete_run_main_calls_pipeline(tmp_path: Path, monkeypatch: pytest.Mo
           target_name: target.png
         training:
           epochs: 1
+          losses: {}
         inference:
           checkpoint_path: /tmp/ep000.pth
         evaluation:

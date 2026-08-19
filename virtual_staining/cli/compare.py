@@ -7,7 +7,6 @@ from typing import Any
 from virtual_staining.applications.compare import (
     CompareRequest,
     compare,
-    compare_from_config,
 )
 from virtual_staining.cli._output import color_metric_value, print_info, print_section, style
 
@@ -353,12 +352,6 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
         add_help=True,
     )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=None,
-        help="Path to run config YAML. Uses the config's compare section.",
-    )
     subparsers = parser.add_subparsers(dest="mode")
     _add_unpaired_subparser(subparsers)
     _add_paired_subparser(subparsers)
@@ -419,16 +412,8 @@ def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    if args.config is not None:
-        try:
-            result = compare_from_config(args.config)
-        except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
-            raise SystemExit(str(exc)) from exc
-        _print_result(result)
-        return
-
     if args.mode is None:
-        parser.error("either --config or a comparison mode is required")
+        parser.error("a comparison mode is required")
 
     request = _build_request(args)
     result = compare(request)

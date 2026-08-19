@@ -213,7 +213,7 @@ def test_run_training_writes_resolved_config_and_hash(tmp_path: Path, monkeypatc
     assert hash_path.exists()
     assert environment_path.exists()
     assert input_path.read_text(encoding="utf-8") == config_path.read_text(encoding="utf-8")
-    assert yaml.safe_load(resolved_path.read_text(encoding="utf-8")) == config.to_yaml_dict()
+    assert yaml.safe_load(resolved_path.read_text(encoding="utf-8")) == config.to_dict()
 
     expected = f"sha256:{hashlib.sha256(resolved_path.read_bytes()).hexdigest()}"
     assert hash_path.read_text(encoding="utf-8") == expected

@@ -19,7 +19,6 @@ from virtual_staining.experiment.snapshots import (
     resolve_prepare_snapshot_paths,
     save_environment_snapshot,
     save_stage_config_snapshots,
-    serialize_preprocessing_config,
 )
 
 
@@ -36,7 +35,7 @@ def _build_current_fingerprint(config: RunConfig) -> dict[str, Any]:
     if config.preprocessing is None:
         raise ValueError("RunConfig.preprocessing must be present for prepare().")
     dataset_root = config.preprocessing.dataset_root
-    preprocessing_payload = serialize_preprocessing_config(config.preprocessing)
+    preprocessing_payload = config.preprocessing.to_dict()
     return build_dataset_fingerprint_metadata(
         dataset_root=dataset_root,
         preprocessing_config=preprocessing_payload,

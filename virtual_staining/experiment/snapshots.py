@@ -6,16 +6,13 @@ import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 import yaml
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.environment import collect_environment
 from virtual_staining.experiment.run_paths import RunPaths
-
-if TYPE_CHECKING:
-    from virtual_staining.data.config import PreprocessingConfig
 
 
 @dataclass(frozen=True)
@@ -134,35 +131,6 @@ def build_file_provenance(path: Path) -> dict[str, Any]:
     }
 
 
-def serialize_preprocessing_config(config: PreprocessingConfig) -> dict[str, Any]:
-    """Return the canonical preprocessing payload used for dataset fingerprints."""
-    return {
-        "dataset_root": str(config.dataset_root.resolve()),
-        "source_name": config.source_name,
-        "target_name": config.target_name,
-        "image_size": list(config.image_size),
-        "grid_movement": list(config.grid_movement),
-        "margin": config.margin,
-        "seed": config.seed,
-        "save_masks": config.save_masks,
-        "save_discarded_patches": config.save_discarded_patches,
-        "mask_strategy": config.mask_strategy,
-        "source_mask_strategy": config.source_mask_strategy,
-        "target_mask_strategy": config.target_mask_strategy,
-        "mask_scale": config.mask_scale,
-        "lowres_mask_filtering": config.lowres_mask_filtering,
-        "tiled_io": config.tiled_io,
-        "max_memory_gb": config.max_memory_gb,
-        "train_ratio": config.train_ratio,
-        "val_ratio": config.val_ratio,
-        "test_ratio": config.test_ratio,
-        "min_foreground_ratio": config.min_foreground_ratio,
-        "max_white_ratio": config.max_white_ratio,
-        "white_threshold": config.white_threshold,
-        "max_largest_white_component_ratio": config.max_largest_white_component_ratio,
-    }
-
-
 def build_dataset_fingerprint_metadata(
     *,
     dataset_root: Path,
@@ -216,7 +184,7 @@ def save_stage_config_snapshots(
 ) -> str:
     """Write the canonical input/resolved/hash snapshot set for a stage."""
     save_input_config(config_path, input_dest)
-    save_resolved_config(config.to_yaml_dict(), resolved_dest)
+    save_resolved_config(config.to_dict(), resolved_dest)
     config_hash = compute_config_hash(resolved_dest)
     save_config_hash(config_hash, hash_dest)
     return config_hash

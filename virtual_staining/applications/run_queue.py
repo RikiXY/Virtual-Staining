@@ -277,9 +277,7 @@ def _build_ablation_summary(
     if queue.ablation is None:
         raise QueueAblationError("queue has no ablation configuration")
 
-    resolved_configs = tuple(
-        _canonicalize_resolved_config(config.to_yaml_dict()) for config in configs
-    )
+    resolved_configs = tuple(_canonicalize_resolved_config(config.to_dict()) for config in configs)
     flattened_configs = tuple(_flatten_config(config) for config in resolved_configs)
     _validate_ablation_differences(queue.ablation, flattened_configs)
 

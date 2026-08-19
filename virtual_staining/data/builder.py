@@ -35,7 +35,6 @@ from virtual_staining.data.results import DatasetBuildResult
 from virtual_staining.experiment.snapshots import (
     build_dataset_fingerprint_metadata,
     save_dataset_fingerprint,
-    serialize_preprocessing_config,
 )
 from virtual_staining.utils.image_io import RegionImageReader, open_image_reader
 
@@ -743,7 +742,7 @@ class DatasetBuilder:
 
         fingerprint_metadata = build_dataset_fingerprint_metadata(
             dataset_root=root,
-            preprocessing_config=serialize_preprocessing_config(self.config),
+            preprocessing_config=self.config.to_dict(),
             source_path=root / self._source_file.name,
             target_path=root / self._target_file.name,
             prepared_at=build_metadata["completed_at"],

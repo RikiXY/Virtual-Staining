@@ -8,8 +8,8 @@ continue_on_failure: false
 #     - training.epochs
 #   variable_fields:
 #     - run_name
-#     - losses.generator
-#     - losses.discriminator
+#     - training.losses.generator
+#     - training.losses.discriminator
 #     - training.scheduler.name
 jobs:
   - config_path: ../runs/local/run_a.yaml

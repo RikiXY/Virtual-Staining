@@ -47,8 +47,6 @@ make infer-images   CONFIG=config/runs/local/my_run.yaml INPUT_PATH=examples
 make evaluate       CONFIG=config/runs/local/my_run.yaml
 make complete-run   CONFIG=config/runs/local/my_run.yaml
 make run-queue      QUEUE=config/queues/example.yaml
-make compare        CONFIG=config/runs/local/my_run.yaml
-make compare-panels CONFIG=config/runs/local/my_run.yaml
 ```
 
 Or call the CLI directly:
@@ -137,13 +135,18 @@ training:
   batch_size: 8
   epochs: 100
   lr_g: 0.0002
-  l1_weight: 25.0
   seed: 42
-
-augmentation:
-  enabled: false
-  expansion_factor: 1
-  intensity: light
+  augmentation:
+    enabled: false
+    expansion_factor: 1
+    intensity: light
+  losses:
+    generator:
+      - name: l1
+        weight: 25.0
+    discriminator:
+      - name: adversarial_bce
+        weight: 1.0
 
 inference:
   checkpoint_policy: latest   # or: checkpoint_path: checkpoints/ep099.pth

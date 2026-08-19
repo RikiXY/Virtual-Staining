@@ -50,9 +50,9 @@ def set_seed(seed: int) -> None:
 
 
 def _requires_foreground_masks(config: RunConfig) -> bool:
-    if config.losses is None:
+    if config.training is None:
         return False
-    return any(term.requires_mask for term in config.losses.generator)
+    return any(term.requires_mask for term in config.training.losses.generator)
 
 
 def run_training(
@@ -63,15 +63,12 @@ def run_training(
     """Build all training components, persist provenance, and execute training."""
     if config.training is None:
         raise ValueError("RunConfig.training must be present for run_training().")
-    if config.losses is None:
-        raise ValueError("RunConfig.losses must be present for run_training().")
+    training = config.training
 
     if reporter is None:
         reporter = NullReporter()
 
-    seed = (
-        config.training.seed if config.training.seed is not None else random.randint(0, 2**32 - 1)
-    )
+    seed = training.seed if training.seed is not None else random.randint(0, 2**32 - 1)
     set_seed(seed)
 
     run_root = config.project.results_path / config.project.run_name
@@ -126,7 +123,7 @@ def run_training(
 
     started_at = datetime.now(UTC).isoformat()
     effective_train_sample_count = (
-        len(train_manifest) * config.augmentation.effective_expansion_factor
+        len(train_manifest) * training.augmentation.effective_expansion_factor
     )
     train_details = {
         "manifest_path": str(manifest_path),
@@ -136,9 +133,9 @@ def run_training(
         "cuda_device_name": torch.cuda.get_device_name(device) if device.type == "cuda" else None,
         "train_sample_count": len(train_manifest),
         "effective_train_sample_count": effective_train_sample_count,
-        "augmentation_enabled": config.augmentation.enabled,
-        "augmentation_intensity": config.augmentation.intensity,
-        "augmentation_expansion_factor": config.augmentation.effective_expansion_factor,
+        "augmentation_enabled": training.augmentation.enabled,
+        "augmentation_intensity": training.augmentation.intensity,
+        "augmentation_expansion_factor": training.augmentation.effective_expansion_factor,
         "val_sample_count": len(val_manifest),
     }
     save_stage_metadata(
@@ -196,7 +193,7 @@ def run_training(
     val_dir = config.project.split_dir("val")
     include_foreground_mask = _requires_foreground_masks(config)
     train_paired_transform = build_training_paired_transform(
-        config.augmentation,
+        training.augmentation,
         image_size=config.project.image_size,
         seed=seed,
     )
@@ -207,7 +204,7 @@ def run_training(
         mask_transform=None if train_paired_transform is not None else mask_transform,
         paired_transform=train_paired_transform,
         include_foreground_mask=include_foreground_mask,
-        virtual_expansion_factor=config.augmentation.effective_expansion_factor,
+        virtual_expansion_factor=training.augmentation.effective_expansion_factor,
     )
     val_dataset = PairedManifestDataset(
         val_manifest,
@@ -229,17 +226,17 @@ def run_training(
 
     train_loader = DataLoader(
         train_dataset,
-        batch_size=config.training.batch_size,
+        batch_size=training.batch_size,
         shuffle=True,
-        num_workers=config.training.num_workers,
+        num_workers=training.num_workers,
         pin_memory=(device.type == "cuda"),
         generator=train_loader_generator,
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=config.training.batch_size,
+        batch_size=training.batch_size,
         shuffle=False,
-        num_workers=config.training.num_workers,
+        num_workers=training.num_workers,
         pin_memory=(device.type == "cuda"),
         generator=val_loader_generator,
     )
@@ -248,7 +245,7 @@ def run_training(
     discriminator = build_discriminator(config.model.discriminator).to(device)
 
     trainer = Trainer(
-        config=config.training,
+        config=training,
         model_config=config.model,
         run_paths=paths,
         generator=generator,
@@ -259,13 +256,13 @@ def run_training(
         image_size=config.project.image_size,
         train_dir=train_dir,
         val_dir=val_dir,
-        losses=config.losses,
+        losses=training.losses,
     )
 
     start_epoch = 0
-    if config.training.resume is not None:
+    if training.resume is not None:
         start_epoch = _resume_from_checkpoint(
-            config.training.resume,
+            training.resume,
             trainer,
             paths,
             config.project.image_size,

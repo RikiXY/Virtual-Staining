@@ -34,8 +34,8 @@ ablation:
     - training.epochs
   variable_fields:
     - run_name
-    - losses.generator
-    - losses.discriminator
+    - training.losses.generator
+    - training.losses.discriminator
     - training.scheduler.name
 jobs:
   - config_path: ../runs/local/ablation/baseline.yaml
@@ -121,22 +121,23 @@ The fully expanded effective configuration after all defaults have been applied
 and all derived paths resolved. Differences from `input.yaml` reflect default
 values that were not explicitly set by the user.
 
-Training losses are recorded under top-level `losses.generator` and
-`losses.discriminator` lists. Training requires explicit loss terms. Registered
+Training losses are recorded under `training.losses.generator` and
+`training.losses.discriminator` lists. Training requires explicit loss terms. Registered
 losses have a default weight of `0.0`; a term is active only when it is
 explicitly listed, `enabled` is `true`, and its scheduled current weight is
 nonzero. Explicitly listed terms must declare `weight`; unlisted registry
 entries remain absent and inactive.
 
-Training-only augmentation is recorded under top-level `augmentation`. When
+Training-only augmentation is recorded under `training.augmentation`. When
 enabled, the training split is virtually expanded in memory; no augmented patch
 files are written, and validation/test data keep deterministic preprocessing.
 
 ```yaml
-augmentation:
-  enabled: false
-  expansion_factor: 1
-  intensity: light  # light, medium, or strong
+training:
+  augmentation:
+    enabled: false
+    expansion_factor: 1
+    intensity: light  # light, medium, or strong
 ```
 
 Optimizer learning-rate schedules are configured under `training.scheduler`.
@@ -165,7 +166,7 @@ training:
     min_lr: 0.00002
 ```
 
-Optimizer LR schedules are separate from `losses.*.schedule`, which changes
+Optimizer LR schedules are separate from `training.losses.*.schedule`, which changes
 loss-term weights rather than optimizer learning rates.
 
 Early stopping is configured under `training.early_stopping` and is disabled
@@ -190,45 +191,28 @@ Accepted loss names are:
 - `ssim`: generator image structural similarity loss.
 
 ```yaml
-losses:
-  generator:
-    - name: adversarial_bce
-      weight: 1.0
-      enabled: true
-      schedule:
-        type: constant
-    - name: l1
-      weight: 25.0
-      enabled: true
-      params:
-        reduction: mean
-      schedule:
-        type: constant
-    - name: ssim
-      weight: 0.0
-      enabled: false
-      params:
-        data_range: 1.0
-        window_size: 11
-        sigma: 1.5
-        channel_mode: rgb
-        reduction: mean
-        mask:
-          enabled: false
-          source: foreground_mask
-          foreground_weight: 1.0
-          background_weight: 0.25
-          ignore_empty_mask: true
-      schedule:
-        type: linear_warmup
-        start_epoch: 0
-        end_epoch: 5
-  discriminator:
-    - name: adversarial_bce
-      weight: 1.0
-      enabled: true
-      schedule:
-        type: constant
+training:
+  losses:
+    generator:
+      - name: adversarial_bce
+        weight: 1.0
+      - name: l1
+        weight: 25.0
+      - name: ssim
+        weight: 0.0
+        enabled: false
+        params:
+          mask:
+            enabled: false
+            source: foreground_mask
+            background_weight: 0.25
+        schedule:
+          type: linear_warmup
+          start_epoch: 0
+          end_epoch: 5
+    discriminator:
+      - name: adversarial_bce
+        weight: 1.0
 ```
 
 The baseline objective uses generator `adversarial_bce` with weight `1.0`,

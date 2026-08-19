@@ -27,6 +27,7 @@ def _write_run_config(path: Path, *, run_name: str = "snapshots_run") -> RunConf
         image_size: [32, 32]
         training:
           epochs: 1
+          losses: {}
         """,
         filename=path.name,
         dataset_root=path.parent / "dataset",
@@ -53,7 +54,7 @@ def test_save_stage_config_snapshots_writes_input_resolved_and_hash(tmp_path: Pa
     )
 
     assert input_dest.read_text(encoding="utf-8") == config_path.read_text(encoding="utf-8")
-    assert yaml.safe_load(resolved_dest.read_text(encoding="utf-8")) == config.to_yaml_dict()
+    assert yaml.safe_load(resolved_dest.read_text(encoding="utf-8")) == config.to_dict()
     expected = f"sha256:{hashlib.sha256(resolved_dest.read_bytes()).hexdigest()}"
     assert config_hash == expected
     assert hash_dest.read_text(encoding="utf-8") == expected

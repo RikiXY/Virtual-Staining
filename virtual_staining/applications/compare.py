@@ -6,7 +6,6 @@ from typing import Literal
 
 import numpy as np
 
-from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.comparison import (
     plot_distribution_ecdf,
     plot_distribution_histogram,
@@ -96,40 +95,6 @@ def compare(request: CompareRequest) -> CompareResult:
     resolved = _resolve_request(request)
     resolved.output_dir.mkdir(parents=True, exist_ok=True)
     return _compare_unpaired(resolved) if resolved.mode == "unpaired" else _compare_paired(resolved)
-
-
-def compare_from_config(config_path: Path) -> CompareResult:
-    """Compare runs selected by a run config."""
-    config = RunConfig.from_yaml(config_path.resolve())
-    value = config.compare
-    if value is None:
-        raise ValueError("Config has no 'compare' section.")
-    return compare(
-        CompareRequest(
-            mode=value.mode,
-            run_a=value.run_a or (config.project.run_root if value.csv_a is None else None),
-            run_b=value.run_b,
-            csv_a=value.csv_a,
-            csv_b=value.csv_b,
-            label_a=value.label_a,
-            label_b=value.label_b,
-            column=value.column,
-            output_dir=value.output_dir,
-            higher_is_better=(
-                True
-                if value.higher_is_better is True
-                else False
-                if value.lower_is_better is True
-                else None
-            ),
-            bins=value.bins,
-            min_value=value.min_value,
-            max_value=value.max_value,
-            thresholds=value.thresholds,
-            tolerance=value.tolerance,
-            sample_id_column=value.sample_id_column,
-        )
-    )
 
 
 def _resolve_request(request: CompareRequest) -> _ResolvedCompareRequest:

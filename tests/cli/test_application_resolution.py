@@ -4,9 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.config_helpers import write_run_config
 from virtual_staining.applications import compare as compare_app
-from virtual_staining.applications import organize as organize_app
 from virtual_staining.applications.pipeline import run_stage
 
 
@@ -31,29 +29,6 @@ def test_compare_resolves_run_inputs_and_defaults(tmp_path: Path) -> None:
     assert resolved.csv_b == run_b / "evaluation" / "per_image_metrics.csv"
     assert resolved.output_dir == tmp_path / "results" / "comparisons" / "a_vs_b" / "paired_ssim"
     assert resolved.higher_is_better is True
-
-
-def test_organize_from_config_resolves_current_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    run_path = tmp_path / "results" / "current_run"
-    metrics_csv = _metrics_csv(run_path)
-    config_path = write_run_config(
-        tmp_path,
-        "organize:\n  top_k: 5\n  mode: copy\n",
-        results_path=tmp_path / "results",
-        run_name="current_run",
-    )
-    captured: list[organize_app.OrganizeRequest] = []
-    monkeypatch.setattr(organize_app, "organize", lambda request: captured.append(request))
-
-    organize_app.organize_from_config(config_path)
-
-    assert captured[0].run_path == run_path
-    assert captured[0].metrics_csv is None
-    assert metrics_csv.is_file()
-    assert captured[0].top_k == 5
-    assert captured[0].mode == "copy"
 
 
 def test_pipeline_rejects_unknown_stage_before_loading_config(tmp_path: Path) -> None:

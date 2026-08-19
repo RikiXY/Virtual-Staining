@@ -8,7 +8,6 @@ from virtual_staining.applications.organize import (
     OrganizeRequest,
     OrganizeResult,
     organize,
-    organize_from_config,
 )
 from virtual_staining.cli._output import print_info, print_section, style
 
@@ -35,13 +34,6 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=None,
-        help="Path to run config YAML. Uses the config's organize section.",
-    )
-
     parser.add_argument(
         "--run-path",
         type=Path,
@@ -116,15 +108,8 @@ def _print_result(result: OrganizeResult) -> None:
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    if args.config is not None:
-        try:
-            result = organize_from_config(args.config)
-        except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
-            raise SystemExit(str(exc)) from exc
-        _print_result(result)
-        return
     if args.run_path is None and args.metrics_csv is None:
-        parser.error("either --config, --run-path, or --metrics-csv is required")
+        parser.error("either --run-path or --metrics-csv is required")
     try:
         result = organize(
             OrganizeRequest(
