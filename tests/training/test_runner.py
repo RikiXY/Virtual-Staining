@@ -195,7 +195,7 @@ def test_run_training_writes_resolved_config_and_hash(tmp_path: Path, monkeypatc
     config_path = _write_train_config(tmp_path, dataset_root)
     config = RunConfig.from_yaml(config_path)
 
-    def _fake_train(self, seed: int, start_epoch: int = 0, reporter=None) -> TrainingResult:
+    def _fake_train(self, seed: int, start_epoch: int = 0) -> TrainingResult:
         return TrainingResult(final_epoch=start_epoch, best_checkpoint_path=None)
 
     monkeypatch.setattr("virtual_staining.training.trainer.Trainer.train", _fake_train)
@@ -262,7 +262,7 @@ def test_run_training_writes_early_stopping_result_metadata(
     config_path = _write_train_config(tmp_path, dataset_root)
     config = RunConfig.from_yaml(config_path)
 
-    def _fake_train(self, seed: int, start_epoch: int = 0, reporter=None) -> TrainingResult:
+    def _fake_train(self, seed: int, start_epoch: int = 0) -> TrainingResult:
         return TrainingResult(
             final_epoch=3,
             best_checkpoint_path=None,
@@ -345,7 +345,7 @@ def test_run_training_uses_separate_seeded_loader_generators(
             self.dataset = dataset
             loader_kwargs.append(kwargs)
 
-    def _fake_train(self, seed: int, start_epoch: int = 0, reporter=None) -> TrainingResult:
+    def _fake_train(self, seed: int, start_epoch: int = 0) -> TrainingResult:
         return TrainingResult(final_epoch=start_epoch, best_checkpoint_path=None)
 
     monkeypatch.setattr("virtual_staining.training.runner.DataLoader", _FakeDataLoader)
@@ -413,7 +413,7 @@ def test_run_training_wires_augmentation_virtual_expansion(
             self.dataset = dataset
             loader_datasets.append(dataset)
 
-    def _fake_train(self, seed: int, start_epoch: int = 0, reporter=None) -> TrainingResult:
+    def _fake_train(self, seed: int, start_epoch: int = 0) -> TrainingResult:
         return TrainingResult(final_epoch=start_epoch, best_checkpoint_path=None)
 
     def _paired_transform(source, target, mask):
@@ -458,7 +458,7 @@ def test_run_training_writes_failed_stage_metadata_and_events(tmp_path: Path, mo
     config_path = _write_train_config(tmp_path, dataset_root)
     config = RunConfig.from_yaml(config_path)
 
-    def _fail_train(self, seed: int, start_epoch: int = 0, reporter=None) -> TrainingResult:
+    def _fail_train(self, seed: int, start_epoch: int = 0) -> TrainingResult:
         raise RuntimeError("boom")
 
     monkeypatch.setattr("virtual_staining.training.trainer.Trainer.train", _fail_train)

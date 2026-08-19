@@ -7,7 +7,7 @@ import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, TextIO
+from typing import TextIO
 
 import torch
 import torch.nn as nn
@@ -51,9 +51,6 @@ from virtual_staining.training.validation_metrics import (
     VALIDATION_IMAGE_METRIC_NAMES,
     ValidationImageMetricAccumulator,
 )
-
-if TYPE_CHECKING:
-    from virtual_staining.reporting.base import TrainingReporter
 
 logger = logging.getLogger(__name__)
 checkpoint_logger = logging.getLogger("virtual_staining.training.checkpoints")
@@ -107,7 +104,7 @@ class Trainer:
     Orchestrates a Pix2Pix training run.
 
     Owns the training loop, validation, checkpoint save/load, progress
-    reporting, and metric logging. Models and data loaders are constructed
+    progress display and metric logging. Models and data loaders are constructed
     outside and injected - Trainer does not hardcode architecture choices.
     """
 
@@ -210,7 +207,6 @@ class Trainer:
         self,
         seed: int,
         start_epoch: int = 0,
-        reporter: TrainingReporter | None = None,
     ) -> TrainingResult:
         """Run the full training loop."""
         start_time = time.time()
@@ -231,7 +227,6 @@ class Trainer:
                 training_status=training_status,
                 best_state=best_state,
                 start_time=start_time,
-                reporter=reporter,
             )
 
             if best_state.path is None:
@@ -385,7 +380,6 @@ class Trainer:
         training_status: _TrainingStatus,
         best_state: _BestCheckpointState,
         start_time: float,
-        reporter: TrainingReporter | None,
     ) -> _TrainingLoopResult:
         loss_names = configured_loss_names(self.losses)
         train_metrics_path = self._run_paths.metrics_dir / "train.csv"
@@ -434,7 +428,6 @@ class Trainer:
                     training_status=training_status,
                     best_state=best_state,
                     start_time=start_time,
-                    reporter=reporter,
                     early_stopping_state=early_stopping_state,
                 )
                 last_epoch_metrics = epoch_result.metrics
@@ -450,7 +443,6 @@ class Trainer:
             training_status=training_status,
             best_state=best_state,
             start_time=start_time,
-            reporter=reporter,
         )
         return _TrainingLoopResult(
             final_epoch=final_epoch,
@@ -473,7 +465,6 @@ class Trainer:
         training_status: _TrainingStatus,
         best_state: _BestCheckpointState,
         start_time: float,
-        reporter: TrainingReporter | None,
         early_stopping_state: _EarlyStoppingState | None,
     ) -> _EpochResult:
         logger.debug("Starting epoch %s", epoch)
@@ -487,7 +478,6 @@ class Trainer:
             training_status=training_status,
             best_state=best_state,
             start_time=start_time,
-            reporter=reporter,
         )
         if val_metrics is None:
             self._step_lr_schedulers(epoch=epoch, val_metrics=None)
@@ -498,7 +488,6 @@ class Trainer:
             progress_tracker=progress_tracker,
             training_status=training_status,
             start_time=start_time,
-            reporter=reporter,
             existing_checkpoint_path=validation_checkpoint_path,
         )
 
@@ -509,8 +498,6 @@ class Trainer:
             validation_metrics_file.flush()
         self._write_all_metrics(all_metrics_writer, epoch, epoch_metrics, val_metrics)
         all_metrics_file.flush()
-        if reporter is not None:
-            reporter.on_epoch_completed(epoch_metrics)
         stopped_early = False
         if val_metrics is not None and early_stopping_state is not None:
             stopped_early = self._update_early_stopping(
@@ -528,7 +515,6 @@ class Trainer:
         progress_tracker: ProgressTracker,
         training_status: _TrainingStatus,
         start_time: float,
-        reporter: TrainingReporter | None,
         existing_checkpoint_path: Path | None = None,
     ) -> Path | None:
         if (epoch + 1) % self.config.checkpoint_rate != 0:
@@ -539,8 +525,6 @@ class Trainer:
             checkpoint_path = self._checkpoint_manager.save(epoch)
             training_status.last_checkpoint = checkpoint_path.name
             logger.info("Checkpoint saved to %s at epoch %s", checkpoint_path, epoch)
-            if reporter is not None:
-                reporter.on_checkpoint_saved(checkpoint_path, epoch)
         self._emit_epoch_progress(
             epoch=epoch,
             epoch_metrics=epoch_metrics,
@@ -560,7 +544,6 @@ class Trainer:
         training_status: _TrainingStatus,
         best_state: _BestCheckpointState,
         start_time: float,
-        reporter: TrainingReporter | None,
     ) -> tuple[EpochMetrics | None, Path | None]:
         if (epoch + 1) % self.config.validate_rate != 0:
             return None, None
@@ -581,7 +564,6 @@ class Trainer:
                 epoch=epoch,
                 checkpoint_path=None,
                 training_status=training_status,
-                reporter=reporter,
             )
             config_hash = self._read_config_hash()
             loss_config = self.losses.to_dict() if self.losses is not None else None
@@ -764,7 +746,6 @@ class Trainer:
         epoch: int,
         checkpoint_path: Path | None,
         training_status: _TrainingStatus,
-        reporter: TrainingReporter | None,
     ) -> Path:
         if checkpoint_path is not None:
             return checkpoint_path
@@ -776,8 +757,6 @@ class Trainer:
             checkpoint_path,
             epoch,
         )
-        if reporter is not None:
-            reporter.on_checkpoint_saved(checkpoint_path, epoch)
         return checkpoint_path
 
     def _write_train_metrics(
@@ -843,7 +822,6 @@ class Trainer:
         training_status: _TrainingStatus,
         best_state: _BestCheckpointState,
         start_time: float,
-        reporter: TrainingReporter | None,
     ) -> None:
         if start_epoch >= self.config.epochs or final_metrics is None:
             return
@@ -854,8 +832,6 @@ class Trainer:
         checkpoint_path = self._checkpoint_manager.save(final_epoch)
         training_status.last_checkpoint = checkpoint_path.name
         logger.info("Final checkpoint saved to %s (epoch %s)", checkpoint_path, final_epoch)
-        if reporter is not None:
-            reporter.on_checkpoint_saved(checkpoint_path, final_epoch)
         if best_state.path is None:
             best_state.path = checkpoint_path
             training_status.best_checkpoint = checkpoint_path.name

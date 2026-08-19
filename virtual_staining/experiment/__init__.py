@@ -5,7 +5,6 @@ from virtual_staining.experiment.metadata import (
     ensure_run_metadata,
     save_stage_metadata,
 )
-from virtual_staining.experiment.run_context import RunContext
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
     SnapshotPaths,
@@ -27,7 +26,6 @@ from virtual_staining.experiment.snapshots import (
 
 __all__ = [
     "RunPaths",
-    "RunContext",
     "RunMetadata",
     "append_run_event",
     "ensure_run_metadata",

@@ -19,7 +19,6 @@ from virtual_staining.experiment.metadata import (
     ensure_run_metadata,
     save_stage_metadata,
 )
-from virtual_staining.experiment.run_context import RunContext
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
     compute_manifest_hash,
@@ -28,8 +27,6 @@ from virtual_staining.experiment.snapshots import (
     save_stage_config_snapshots,
 )
 from virtual_staining.models.factory import build_discriminator, build_generator
-from virtual_staining.reporting.base import TrainingReporter
-from virtual_staining.reporting.null import NullReporter
 from virtual_staining.training.augmentation import build_training_paired_transform
 from virtual_staining.training.checkpoints import CheckpointManager
 from virtual_staining.training.results import TrainingResult
@@ -58,15 +55,11 @@ def _requires_foreground_masks(config: RunConfig) -> bool:
 def run_training(
     config: RunConfig,
     config_path: Path,
-    reporter: TrainingReporter | None = None,
 ) -> TrainingResult:
     """Build all training components, persist provenance, and execute training."""
     if config.training is None:
         raise ValueError("RunConfig.training must be present for run_training().")
     training = config.training
-
-    if reporter is None:
-        reporter = NullReporter()
 
     seed = training.seed if training.seed is not None else random.randint(0, 2**32 - 1)
     set_seed(seed)
@@ -162,15 +155,6 @@ def run_training(
         },
         paths.metadata_dir,
     )
-
-    context = RunContext(
-        name=config.project.run_name,
-        paths=paths,
-        seed=seed,
-        device=str(device),
-        config_hash=config_hash,
-    )
-    reporter.on_training_started(context)
 
     transform = transforms.Compose(
         [
@@ -270,7 +254,7 @@ def run_training(
         )
 
     try:
-        result = trainer.train(seed=seed, start_epoch=start_epoch, reporter=reporter)
+        result = trainer.train(seed=seed, start_epoch=start_epoch)
     except Exception as exc:
         completed_at = datetime.now(UTC).isoformat()
         save_stage_metadata(
@@ -350,7 +334,6 @@ def run_training(
         },
         paths.metadata_dir,
     )
-    reporter.on_training_completed(result)
     return result
 
 

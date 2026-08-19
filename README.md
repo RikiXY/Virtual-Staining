@@ -180,8 +180,7 @@ From H&E staining to label-free:
 
 - `utils/` - shared primitives: dimensions, image I/O, metrics helpers
 - `config/` - YAML loading, validation, typed config sections
-- `experiment/` - run concept: RunPaths, RunContext, RunMetadata, environment snapshots
-- `reporting/` - Reporter protocol with Null, Logging, and Console implementations
+- `experiment/` - run concept: RunPaths, RunMetadata, environment snapshots
 - `models/` - UNetGenerator, PatchGANDiscriminator, factory, model config
 - `data/` - dataset, manifest, builder, preprocessing pipeline
 - `training/` - Trainer, runner, steps, losses, checkpoint management
@@ -228,7 +227,6 @@ Virtual-Staining/
 │   ├── experiment/
 │   ├── inference/
 │   ├── models/
-│   ├── reporting/
 │   ├── training/
 │   └── utils/
 ├── Makefile

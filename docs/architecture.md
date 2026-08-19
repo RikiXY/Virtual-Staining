@@ -7,7 +7,7 @@ upper layers may import from lower layers, never the reverse.
 
 | Layer | Description | Examples |
 |---|---|---|
-| **Library** | Reusable package code with explicit, testable I/O boundaries. Some modules are pure helpers; others are side-effecting services. | `utils/`, `config/`, `experiment/`, `reporting/`, `models/`, `data/`, `training/`, `inference/`, `evaluation/` |
+| **Library** | Reusable package code with explicit, testable I/O boundaries. Some modules are pure helpers; others are side-effecting services. | `utils/`, `config/`, `experiment/`, `models/`, `data/`, `training/`, `inference/`, `evaluation/` |
 | **Application** | Use-case orchestrators that wire core modules together | `applications/` |
 | **Adapter** | Entry points that translate CLI arguments into application calls | `cli/` |
 
@@ -17,8 +17,7 @@ upper layers may import from lower layers, never the reverse.
 |---|---|
 | `utils/` | Shared primitives: image dimensions, image I/O helpers, pixel-level metric utilities |
 | `config/` | YAML loading and validation, typed config dataclasses, per-section accessors |
-| `experiment/` | Run concept: `RunPaths` (directory layout), `RunContext`, `RunMetadata` (run-level provenance), stage/event metadata helpers, environment snapshots |
-| `reporting/` | `Reporter` protocol with `NullReporter`, `LoggingReporter`, and `ConsoleReporter` implementations |
+| `experiment/` | Run concept: `RunPaths` (directory layout), `RunMetadata` (run-level provenance), stage/event metadata helpers, environment snapshots |
 | `models/` | `UNetGenerator`, `PatchGANDiscriminator`, model factory, model config dataclass |
 | `data/` | `DatasetManifest`, `ManifestRecord`, `DatasetBuilder` (preprocessing pipeline), `PatchDataset` |
 | `training/` | `Trainer`, training runner, augmentation, per-step logic, adversarial and L1 losses, checkpoint I/O |
@@ -58,12 +57,10 @@ These constraints are enforced by convention and checked in code review:
 
 - **No `argparse` outside `cli/`** - application and core modules accept typed
   dataclasses, not raw CLI strings.
-- **No `print()` outside `cli/` and `reporting/`** - structured progress output
-  goes through the `Reporter` protocol; all other modules use `logging`.
-- **No `sys.exit()` outside `cli/`** - applications raise exceptions; the CLI
-  layer converts them to exit codes.
 - **Core and application modules use `logging`**, never `print`, so callers can
   suppress or redirect output.
+- **No `sys.exit()` outside `cli/`** - applications raise exceptions; the CLI
+  layer converts them to exit codes.
 
 ## Configuration Policy
 
