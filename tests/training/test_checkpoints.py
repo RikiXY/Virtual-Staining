@@ -9,12 +9,15 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.amp import GradScaler
 
+from virtual_staining.training.checkpoint_selection import (
+    load_best_checkpoint_record,
+    resolve_best_checkpoint_path,
+    update_checkpoint_selection,
+)
 from virtual_staining.training.checkpoints import (
     CHECKPOINT_FORMAT_VERSION,
     NORMALIZATION_CONTRACT,
     CheckpointManager,
-    load_best_checkpoint_record,
-    resolve_best_checkpoint_path,
 )
 
 
@@ -173,14 +176,16 @@ def test_update_selection_records_writes_per_metric_best_and_top_k(tmp_path: Pat
     checkpoint_0 = mgr.save(epoch=0)
     checkpoint_1 = mgr.save(epoch=1)
 
-    mgr.update_selection_records(
+    update_checkpoint_selection(
+        mgr.checkpoints_dir,
         metrics={"loss_G_val": 0.4, "val_ssim": 0.5, "val_mae": 0.3},
         modes={"loss_G_val": "min", "val_ssim": "max", "val_mae": "min"},
         top_k=2,
         epoch=0,
         checkpoint_path=checkpoint_0,
     )
-    mgr.update_selection_records(
+    update_checkpoint_selection(
+        mgr.checkpoints_dir,
         metrics={"loss_G_val": 0.6, "val_ssim": 0.8, "val_mae": 0.2},
         modes={"loss_G_val": "min", "val_ssim": "max", "val_mae": "min"},
         top_k=2,
@@ -190,7 +195,7 @@ def test_update_selection_records_writes_per_metric_best_and_top_k(tmp_path: Pat
         loss_config={"generator": [], "discriminator": []},
     )
 
-    payload = json.loads(mgr.best_record_path.read_text(encoding="utf-8"))
+    payload = json.loads((mgr.checkpoints_dir / "best.json").read_text(encoding="utf-8"))
     assert "default_metric" not in payload
     assert "default_checkpoint_path" not in payload
     assert payload["metrics"]["val_ssim"]["best"]["epoch"] == 1
@@ -208,14 +213,16 @@ def test_update_selection_records_replaces_duplicate_epoch(tmp_path: Path) -> No
     mgr = _make_manager(tmp_path)
     checkpoint_path = mgr.save(epoch=0)
 
-    mgr.update_selection_records(
+    update_checkpoint_selection(
+        mgr.checkpoints_dir,
         metrics={"loss_G_val": 0.5},
         modes={"loss_G_val": "min"},
         top_k=3,
         epoch=0,
         checkpoint_path=checkpoint_path,
     )
-    mgr.update_selection_records(
+    update_checkpoint_selection(
+        mgr.checkpoints_dir,
         metrics={"loss_G_val": 0.1},
         modes={"loss_G_val": "min"},
         top_k=3,
@@ -223,7 +230,7 @@ def test_update_selection_records_replaces_duplicate_epoch(tmp_path: Path) -> No
         checkpoint_path=checkpoint_path,
     )
 
-    payload = json.loads(mgr.best_record_path.read_text(encoding="utf-8"))
+    payload = json.loads((mgr.checkpoints_dir / "best.json").read_text(encoding="utf-8"))
     assert payload["metrics"]["loss_G_val"]["records"] == [
         {
             "epoch": 0,
@@ -238,7 +245,8 @@ def test_update_selection_records_rejects_missing_checkpoint(tmp_path: Path) -> 
     mgr = _make_manager(tmp_path)
 
     with pytest.raises(FileNotFoundError, match="missing checkpoint"):
-        mgr.update_selection_records(
+        update_checkpoint_selection(
+            mgr.checkpoints_dir,
             metrics={"loss_G_val": 0.1},
             modes={"loss_G_val": "min"},
             top_k=1,
@@ -253,14 +261,16 @@ def test_resolve_best_checkpoint_path_reads_selection_by_metric_and_rank(
     mgr = _make_manager(tmp_path)
     checkpoint_0 = mgr.save(epoch=0)
     checkpoint_1 = mgr.save(epoch=1)
-    mgr.update_selection_records(
+    update_checkpoint_selection(
+        mgr.checkpoints_dir,
         metrics={"val_ssim": 0.5},
         modes={"val_ssim": "max"},
         top_k=2,
         epoch=0,
         checkpoint_path=checkpoint_0,
     )
-    mgr.update_selection_records(
+    update_checkpoint_selection(
+        mgr.checkpoints_dir,
         metrics={"val_ssim": 0.8},
         modes={"val_ssim": "max"},
         top_k=2,
@@ -286,7 +296,8 @@ def test_resolve_best_checkpoint_path_reads_selection_by_metric_and_rank(
 def test_resolve_best_checkpoint_path_requires_metric(tmp_path: Path) -> None:
     mgr = _make_manager(tmp_path)
     checkpoint_path = mgr.save(epoch=0)
-    mgr.update_selection_records(
+    update_checkpoint_selection(
+        mgr.checkpoints_dir,
         metrics={"val_ssim": 0.5},
         modes={"val_ssim": "max"},
         top_k=1,
@@ -301,7 +312,8 @@ def test_resolve_best_checkpoint_path_requires_metric(tmp_path: Path) -> None:
 def test_load_best_checkpoint_record_returns_selection_metadata(tmp_path: Path) -> None:
     mgr = _make_manager(tmp_path)
     checkpoint_path = mgr.save(epoch=3)
-    mgr.update_selection_records(
+    update_checkpoint_selection(
+        mgr.checkpoints_dir,
         metrics={"loss_G_val": 0.1234},
         modes={"loss_G_val": "min"},
         top_k=1,
@@ -324,7 +336,8 @@ def test_resolve_best_checkpoint_path_raises_when_selection_checkpoint_missing(
 ) -> None:
     mgr = _make_manager(tmp_path)
     checkpoint_path = mgr.save(epoch=3)
-    mgr.update_selection_records(
+    update_checkpoint_selection(
+        mgr.checkpoints_dir,
         metrics={"loss_G_val": 0.1234},
         modes={"loss_G_val": "min"},
         top_k=1,

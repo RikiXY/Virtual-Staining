@@ -27,10 +27,10 @@ from virtual_staining.experiment.snapshots import (
 )
 from virtual_staining.inference.outputs import generated_filename_for_sample
 from virtual_staining.models.generator import UNetGenerator
+from virtual_staining.training.checkpoint_selection import resolve_best_checkpoint_path
 from virtual_staining.training.checkpoints import (
     _check_generator_arch,
     _validate_checkpoint_metadata,
-    resolve_best_checkpoint_path,
 )
 from virtual_staining.utils.dimensions import to_torchvision_hw
 

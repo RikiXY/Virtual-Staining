@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.amp import GradScaler
 
-from virtual_staining.training.config import LossScheduleConfig, LossTermConfig
+from virtual_staining.training.loss_config import LossScheduleConfig, LossTermConfig
 from virtual_staining.training.losses import (
     LOSS_REGISTRY,
     ConfiguredLossEvaluator,

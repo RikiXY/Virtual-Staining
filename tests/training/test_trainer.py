@@ -22,12 +22,12 @@ from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.config import (
     EarlyStoppingConfig,
     LearningRateSchedulerConfig,
-    LossConfig,
-    LossTermConfig,
     TrainingConfig,
 )
+from virtual_staining.training.loss_config import LossConfig, LossTermConfig
 from virtual_staining.training.results import EpochMetrics
 from virtual_staining.training.trainer import Trainer
+from virtual_staining.training.validator import validate_epoch
 
 
 def _make_project(dataset_root: Path, results_path: Path, run_name: str) -> ProjectConfig:
@@ -46,6 +46,20 @@ def _pix2pix_losses() -> LossConfig:
             LossTermConfig(name="l1", weight=25.0),
         ),
         discriminator=(LossTermConfig(name="adversarial_bce", weight=1.0),),
+    )
+
+
+def _validate(trainer: Trainer, epoch: int = 0) -> EpochMetrics:
+    return validate_epoch(
+        epoch=epoch,
+        generator=trainer.generator,
+        discriminator=trainer.discriminator,
+        val_loader=trainer.val_loader,
+        loss_evaluator=trainer._loss_evaluator,
+        losses=trainer.losses,
+        device=trainer.device,
+        amp_enabled=trainer._amp_enabled,
+        output_dir=trainer._output_val_dir,
     )
 
 
@@ -418,7 +432,7 @@ def test_validate_restores_models_that_started_in_train_mode(
     trainer.generator.train()
     trainer.discriminator.train()
 
-    trainer._validate(epoch=0)
+    _validate(trainer)
 
     assert trainer.generator.training is True
     assert trainer.discriminator.training is True
@@ -431,7 +445,7 @@ def test_validate_preserves_models_that_started_in_eval_mode(
     trainer.generator.eval()
     trainer.discriminator.eval()
 
-    trainer._validate(epoch=0)
+    _validate(trainer)
 
     assert trainer.generator.training is False
     assert trainer.discriminator.training is False
@@ -476,7 +490,7 @@ def test_validate_image_metrics_do_not_require_discriminator_outputs(tmp_path: P
         losses=losses,
     )
 
-    metrics = trainer._validate(epoch=0)
+    metrics = _validate(trainer)
 
     assert metrics.loss_D == pytest.approx(0.0)
     assert math.isfinite(metrics.image["val_ssim"])

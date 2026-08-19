@@ -4,14 +4,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from virtual_staining.evaluation.diagnostics import save_diagnostic_plots
 from virtual_staining.evaluation.panels import (
-    METRIC_SELECTION_ORDER,
     DiagnosticEntry,
     build_metric_case_artifacts,
-    extract_generated_sample_id,
     save_comparison_panel,
-    save_diagnostic_plots,
     save_metric_diagnostics_summary,
+)
+from virtual_staining.evaluation.selection import (
+    METRIC_SELECTION_ORDER,
+    extract_generated_sample_id,
     select_representative_rows,
     write_metric_selection_summary,
 )
@@ -124,7 +126,6 @@ def _run_single(request: ComparePanelsRequest) -> SinglePanelResult:
     if request.with_diagnostics:
         diagnostics_dir = _infer_case_diagnostics_dir(saved_path, request.generated_image)
         diagnostic_paths = save_diagnostic_plots(
-            source_path=request.source_image,
             generated_path=request.generated_image,
             target_path=request.target_image,
             save_dir=diagnostics_dir,

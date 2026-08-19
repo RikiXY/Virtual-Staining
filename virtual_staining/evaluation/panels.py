@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
@@ -8,22 +7,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 
-from virtual_staining.metrics import DEFAULT_METRICS, is_higher_better_metric
-from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS, open_rgb, to_float01
-
-METRIC_SELECTION_ORDER = list(DEFAULT_METRICS)
-SELECTION_SUMMARY_FIELDNAMES = [
-    "metric",
-    "kind",
-    "sample_id",
-    "metric_value",
-    "target_value",
-    "abs_distance_from_target",
-    "source_path",
-    "target_path",
-    "generated_path",
-    "comparison_path",
-]
+from virtual_staining.evaluation.diagnostics import (
+    compute_absolute_difference_map,
+    save_diagnostic_plots,
+    validate_same_size,
+)
+from virtual_staining.evaluation.selection import (
+    build_selection_summary_row,
+    infer_source_path_from_row,
+)
+from virtual_staining.metrics import is_higher_better_metric
+from virtual_staining.utils.image_io import open_rgb
 
 DiagnosticPathKey = Literal[
     "comparison_path",
@@ -41,148 +35,6 @@ class DiagnosticEntry(TypedDict):
     error_histogram_path: Path
     intensity_overlay_histogram_path: Path
     target_vs_generated_scatter_by_channel_path: Path
-
-
-def validate_same_size(*images: Image.Image) -> None:
-    """Verifies that all images have the same size."""
-    sizes = {image.size for image in images}
-
-    if len(sizes) != 1:
-        raise ValueError(
-            f"All images must have the same size to build a comparison panel. Got: {sorted(sizes)}"
-        )
-
-
-def compute_absolute_difference_map(
-    generated_img: Image.Image, target_img: Image.Image
-) -> np.ndarray:
-    """Computes the per-pixel MAE map between target and generated."""
-    generated_float = to_float01(generated_img)
-    target_float = to_float01(target_img)
-    return np.mean(np.abs(target_float - generated_float), axis=2)
-
-
-def extract_generated_sample_id(path: str | Path) -> str:
-    """Extracts the sample id from the generated file name."""
-    stem = Path(path).stem
-    suffix = "_target_generated"
-
-    if not stem.endswith(suffix):
-        raise ValueError(f"Generated file does not end with '{suffix}': {path}")
-
-    return stem[: -len(suffix)]
-
-
-def find_existing_image(base_dir: str | Path, sample_id: str, suffix: str) -> Path:
-    """Searches for an existing image file by trying all supported extensions."""
-    directory = Path(base_dir)
-
-    for ext in sorted(VALID_IMAGE_EXTENSIONS):
-        candidate = directory / f"{sample_id}{suffix}{ext}"
-        if candidate.is_file():
-            return candidate
-
-    raise FileNotFoundError(
-        f"Could not find image for sample '{sample_id}' with suffix '{suffix}' inside {directory}"
-    )
-
-
-def infer_source_path_from_row(row: dict[str, str]) -> Path:
-    """Tries to reconstruct the source path from a CSV row."""
-    sample_id = row["sample_id"]
-
-    if row.get("source_path"):
-        candidate = Path(row["source_path"])
-        if candidate.is_file():
-            return candidate
-
-    if row.get("target_path"):
-        target_dir = Path(row["target_path"]).parent
-        try:
-            return find_existing_image(target_dir, sample_id, "_source")
-        except FileNotFoundError:
-            pass
-
-    if row.get("generated_path"):
-        generated_path = Path(row["generated_path"])
-        test_split_dir = generated_path.parents[1] / "splits" / "test"
-        try:
-            return find_existing_image(test_split_dir, sample_id, "_source")
-        except FileNotFoundError:
-            pass
-
-    raise FileNotFoundError(f"Could not infer source path for sample '{sample_id}'.")
-
-
-def select_representative_rows(
-    metric_name: str,
-    metric_summary: dict[str, float],
-    per_image_rows: list[dict[str, str]],
-) -> dict[str, dict[str, str]]:
-    """Selects the best, median and worst samples for a metric."""
-    if not per_image_rows:
-        raise ValueError("No per-image rows available for representative selection.")
-
-    def metric_value(row: dict[str, str]) -> float:
-        return float(row[metric_name])
-
-    higher_is_better = is_higher_better_metric(metric_name)
-    best_row = (
-        max(per_image_rows, key=metric_value)
-        if higher_is_better
-        else min(per_image_rows, key=metric_value)
-    )
-    worst_row = (
-        min(per_image_rows, key=metric_value)
-        if higher_is_better
-        else max(per_image_rows, key=metric_value)
-    )
-
-    return {
-        "best": best_row,
-        "median": min(
-            per_image_rows,
-            key=lambda row: abs(metric_value(row) - metric_summary["median"]),
-        ),
-        "worst": worst_row,
-    }
-
-
-def build_selection_summary_row(
-    metric_name: str,
-    kind: str,
-    sample_id: str,
-    metric_value: float,
-    target_value: float,
-    source_path: Path,
-    target_path: Path,
-    generated_path: Path,
-    comparison_path: Path,
-) -> dict[str, object]:
-    """Builds a standard row for selection CSVs."""
-    return {
-        "metric": metric_name,
-        "kind": kind,
-        "sample_id": sample_id,
-        "metric_value": metric_value,
-        "target_value": target_value,
-        "abs_distance_from_target": abs(metric_value - target_value),
-        "source_path": str(source_path),
-        "target_path": str(target_path),
-        "generated_path": str(generated_path),
-        "comparison_path": str(comparison_path),
-    }
-
-
-def write_metric_selection_summary(rows: list[dict[str, object]], save_path: str | Path) -> None:
-    """Writes the CSV with the selected samples for each metric."""
-    save_path = Path(save_path)
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with save_path.open("w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file, fieldnames=SELECTION_SUMMARY_FIELDNAMES)
-        writer.writeheader()
-        writer.writerows(rows)
 
 
 def build_metric_case_artifacts(
@@ -220,7 +72,6 @@ def build_metric_case_artifacts(
 
     diagnostics_case_dir = metric_dir / "diagnostics" / f"{kind}_{sample_id}"
     diagnostic_paths = save_diagnostic_plots(
-        source_path=source_path,
         generated_path=generated_path,
         target_path=target_path,
         save_dir=diagnostics_case_dir,
@@ -297,96 +148,6 @@ def save_comparison_panel(
     fig.savefig(save_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     return save_path
-
-
-def save_diagnostic_plots(
-    source_path: str | Path,
-    generated_path: str | Path,
-    target_path: str | Path,
-    save_dir: str | Path,
-) -> list[Path]:
-    """Saves the diagnostic plots for the individual sample."""
-    generated_img = open_rgb(generated_path)
-    target_img = open_rgb(target_path)
-    validate_same_size(generated_img, target_img)
-
-    target = to_float01(target_img)
-    generated = to_float01(generated_img)
-    save_dir = Path(save_dir)
-    save_dir.mkdir(parents=True, exist_ok=True)
-    sample_id = extract_generated_sample_id(generated_path)
-    saved_paths: list[Path] = []
-
-    absolute_error = np.mean(np.abs(target - generated), axis=2)
-    histogram_path = save_dir / f"{sample_id}_error_histogram.png"
-
-    plt.figure(figsize=(6, 4))
-    plt.hist(absolute_error.ravel(), bins=50)
-    plt.title("Absolute Error Histogram")
-    plt.xlabel("Absolute error")
-    plt.ylabel("Pixel count")
-    plt.tight_layout()
-    plt.savefig(histogram_path, dpi=200, bbox_inches="tight")
-    plt.close()
-    saved_paths.append(histogram_path)
-
-    scatter_path = save_dir / f"{sample_id}_target_vs_generated_scatter_by_channel.png"
-    rng = np.random.default_rng(42)
-    channel_labels = ["R", "G", "B"]
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharex=True, sharey=True)
-
-    for channel_index, (ax, label) in enumerate(zip(axes, channel_labels, strict=True)):
-        target_channel = target[:, :, channel_index].ravel()
-        generated_channel = generated[:, :, channel_index].ravel()
-        n_points = min(20000, target_channel.size)
-        sample_indices = rng.choice(target_channel.size, size=n_points, replace=False)
-        ax.scatter(
-            target_channel[sample_indices],
-            generated_channel[sample_indices],
-            s=4,
-            alpha=0.25,
-        )
-        ax.plot([0, 1], [0, 1], linestyle="--", linewidth=1)
-        ax.set_title(f"{label} channel")
-        ax.set_xlabel("Target intensity")
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-
-        if channel_index == 0:
-            ax.set_ylabel("Generated intensity")
-
-    fig.suptitle("Target vs Generated Intensity by Channel")
-    fig.tight_layout()
-    fig.savefig(scatter_path, dpi=200, bbox_inches="tight")
-    plt.close(fig)
-    saved_paths.append(scatter_path)
-
-    overlay_histogram_path = save_dir / f"{sample_id}_intensity_overlay_histogram.png"
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharey=True)
-
-    for channel_index, (ax, label) in enumerate(zip(axes, channel_labels, strict=True)):
-        ax.hist(target[:, :, channel_index].ravel(), bins=50, alpha=0.5, label="Target")
-        ax.hist(
-            generated[:, :, channel_index].ravel(),
-            bins=50,
-            alpha=0.5,
-            label="Generated",
-        )
-        ax.set_title(f"{label} channel")
-        ax.set_xlabel("Intensity")
-        ax.set_xlim(0, 1)
-
-        if channel_index == 0:
-            ax.set_ylabel("Pixel count")
-
-        ax.legend()
-
-    fig.suptitle("Target vs Generated Intensity Histograms")
-    fig.tight_layout()
-    fig.savefig(overlay_histogram_path, dpi=200, bbox_inches="tight")
-    plt.close(fig)
-    saved_paths.append(overlay_histogram_path)
-    return saved_paths
 
 
 def save_stacked_image_panel(
@@ -484,153 +245,3 @@ def save_metric_diagnostics_summary(
         saved_paths.append(saved_path)
 
     return saved_paths
-
-
-def make_comparison_panel(
-    source: str | Path,
-    target: str | Path,
-    generated: str | Path,
-    output_path: str | Path,
-) -> Path:
-    return save_comparison_panel(
-        source_path=source,
-        generated_path=generated,
-        target_path=target,
-        save_path=output_path,
-    )
-
-
-def make_error_histogram(
-    target: str | Path,
-    generated: str | Path,
-    output_path: str | Path,
-) -> Path:
-    generated_img = open_rgb(generated)
-    target_img = open_rgb(target)
-    validate_same_size(generated_img, target_img)
-    target_arr = to_float01(target_img)
-    generated_arr = to_float01(generated_img)
-    absolute_error = np.mean(np.abs(target_arr - generated_arr), axis=2)
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    plt.figure(figsize=(6, 4))
-    plt.hist(absolute_error.ravel(), bins=50)
-    plt.title("Absolute Error Histogram")
-    plt.xlabel("Absolute error")
-    plt.ylabel("Pixel count")
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=200, bbox_inches="tight")
-    plt.close()
-    return output_path
-
-
-def make_intensity_overlay_histogram(
-    target: str | Path,
-    generated: str | Path,
-    output_path: str | Path,
-) -> Path:
-    generated_img = open_rgb(generated)
-    target_img = open_rgb(target)
-    validate_same_size(generated_img, target_img)
-    target_arr = to_float01(target_img)
-    generated_arr = to_float01(generated_img)
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    channel_labels = ["R", "G", "B"]
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharey=True)
-
-    for channel_index, (ax, label) in enumerate(zip(axes, channel_labels, strict=True)):
-        ax.hist(target_arr[:, :, channel_index].ravel(), bins=50, alpha=0.5, label="Target")
-        ax.hist(
-            generated_arr[:, :, channel_index].ravel(),
-            bins=50,
-            alpha=0.5,
-            label="Generated",
-        )
-        ax.set_title(f"{label} channel")
-        ax.set_xlabel("Intensity")
-        ax.set_xlim(0, 1)
-
-        if channel_index == 0:
-            ax.set_ylabel("Pixel count")
-
-        ax.legend()
-
-    fig.suptitle("Target vs Generated Intensity Histograms")
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=200, bbox_inches="tight")
-    plt.close(fig)
-    return output_path
-
-
-def make_scatter_by_channel(
-    target: str | Path,
-    generated: str | Path,
-    output_path: str | Path,
-) -> Path:
-    generated_img = open_rgb(generated)
-    target_img = open_rgb(target)
-    validate_same_size(generated_img, target_img)
-    target_arr = to_float01(target_img)
-    generated_arr = to_float01(generated_img)
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    rng = np.random.default_rng(42)
-    channel_labels = ["R", "G", "B"]
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharex=True, sharey=True)
-
-    for channel_index, (ax, label) in enumerate(zip(axes, channel_labels, strict=True)):
-        target_channel = target_arr[:, :, channel_index].ravel()
-        generated_channel = generated_arr[:, :, channel_index].ravel()
-        n_points = min(20000, target_channel.size)
-        sample_indices = rng.choice(target_channel.size, size=n_points, replace=False)
-        ax.scatter(
-            target_channel[sample_indices],
-            generated_channel[sample_indices],
-            s=4,
-            alpha=0.25,
-        )
-        ax.plot([0, 1], [0, 1], linestyle="--", linewidth=1)
-        ax.set_title(f"{label} channel")
-        ax.set_xlabel("Target intensity")
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-
-        if channel_index == 0:
-            ax.set_ylabel("Generated intensity")
-
-    fig.suptitle("Target vs Generated Intensity by Channel")
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=200, bbox_inches="tight")
-    plt.close(fig)
-    return output_path
-
-
-def find_representative_samples(
-    rows: list[dict[str, str]],
-    metric: str,
-    kind: str,
-    n: int,
-) -> list[dict[str, str]]:
-    sorted_rows = sorted(
-        rows,
-        key=lambda row: float(row[metric]),
-        reverse=is_higher_better_metric(metric),
-    )
-    if kind == "best":
-        return sorted_rows[:n]
-    if kind == "worst":
-        return list(reversed(sorted_rows[-n:])) if n > 0 else []
-    if kind == "median":
-        if n <= 0:
-            return []
-        middle = len(sorted_rows) // 2
-        start = max(0, middle - n // 2)
-        end = min(len(sorted_rows), start + n)
-        return sorted_rows[start:end]
-    raise ValueError(f"Unsupported representative kind: {kind}")
-
-
-def save_selection_summary_csv(entries: list[dict[str, object]], output_path: str | Path) -> None:
-    write_metric_selection_summary(entries, output_path)

@@ -37,3 +37,11 @@ def parse_bool_strict(value: object, field_name: str) -> bool:
         f"'{field_name}' must be a YAML boolean (true or false), "
         f"got {value!r}. Use true or false without quotes."
     )
+
+
+def parse_choice(value: object, field_name: str, choices: set[str]) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string. Supported values: {sorted(choices)}.")
+    if value not in choices:
+        raise ValueError(f"{field_name} must be one of {sorted(choices)}. Got {value!r}.")
+    return value

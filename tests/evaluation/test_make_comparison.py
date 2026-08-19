@@ -5,13 +5,43 @@ from pathlib import Path
 import pytest
 
 from tests.image_helpers import write_rgb_image, write_rgb_pair
+from virtual_staining.evaluation import diagnostics
 from virtual_staining.evaluation.panels import (
     DiagnosticEntry,
     build_metric_case_artifacts,
     save_comparison_panel,
     save_metric_diagnostics_summary,
-    select_representative_rows,
 )
+from virtual_staining.evaluation.selection import select_representative_rows
+
+
+def test_save_diagnostic_plots_delegates_to_canonical_plotters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sample_id = "00000_00000"
+    target = write_rgb_image(tmp_path / f"{sample_id}_target.png")
+    generated = write_rgb_image(tmp_path / f"{sample_id}_target_generated.png")
+    called: list[str] = []
+
+    def _record(name: str):
+        def save(_target, _generated, output_path):
+            called.append(name)
+            return Path(output_path)
+
+        return save
+
+    monkeypatch.setattr(diagnostics, "make_error_histogram", _record("error"))
+    monkeypatch.setattr(diagnostics, "make_scatter_by_channel", _record("scatter"))
+    monkeypatch.setattr(diagnostics, "make_intensity_overlay_histogram", _record("intensity"))
+
+    paths = diagnostics.save_diagnostic_plots(generated, target, tmp_path / "diagnostics")
+
+    assert called == ["error", "scatter", "intensity"]
+    assert [path.name for path in paths] == [
+        f"{sample_id}_error_histogram.png",
+        f"{sample_id}_target_vs_generated_scatter_by_channel.png",
+        f"{sample_id}_intensity_overlay_histogram.png",
+    ]
 
 
 def test_select_representative_rows_uses_higher_is_better_direction() -> None:

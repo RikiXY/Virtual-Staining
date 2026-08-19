@@ -21,9 +21,9 @@ upper layers may import from lower layers, never the reverse.
 | `experiment/` | Run concept: `RunPaths` (directory layout), `RunMetadata` (run-level provenance), `RunProvenance` (stage lifecycle), environment snapshots |
 | `models/` | `UNetGenerator`, `PatchGANDiscriminator`, model config dataclass |
 | `data/` | `DatasetManifest`, `ManifestRecord`, `DatasetBuilder` (preprocessing pipeline), `PatchDataset` |
-| `training/` | `Trainer`, training runner, augmentation, per-step logic, adversarial and L1 losses, checkpoint I/O |
+| `training/` | `Trainer` lifecycle, validation, metric history, loss configuration, per-step logic, checkpoint state and checkpoint selection |
 | `inference/` | Inference runner, single-image workflows, canonical output naming |
-| `evaluation/` | Pair evaluation, plots, summary statistics, comparison panels, ranking utilities |
+| `evaluation/` | Pair evaluation, diagnostic plots, representative selection, comparison panels, summary statistics, ranking utilities |
 | `applications/` | Use-case orchestrators (`train.py`, `infer.py`, `evaluate.py`, ...) - no `argparse` |
 | `cli/` | The `argparse` entrypoint and helpers for `vs <command>` - thin adapters over `applications/` |
 
@@ -51,6 +51,12 @@ The architectural boundary is not “no I/O in library code.” The actual rule 
 - reusable package code should keep I/O explicit and testable
 - orchestration belongs in `applications/`
 - CLI translation belongs in `cli/`
+
+Within training, `trainer.py` owns epoch orchestration, `validator.py` owns validation
+inference, `history.py` owns metric CSV persistence, `checkpoints.py` owns model/training
+state, and `checkpoint_selection.py` owns `best.json` ranking and resolution. Evaluation
+keeps plot primitives in `diagnostics.py`, representative-row policy in `selection.py`,
+and composed image layouts in `panels.py`.
 
 ## Architectural Rules
 

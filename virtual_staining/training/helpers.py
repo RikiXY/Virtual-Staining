@@ -6,7 +6,7 @@ from typing import NamedTuple
 import torch
 from torchvision.utils import save_image
 
-from virtual_staining.training.config import LossConfig
+from virtual_staining.training.loss_config import LossConfig
 from virtual_staining.training.results import EpochMetrics
 
 
