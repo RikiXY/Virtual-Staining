@@ -31,7 +31,6 @@ from virtual_staining.data.preprocessing import (
     warp_aligned_mask_patch_from_mask_space,
     warp_aligned_patch,
 )
-from virtual_staining.data.results import DatasetBuildResult
 from virtual_staining.experiment.snapshots import (
     build_dataset_fingerprint_metadata,
     save_dataset_fingerprint,
@@ -40,6 +39,16 @@ from virtual_staining.utils.image_io import RegionImageReader, open_image_reader
 
 logger = logging.getLogger(__name__)
 _MEMORY_WARNING_THRESHOLD_GB = 8.0
+
+
+@dataclasses.dataclass(frozen=True)
+class DatasetBuildResult:
+    train_count: int
+    val_count: int
+    test_count: int
+    skipped_count: int
+    output_root: Path
+    reused: bool = False
 
 
 def _log_memory(stage: str) -> None:

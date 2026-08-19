@@ -17,10 +17,9 @@ from tests.config_helpers import write_run_config, yaml_section
 from virtual_staining.applications.prepare import prepare
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data import builder as builder_module
-from virtual_staining.data.builder import DatasetBuilder
+from virtual_staining.data.builder import DatasetBuilder, DatasetBuildResult
 from virtual_staining.data.config import PreprocessingConfig
 from virtual_staining.data.preprocessing import AlignmentMetadata, assign_split_by_hash
-from virtual_staining.data.results import DatasetBuildResult
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -22,7 +22,7 @@ upper layers may import from lower layers, never the reverse.
 | `models/` | `UNetGenerator`, `PatchGANDiscriminator`, model config dataclass |
 | `data/` | `DatasetManifest`, `ManifestRecord`, `DatasetBuilder` (preprocessing pipeline), `PatchDataset` |
 | `training/` | `Trainer`, training runner, augmentation, per-step logic, adversarial and L1 losses, checkpoint I/O |
-| `inference/` | `Predictor`, inference runner, output writers |
+| `inference/` | Inference runner, single-image workflows, canonical output naming |
 | `evaluation/` | Pair evaluation, plots, summary statistics, comparison panels, ranking utilities |
 | `applications/` | Use-case orchestrators (`train.py`, `infer.py`, `evaluate.py`, ...) - no `argparse` |
 | `cli/` | The `argparse` entrypoint and helpers for `vs <command>` - thin adapters over `applications/` |
@@ -43,7 +43,7 @@ Typical examples:
 | Mostly pure indexing/data model | `data/dataset.py` | Dataset indexing and manifest-backed lookup |
 | Side-effecting preprocessing service | `data/builder.py` | Builds datasets, writes patches/manifests/metadata |
 | Side-effecting training service | `training/trainer.py` | Training loop, checkpoint/log/metric writes |
-| Side-effecting inference service | `inference/predictor.py`, `inference/runner.py` | Model execution plus output writing at runner boundary |
+| Side-effecting inference service | `inference/runner.py`, `inference/single.py` | Model execution plus output writing at runner boundary |
 | Side-effecting evaluation service | `evaluation/` runners/report writers | Metrics computation plus report/CSV output |
 
 The architectural boundary is not “no I/O in library code.” The actual rule is:

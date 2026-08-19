@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
 import torch
 import torch.nn as nn
+from torch.amp import autocast
 from torchvision import transforms
+from torchvision.utils import save_image
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.dataset import PairedManifestDataset
@@ -22,9 +25,7 @@ from virtual_staining.experiment.snapshots import (
     save_environment_snapshot,
     save_stage_config_snapshots,
 )
-from virtual_staining.inference.outputs import InferenceOutputWriter
-from virtual_staining.inference.predictor import Predictor
-from virtual_staining.inference.results import InferenceResult
+from virtual_staining.inference.outputs import generated_filename_for_sample
 from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.checkpoints import (
     _check_generator_arch,
@@ -36,8 +37,22 @@ from virtual_staining.utils.dimensions import to_torchvision_hw
 logger = logging.getLogger(__name__)
 
 
-def _is_amp_enabled(device: torch.device) -> bool:
-    return device.type == "cuda"
+@dataclass
+class InferenceResult:
+    output_dir: Path
+    generated_paths: list[Path] = field(default_factory=list)
+    num_samples: int = 0
+
+
+@torch.no_grad()
+def _predict_batch(
+    generator: nn.Module,
+    source: torch.Tensor,
+    device: torch.device,
+) -> torch.Tensor:
+    with autocast(device_type=device.type, enabled=device.type == "cuda"):
+        output = generator(source.to(device))
+    return (output * 0.5 + 0.5).clamp(0, 1)
 
 
 def resolve_inference_device() -> torch.device:
@@ -118,6 +133,7 @@ def load_inference_generator(
     ).to(device)
     _check_generator_arch(checkpoint_arch, generator)
     generator.load_state_dict(checkpoint["generator_state_dict"])
+    generator.eval()
     return generator, checkpoint_path
 
 
@@ -170,21 +186,23 @@ def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
     }
     run = RunProvenance(paths.metadata_dir, config.project.run_name, config_hash)
     with run.stage("infer", details=infer_details) as stage:
-        writer = InferenceOutputWriter(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
         result = InferenceResult(output_dir=output_dir)
         stage.result(inferred_count=0)
         if len(dataset) == 0:
             logger.warning("No test pairs found in manifest: %s", config.project.manifest_path)
             return result
 
-        predictor = Predictor(generator, device, _is_amp_enabled(device))
         for idx in range(len(dataset)):
             source_tensor, _ = dataset[idx]
             source_tensor = cast(torch.Tensor, source_tensor)
             record = test_manifest.records[idx]
             batch = source_tensor.unsqueeze(0)
-            output = predictor.predict_batch(batch)[0]
-            out_path = writer.write(record.sample_id, record.input_path.suffix, output)
+            output = _predict_batch(generator, batch, device)[0]
+            out_path = output_dir / generated_filename_for_sample(
+                record.sample_id, record.input_path.suffix
+            )
+            save_image(output, out_path)
             result.generated_paths.append(out_path)
             result.num_samples += 1
             stage.result(inferred_count=result.num_samples)

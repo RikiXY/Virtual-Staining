@@ -185,7 +185,7 @@ From H&E staining to label-free:
 - `models/` - UNetGenerator, PatchGANDiscriminator, model config
 - `data/` - dataset, manifest, builder, preprocessing pipeline
 - `training/` - Trainer, runner, steps, losses, checkpoint management
-- `inference/` - Predictor, runner, output writers
+- `inference/` - inference runner, single-image workflows, canonical output naming
 - `evaluation/` - evaluator, plots, summaries, panels, ranking
 - `applications/` - use-case orchestrators (no argparse)
 - `cli/` - thin argparse entrypoints delegating to `applications/`

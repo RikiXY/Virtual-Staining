@@ -5,8 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from virtual_staining.config.run import RunConfig
-from virtual_staining.data.builder import DatasetBuilder
-from virtual_staining.data.results import DatasetBuildResult
+from virtual_staining.data.builder import DatasetBuilder, DatasetBuildResult
 from virtual_staining.experiment.metadata import (
     RunProvenance,
     ensure_run_metadata,

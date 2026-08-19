@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from virtual_staining.data.results import DatasetBuildResult
+from virtual_staining.data.builder import DatasetBuildResult
 
 
 def test_dataset_build_result_fields() -> None:
