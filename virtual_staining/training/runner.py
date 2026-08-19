@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import random
-from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -15,9 +14,8 @@ from virtual_staining.data.dataset import PairedManifestDataset
 from virtual_staining.data.manifest import load_manifest_or_raise
 from virtual_staining.experiment.metadata import (
     RunMetadata,
-    append_run_event,
+    RunProvenance,
     ensure_run_metadata,
-    save_stage_metadata,
 )
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
@@ -115,7 +113,6 @@ def run_training(
 
     save_environment_snapshot(snapshot_paths.environment)
 
-    started_at = datetime.now(UTC).isoformat()
     effective_train_sample_count = (
         len(train_manifest) * training.augmentation.effective_expansion_factor
     )
@@ -132,30 +129,6 @@ def run_training(
         "augmentation_expansion_factor": training.augmentation.effective_expansion_factor,
         "val_sample_count": len(val_manifest),
     }
-    save_stage_metadata(
-        "train",
-        {
-            "stage": "train",
-            "status": "running",
-            "started_at": started_at,
-            "completed_at": None,
-            "config_hash": config_hash,
-            **train_details,
-        },
-        paths.metadata_dir,
-    )
-    append_run_event(
-        {
-            "timestamp": started_at,
-            "run_name": config.project.run_name,
-            "stage": "train",
-            "event_type": "stage_started",
-            "status": "running",
-            "config_hash": config_hash,
-            "details": train_details,
-        },
-        paths.metadata_dir,
-    )
 
     transform = transforms.Compose(
         [
@@ -267,87 +240,24 @@ def run_training(
             device,
         )
 
-    try:
+    run = RunProvenance(paths.metadata_dir, config.project.run_name, config_hash)
+    with run.stage("train", details=train_details) as stage:
         result = trainer.train(seed=seed, start_epoch=start_epoch)
-    except Exception as exc:
-        completed_at = datetime.now(UTC).isoformat()
-        save_stage_metadata(
-            "train",
-            {
-                "stage": "train",
-                "status": "failed",
-                "started_at": started_at,
-                "completed_at": completed_at,
-                "config_hash": config_hash,
-                **train_details,
-                "error": str(exc),
-            },
-            paths.metadata_dir,
-        )
-        append_run_event(
-            {
-                "timestamp": completed_at,
-                "run_name": config.project.run_name,
-                "stage": "train",
-                "event_type": "stage_failed",
-                "status": "failed",
-                "config_hash": config_hash,
-                "details": {**train_details, "error": str(exc)},
-            },
-            paths.metadata_dir,
-        )
-        raise
-
-    completed_at = datetime.now(UTC).isoformat()
-    early_stopping_details = {
-        "stopped_early": result.stopped_early,
-        "stop_epoch": result.stop_epoch,
-        "stop_reason": result.stop_reason,
-        "early_stopping_monitor": result.early_stopping_monitor,
-        "early_stopping_mode": result.early_stopping_mode,
-        "early_stopping_best_epoch": result.early_stopping_best_epoch,
-        "early_stopping_best_value": result.early_stopping_best_value,
-    }
-    save_stage_metadata(
-        "train",
-        {
-            "stage": "train",
-            "status": "completed",
-            "started_at": started_at,
-            "completed_at": completed_at,
-            "config_hash": config_hash,
-            **train_details,
-            "final_epoch": result.final_epoch,
-            **early_stopping_details,
-            "best_checkpoint_path": (
+        stage.result(
+            final_epoch=result.final_epoch,
+            stopped_early=result.stopped_early,
+            stop_epoch=result.stop_epoch,
+            stop_reason=result.stop_reason,
+            early_stopping_monitor=result.early_stopping_monitor,
+            early_stopping_mode=result.early_stopping_mode,
+            early_stopping_best_epoch=result.early_stopping_best_epoch,
+            early_stopping_best_value=result.early_stopping_best_value,
+            best_checkpoint_path=(
                 str(result.best_checkpoint_path)
                 if result.best_checkpoint_path is not None
                 else None
             ),
-        },
-        paths.metadata_dir,
-    )
-    append_run_event(
-        {
-            "timestamp": completed_at,
-            "run_name": config.project.run_name,
-            "stage": "train",
-            "event_type": "stage_completed",
-            "status": "completed",
-            "config_hash": config_hash,
-            "details": {
-                **train_details,
-                "final_epoch": result.final_epoch,
-                **early_stopping_details,
-                "best_checkpoint_path": (
-                    str(result.best_checkpoint_path)
-                    if result.best_checkpoint_path is not None
-                    else None
-                ),
-            },
-        },
-        paths.metadata_dir,
-    )
+        )
     return result
 
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -9,9 +8,8 @@ from virtual_staining.config.run import RunConfig
 from virtual_staining.data.builder import DatasetBuilder
 from virtual_staining.data.results import DatasetBuildResult
 from virtual_staining.experiment.metadata import (
-    append_run_event,
+    RunProvenance,
     ensure_run_metadata,
-    save_stage_metadata,
 )
 from virtual_staining.experiment.snapshots import (
     build_dataset_fingerprint_metadata,
@@ -118,100 +116,20 @@ def prepare(config: RunConfig, config_path: Path) -> DatasetBuildResult:
         config_hash=config_hash,
     )
 
-    started_at = datetime.now(UTC).isoformat()
-    save_stage_metadata(
-        "prepare",
-        {
-            "stage": "prepare",
-            "status": "running",
-            "started_at": started_at,
-            "completed_at": None,
-            "config_hash": config_hash,
-            "dataset_root": str(dataset_root),
-        },
-        metadata_dir,
-    )
-    append_run_event(
-        {
-            "timestamp": started_at,
-            "run_name": config.project.run_name,
-            "stage": "prepare",
-            "event_type": "stage_started",
-            "status": "running",
-            "config_hash": config_hash,
-            "details": {"dataset_root": str(dataset_root)},
-        },
-        metadata_dir,
-    )
-
-    try:
+    run = RunProvenance(metadata_dir, config.project.run_name, config_hash)
+    with run.stage("prepare", details={"dataset_root": str(dataset_root)}) as stage:
         result = _reuse_existing_dataset(config)
         if result is None:
             builder = DatasetBuilder(config.preprocessing)
             result = builder.run_all()
-    except Exception as exc:
-        completed_at = datetime.now(UTC).isoformat()
-        save_stage_metadata(
-            "prepare",
-            {
-                "stage": "prepare",
-                "status": "failed",
-                "started_at": started_at,
-                "completed_at": completed_at,
-                "config_hash": config_hash,
-                "dataset_root": str(dataset_root),
-                "error": str(exc),
-            },
-            metadata_dir,
+        manifest_path = dataset_root / "manifests" / "manifest.csv"
+        stage.result(
+            manifest_path=str(manifest_path),
+            manifest_sha256=compute_manifest_hash(manifest_path),
+            train_count=result.train_count,
+            val_count=result.val_count,
+            test_count=result.test_count,
+            skipped_count=result.skipped_count,
+            reused=result.reused,
         )
-        append_run_event(
-            {
-                "timestamp": completed_at,
-                "run_name": config.project.run_name,
-                "stage": "prepare",
-                "event_type": "stage_failed",
-                "status": "failed",
-                "config_hash": config_hash,
-                "details": {"dataset_root": str(dataset_root), "error": str(exc)},
-            },
-            metadata_dir,
-        )
-        raise
-
-    manifest_path = dataset_root / "manifests" / "manifest.csv"
-    completed_at = datetime.now(UTC).isoformat()
-    details = {
-        "dataset_root": str(dataset_root),
-        "manifest_path": str(manifest_path),
-        "manifest_sha256": compute_manifest_hash(manifest_path),
-        "train_count": result.train_count,
-        "val_count": result.val_count,
-        "test_count": result.test_count,
-        "skipped_count": result.skipped_count,
-        "reused": result.reused,
-    }
-    save_stage_metadata(
-        "prepare",
-        {
-            "stage": "prepare",
-            "status": "completed",
-            "started_at": started_at,
-            "completed_at": completed_at,
-            "config_hash": config_hash,
-            **details,
-        },
-        metadata_dir,
-    )
-    append_run_event(
-        {
-            "timestamp": completed_at,
-            "run_name": config.project.run_name,
-            "stage": "prepare",
-            "event_type": "stage_completed",
-            "status": "completed",
-            "config_hash": config_hash,
-            "details": details,
-        },
-        metadata_dir,
-    )
     return result

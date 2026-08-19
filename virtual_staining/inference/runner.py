@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -13,9 +12,8 @@ from virtual_staining.config.run import RunConfig
 from virtual_staining.data.dataset import PairedManifestDataset
 from virtual_staining.data.manifest import load_manifest_or_raise
 from virtual_staining.experiment.metadata import (
-    append_run_event,
+    RunProvenance,
     ensure_run_metadata,
-    save_stage_metadata,
 )
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
@@ -123,12 +121,6 @@ def load_inference_generator(
     return generator, checkpoint_path
 
 
-def _write_inference_stage_metadata(paths: RunPaths, payload: dict[str, object]) -> None:
-    stage_path = save_stage_metadata("infer", payload, paths.metadata_dir)
-    if stage_path is not None:
-        logger.info("Inference metadata written -> %s", stage_path)
-
-
 def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
     """Load a checkpoint, run the generator on the test split, and write outputs."""
     if config.inference is None:
@@ -165,7 +157,6 @@ def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
         manifest_sha256=manifest_hash,
         device=str(device),
     )
-    started_at = datetime.now(UTC).isoformat()
     test_manifest = manifest.filter_split("test")
     dataset = PairedManifestDataset(test_manifest, transform=transform)
     logger.info("Loaded manifest: %s test samples", len(dataset))
@@ -177,63 +168,16 @@ def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
         "test_sample_count": len(test_manifest.records),
         "device": str(device),
     }
-    _write_inference_stage_metadata(
-        paths,
-        {
-            "stage": "infer",
-            "status": "running",
-            "started_at": started_at,
-            "completed_at": None,
-            "config_hash": config_hash,
-            **infer_details,
-        },
-    )
-    append_run_event(
-        {
-            "timestamp": started_at,
-            "run_name": config.project.run_name,
-            "stage": "infer",
-            "event_type": "stage_started",
-            "status": "running",
-            "config_hash": config_hash,
-            "details": infer_details,
-        },
-        paths.metadata_dir,
-    )
+    run = RunProvenance(paths.metadata_dir, config.project.run_name, config_hash)
+    with run.stage("infer", details=infer_details) as stage:
+        writer = InferenceOutputWriter(output_dir)
+        result = InferenceResult(output_dir=output_dir)
+        stage.result(inferred_count=0)
+        if len(dataset) == 0:
+            logger.warning("No test pairs found in manifest: %s", config.project.manifest_path)
+            return result
 
-    writer = InferenceOutputWriter(output_dir)
-    result = InferenceResult(output_dir=output_dir)
-    if len(dataset) == 0:
-        logger.warning("No test pairs found in manifest: %s", config.project.manifest_path)
-        completed_at = datetime.now(UTC).isoformat()
-        _write_inference_stage_metadata(
-            paths,
-            {
-                "stage": "infer",
-                "status": "completed",
-                "started_at": started_at,
-                "completed_at": completed_at,
-                "config_hash": config_hash,
-                **infer_details,
-                "inferred_count": result.num_samples,
-            },
-        )
-        append_run_event(
-            {
-                "timestamp": completed_at,
-                "run_name": config.project.run_name,
-                "stage": "infer",
-                "event_type": "stage_completed",
-                "status": "completed",
-                "config_hash": config_hash,
-                "details": {**infer_details, "inferred_count": result.num_samples},
-            },
-            paths.metadata_dir,
-        )
-        return result
-
-    predictor = Predictor(generator, device, _is_amp_enabled(device))
-    try:
+        predictor = Predictor(generator, device, _is_amp_enabled(device))
         for idx in range(len(dataset)):
             source_tensor, _ = dataset[idx]
             source_tensor = cast(torch.Tensor, source_tensor)
@@ -243,63 +187,6 @@ def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
             out_path = writer.write(record.sample_id, record.input_path.suffix, output)
             result.generated_paths.append(out_path)
             result.num_samples += 1
-    except Exception as exc:
-        completed_at = datetime.now(UTC).isoformat()
-        _write_inference_stage_metadata(
-            paths,
-            {
-                "stage": "infer",
-                "status": "failed",
-                "started_at": started_at,
-                "completed_at": completed_at,
-                "config_hash": config_hash,
-                **infer_details,
-                "inferred_count": result.num_samples,
-                "error": str(exc),
-            },
-        )
-        append_run_event(
-            {
-                "timestamp": completed_at,
-                "run_name": config.project.run_name,
-                "stage": "infer",
-                "event_type": "stage_failed",
-                "status": "failed",
-                "config_hash": config_hash,
-                "details": {
-                    **infer_details,
-                    "inferred_count": result.num_samples,
-                    "error": str(exc),
-                },
-            },
-            paths.metadata_dir,
-        )
-        raise
-
-    completed_at = datetime.now(UTC).isoformat()
-    _write_inference_stage_metadata(
-        paths,
-        {
-            "stage": "infer",
-            "status": "completed",
-            "started_at": started_at,
-            "completed_at": completed_at,
-            "config_hash": config_hash,
-            **infer_details,
-            "inferred_count": result.num_samples,
-        },
-    )
-    append_run_event(
-        {
-            "timestamp": completed_at,
-            "run_name": config.project.run_name,
-            "stage": "infer",
-            "event_type": "stage_completed",
-            "status": "completed",
-            "config_hash": config_hash,
-            "details": {**infer_details, "inferred_count": result.num_samples},
-        },
-        paths.metadata_dir,
-    )
+            stage.result(inferred_count=result.num_samples)
     logger.info("Inference complete: %s samples -> %s", result.num_samples, output_dir)
     return result
