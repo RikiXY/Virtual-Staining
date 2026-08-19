@@ -15,7 +15,6 @@ import torch.optim as optim
 from torch.amp import GradScaler, autocast
 
 from virtual_staining.experiment.run_paths import RunPaths
-from virtual_staining.models.config import ModelConfig
 from virtual_staining.training.checkpoints import CheckpointManager
 from virtual_staining.training.config import (
     SUPPORTED_CHECKPOINT_METRICS,
@@ -111,7 +110,6 @@ class Trainer:
     def __init__(
         self,
         config: TrainingConfig,
-        model_config: ModelConfig,
         run_paths: RunPaths,
         generator: nn.Module,
         discriminator: nn.Module,
@@ -125,7 +123,6 @@ class Trainer:
         losses: LossConfig | None = None,
     ) -> None:
         self.config = config
-        self.model_config = model_config
         self._run_paths = run_paths
         self.generator = generator
         self.discriminator = discriminator
@@ -190,7 +187,6 @@ class Trainer:
             scheduler_D=self._scheduler_D,
             image_size=image_size,
             device=device,
-            model_name=model_config.name,
             lr_g=config.lr_g,
             lr_d=config.lr_d,
             beta1=config.beta1,

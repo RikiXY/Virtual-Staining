@@ -17,7 +17,6 @@ from virtual_staining.config.project import ProjectConfig
 from virtual_staining.data.dataset import PairedManifestDataset
 from virtual_staining.data.manifest import DatasetManifest, Split
 from virtual_staining.experiment.run_paths import RunPaths
-from virtual_staining.models.config import ModelConfig
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.config import (
@@ -122,7 +121,6 @@ def _make_resume_trainer(
     )
     return Trainer(
         config=config,
-        model_config=ModelConfig(),
         run_paths=run_paths,
         generator=generator.to(device),
         discriminator=discriminator.to(device),
@@ -168,7 +166,6 @@ def _make_trainer(
     return (
         Trainer(
             config=config,
-            model_config=ModelConfig(),
             run_paths=run_paths,
             generator=UNetGenerator().to(device),
             discriminator=PatchGANDiscriminator().to(device),
@@ -312,7 +309,6 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
     run_paths.create_directories()
     trainer = Trainer(
         config=config,
-        model_config=ModelConfig(),
         run_paths=run_paths,
         generator=UNetGenerator().to("cpu"),
         discriminator=PatchGANDiscriminator().to("cpu"),
@@ -370,7 +366,6 @@ def test_trainer_metrics_csv_includes_configured_loss_components(tmp_path: Path)
 
     trainer = Trainer(
         config=config,
-        model_config=ModelConfig(),
         run_paths=run_paths,
         generator=UNetGenerator().to("cpu"),
         discriminator=PatchGANDiscriminator().to("cpu"),
@@ -467,7 +462,6 @@ def test_validate_image_metrics_do_not_require_discriminator_outputs(tmp_path: P
     losses = LossConfig(generator=(LossTermConfig(name="l1", weight=1.0),), discriminator=())
     trainer = Trainer(
         config=config,
-        model_config=ModelConfig(),
         run_paths=run_paths,
         generator=UNetGenerator().to("cpu"),
         discriminator=_FailingDiscriminator().to("cpu"),
@@ -504,7 +498,6 @@ def test_trainer_checkpoint_round_trip(
 
     trainer_2 = Trainer(
         config=config,
-        model_config=ModelConfig(),
         run_paths=run_paths,
         generator=UNetGenerator().to("cpu"),
         discriminator=PatchGANDiscriminator().to("cpu"),
@@ -540,7 +533,7 @@ def test_checkpoint_architecture_metadata_present(
     assert gen["dropout"] is False
     assert gen["bilinear"] is False
     assert gen["output_activation"] == "tanh"
-    assert ck["architecture"]["name"] == "pix2pix"
+    assert "name" not in ck["architecture"]
     assert ck["format_version"] == 2
     assert ck["normalization_contract"] == {
         "input_range": "[-1, 1]",
@@ -610,7 +603,6 @@ def _make_policy_selection_trainer(
     run_paths.create_directories()
     trainer = Trainer(
         config=config,
-        model_config=ModelConfig(),
         run_paths=run_paths,
         generator=UNetGenerator().to("cpu"),
         discriminator=(discriminator or PatchGANDiscriminator()).to("cpu"),
@@ -1033,7 +1025,6 @@ def test_checkpoint_rate_creates_multiple_files(tmp_path: Path) -> None:
     )
     trainer = Trainer(
         config=config,
-        model_config=ModelConfig(),
         run_paths=run_paths,
         generator=UNetGenerator().to("cpu"),
         discriminator=PatchGANDiscriminator().to("cpu"),

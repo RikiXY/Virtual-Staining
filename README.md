@@ -181,7 +181,7 @@ From H&E staining to label-free:
 - `utils/` - shared primitives: dimensions, image I/O, metrics helpers
 - `config/` - YAML loading, validation, typed config sections
 - `experiment/` - run concept: RunPaths, RunMetadata, environment snapshots
-- `models/` - UNetGenerator, PatchGANDiscriminator, factory, model config
+- `models/` - UNetGenerator, PatchGANDiscriminator, model config
 - `data/` - dataset, manifest, builder, preprocessing pipeline
 - `training/` - Trainer, runner, steps, losses, checkpoint management
 - `inference/` - Predictor, runner, output writers

@@ -27,7 +27,7 @@ from virtual_staining.experiment.snapshots import (
 from virtual_staining.inference.outputs import InferenceOutputWriter
 from virtual_staining.inference.predictor import Predictor
 from virtual_staining.inference.results import InferenceResult
-from virtual_staining.models.factory import build_generator
+from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.checkpoints import (
     _check_generator_arch,
     _validate_checkpoint_metadata,
@@ -109,7 +109,15 @@ def load_inference_generator(
 
     checkpoint_arch = _validate_checkpoint_metadata(checkpoint, checkpoint_path)
 
-    generator = build_generator(config.model.generator).to(device)
+    generator_config = config.model.generator
+    generator = UNetGenerator(
+        in_channels=generator_config.in_channels,
+        out_channels=generator_config.out_channels,
+        base_channels=generator_config.base_channels,
+        norm=generator_config.norm,
+        dropout=generator_config.dropout,
+        bilinear=generator_config.bilinear,
+    ).to(device)
     _check_generator_arch(checkpoint_arch, generator)
     generator.load_state_dict(checkpoint["generator_state_dict"])
     return generator, checkpoint_path

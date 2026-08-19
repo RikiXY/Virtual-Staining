@@ -26,7 +26,8 @@ from virtual_staining.experiment.snapshots import (
     save_environment_snapshot,
     save_stage_config_snapshots,
 )
-from virtual_staining.models.factory import build_discriminator, build_generator
+from virtual_staining.models.discriminator import PatchGANDiscriminator
+from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.augmentation import build_training_paired_transform
 from virtual_staining.training.checkpoints import CheckpointManager
 from virtual_staining.training.results import TrainingResult
@@ -225,12 +226,25 @@ def run_training(
         generator=val_loader_generator,
     )
 
-    generator = build_generator(config.model.generator).to(device)
-    discriminator = build_discriminator(config.model.discriminator).to(device)
+    generator_config = config.model.generator
+    generator = UNetGenerator(
+        in_channels=generator_config.in_channels,
+        out_channels=generator_config.out_channels,
+        base_channels=generator_config.base_channels,
+        norm=generator_config.norm,
+        dropout=generator_config.dropout,
+        bilinear=generator_config.bilinear,
+    ).to(device)
+    discriminator_config = config.model.discriminator
+    discriminator = PatchGANDiscriminator(
+        in_channels=discriminator_config.in_channels,
+        ndf=discriminator_config.ndf,
+        norm=discriminator_config.norm,
+        use_sigmoid=discriminator_config.use_sigmoid,
+    ).to(device)
 
     trainer = Trainer(
         config=training,
-        model_config=config.model,
         run_paths=paths,
         generator=generator,
         discriminator=discriminator,

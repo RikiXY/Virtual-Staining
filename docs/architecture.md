@@ -18,7 +18,7 @@ upper layers may import from lower layers, never the reverse.
 | `utils/` | Shared primitives: image dimensions, image I/O helpers, pixel-level metric utilities |
 | `config/` | YAML loading and validation, typed config dataclasses, per-section accessors |
 | `experiment/` | Run concept: `RunPaths` (directory layout), `RunMetadata` (run-level provenance), stage/event metadata helpers, environment snapshots |
-| `models/` | `UNetGenerator`, `PatchGANDiscriminator`, model factory, model config dataclass |
+| `models/` | `UNetGenerator`, `PatchGANDiscriminator`, model config dataclass |
 | `data/` | `DatasetManifest`, `ManifestRecord`, `DatasetBuilder` (preprocessing pipeline), `PatchDataset` |
 | `training/` | `Trainer`, training runner, augmentation, per-step logic, adversarial and L1 losses, checkpoint I/O |
 | `inference/` | `Predictor`, inference runner, output writers |

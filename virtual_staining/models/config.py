@@ -5,14 +5,13 @@ from typing import Any, Literal, cast
 
 from virtual_staining.config.validation import parse_bool_strict, reject_unknown_keys
 
-ModelName = Literal["pix2pix"]
 NormName = Literal["batch", "instance"]
 
-_MODEL_KEYS = frozenset({"name", "generator", "discriminator"})
+_MODEL_KEYS = frozenset({"generator", "discriminator"})
 _GENERATOR_KEYS = frozenset(
-    {"name", "in_channels", "out_channels", "base_channels", "norm", "dropout", "bilinear"}
+    {"in_channels", "out_channels", "base_channels", "norm", "dropout", "bilinear"}
 )
-_DISCRIMINATOR_KEYS = frozenset({"name", "in_channels", "ndf", "norm", "use_sigmoid"})
+_DISCRIMINATOR_KEYS = frozenset({"in_channels", "ndf", "norm", "use_sigmoid"})
 
 
 def _choice(value: Any, field_name: str, choices: set[str]) -> str:
@@ -25,7 +24,6 @@ def _choice(value: Any, field_name: str, choices: set[str]) -> str:
 
 @dataclass(frozen=True)
 class GeneratorConfig:
-    name: Literal["unet"] = "unet"
     in_channels: int = 3
     out_channels: int = 3
     base_channels: int = 64
@@ -36,7 +34,6 @@ class GeneratorConfig:
 
 @dataclass(frozen=True)
 class DiscriminatorConfig:
-    name: Literal["patchgan"] = "patchgan"
     in_channels: int = 6
     ndf: int = 64
     norm: NormName = "instance"
@@ -45,7 +42,6 @@ class DiscriminatorConfig:
 
 @dataclass(frozen=True)
 class ModelConfig:
-    name: ModelName = "pix2pix"
     generator: GeneratorConfig = field(default_factory=GeneratorConfig)
     discriminator: DiscriminatorConfig = field(default_factory=DiscriminatorConfig)
 
@@ -64,12 +60,7 @@ class ModelConfig:
         reject_unknown_keys(generator_data, _GENERATOR_KEYS, "model.generator")
         reject_unknown_keys(discriminator_data, _DISCRIMINATOR_KEYS, "model.discriminator")
         return cls(
-            name=cast(ModelName, _choice(data.get("name", "pix2pix"), "model.name", {"pix2pix"})),
             generator=GeneratorConfig(
-                name=cast(
-                    Literal["unet"],
-                    _choice(generator_data.get("name", "unet"), "model.generator.name", {"unet"}),
-                ),
                 in_channels=int(generator_data.get("in_channels", 3)),
                 out_channels=int(generator_data.get("out_channels", 3)),
                 base_channels=int(generator_data.get("base_channels", 64)),
@@ -89,14 +80,6 @@ class ModelConfig:
                 ),
             ),
             discriminator=DiscriminatorConfig(
-                name=cast(
-                    Literal["patchgan"],
-                    _choice(
-                        discriminator_data.get("name", "patchgan"),
-                        "model.discriminator.name",
-                        {"patchgan"},
-                    ),
-                ),
                 in_channels=int(discriminator_data.get("in_channels", 6)),
                 ndf=int(discriminator_data.get("ndf", 64)),
                 norm=cast(
@@ -124,9 +107,7 @@ class ModelConfig:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "name": self.name,
             "generator": {
-                "name": self.generator.name,
                 "in_channels": self.generator.in_channels,
                 "out_channels": self.generator.out_channels,
                 "base_channels": self.generator.base_channels,
@@ -135,7 +116,6 @@ class ModelConfig:
                 "bilinear": self.generator.bilinear,
             },
             "discriminator": {
-                "name": self.discriminator.name,
                 "in_channels": self.discriminator.in_channels,
                 "ndf": self.discriminator.ndf,
                 "norm": self.discriminator.norm,
