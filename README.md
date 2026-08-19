@@ -163,8 +163,9 @@ evaluation:
 
 Experiment commands accept YAML configuration directly through `--config`.
 
-See [`docs/architecture.md`](docs/architecture.md) for the full config schema and
-[`docs/run_format.md`](docs/run_format.md) for run output layout.
+See [`docs/architecture.md`](docs/architecture.md) for the full config schema,
+[`docs/run_format.md`](docs/run_format.md) for run output layout, and
+[`docs/reproducibility.md`](docs/reproducibility.md) for canonical config snapshots and hashes.
 
 ## Qualitative Results
 
