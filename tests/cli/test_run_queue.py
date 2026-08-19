@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from tests.config_helpers import write_queue_config, write_run_config, write_yaml
+from virtual_staining import cli
 from virtual_staining.applications.run_queue import load_local_run_queue, run_queue
-from virtual_staining.cli import run_queue as run_queue_cli
 
 
 def _write_config(tmp_path: Path, section_yaml: str) -> Path:
@@ -44,9 +44,9 @@ def test_run_queue_main_passes_queue_path(tmp_path: Path, monkeypatch: pytest.Mo
         captured["queue_path"] = incoming_path
         return SimpleNamespace(status="completed")
 
-    monkeypatch.setattr(run_queue_cli, "run_queue", _fake_run_queue)
+    monkeypatch.setattr(cli, "run_queue", _fake_run_queue)
 
-    run_queue_cli.main(["--queue", str(queue_path)])
+    cli.main(["queue", "--queue", str(queue_path)])
 
     assert captured["queue_path"] == queue_path.resolve()
 

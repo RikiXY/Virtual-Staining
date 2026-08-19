@@ -9,17 +9,16 @@ generation of virtually stained images from label-free microscopy inputs (and vi
 
 | Command | Purpose |
 |---|---|
-| `vs-prepare` | Build the patch dataset from full-size image pairs |
-| `vs-complete-run` | Run prepare, train, infer, and evaluate in sequence |
-| `vs-run-queue` | Execute full or staged runs sequentially from a queue file |
-| `vs-train` | Train the Pix2Pix model |
-| `vs-infer` | Run inference on the test split |
-| `vs-infer-images` | Run inference on one image file or a directory of images |
-| `vs-evaluate` | Evaluate generated images with MAE, RMSE, PSNR, SSIM |
-| `vs-compare` | Compare metric distributions across runs |
-| `vs-compare-panels` | Build source / generated / target comparison panels |
-| `vs-evaluate-single` | Evaluate a single image pair |
-| `vs-organize` | Organise run outputs |
+| `vs prepare` | Build the patch dataset from full-size image pairs |
+| `vs run` | Run the complete pipeline or selected stages |
+| `vs train` | Train the Pix2Pix model |
+| `vs infer` | Run inference on the test split |
+| `vs infer-images` | Run inference on one image file or a directory of images |
+| `vs evaluate` | Evaluate a configured run or one image pair |
+| `vs compare` | Compare metric distributions across runs |
+| `vs panels` | Build source / generated / target comparison panels |
+| `vs organize` | Organise run outputs |
+| `vs queue` | Execute full or staged runs sequentially from a queue file |
 
 ## Quick Start
 
@@ -34,37 +33,44 @@ uv sync --frozen
 cp config/runs/example.yaml config/runs/local/my_run.yaml
 
 # 4. Run the full pipeline
-vs-complete-run --config config/runs/local/my_run.yaml
+vs run --config config/runs/local/my_run.yaml
 ```
 
-### Makefile shortcuts
+### Development commands
 
 ```bash
-make dataset        CONFIG=config/runs/local/my_run.yaml
-make train          CONFIG=config/runs/local/my_run.yaml
-make infer          CONFIG=config/runs/local/my_run.yaml
-make infer-images   CONFIG=config/runs/local/my_run.yaml INPUT_PATH=examples
-make evaluate       CONFIG=config/runs/local/my_run.yaml
-make complete-run   CONFIG=config/runs/local/my_run.yaml
-make run-queue      QUEUE=config/queues/example.yaml
+make sync
+make format
+make lint
+make typecheck
+make test
+make qa
+make clean
 ```
 
 Or call the CLI directly:
 
 ```bash
-vs-complete-run --config config/runs/local/my_run.yaml
+vs run --config config/runs/local/my_run.yaml
+vs run --config config/runs/local/my_run.yaml --stages train infer evaluate
+```
+
+Evaluate one generated image without adding another top-level command:
+
+```bash
+vs evaluate --pair target.png target_generated.png --output-dir evaluation
 ```
 
 Run inference on one image or a directory:
 
 ```bash
-vs-infer-images \
+vs infer-images \
   --config config/runs/local/my_run.yaml \
   --input examples \
   --output local_workspace/results/my_run/example_outputs
 ```
 
-`vs-infer-images` accepts `.bmp`, `.jpg`, `.jpeg`, `.png`, `.tif`, and `.tiff`.
+`vs infer-images` accepts `.bmp`, `.jpg`, `.jpeg`, `.png`, `.tif`, and `.tiff`.
 It defaults to `--mode auto`: patch-sized inputs use the standard single-patch
 path, while larger images are processed tile-by-tile and saved at the original
 size. Use `--mode resize` to force the resizing of the whole input to
@@ -86,7 +92,7 @@ jobs:
 ```
 
 ```bash
-vs-run-queue --queue config/queues/nightly.yaml
+vs queue --queue config/queues/nightly.yaml
 ```
 
 Omit `stages` to run the full `prepare`, `train`, `infer`, `evaluate`
@@ -155,9 +161,7 @@ evaluation:
   save_graphs: true
 ```
 
-The `CONFIG` variable is the only Make argument accepted for experiment targets.
-Put dataset paths, run names, image sizes, epochs, seeds, and checkpoint selection
-in the YAML - not in Make variables.
+Experiment commands accept YAML configuration directly through `--config`.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full config schema and
 [`docs/run_format.md`](docs/run_format.md) for run output layout.
@@ -266,7 +270,7 @@ Other useful commands:
 ```bash
 make format       # apply ruff formatting
 make lint         # ruff lint check
-make check-types  # pyright only
+make typecheck    # pyright only
 make test         # pytest only
 make sync         # reinstall from uv.lock
 uv lock           # re-resolve dependencies

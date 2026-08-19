@@ -25,7 +25,7 @@ upper layers may import from lower layers, never the reverse.
 | `inference/` | `Predictor`, inference runner, output writers |
 | `evaluation/` | Per-image metrics, `Evaluator`, summary statistics, comparison panels, ranking utilities |
 | `applications/` | Use-case orchestrators (`train.py`, `infer.py`, `evaluate.py`, ...) - no `argparse` |
-| `cli/` | `argparse` entrypoints (`vs-prepare`, `vs-train`, `vs-infer`, `vs-evaluate`, ...) - thin adapters over `applications/` |
+| `cli/` | The `argparse` entrypoint and helpers for `vs <command>` - thin adapters over `applications/` |
 
 ## Purity and I/O Boundaries
 

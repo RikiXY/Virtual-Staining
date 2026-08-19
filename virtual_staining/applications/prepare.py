@@ -114,7 +114,7 @@ def prepare(config: RunConfig, config_path: Path) -> DatasetBuildResult:
     ensure_run_metadata(
         metadata_dir / "run.json",
         run_name=config.project.run_name,
-        entrypoint="vs-prepare",
+        entrypoint="vs prepare",
         config_hash=config_hash,
     )
 

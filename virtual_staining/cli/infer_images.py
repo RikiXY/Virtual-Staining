@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import logging
-import sys
 from pathlib import Path
 
 from virtual_staining.applications.infer_images import (
@@ -12,19 +10,20 @@ from virtual_staining.applications.infer_images import (
     SingleInferenceResult,
     infer_images,
 )
+from virtual_staining.cli._common import (
+    add_config_argument,
+    add_log_level_argument,
+    configure_logging,
+)
 from virtual_staining.cli._output import print_info, print_section, style
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="vs-infer-images",
+        prog="vs infer-images",
         description="Run Pix2Pix inference on one image file or a directory of images.",
     )
-    parser.add_argument(
-        "--config",
-        required=True,
-        help="Path to the run config YAML. The inference checkpoint is read from this file.",
-    )
+    add_config_argument(parser)
     parser.add_argument(
         "--input",
         "--input-image",
@@ -68,11 +67,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="same",
         help="Output extension to use when an output file is not provided.",
     )
-    parser.add_argument(
-        "--log-level",
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-    )
+    add_log_level_argument(parser)
     return parser
 
 
@@ -94,11 +89,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    logging.basicConfig(
-        level=getattr(logging, args.log_level),
-        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
-        stream=sys.stdout,
-    )
+    configure_logging(args.log_level)
 
     config_path = Path(args.config).resolve()
     output_path = Path(args.output_path) if args.output_path is not None else None

@@ -38,7 +38,7 @@ of the target image to the source reference frame.
 
 ## Preprocessing Pipeline
 
-`vs-prepare` performs the following steps:
+`vs prepare` performs the following steps:
 
 1. **Input validation and loading**: reads the paired source and target images
    from `dataset_root` and validates the configured filenames and sizes.

@@ -145,7 +145,7 @@ def _add_from_metrics_subparser(subparsers: Any) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="vs-compare-panels",
+        prog="vs panels",
         description=(
             "Create side-by-side comparison panels for paired histology images, "
             "or generate representative panels from evaluation CSV files. "
@@ -153,15 +153,15 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Examples:\n"
-            "  vs-compare-panels single\n"
+            "  vs panels single\n"
             "      --source-image local_workspace/datasets/your_run/splits/test/00512_09216_source.tif\n"  # noqa: E501
             "      --generated-image local_workspace/results/your_run/artifacts/output_test/00512_09216_target_generated.tif\n"  # noqa: E501
             "      --target-image local_workspace/datasets/your_run/splits/test/00512_09216_target.tif\n"  # noqa: E501
             "      --with-diagnostics\n"
             "\n"
-            "  vs-compare-panels from-metrics\n"
+            "  vs panels from-metrics\n"
             "      --run-path local_workspace/results/your_run\n\n"
-            "Use 'vs-compare-panels <command> --help' to see the options "
+            "Use 'vs panels <command> --help' to see the options "
             "for a specific command."
         ),
         formatter_class=argparse.RawTextHelpFormatter,

@@ -151,7 +151,7 @@ def run_inference(config: RunConfig, config_path: Path) -> InferenceResult:
     ensure_run_metadata(
         paths.run_metadata,
         run_name=config.project.run_name,
-        entrypoint="vs-infer",
+        entrypoint="vs infer",
         config_hash=config_hash,
         manifest_path=str(manifest_path),
         manifest_sha256=manifest_hash,

@@ -100,12 +100,12 @@ local_workspace/results/<run_name>/
 ├── artifacts/
 │   ├── output_train/           # generated images for train-split samples
 │   ├── output_val/             # generated images for validation-split samples
-│   └── output_test/            # generated images for test-split samples (from vs-infer)
+│   └── output_test/            # generated images for test-split samples (from vs infer)
 ├── evaluation/
 │   ├── per_image_metrics.csv   # per-image metrics for all evaluated test samples
 │   ├── summary.csv             # aggregate statistics across the test split
 │   └── skipped.csv             # samples that could not be evaluated (optional)
-└── comparisons/                # comparison panels produced by vs-compare-panels
+└── comparisons/                # comparison panels produced by vs panels
 ```
 
 ## File Descriptions
@@ -234,7 +234,7 @@ Mask weighting is optional. When `params.mask.enabled` is `true`, the training
 dataset must provide a `foreground_mask` tensor for every batch. Missing masks
 raise an error instead of being treated as all-foreground. Current datasets look
 for sidecar patch masks named `<sample_id>_foreground_mask<ext>` in the same
-split directory. `vs-prepare` writes those sidecar masks for accepted patches
+split directory. `vs prepare` writes those sidecar masks for accepted patches
 when `preprocessing.save_masks: true`; the sidecar mask is the aligned target
 foreground mask for that patch.
 
@@ -407,7 +407,7 @@ This file is not written when all test samples are evaluated successfully.
   "seed":           42,
   "device":         "cuda",
   "cuda_device_name": "NVIDIA GeForce RTX 3090",
-  "entrypoint":     "vs-train",
+  "entrypoint":     "vs train",
   "package_version": "0.1.0",
   "last_event_at":  "2025-01-15T12:45:00+00:00",
   "stages_present": ["train", "infer", "evaluate"],

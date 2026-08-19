@@ -324,24 +324,24 @@ def _add_paired_subparser(subparsers: Any) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="vs-compare",
+        prog="vs compare",
         description=(
             "Compare metric distributions from per-image CSV files. "
             "Supports both unpaired and paired comparisons."
         ),
         epilog=(
             "Examples:\n"
-            "  vs-compare unpaired \\\n"
+            "  vs compare unpaired \\\n"
             "      --run-a local_workspace/results/run_a \\\n"
             "      --run-b local_workspace/results/run_b \\\n"
             "      --column ssim\n"
             "\n"
-            "  vs-compare paired \\\n"
+            "  vs compare paired \\\n"
             "      --run-a local_workspace/results/L1-25 \\\n"
             "      --run-b local_workspace/results/L1-31 \\\n"
             "      --column ssim\n"
             "\n"
-            "  vs-compare paired \\\n"
+            "  vs compare paired \\\n"
             "      --csv-a custom_a/per_image_metrics.csv \\\n"
             "      --csv-b custom_b/per_image_metrics.csv \\\n"
             "      --label-a custom_a \\\n"

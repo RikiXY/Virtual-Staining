@@ -67,7 +67,7 @@ def _patched_prepare_dependencies() -> Iterator[None]:
 
 def test_stage_metadata_overwrites_current_state_and_events_append(tmp_path: Path) -> None:
     metadata_dir = tmp_path / "metadata"
-    ensure_run_metadata(metadata_dir / "run.json", run_name="demo", entrypoint="vs-train")
+    ensure_run_metadata(metadata_dir / "run.json", run_name="demo", entrypoint="vs train")
 
     save_stage_metadata(
         "infer",

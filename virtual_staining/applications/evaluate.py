@@ -85,7 +85,7 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
     ensure_run_metadata(
         paths.run_metadata,
         run_name=project.run_name,
-        entrypoint="vs-evaluate",
+        entrypoint="vs evaluate",
         config_hash=config_hash,
         manifest_path=str(manifest_path),
         manifest_sha256=manifest_hash,

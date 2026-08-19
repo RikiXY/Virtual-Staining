@@ -14,7 +14,7 @@ from virtual_staining.cli._output import print_info, print_section, style
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="vs-organize",
+        prog="vs organize",
         description=(
             "Organize generated, target and source images by metric ranking. "
             "By default, the script reads RUN/evaluation/per_image_metrics.csv "
@@ -22,11 +22,11 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Examples:\n"
-            "  vs-organize \\\n"
+            "  vs organize \\\n"
             "      --run-path local_workspace/results/RUN_NAME \\\n"
             "      --top-k 20\n"
             "\n"
-            "  vs-organize \\\n"
+            "  vs organize \\\n"
             "      --metrics-csv local_workspace/results/RUN_NAME/evaluation/per_image_metrics.csv \\\n"  # noqa: E501
             "      --output-dir local_workspace/results/RUN_NAME/evaluation/sorted_by_metrics \\\n"
             "      --top-k 20 \\\n"

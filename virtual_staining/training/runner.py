@@ -96,7 +96,7 @@ def run_training(
 
     run_metadata = RunMetadata.create(
         run_name=config.project.run_name,
-        entrypoint="vs-train",
+        entrypoint="vs train",
         seed=seed,
         config_hash=config_hash,
         manifest_path=str(manifest_path),
