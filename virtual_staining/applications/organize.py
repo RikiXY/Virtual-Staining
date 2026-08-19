@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from virtual_staining.evaluation.ranking import organize_by_metrics
-from virtual_staining.utils.metrics import DEFAULT_METRICS
+from virtual_staining.metrics import DEFAULT_METRICS
 
 
 @dataclass(frozen=True)

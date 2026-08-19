@@ -18,7 +18,7 @@ from virtual_staining.evaluation.reports import (
 )
 from virtual_staining.evaluation.summaries import metric_value, write_summary_csv
 from virtual_staining.experiment.run_paths import RunPaths
-from virtual_staining.utils.metrics import DEFAULT_METRICS
+from virtual_staining.metrics import DEFAULT_METRICS
 
 __all__ = [
     "DEFAULT_METRICS",
@@ -143,7 +143,7 @@ def _infer_default_output_dir(generated_path: str | Path) -> Path:
 
 
 def _run_single(request: _EvaluateRequest) -> SingleEvalResult:
-    from virtual_staining.evaluation.metrics import evaluate_pair
+    from virtual_staining.evaluation.evaluator import evaluate_pair
 
     assert request.sample_id is not None
     target_files = collect_image_files(request.target_dir, "_target", "Target")

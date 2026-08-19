@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 from virtual_staining.config.validation import parse_bool_strict, reject_unknown_keys
-from virtual_staining.utils.metrics import is_higher_better_metric
+from virtual_staining.metrics import is_higher_better_metric
 
 _TRAINING_KEYS: frozenset[str] = frozenset(
     {

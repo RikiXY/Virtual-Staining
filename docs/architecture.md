@@ -7,7 +7,7 @@ upper layers may import from lower layers, never the reverse.
 
 | Layer | Description | Examples |
 |---|---|---|
-| **Library** | Reusable package code with explicit, testable I/O boundaries. Some modules are pure helpers; others are side-effecting services. | `utils/`, `config/`, `experiment/`, `models/`, `data/`, `training/`, `inference/`, `evaluation/` |
+| **Library** | Reusable package code with explicit, testable I/O boundaries. Some modules are pure helpers; others are side-effecting services. | `metrics.py`, `utils/`, `config/`, `experiment/`, `models/`, `data/`, `training/`, `inference/`, `evaluation/` |
 | **Application** | Use-case orchestrators that wire core modules together | `applications/` |
 | **Adapter** | Entry points that translate CLI arguments into application calls | `cli/` |
 
@@ -15,14 +15,15 @@ upper layers may import from lower layers, never the reverse.
 
 | Package | Responsibility |
 |---|---|
-| `utils/` | Shared primitives: image dimensions, image I/O helpers, pixel-level metric utilities |
+| `metrics.py` | Image metric computations, directions, and quality thresholds |
+| `utils/` | Shared primitives: image dimensions and image I/O helpers |
 | `config/` | YAML loading and validation, typed config dataclasses, per-section accessors |
 | `experiment/` | Run concept: `RunPaths` (directory layout), `RunMetadata` (run-level provenance), `RunProvenance` (stage lifecycle), environment snapshots |
 | `models/` | `UNetGenerator`, `PatchGANDiscriminator`, model config dataclass |
 | `data/` | `DatasetManifest`, `ManifestRecord`, `DatasetBuilder` (preprocessing pipeline), `PatchDataset` |
 | `training/` | `Trainer`, training runner, augmentation, per-step logic, adversarial and L1 losses, checkpoint I/O |
 | `inference/` | `Predictor`, inference runner, output writers |
-| `evaluation/` | Per-image metrics, `Evaluator`, summary statistics, comparison panels, ranking utilities |
+| `evaluation/` | Pair evaluation, plots, summary statistics, comparison panels, ranking utilities |
 | `applications/` | Use-case orchestrators (`train.py`, `infer.py`, `evaluate.py`, ...) - no `argparse` |
 | `cli/` | The `argparse` entrypoint and helpers for `vs <command>` - thin adapters over `applications/` |
 
@@ -37,7 +38,7 @@ Typical examples:
 
 | Kind | Example | Notes |
 |---|---|---|
-| Pure helper | `utils/metrics.py` | Metric computations over arrays/tensors |
+| Pure helper | `metrics.py` | Metric computations over arrays |
 | I/O helper | `utils/image_io.py` | Reads/writes image files |
 | Mostly pure indexing/data model | `data/dataset.py` | Dataset indexing and manifest-backed lookup |
 | Side-effecting preprocessing service | `data/builder.py` | Builds datasets, writes patches/manifests/metadata |

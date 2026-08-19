@@ -178,14 +178,15 @@ From H&E staining to label-free:
 
 ## Package Structure
 
-- `utils/` - shared primitives: dimensions, image I/O, metrics helpers
+- `metrics.py` - image metric computations and metric metadata
+- `utils/` - shared primitives: dimensions and image I/O
 - `config/` - YAML loading, validation, typed config sections
 - `experiment/` - run paths, metadata, stage lifecycle, and environment snapshots
 - `models/` - UNetGenerator, PatchGANDiscriminator, model config
 - `data/` - dataset, manifest, builder, preprocessing pipeline
 - `training/` - Trainer, runner, steps, losses, checkpoint management
 - `inference/` - Predictor, runner, output writers
-- `evaluation/` - metrics, evaluator, summaries, panels, ranking
+- `evaluation/` - evaluator, plots, summaries, panels, ranking
 - `applications/` - use-case orchestrators (no argparse)
 - `cli/` - thin argparse entrypoints delegating to `applications/`
 
@@ -219,6 +220,7 @@ Virtual-Staining/
 │   ├── training/
 │   └── utils/
 ├── virtual_staining/           # installable package
+│   ├── metrics.py              # metric computations and metadata
 │   ├── applications/           # use-case orchestrators
 │   ├── cli/                    # argparse entry points
 │   ├── config/

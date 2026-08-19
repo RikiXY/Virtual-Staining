@@ -4,8 +4,16 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from virtual_staining.evaluation.metrics import evaluate_pair
 from virtual_staining.evaluation.reports import build_metric_row, write_per_image_metrics_csv
+from virtual_staining.metrics import (
+    compute_mae,
+    compute_mse,
+    compute_pcc_gray,
+    compute_pcc_rgb,
+    compute_psnr,
+    compute_ssim,
+)
+from virtual_staining.utils.image_io import load_rgb_image, to_float01
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +27,37 @@ class EvaluationResult:
     num_skipped: int = 0
     rows: list[dict[str, object]] = field(default_factory=list)
     skipped_rows: list[dict[str, str]] = field(default_factory=list)
+
+
+def evaluate_pair(
+    target_path: str | Path,
+    generated_path: str | Path,
+) -> tuple[dict[str, float], tuple[int, int, int]]:
+    """Loads an image pair and computes the standard metrics."""
+    target = load_rgb_image(target_path)
+    generated = load_rgb_image(generated_path)
+    if target.shape != generated.shape:
+        raise ValueError(
+            "Target and generated images must have the same shape. "
+            f"Got {target.shape} and {generated.shape}."
+        )
+
+    target_float = to_float01(target)
+    generated_float = to_float01(generated)
+    mse = compute_mse(target_float, generated_float)
+    pcc_r, pcc_g, pcc_b, pcc_rgb_mean = compute_pcc_rgb(target_float, generated_float)
+    return {
+        "mae": compute_mae(target_float, generated_float),
+        "mse": mse,
+        "rmse": float(mse**0.5),
+        "psnr": compute_psnr(target_float, generated_float),
+        "ssim": compute_ssim(target_float, generated_float),
+        "pcc_gray": compute_pcc_gray(target_float, generated_float),
+        "pcc_r": pcc_r,
+        "pcc_g": pcc_g,
+        "pcc_b": pcc_b,
+        "pcc_rgb_mean": pcc_rgb_mean,
+    }, target.shape
 
 
 def evaluate_pairs(

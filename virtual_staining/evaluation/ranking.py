@@ -8,7 +8,7 @@ from typing import Any
 
 import pandas as pd
 
-from virtual_staining.utils.metrics import DEFAULT_METRICS, is_higher_better_metric
+from virtual_staining.metrics import DEFAULT_METRICS, is_higher_better_metric
 
 logger = logging.getLogger(__name__)
 

@@ -20,6 +20,7 @@ from virtual_staining.evaluation.comparison import (
     save_unpaired_report_txt,
     save_unpaired_summary_json,
 )
+from virtual_staining.evaluation.plotting import get_metric_plot_range
 from virtual_staining.evaluation.statistics import (
     PairedSummary,
     UnpairedComparison,
@@ -31,11 +32,7 @@ from virtual_staining.evaluation.statistics import (
     load_metric_values,
     resolve_input_csv,
 )
-from virtual_staining.utils.metrics import (
-    get_metric_plot_range,
-    get_metric_thresholds,
-    is_higher_better_metric,
-)
+from virtual_staining.metrics import get_metric_thresholds, is_higher_better_metric
 
 
 @dataclass(frozen=True)
