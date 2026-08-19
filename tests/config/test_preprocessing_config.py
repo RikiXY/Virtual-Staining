@@ -18,7 +18,7 @@ def test_from_mapping_uses_explicit_project_context() -> None:
         _mapping(), dataset_root=Path("/data"), default_image_size=(320, 256)
     )
     assert config.dataset_root == Path("/data")
-    assert config.image_size == (320, 256)
+    assert config.patch_size == (320, 256)
     assert config.grid_movement == (320, 256)
 
 
@@ -28,7 +28,7 @@ def test_patch_size_overrides_shared_image_size() -> None:
         dataset_root=Path("/data"),
         default_image_size=(256, 256),
     )
-    assert config.image_size == (128, 64)
+    assert config.patch_size == (128, 64)
     assert config.to_dict()["patch_size"] == [128, 64]
 
 
@@ -71,6 +71,7 @@ def test_to_dict_round_trip_preserves_resolved_section() -> None:
     ("overrides", "match"),
     [
         ({"source_name": "same.tif", "target_name": "same.tif"}, "differ"),
+        ({"patch_size": [0, 64]}, "patch_size"),
         ({"train_ratio": 0.5}, "sum to 1"),
         ({"mask_scale": 0.0}, "mask_scale"),
         ({"save_masks": "false"}, "YAML boolean"),

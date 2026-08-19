@@ -36,15 +36,15 @@ def _write_prepare_config(
     builder_config: PreprocessingConfig,
     *,
     filename: str = "prepare.yaml",
-    preprocessing_image_size: tuple[int, int] | None = None,
+    preprocessing_patch_size: tuple[int, int] | None = None,
 ) -> Path:
     preprocessing_lines = [
         f"source_name: {builder_config.source_name}",
         f"target_name: {builder_config.target_name}",
     ]
-    if preprocessing_image_size is not None:
+    if preprocessing_patch_size is not None:
         preprocessing_lines.append(
-            f"image_size: [{preprocessing_image_size[0]}, {preprocessing_image_size[1]}]"
+            f"patch_size: [{preprocessing_patch_size[0]}, {preprocessing_patch_size[1]}]"
         )
     preprocessing_lines.extend(
         [
@@ -68,7 +68,7 @@ def _write_prepare_config(
         ]
     )
     section = (
-        f"image_size: [{builder_config.image_size[0]}, {builder_config.image_size[1]}]\n"
+        f"image_size: [{builder_config.patch_size[0]}, {builder_config.patch_size[1]}]\n"
         f"{yaml_section('preprocessing', chr(10).join(preprocessing_lines))}"
     )
     return write_run_config(
@@ -145,7 +145,7 @@ def builder_config(tmp_path: Path) -> PreprocessingConfig:
         dataset_root=root,
         source_name="source.png",
         target_name="target.png",
-        image_size=(64, 64),
+        patch_size=(64, 64),
         grid_movement=(64, 64),
         margin=0,
         seed=42,
@@ -172,7 +172,7 @@ def builder_scaled_config(tmp_path: Path) -> PreprocessingConfig:
         dataset_root=root,
         source_name="source.png",
         target_name="target.png",
-        image_size=(64, 64),
+        patch_size=(64, 64),
         grid_movement=(64, 64),
         margin=0,
         seed=42,
@@ -335,7 +335,7 @@ def test_compute_masks_raises_if_estimated_memory_exceeds_limit(
         dataset_root=builder_config.dataset_root,
         source_name=builder_config.source_name,
         target_name=builder_config.target_name,
-        image_size=builder_config.image_size,
+        patch_size=builder_config.patch_size,
         grid_movement=builder_config.grid_movement,
         margin=builder_config.margin,
         seed=builder_config.seed,
@@ -457,7 +457,7 @@ def test_run_all_produces_same_output_as_old_stages(tmp_path: Path) -> None:
             dataset_root=dataset_root,
             source_name="source.png",
             target_name="target.png",
-            image_size=(64, 64),
+            patch_size=(64, 64),
             grid_movement=(64, 64),
             margin=0,
             seed=42,
@@ -577,7 +577,7 @@ def test_stream_patches_to_disk_writes_foreground_masks_when_enabled(
         assert mask_path.exists()
         mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
         assert mask is not None
-        assert mask.shape == config.image_size[::-1]
+        assert mask.shape == config.patch_size[::-1]
 
 
 def test_stream_patches_to_disk_uses_min_foreground_ratio_for_source_prefilter(
@@ -876,7 +876,7 @@ def test_assign_splits_and_finalize_is_deterministic_for_fixed_seed(
             dataset_root=dataset_root,
             source_name="source.png",
             target_name="target.png",
-            image_size=(64, 64),
+            patch_size=(64, 64),
             grid_movement=(64, 64),
             margin=0,
             seed=42,
@@ -1061,7 +1061,7 @@ def test_prepare_reuses_existing_dataset_when_fingerprint_matches(
 
 
 def test_prepare_rebuilds_when_preprocessing_changes(builder_config: PreprocessingConfig) -> None:
-    config_path = _write_prepare_config(builder_config, preprocessing_image_size=(32, 64))
+    config_path = _write_prepare_config(builder_config, preprocessing_patch_size=(32, 64))
     original_config_path = builder_config.dataset_root.parent / "original.yaml"
     original_config_text = config_path.read_text(encoding="utf-8").replace(
         "  patch_size:\n  - 32\n  - 64",
@@ -1243,8 +1243,8 @@ def test_run_all_writes_manifest_columns_and_relative_paths(
         assert row["target_path"].startswith(f"splits/{row['split']}/")
         assert row["input_modality"] == "source"
         assert row["target_modality"] == "target"
-        assert int(row["width"]) == builder_config.image_size[0]
-        assert int(row["height"]) == builder_config.image_size[1]
+        assert int(row["width"]) == builder_config.patch_size[0]
+        assert int(row["height"]) == builder_config.patch_size[1]
 
 
 def test_run_all_manifest_modalities_follow_configured_filenames(tmp_path: Path) -> None:
@@ -1256,7 +1256,7 @@ def test_run_all_manifest_modalities_follow_configured_filenames(tmp_path: Path)
         dataset_root=root,
         source_name="stained.tif",
         target_name="label_free.tif",
-        image_size=(64, 64),
+        patch_size=(64, 64),
         grid_movement=(64, 64),
         margin=0,
         seed=42,
@@ -1313,7 +1313,7 @@ def test_run_all_writes_dataset_fingerprint_metadata(builder_config: Preprocessi
     assert data["dataset_root"] == str(builder_config.dataset_root.resolve())
     assert data["preprocessing"]["source_name"] == builder_config.source_name
     assert data["preprocessing"]["target_name"] == builder_config.target_name
-    assert data["preprocessing"]["patch_size"] == list(builder_config.image_size)
+    assert data["preprocessing"]["patch_size"] == list(builder_config.patch_size)
     assert data["source"]["path"] == str((builder_config.dataset_root / "source.png").resolve())
     assert data["target"]["path"] == str((builder_config.dataset_root / "target.png").resolve())
     assert data["source"]["size"] > 0

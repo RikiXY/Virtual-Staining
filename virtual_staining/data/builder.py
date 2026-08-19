@@ -448,7 +448,7 @@ class DatasetBuilder:
             def _source_iter() -> Any:
                 if self._source_reader is None:
                     raise RuntimeError("Tiled source reader is not available")
-                patch_w, patch_h = self.config.image_size
+                patch_w, patch_h = self.config.patch_size
                 step_x, step_y = self.config.grid_movement
                 for x in range(0, cropped_w, step_x):
                     for y in range(0, cropped_h, step_y):
@@ -472,7 +472,7 @@ class DatasetBuilder:
             cropped_source_mask = None if use_mask_space_filtering else _crop(self._source_mask)
             source_iter = iter_image_with_grid(
                 cropped_source,
-                self.config.image_size,
+                self.config.patch_size,
                 self.config.grid_movement,
                 cropped_source_mask,
                 max_mask_percentage=self.config.min_foreground_ratio,
@@ -482,7 +482,7 @@ class DatasetBuilder:
         _log_memory("extract_patches")
         valid_rows: list[dict[str, Any]] = []
         discarded_rows: list[dict[str, Any]] = []
-        patch_w, patch_h = self.config.image_size
+        patch_w, patch_h = self.config.patch_size
         split_seed = self._effective_seed if self._effective_seed is not None else self.config.seed
         if split_seed is None:
             split_seed = 0
@@ -673,8 +673,8 @@ class DatasetBuilder:
                     target_modality=target_modality,
                     x=x,
                     y=y,
-                    width=self.config.image_size[0],
-                    height=self.config.image_size[1],
+                    width=self.config.patch_size[0],
+                    height=self.config.patch_size[1],
                 )
             )
 
@@ -694,8 +694,8 @@ class DatasetBuilder:
                     target_modality=target_modality,
                     x=x,
                     y=y,
-                    width=self.config.image_size[0],
-                    height=self.config.image_size[1],
+                    width=self.config.patch_size[0],
+                    height=self.config.patch_size[1],
                 )
             )
 

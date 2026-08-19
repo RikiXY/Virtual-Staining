@@ -63,18 +63,7 @@ class RunConfig:
                 else None
             ),
         )
-        config.validate()
         return config
-
-    def validate(self) -> None:
-        self.project.validate()
-        self.model.validate()
-        if self.preprocessing is not None:
-            self.preprocessing.validate()
-        if self.training is not None:
-            self.training.validate()
-        if self.inference is not None:
-            self.inference.validate()
 
     def to_dict(self) -> dict[str, Any]:
         data = self.project.to_dict()

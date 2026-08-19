@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from virtual_staining.config.validation import reject_unknown_keys
 from virtual_staining.utils.dimensions import parse_wh_size
 
 _PROJECT_KEYS = frozenset(
@@ -28,7 +27,6 @@ class ProjectConfig:
     @classmethod
     def from_mapping(cls, data: dict[str, Any]) -> ProjectConfig:
         project_data = {key: value for key, value in data.items() if key in _PROJECT_KEYS}
-        reject_unknown_keys(project_data, _PROJECT_KEYS, "project")
         manifest_path = project_data.get("manifest_path")
         return cls(
             dataset_root=Path(project_data["dataset_root"]),

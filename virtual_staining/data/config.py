@@ -68,7 +68,7 @@ class PreprocessingConfig:
     dataset_root: Path
     source_name: str
     target_name: str
-    image_size: tuple[int, int] = (256, 256)  # (width, height)
+    patch_size: tuple[int, int] = (256, 256)  # (width, height)
     grid_movement: tuple[int, int] = (256, 256)  # (x_step, y_step)
     margin: int = 200
     seed: int | None = None
@@ -101,7 +101,7 @@ class PreprocessingConfig:
             raise ValueError("target_name must differ from source_name")
 
         for field_name, value in (
-            ("image_size", self.image_size),
+            ("patch_size", self.patch_size),
             ("grid_movement", self.grid_movement),
         ):
             if len(value) != 2 or any(dimension <= 0 for dimension in value):
@@ -160,7 +160,7 @@ class PreprocessingConfig:
             dataset_root=dataset_root,
             source_name=data["source_name"],
             target_name=data["target_name"],
-            image_size=parse_wh_size(data.get("patch_size"), default_image_size),
+            patch_size=parse_wh_size(data.get("patch_size"), default_image_size),
             grid_movement=_pair(data.get("grid_movement"), default_image_size),
             margin=int(data.get("margin", 200)),
             seed=data.get("seed"),
@@ -202,7 +202,7 @@ class PreprocessingConfig:
         return {
             "source_name": self.source_name,
             "target_name": self.target_name,
-            "patch_size": list(self.image_size),
+            "patch_size": list(self.patch_size),
             "grid_movement": list(self.grid_movement),
             "margin": self.margin,
             "seed": self.seed,
