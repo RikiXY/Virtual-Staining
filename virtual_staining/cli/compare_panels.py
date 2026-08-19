@@ -9,10 +9,9 @@ from virtual_staining.applications.compare_panels import (
     FromMetricsResult,
     SinglePanelResult,
     compare_panels,
+    compare_panels_from_config,
 )
-from virtual_staining.config.run import RunConfig
-from virtual_staining.utils.console import print_info, print_section, style
-from virtual_staining.utils.metrics import color_for_metric
+from virtual_staining.cli._output import color_for_metric, print_info, print_section, style
 
 
 def _print_single_summary(result: SinglePanelResult) -> None:
@@ -182,42 +181,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _run_from_config(config_path: Path) -> None:
-    config = RunConfig.from_yaml(config_path.resolve())
-    panels_cfg = config.compare_panels
-    if panels_cfg is None:
-        raise SystemExit("Config has no 'compare_panels' section.")
-
-    if panels_cfg.mode == "single":
-        if (
-            panels_cfg.source_image is None
-            or panels_cfg.generated_image is None
-            or panels_cfg.target_image is None
-        ):
-            raise SystemExit(
-                "compare_panels.single requires source_image, generated_image, and target_image."
-            )
-        request = ComparePanelsRequest(
-            mode="single",
-            source_image=panels_cfg.source_image,
-            generated_image=panels_cfg.generated_image,
-            target_image=panels_cfg.target_image,
-            save_path=panels_cfg.save_path,
-            with_diagnostics=panels_cfg.with_diagnostics,
-        )
-        result = compare_panels(request)
-        assert isinstance(result, SinglePanelResult)
+    try:
+        result = compare_panels_from_config(config_path)
+    except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
+    if isinstance(result, SinglePanelResult):
         _print_single_summary(result)
         return
-
-    request = ComparePanelsRequest(
-        mode="from_metrics",
-        run_path=(
-            panels_cfg.run_path if panels_cfg.run_path is not None else config.project.run_root
-        ),
-    )
-    result = compare_panels(request)
     assert isinstance(result, FromMetricsResult)
-    _print_from_metrics_summary(result, panels_cfg.hide_graphs_path)
+    _print_from_metrics_summary(result, result.hide_graphs_path)
 
 
 def main(argv: list[str] | None = None) -> None:

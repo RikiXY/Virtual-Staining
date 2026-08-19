@@ -5,15 +5,14 @@ import logging
 import sys
 from pathlib import Path
 
-from virtual_staining.applications.infer_images import infer_images
-from virtual_staining.config.run import RunConfig
-from virtual_staining.inference.single import (
+from virtual_staining.applications.infer_images import (
     DEFAULT_TILE_OVERLAP,
     SUPPORTED_OUTPUT_FORMATS,
     DirectoryInferenceResult,
     SingleInferenceResult,
+    infer_images,
 )
-from virtual_staining.utils.console import print_info, print_section, style
+from virtual_staining.cli._output import print_info, print_section, style
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -102,10 +101,9 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     config_path = Path(args.config).resolve()
-    config = RunConfig.from_yaml(config_path)
     output_path = Path(args.output_path) if args.output_path is not None else None
     result = infer_images(
-        config,
+        config_path,
         Path(args.input_path),
         output_path,
         recursive=args.recursive,

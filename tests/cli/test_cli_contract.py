@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import subprocess
 import tomllib
-from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,9 +10,10 @@ import pytest
 import yaml
 
 from tests.config_helpers import write_run_config
+from virtual_staining.applications import pipeline
 from virtual_staining.applications.compare_panels import FromMetricsResult
-from virtual_staining.applications.complete_run import complete_run
 from virtual_staining.applications.evaluate_single import DatasetEvalResult
+from virtual_staining.applications.organize import OrganizeResult
 from virtual_staining.cli import compare as compare_cli
 from virtual_staining.cli import compare_panels as compare_panels_cli
 from virtual_staining.cli import complete_run as complete_run_cli
@@ -186,7 +186,7 @@ def test_compare_help_includes_config() -> None:
     assert "--config" in compare_cli._build_parser().format_help()
 
 
-def test_compare_main_with_config_invokes_compare(
+def test_compare_main_with_config_invokes_compare_application(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     current_run = tmp_path / "results" / "current_run"
@@ -203,13 +203,15 @@ def test_compare_main_with_config_invokes_compare(
         """,
     )
 
-    captured: dict[str, object] = {}
+    captured: list[Path] = []
 
-    def _fake_compare(request: object) -> object:
-        captured["request"] = request
+    def _fake_compare(config: Path) -> object:
+        captured.append(config)
         return SimpleNamespace(
             mode="paired",
-            output_dir=request.output_dir,  # type: ignore[attr-defined]
+            output_dir=current_run / "comparisons",
+            column="ssim",
+            higher_is_better=True,
             paired_summary=PairedSummary(
                 label_a="current_run",
                 label_b="baseline_run",
@@ -226,14 +228,11 @@ def test_compare_main_with_config_invokes_compare(
             ),
         )
 
-    monkeypatch.setattr(compare_cli, "compare", _fake_compare)
+    monkeypatch.setattr(compare_cli, "compare_from_config", _fake_compare)
 
     compare_cli.main(["--config", str(config_path)])
 
-    request = captured["request"]
-    assert request.csv_a == current_run / "evaluation" / "per_image_metrics.csv"  # type: ignore[attr-defined]
-    assert request.csv_b == baseline_run / "evaluation" / "per_image_metrics.csv"  # type: ignore[attr-defined]
-    assert request.mode == "paired"  # type: ignore[attr-defined]
+    assert captured == [config_path]
 
 
 def test_compare_panels_help_includes_config() -> None:
@@ -258,12 +257,13 @@ def test_compare_panels_main_with_config_invokes_compare_panels(
         """,
     )
 
-    captured: dict[str, object] = {}
+    captured: list[Path] = []
 
-    def _fake_compare_panels(request: object) -> object:
-        captured["request"] = request
+    def _fake_compare_panels(path: Path) -> object:
+        captured.append(path)
+        run_path = tmp_path / "results" / "current_run"
         return FromMetricsResult(
-            run_path=request.run_path,  # type: ignore[attr-defined]
+            run_path=run_path,
             available_metrics=["ssim"],
             per_metric_representative_rows={
                 "ssim": {
@@ -273,16 +273,15 @@ def test_compare_panels_main_with_config_invokes_compare_panels(
                 }
             },
             saved_aggregated_paths=[],
-            metrics_dir=(request.run_path / "comparisons" / "metrics"),  # type: ignore[attr-defined]
+            metrics_dir=run_path / "comparisons" / "metrics",
+            hide_graphs_path=True,
         )
 
-    monkeypatch.setattr(compare_panels_cli, "compare_panels", _fake_compare_panels)
+    monkeypatch.setattr(compare_panels_cli, "compare_panels_from_config", _fake_compare_panels)
 
     compare_panels_cli.main(["--config", str(config_path)])
 
-    request = captured["request"]
-    assert request.mode == "from_metrics"  # type: ignore[attr-defined]
-    assert request.run_path == tmp_path / "results" / "current_run"  # type: ignore[attr-defined]
+    assert captured == [config_path]
 
 
 def test_evaluate_single_help_includes_config() -> None:
@@ -306,11 +305,11 @@ def test_evaluate_single_main_with_config_invokes_dataset_mode(
         """,
     )
 
-    captured: dict[str, object] = {}
+    captured: list[Path] = []
 
-    def _fake_evaluate_single(request: object) -> object:
-        captured["request"] = request
-        output_dir = request.output_dir  # type: ignore[attr-defined]
+    def _fake_evaluate_dataset(path: Path) -> object:
+        captured.append(path)
+        output_dir = tmp_path / "results" / "current_run" / "evaluation"
         return DatasetEvalResult(
             target_files={},
             generated_files={},
@@ -323,14 +322,11 @@ def test_evaluate_single_main_with_config_invokes_dataset_mode(
             plot_paths=[],
         )
 
-    monkeypatch.setattr(evaluate_single_cli, "evaluate_single", _fake_evaluate_single)
+    monkeypatch.setattr(evaluate_single_cli, "evaluate_dataset", _fake_evaluate_dataset)
 
     evaluate_single_cli.main(["--config", str(config_path)])
 
-    request = captured["request"]
-    assert request.sample_id is None  # type: ignore[attr-defined]
-    assert request.save_graphs is True  # type: ignore[attr-defined]
-    assert request.output_dir == tmp_path / "results" / "current_run" / "evaluation"  # type: ignore[attr-defined]
+    assert captured == [config_path]
 
 
 def test_organize_help_includes_config() -> None:
@@ -352,26 +348,27 @@ def test_organize_main_with_config_invokes_organize(
         """,
     )
 
-    captured: dict[str, object] = {}
+    captured: list[Path] = []
 
-    def _fake_organize(request: object) -> None:
-        captured["request"] = request
+    def _fake_organize(path: Path) -> OrganizeResult:
+        captured.append(path)
+        return OrganizeResult(
+            metrics_csv=current_run / "evaluation" / "per_image_metrics.csv",
+            output_dir=current_run / "evaluation" / "sorted_by_metrics",
+            mode="copy",
+            top_k=5,
+            metric_summaries=(),
+            summary_csv=None,
+        )
 
-    monkeypatch.setattr(organize_cli, "organize", _fake_organize)
+    monkeypatch.setattr(organize_cli, "organize_from_config", _fake_organize)
 
     organize_cli.main(["--config", str(config_path)])
 
-    request = captured["request"]
-    assert request.metrics_csv == current_run / "evaluation" / "per_image_metrics.csv"  # type: ignore[attr-defined]
-    assert request.output_dir == current_run / "evaluation" / "sorted_by_metrics"  # type: ignore[attr-defined]
-    assert request.top_k == 5  # type: ignore[attr-defined]
-    assert request.mode == "copy"  # type: ignore[attr-defined]
-    assert request.include_all_ranked is True  # type: ignore[attr-defined]
+    assert captured == [config_path]
 
 
-def test_train_main_passes_full_run_config_and_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_train_main_calls_train_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _write_config(
         tmp_path,
         """\
@@ -379,23 +376,15 @@ def test_train_main_passes_full_run_config_and_path(
           epochs: 1
         """,
     )
-    captured: dict[str, object] = {}
-
-    def _fake_train(config: RunConfig, incoming_path: Path) -> None:
-        captured["config"] = config
-        captured["config_path"] = incoming_path
-
-    monkeypatch.setattr(train_cli, "train", _fake_train)
+    captured: list[tuple[Path, str]] = []
+    monkeypatch.setattr(train_cli, "run_stage", lambda path, stage: captured.append((path, stage)))
 
     train_cli.main(["--config", str(config_path)])
 
-    assert isinstance(captured["config"], RunConfig)
-    assert captured["config_path"] == config_path.resolve()
+    assert captured == [(config_path.resolve(), "train")]
 
 
-def test_infer_main_passes_full_run_config_and_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_infer_main_calls_infer_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _write_config(
         tmp_path,
         """\
@@ -403,18 +392,12 @@ def test_infer_main_passes_full_run_config_and_path(
           checkpoint_path: /tmp/ep000.pth
         """,
     )
-    captured: dict[str, object] = {}
-
-    def _fake_infer(config: RunConfig, incoming_path: Path) -> None:
-        captured["config"] = config
-        captured["config_path"] = incoming_path
-
-    monkeypatch.setattr(infer_cli, "infer", _fake_infer)
+    captured: list[tuple[Path, str]] = []
+    monkeypatch.setattr(infer_cli, "run_stage", lambda path, stage: captured.append((path, stage)))
 
     infer_cli.main(["--config", str(config_path)])
 
-    assert isinstance(captured["config"], RunConfig)
-    assert captured["config_path"] == config_path.resolve()
+    assert captured == [(config_path.resolve(), "infer")]
 
 
 def test_infer_images_main_passes_path_options(
@@ -432,7 +415,7 @@ def test_infer_images_main_passes_path_options(
     captured: dict[str, object] = {}
 
     def _fake_infer_images(
-        config: RunConfig,
+        incoming_config_path: Path,
         incoming_input: Path,
         incoming_output: Path | None = None,
         *,
@@ -441,7 +424,7 @@ def test_infer_images_main_passes_path_options(
         tile_overlap: int = 16,
         output_format: str = "same",
     ) -> object:
-        captured["config"] = config
+        captured["config_path"] = incoming_config_path
         captured["input_path"] = incoming_input
         captured["output_path"] = incoming_output
         captured["recursive"] = recursive
@@ -475,7 +458,7 @@ def test_infer_images_main_passes_path_options(
         ]
     )
 
-    assert isinstance(captured["config"], RunConfig)
+    assert captured["config_path"] == config_path.resolve()
     assert captured["input_path"] == input_dir
     assert captured["output_path"] == output_dir
     assert captured["recursive"] is True
@@ -484,7 +467,7 @@ def test_infer_images_main_passes_path_options(
     assert captured["output_format"] == "png"
 
 
-def test_evaluate_main_passes_full_run_config_and_path(
+def test_evaluate_main_calls_evaluate_stage(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config_path = _write_config(
@@ -494,23 +477,17 @@ def test_evaluate_main_passes_full_run_config_and_path(
           save_graphs: false
         """,
     )
-    captured: dict[str, object] = {}
-
-    def _fake_evaluate(config: RunConfig, incoming_path: Path) -> None:
-        captured["config"] = config
-        captured["config_path"] = incoming_path
-
-    monkeypatch.setattr(evaluate_cli, "evaluate", _fake_evaluate)
+    captured: list[tuple[Path, str]] = []
+    monkeypatch.setattr(
+        evaluate_cli, "run_stage", lambda path, stage: captured.append((path, stage))
+    )
 
     evaluate_cli.main(["--config", str(config_path)])
 
-    assert isinstance(captured["config"], RunConfig)
-    assert captured["config_path"] == config_path.resolve()
+    assert captured == [(config_path.resolve(), "evaluate")]
 
 
-def test_prepare_main_passes_full_run_config_and_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_prepare_main_calls_prepare_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _write_config(
         tmp_path,
         """\
@@ -519,23 +496,17 @@ def test_prepare_main_passes_full_run_config_and_path(
           target_name: target.png
         """,
     )
-    captured: dict[str, object] = {}
-
-    def _fake_prepare(config: RunConfig, incoming_path: Path) -> None:
-        captured["config"] = config
-        captured["config_path"] = incoming_path
-
-    monkeypatch.setattr(prepare_cli, "prepare", _fake_prepare)
+    captured: list[tuple[Path, str]] = []
+    monkeypatch.setattr(
+        prepare_cli, "run_stage", lambda path, stage: captured.append((path, stage))
+    )
 
     prepare_cli.main(["--config", str(config_path)])
 
-    assert isinstance(captured["config"], RunConfig)
-    assert captured["config_path"] == config_path.resolve()
+    assert captured == [(config_path.resolve(), "prepare")]
 
 
-def test_complete_run_main_passes_full_run_config_and_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_complete_run_main_calls_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _write_config(
         tmp_path,
         """\
@@ -550,18 +521,12 @@ def test_complete_run_main_passes_full_run_config_and_path(
           save_graphs: false
         """,
     )
-    captured: dict[str, object] = {}
-
-    def _fake_complete_run(config: RunConfig, incoming_path: Path) -> None:
-        captured["config"] = config
-        captured["config_path"] = incoming_path
-
-    monkeypatch.setattr(complete_run_cli, "complete_run", _fake_complete_run)
+    captured: list[Path] = []
+    monkeypatch.setattr(complete_run_cli, "run_stages", lambda path: captured.append(path))
 
     complete_run_cli.main(["--config", str(config_path)])
 
-    assert isinstance(captured["config"], RunConfig)
-    assert captured["config_path"] == config_path.resolve()
+    assert captured == [config_path.resolve()]
 
 
 def test_complete_run_executes_stages_in_order(
@@ -581,24 +546,13 @@ def test_complete_run_executes_stages_in_order(
           save_graphs: false
         """,
     )
-    config = RunConfig.from_yaml(config_path)
     calls: list[str] = []
+    monkeypatch.setattr(pipeline, "prepare", lambda config, path: calls.append("prepare"))
+    monkeypatch.setattr(pipeline, "run_training", lambda config, path: calls.append("train"))
+    monkeypatch.setattr(pipeline, "run_inference", lambda config, path: calls.append("infer"))
+    monkeypatch.setattr(pipeline, "evaluate", lambda config, path: calls.append("evaluate"))
 
-    def _fake_run_stages(
-        config_arg: RunConfig,
-        config_path_arg: Path,
-        stages: Sequence[str],
-    ) -> None:
-        assert config_arg is config
-        assert config_path_arg == config_path
-        calls.extend(stages)
-
-    monkeypatch.setattr(
-        "virtual_staining.applications.complete_run.run_stages",
-        _fake_run_stages,
-    )
-
-    complete_run(config, config_path)
+    pipeline.run_stages(config_path)
 
     assert calls == ["prepare", "train", "infer", "evaluate"]
 
@@ -620,26 +574,17 @@ def test_complete_run_stops_on_first_failing_stage(
           save_graphs: false
         """,
     )
-    config = RunConfig.from_yaml(config_path)
     calls: list[str] = []
 
-    def _fake_run_stages(
-        config_arg: RunConfig,
-        config_path_arg: Path,
-        stages: Sequence[str],
-    ) -> None:
-        assert config_arg is config
-        assert config_path_arg == config_path
-        assert list(stages) == ["prepare", "train", "infer", "evaluate"]
+    def _fail(config: RunConfig, path: Path) -> None:
+        del config, path
         calls.append("prepare")
         raise RuntimeError("prepare failed")
 
-    monkeypatch.setattr(
-        "virtual_staining.applications.complete_run.run_stages",
-        _fake_run_stages,
-    )
+    monkeypatch.setattr(pipeline, "prepare", _fail)
+    monkeypatch.setattr(pipeline, "run_training", lambda config, path: calls.append("train"))
 
     with pytest.raises(RuntimeError, match="prepare failed"):
-        complete_run(config, config_path)
+        pipeline.run_stages(config_path)
 
     assert calls == ["prepare"]

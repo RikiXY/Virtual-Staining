@@ -5,8 +5,7 @@ import logging
 import sys
 from pathlib import Path
 
-from virtual_staining.applications.prepare import prepare
-from virtual_staining.config.run import RunConfig
+from virtual_staining.applications.pipeline import run_stage
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -38,10 +37,7 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     config_path = Path(args.config).resolve()
-    config_bundle = RunConfig.from_yaml(config_path)
-    if config_bundle.preprocessing is None:
-        raise SystemExit("Config has no 'preprocessing' section.")
-    prepare(config_bundle, config_path)
+    run_stage(config_path, "prepare")
 
 
 if __name__ == "__main__":

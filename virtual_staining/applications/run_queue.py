@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from virtual_staining.applications.run_stages import (
+from virtual_staining.applications.pipeline import (
     DEFAULT_FULL_RUN_STAGES,
     VALID_STAGES,
     run_stages,
@@ -436,7 +436,7 @@ def run_queue(queue_path: Path) -> QueueState:
         return state
 
     failures = 0
-    for index, (job, config) in enumerate(zip(queue.jobs, configs, strict=True)):
+    for index, job in enumerate(queue.jobs):
         job_state = state.jobs[index]
         job_state.status = "running"
         job_state.started_at = datetime.now(UTC).isoformat()
@@ -444,11 +444,7 @@ def run_queue(queue_path: Path) -> QueueState:
         state.save(queue.state_path)
 
         try:
-            run_stages(
-                config=config,
-                config_path=job.config_path,
-                stages=job.stages or DEFAULT_FULL_RUN_STAGES,
-            )
+            run_stages(job.config_path, job.stages or DEFAULT_FULL_RUN_STAGES)
         except Exception as exc:
             failures += 1
             job_state.status = "failed"

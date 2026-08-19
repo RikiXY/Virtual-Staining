@@ -5,8 +5,7 @@ import logging
 import sys
 from pathlib import Path
 
-from virtual_staining.applications.complete_run import complete_run
-from virtual_staining.config.run import RunConfig
+from virtual_staining.applications.pipeline import run_stages
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -38,8 +37,7 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     config_path = Path(args.config).resolve()
-    config = RunConfig.from_yaml(config_path)
-    complete_run(config, config_path)
+    run_stages(config_path)
 
 
 if __name__ == "__main__":

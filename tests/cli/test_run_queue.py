@@ -10,7 +10,6 @@ import pytest
 from tests.config_helpers import write_queue_config, write_run_config, write_yaml
 from virtual_staining.applications.run_queue import load_local_run_queue, run_queue
 from virtual_staining.cli import run_queue as run_queue_cli
-from virtual_staining.config.run import RunConfig
 
 
 def _write_config(tmp_path: Path, section_yaml: str) -> Path:
@@ -144,12 +143,7 @@ def test_run_queue_executes_jobs_in_order_and_persists_state(
     )
     calls: list[tuple[Path, tuple[str, ...]]] = []
 
-    def _fake_run_stages(
-        config: RunConfig,
-        config_path: Path,
-        stages: Sequence[str],
-    ) -> None:
-        del config
+    def _fake_run_stages(config_path: Path, stages: Sequence[str]) -> None:
         calls.append((config_path, tuple(stages)))
 
     monkeypatch.setattr(
@@ -238,12 +232,8 @@ def test_run_queue_ablation_validation_passes_and_writes_summary(
     )
     calls: list[Path] = []
 
-    def _fake_run_stages(
-        config: RunConfig,
-        config_path: Path,
-        stages: Sequence[str],
-    ) -> None:
-        del config, stages
+    def _fake_run_stages(config_path: Path, stages: Sequence[str]) -> None:
+        del stages
         calls.append(config_path)
 
     monkeypatch.setattr(
@@ -309,7 +299,7 @@ def test_run_queue_ablation_validation_fails_on_undeclared_difference(
     calls: list[Path] = []
     monkeypatch.setattr(
         "virtual_staining.applications.run_queue.run_stages",
-        lambda config, config_path, stages: calls.append(config_path),
+        lambda config_path, stages: calls.append(config_path),
     )
 
     state = run_queue(queue_path)
@@ -381,7 +371,7 @@ def test_run_queue_ablation_canonicalizes_loss_list_order(
     )
     monkeypatch.setattr(
         "virtual_staining.applications.run_queue.run_stages",
-        lambda config, config_path, stages: None,
+        lambda config_path, stages: None,
     )
 
     state = run_queue(queue_path)
@@ -404,12 +394,8 @@ def test_run_queue_stops_on_failure_when_continue_on_failure_is_false(
     )
     calls: list[Path] = []
 
-    def _fake_run_stages(
-        config: RunConfig,
-        config_path: Path,
-        stages: Sequence[str],
-    ) -> None:
-        del config, stages
+    def _fake_run_stages(config_path: Path, stages: Sequence[str]) -> None:
+        del stages
         calls.append(config_path)
         raise RuntimeError("boom")
 
@@ -444,12 +430,8 @@ def test_run_queue_continues_after_failure_when_configured(
     )
     calls: list[Path] = []
 
-    def _fake_run_stages(
-        config: RunConfig,
-        config_path: Path,
-        stages: Sequence[str],
-    ) -> None:
-        del config, stages
+    def _fake_run_stages(config_path: Path, stages: Sequence[str]) -> None:
+        del stages
         calls.append(config_path)
         if config_path == config_a.resolve():
             raise RuntimeError("boom")
@@ -495,12 +477,8 @@ def test_run_queue_preflights_configs_before_running_any_job(
     )
     calls: list[Path] = []
 
-    def _fake_run_stages(
-        config: RunConfig,
-        config_path: Path,
-        stages: Sequence[str],
-    ) -> None:
-        del config, stages
+    def _fake_run_stages(config_path: Path, stages: Sequence[str]) -> None:
+        del stages
         calls.append(config_path)
 
     monkeypatch.setattr(

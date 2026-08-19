@@ -7,18 +7,14 @@ from pathlib import Path
 from typing import Any
 
 from virtual_staining.applications.evaluate_single import (
+    DEFAULT_METRICS,
     DatasetEvalResult,
-    EvaluateSingleRequest,
     SingleEvalResult,
-    _resolve_output_dir,
-    evaluate_single,
+    evaluate_dataset,
+    evaluate_pair,
+    metric_value,
 )
-from virtual_staining.config.run import RunConfig
-from virtual_staining.evaluation.io import extract_single_sample_id
-from virtual_staining.evaluation.summaries import metric_value
-from virtual_staining.experiment.run_paths import RunPaths
-from virtual_staining.utils.console import print_info, print_section, style
-from virtual_staining.utils.metrics import DEFAULT_METRICS, color_metric
+from virtual_staining.cli._output import color_metric, print_info, print_section, style
 
 METRIC_NAMES = list(DEFAULT_METRICS)
 
@@ -68,58 +64,19 @@ def _print_dataset_summary(result: DatasetEvalResult) -> None:
     print_info("Evaluation dir", style(str(result.output_dir), "bold", "magenta"))
 
 
-def _build_single_request(args: argparse.Namespace) -> EvaluateSingleRequest:
-    target_path = Path(args.target)
-    generated_path = Path(args.generated)
-    sample_id = extract_single_sample_id(target_path, generated_path)
-    output_dir = _resolve_output_dir(args.output_dir, generated_path)
-    return EvaluateSingleRequest(
-        target_dir=target_path.parent,
-        generated_dir=generated_path.parent,
-        output_dir=output_dir,
-        sample_id=sample_id,
-    )
-
-
-def _build_dataset_request(args: argparse.Namespace) -> EvaluateSingleRequest:
-    config = RunConfig.from_yaml(Path(args.config).resolve())
-    eval_cfg = config.evaluation
-    run_root = config.project.run_root
-    paths = RunPaths(run_root)
-    target_dir = (
-        eval_cfg.target_dir
-        if eval_cfg and eval_cfg.target_dir
-        else config.project.split_dir("test")
-    )
-    generated_dir = (
-        eval_cfg.generated_dir if eval_cfg and eval_cfg.generated_dir else paths.output_test_dir
-    )
-    output_dir = (
-        eval_cfg.output_dir if eval_cfg and eval_cfg.output_dir else run_root / "evaluation"
-    )
-    save_graphs = eval_cfg.save_graphs if eval_cfg else False
-    return EvaluateSingleRequest(
-        target_dir=target_dir,
-        generated_dir=generated_dir,
-        output_dir=output_dir,
-        sample_id=None,
-        save_graphs=save_graphs,
-    )
-
-
 def _cmd_single(args: argparse.Namespace) -> None:
-    request = _build_single_request(args)
-    result = evaluate_single(request)
-    assert isinstance(result, SingleEvalResult)
+    result = evaluate_pair(
+        Path(args.target),
+        Path(args.generated),
+        Path(args.output_dir) if args.output_dir is not None else None,
+    )
     _print_single_result(result)
     print_section("Saved files")
     print_info("Single evaluation CSV", style(str(result.single_case_csv), "bold", "magenta"))
 
 
 def _cmd_dataset(args: argparse.Namespace) -> None:
-    request = _build_dataset_request(args)
-    result = evaluate_single(request)
-    assert isinstance(result, DatasetEvalResult)
+    result = evaluate_dataset(Path(args.config))
     print_section("Saved files")
     print_info("Per-image metrics", str(result.per_image_csv))
     print_info("Summary", str(result.summary_csv))

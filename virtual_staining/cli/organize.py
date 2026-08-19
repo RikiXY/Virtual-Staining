@@ -3,71 +3,14 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from virtual_staining.applications.organize import OrganizeRequest, organize
-from virtual_staining.config.run import RunConfig
-from virtual_staining.utils.metrics import DEFAULT_METRICS
-
-
-def _resolve_run_path(run_path: str | Path) -> Path:
-    path = Path(run_path).resolve()
-    if not path.is_dir():
-        raise NotADirectoryError(f"Run directory not found: {path}")
-    return path
-
-
-def _infer_run_path_from_metrics_csv(metrics_csv: str | Path) -> Path | None:
-    path = Path(metrics_csv).resolve()
-    if path.name == "per_image_metrics.csv" and path.parent.name == "evaluation":
-        return path.parent.parent
-    return None
-
-
-def _resolve_metrics_csv(args: argparse.Namespace) -> Path:
-    if args.metrics_csv is not None:
-        metrics_csv = args.metrics_csv.resolve()
-        if not metrics_csv.is_file():
-            raise FileNotFoundError(f"CSV not found: {metrics_csv}")
-        return metrics_csv
-
-    if args.run_path is None:
-        raise ValueError("You must provide either --run-path or --metrics-csv.")
-
-    run_path = _resolve_run_path(args.run_path)
-    metrics_csv = run_path / "evaluation" / "per_image_metrics.csv"
-
-    if not metrics_csv.is_file():
-        raise FileNotFoundError(f"Could not find per_image_metrics.csv. Expected: {metrics_csv}")
-
-    return metrics_csv
-
-
-def _resolve_output_dir(args: argparse.Namespace, metrics_csv: Path) -> Path:
-    if args.output_dir is not None:
-        return args.output_dir.resolve()
-
-    if args.run_path is not None:
-        return _resolve_run_path(args.run_path) / "evaluation" / "sorted_by_metrics"
-
-    inferred_run_path = _infer_run_path_from_metrics_csv(metrics_csv)
-
-    if inferred_run_path is not None:
-        return inferred_run_path / "evaluation" / "sorted_by_metrics"
-
-    raise ValueError("Could not infer output directory. Please provide --output-dir explicitly.")
-
-
-def _build_request(args: argparse.Namespace) -> OrganizeRequest:
-    metrics_csv = _resolve_metrics_csv(args)
-    output_dir = _resolve_output_dir(args, metrics_csv)
-    return OrganizeRequest(
-        metrics_csv=metrics_csv,
-        output_dir=output_dir,
-        top_k=args.top_k,
-        metrics=tuple(args.metrics),
-        mode=args.mode,
-        overwrite=args.overwrite,
-        include_all_ranked=args.include_all_ranked,
-    )
+from virtual_staining.applications.organize import (
+    DEFAULT_METRICS,
+    OrganizeRequest,
+    OrganizeResult,
+    organize,
+    organize_from_config,
+)
+from virtual_staining.cli._output import print_info, print_section, style
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -155,44 +98,46 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _build_request_from_config(config_path: Path) -> OrganizeRequest:
-    config = RunConfig.from_yaml(config_path.resolve())
-    organize_cfg = config.organize
-    if organize_cfg is None:
-        raise SystemExit("Config has no 'organize' section.")
-    args = argparse.Namespace(
-        run_path=(
-            organize_cfg.run_path
-            if organize_cfg.run_path is not None
-            else config.project.run_root
-            if organize_cfg.metrics_csv is None
-            else None
-        ),
-        metrics_csv=organize_cfg.metrics_csv,
-        output_dir=organize_cfg.output_dir,
-        metrics=(
-            list(organize_cfg.metrics)
-            if organize_cfg.metrics is not None
-            else list(DEFAULT_METRICS)
-        ),
-        top_k=organize_cfg.top_k,
-        mode=organize_cfg.mode,
-        overwrite=organize_cfg.overwrite,
-        include_all_ranked=organize_cfg.include_all_ranked,
-    )
-    return _build_request(args)
+def _print_result(result: OrganizeResult) -> None:
+    print_section("Organize outputs by metric")
+    print_info("Metrics CSV", str(result.metrics_csv))
+    print_info("Output dir", style(str(result.output_dir), "bold", "magenta"))
+    print_info("Mode", result.mode)
+    print_info("Top K", str(result.top_k))
+    print_info("Image columns", ", ".join(result.image_columns))
+    for summary in result.metric_summaries:
+        print_info("Organized metric", style(str(summary["metric"]), "green"))
+    if result.summary_csv is not None:
+        print_info("Summary CSV", str(result.summary_csv))
+    print_section("Done")
+    print_info("Output written to", style(str(result.output_dir), "bold", "magenta"))
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
     if args.config is not None:
-        organize(_build_request_from_config(args.config))
+        try:
+            result = organize_from_config(args.config)
+        except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
+            raise SystemExit(str(exc)) from exc
+        _print_result(result)
         return
     if args.run_path is None and args.metrics_csv is None:
         parser.error("either --config, --run-path, or --metrics-csv is required")
     try:
-        request = _build_request(args)
+        result = organize(
+            OrganizeRequest(
+                run_path=args.run_path,
+                metrics_csv=args.metrics_csv,
+                output_dir=args.output_dir,
+                top_k=args.top_k,
+                metrics=tuple(args.metrics),
+                mode=args.mode,
+                overwrite=args.overwrite,
+                include_all_ranked=args.include_all_ranked,
+            )
+        )
     except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
-    organize(request)
+    _print_result(result)

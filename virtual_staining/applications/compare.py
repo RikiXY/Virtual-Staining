@@ -6,6 +6,7 @@ from typing import Literal
 
 import numpy as np
 
+from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.comparison import (
     plot_distribution_ecdf,
     plot_distribution_histogram,
@@ -29,11 +30,37 @@ from virtual_staining.evaluation.statistics import (
     compute_unpaired_comparison,
     compute_unpaired_group_stats,
     load_metric_values,
+    resolve_input_csv,
+)
+from virtual_staining.utils.metrics import (
+    get_metric_plot_range,
+    get_metric_thresholds,
+    is_higher_better_metric,
 )
 
 
 @dataclass(frozen=True)
 class CompareRequest:
+    mode: Literal["paired", "unpaired"]
+    run_a: Path | None = None
+    run_b: Path | None = None
+    csv_a: str | Path | None = None
+    csv_b: str | Path | None = None
+    label_a: str | None = None
+    label_b: str | None = None
+    column: str = "ssim"
+    output_dir: Path | None = None
+    higher_is_better: bool | None = None
+    bins: int = 30
+    min_value: float | None = None
+    max_value: float | None = None
+    thresholds: tuple[float, ...] | None = None
+    tolerance: float = 0.0
+    sample_id_column: str = "sample_id"
+
+
+@dataclass(frozen=True)
+class _ResolvedCompareRequest:
     mode: Literal["paired", "unpaired"]
     csv_a: Path
     csv_b: Path
@@ -54,6 +81,8 @@ class CompareRequest:
 class CompareResult:
     mode: Literal["paired", "unpaired"]
     output_dir: Path
+    column: str
+    higher_is_better: bool
     group_a: UnpairedGroupStats | None = None
     group_b: UnpairedGroupStats | None = None
     unpaired_comparison: UnpairedComparison | None = None
@@ -62,15 +91,139 @@ class CompareResult:
 
 def compare(request: CompareRequest) -> CompareResult:
     """Run the full comparison pipeline for paired or unpaired metric distributions."""
-    request.output_dir.mkdir(parents=True, exist_ok=True)
-    if request.mode == "unpaired":
-        return _compare_unpaired(request)
-    if request.mode == "paired":
-        return _compare_paired(request)
-    raise ValueError(f"Unsupported comparison mode: {request.mode}")
+    if request.mode not in {"paired", "unpaired"}:
+        raise ValueError(f"Unsupported comparison mode: {request.mode}")
+    resolved = _resolve_request(request)
+    resolved.output_dir.mkdir(parents=True, exist_ok=True)
+    return _compare_unpaired(resolved) if resolved.mode == "unpaired" else _compare_paired(resolved)
 
 
-def _compare_unpaired(request: CompareRequest) -> CompareResult:
+def compare_from_config(config_path: Path) -> CompareResult:
+    """Compare runs selected by a run config."""
+    config = RunConfig.from_yaml(config_path.resolve())
+    value = config.compare
+    if value is None:
+        raise ValueError("Config has no 'compare' section.")
+    return compare(
+        CompareRequest(
+            mode=value.mode,
+            run_a=value.run_a or (config.project.run_root if value.csv_a is None else None),
+            run_b=value.run_b,
+            csv_a=value.csv_a,
+            csv_b=value.csv_b,
+            label_a=value.label_a,
+            label_b=value.label_b,
+            column=value.column,
+            output_dir=value.output_dir,
+            higher_is_better=(
+                True
+                if value.higher_is_better is True
+                else False
+                if value.lower_is_better is True
+                else None
+            ),
+            bins=value.bins,
+            min_value=value.min_value,
+            max_value=value.max_value,
+            thresholds=value.thresholds,
+            tolerance=value.tolerance,
+            sample_id_column=value.sample_id_column,
+        )
+    )
+
+
+def _resolve_request(request: CompareRequest) -> _ResolvedCompareRequest:
+    csv_a = _resolve_csv(request.run_a, request.csv_a, "A")
+    csv_b = _resolve_csv(request.run_b, request.csv_b, "B")
+    label_a = request.label_a or _infer_label(request.run_a, request.csv_a, "A")
+    label_b = request.label_b or _infer_label(request.run_b, request.csv_b, "B")
+    default_min, default_max = get_metric_plot_range(request.column)
+    min_value = request.min_value if request.min_value is not None else default_min
+    max_value = request.max_value if request.max_value is not None else default_max
+    if min_value == max_value:
+        padding = 0.5 if min_value == 0 else abs(min_value) * 0.05
+        min_value -= padding
+        max_value += padding
+    output_dir = request.output_dir or _default_output_dir(request, csv_a, label_a, label_b)
+    return _ResolvedCompareRequest(
+        mode=request.mode,
+        csv_a=csv_a,
+        csv_b=csv_b,
+        label_a=label_a,
+        label_b=label_b,
+        column=request.column,
+        output_dir=output_dir,
+        higher_is_better=(
+            request.higher_is_better
+            if request.higher_is_better is not None
+            else is_higher_better_metric(request.column)
+        ),
+        bins=request.bins,
+        min_value=float(min_value),
+        max_value=float(max_value),
+        thresholds=(
+            request.thresholds
+            if request.thresholds is not None
+            else tuple(get_metric_thresholds(request.column))
+        ),
+        tolerance=request.tolerance,
+        sample_id_column=request.sample_id_column,
+    )
+
+
+def _resolve_csv(run_path: Path | None, csv_path: str | Path | None, label: str) -> Path:
+    if run_path is None and csv_path is None:
+        raise ValueError(f"You must provide either --run-{label.lower()} or --csv-{label.lower()}.")
+    if run_path is None:
+        assert csv_path is not None
+        return resolve_input_csv(csv_path)
+    run_path = run_path.resolve()
+    if not run_path.is_dir():
+        raise NotADirectoryError(f"Run directory not found: {run_path}")
+    path = run_path / "evaluation" / "per_image_metrics.csv"
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Could not find per_image_metrics.csv for run '{run_path.name}'. Expected: {path}"
+        )
+    return path
+
+
+def _infer_label(run_path: Path | None, csv_path: str | Path | None, fallback: str) -> str:
+    if run_path is not None:
+        return run_path.resolve().name
+    if csv_path is None:
+        return fallback
+    path = Path(csv_path).resolve()
+    if path.name == "per_image_metrics.csv" and path.parent.name == "evaluation":
+        return path.parent.parent.name
+    return path.stem
+
+
+def _default_output_dir(request: CompareRequest, csv_a: Path, label_a: str, label_b: str) -> Path:
+    results_root = next(
+        (
+            path.resolve().parent
+            for path in (request.run_a, request.run_b)
+            if path is not None and path.resolve().parent.name == "results"
+        ),
+        None,
+    )
+    if results_root is None:
+        parts = csv_a.resolve().parts
+        results_root = (
+            Path(*parts[: parts.index("results") + 1])
+            if "results" in parts
+            else Path("local_workspace") / "results"
+        )
+    return (
+        results_root
+        / "comparisons"
+        / f"{label_a}_vs_{label_b}"
+        / f"{request.mode}_{request.column}"
+    )
+
+
+def _compare_unpaired(request: _ResolvedCompareRequest) -> CompareResult:
     values_a = load_metric_values(request.csv_a, request.column)
     values_b = load_metric_values(request.csv_b, request.column)
     thresholds = list(request.thresholds)
@@ -136,13 +289,15 @@ def _compare_unpaired(request: CompareRequest) -> CompareResult:
     return CompareResult(
         mode="unpaired",
         output_dir=request.output_dir,
+        column=request.column,
+        higher_is_better=request.higher_is_better,
         group_a=group_a,
         group_b=group_b,
         unpaired_comparison=comparison,
     )
 
 
-def _compare_paired(request: CompareRequest) -> CompareResult:
+def _compare_paired(request: _ResolvedCompareRequest) -> CompareResult:
     merged = align_paired_frames(
         csv_a=request.csv_a,
         csv_b=request.csv_b,
@@ -209,5 +364,7 @@ def _compare_paired(request: CompareRequest) -> CompareResult:
     return CompareResult(
         mode="paired",
         output_dir=request.output_dir,
+        column=request.column,
+        higher_is_better=request.higher_is_better,
         paired_summary=summary,
     )

@@ -5,15 +5,24 @@ from pathlib import Path
 from virtual_staining.config.run import RunConfig
 from virtual_staining.inference.single import (
     DEFAULT_TILE_OVERLAP,
+    SUPPORTED_OUTPUT_FORMATS,
     DirectoryInferenceResult,
     SingleInferenceMode,
     SingleInferenceResult,
     run_image_path_inference,
 )
 
+__all__ = [
+    "DEFAULT_TILE_OVERLAP",
+    "SUPPORTED_OUTPUT_FORMATS",
+    "DirectoryInferenceResult",
+    "SingleInferenceResult",
+    "infer_images",
+]
+
 
 def infer_images(
-    config: RunConfig,
+    config_path: Path,
     input_path: Path,
     output_path: Path | None = None,
     *,
@@ -23,6 +32,7 @@ def infer_images(
     output_format: str = "same",
 ) -> SingleInferenceResult | DirectoryInferenceResult:
     """Application-level image inference entry point for files or directories."""
+    config = RunConfig.from_yaml(config_path.resolve())
     return run_image_path_inference(
         config,
         input_path,
