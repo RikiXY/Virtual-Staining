@@ -17,9 +17,15 @@ from tests.config_helpers import write_run_config, yaml_section
 from tests.image_helpers import make_rgb_image, write_rgb_image, write_rgb_pair
 from tests.manifest_helpers import make_manifest_record, write_manifest_csv
 from virtual_staining.config.run import RunConfig
+from virtual_staining.evaluation.evaluator import evaluate_pair
 from virtual_staining.evaluation.io import collect_image_files, extract_single_sample_id
-from virtual_staining.evaluation.metrics import evaluate_pair
-from virtual_staining.inference.runner import run_inference as _run_inference_impl
+from virtual_staining.inference import InferenceResult
+from virtual_staining.inference.runner import (
+    InferenceResult as RunnerInferenceResult,
+)
+from virtual_staining.inference.runner import (
+    run_inference as _run_inference_impl,
+)
 from virtual_staining.inference.single import (
     SingleInferenceResult,
     run_image_directory_inference,
@@ -36,6 +42,10 @@ from virtual_staining.utils.dimensions import to_torchvision_hw
 
 _IMAGE_SIZE = (32, 32)
 _SAMPLE_ID = "00512_09216"
+
+
+def test_inference_result_remains_package_export() -> None:
+    assert InferenceResult is RunnerInferenceResult
 
 
 # ---------------------------------------------------------------------------

@@ -45,12 +45,9 @@ class BestCheckpointRecord:
 def _make_arch_metadata(
     generator: nn.Module,
     discriminator: nn.Module,
-    *,
-    model_name: str | None = None,
 ) -> dict[str, Any]:
     """Build the architecture dict saved inside every checkpoint."""
     return {
-        "name": model_name,
         "generator": {
             "class": type(generator).__name__,
             "in_channels": getattr(generator, "in_channels", None),
@@ -180,7 +177,6 @@ class CheckpointManager:
         scheduler_D: (
             optim.lr_scheduler.LRScheduler | optim.lr_scheduler.ReduceLROnPlateau | None
         ) = None,
-        model_name: str | None = None,
         lr_g: float | None = None,
         lr_d: float | None = None,
         beta1: float | None = None,
@@ -200,7 +196,6 @@ class CheckpointManager:
         self.scheduler_D = scheduler_D
         self.image_size = image_size
         self.device = device
-        self.model_name = model_name
         self.lr_g = lr_g
         self.lr_d = lr_d
         self.beta1 = beta1
@@ -220,11 +215,7 @@ class CheckpointManager:
         checkpoint = {
             "format_version": CHECKPOINT_FORMAT_VERSION,
             "epoch": epoch,
-            "architecture": _make_arch_metadata(
-                self.generator,
-                self.discriminator,
-                model_name=self.model_name,
-            ),
+            "architecture": _make_arch_metadata(self.generator, self.discriminator),
             "normalization_contract": NORMALIZATION_CONTRACT,
             "generator_state_dict": self.generator.state_dict(),
             "discriminator_state_dict": self.discriminator.state_dict(),

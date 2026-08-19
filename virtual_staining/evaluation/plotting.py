@@ -6,11 +6,22 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from virtual_staining.utils.metrics import DEFAULT_METRICS
-from virtual_staining.utils.metrics import get_metric_plot_range as default_metric_plot_range
+from virtual_staining.metrics import DEFAULT_METRICS
 
 METRIC_NAMES = list(DEFAULT_METRICS)
 PLOT_FIXED_BINS = 30
+METRIC_PLOT_RANGES = {
+    "mae": (0.0, 1.0),
+    "mse": (0.0, 1.0),
+    "rmse": (0.0, 1.0),
+    "ssim": (0.0, 1.0),
+    "pcc_gray": (-1.0, 1.0),
+    "pcc_rgb_mean": (-1.0, 1.0),
+    "pcc_r": (-1.0, 1.0),
+    "pcc_g": (-1.0, 1.0),
+    "pcc_b": (-1.0, 1.0),
+    "psnr": (0.0, 60.0),
+}
 
 
 def _metric_value(row: dict[str, object], metric: str) -> float:
@@ -27,7 +38,12 @@ def _finite_metric_values(rows: list[dict[str, object]], metric: str) -> list[fl
 
 def get_metric_plot_range(metric: str) -> tuple[float, float]:
     """Returns the fixed range used in plots for a metric."""
-    return default_metric_plot_range(metric)
+    try:
+        return METRIC_PLOT_RANGES[metric]
+    except KeyError:
+        raise ValueError(
+            f"Unsupported metric '{metric}'. Supported metrics: {', '.join(METRIC_PLOT_RANGES)}"
+        ) from None
 
 
 def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) -> list[Path]:

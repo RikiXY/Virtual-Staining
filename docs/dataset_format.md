@@ -2,7 +2,7 @@
 
 ## Directory Layout
 
-`vs-prepare` writes its outputs into the dataset root folder specified by
+`vs prepare` writes its outputs into the dataset root folder specified by
 `dataset_root` in the run YAML.
 
 ```
@@ -31,7 +31,7 @@ local_workspace/datasets/<name>/
 
 ## Alignment Outputs
 
-`vs-prepare` writes `alignment_metadata.json` in the dataset root. This file
+`vs prepare` writes `alignment_metadata.json` in the dataset root. This file
 contains the affine warp matrix and alignment diagnostics used to pair source
 and target patches.
 
@@ -48,11 +48,11 @@ target frame solely for preview/debug purposes.
 exist and which dataset split they belong to. All downstream pipeline stages
 depend on it:
 
-- **Training** (`vs-train`) loads the manifest, validates it, filters to the
+- **Training** (`vs train`) loads the manifest, validates it, filters to the
   `train` and `val` splits, and fails loudly if the manifest is missing.
-- **Inference** (`vs-infer`) loads the manifest, validates it, filters to the
+- **Inference** (`vs infer`) loads the manifest, validates it, filters to the
   `test` split, and fails loudly if the manifest is missing.
-- **Evaluation** (`vs-evaluate`) loads the manifest, validates it, iterates the
+- **Evaluation** (`vs evaluate`) loads the manifest, validates it, iterates the
   `test` split records, and pairs each target image with the generated image
   expected for that manifest record.
 
@@ -99,10 +99,10 @@ therefore approximate, not exact-count guarantees.
 `f"{x:05}_{y:05}"` (zero-padded 5-digit integers, for example `00512_09216`
 for a patch starting at column 512, row 9216).
 
-**Uniqueness scope**: `sample_id` is unique within one `vs-prepare` run over a
+**Uniqueness scope**: `sample_id` is unique within one `vs prepare` run over a
 single source/target image pair.
 
-**Not globally unique**: if `vs-prepare` is run separately on two different
+**Not globally unique**: if `vs prepare` is run separately on two different
 slides and both runs contain the same patch coordinates, the resulting manifests
 will contain colliding `sample_id` values. Such manifests cannot be concatenated
 safely under the current contract.
@@ -182,7 +182,7 @@ whole-slide registration and cloud/object-store streaming are not implemented.
 ## dataset_build.json Fields
 
 `metadata/dataset_build.json` records build statistics and is written once
-`vs-prepare` completes successfully.
+`vs prepare` completes successfully.
 
 | Field | Type | Description |
 |---|---|---|
@@ -201,10 +201,10 @@ whole-slide registration and cloud/object-store streaming are not implemented.
 ## dataset_fingerprint.json Fields
 
 `metadata/dataset_fingerprint.json` records the cache identity of the prepared
-dataset. It is written after a successful `vs-prepare` run and is the intended
+dataset. It is written after a successful `vs prepare` run and is the intended
 input for later reuse-or-rebuild decisions.
 
-`vs-prepare` may skip rebuilding and reuse the existing dataset only when this
+`vs prepare` may skip rebuilding and reuse the existing dataset only when this
 fingerprint matches the current preprocessing request and the required prepared
 outputs still exist. Matching fingerprint metadata alone is not sufficient.
 
@@ -240,7 +240,7 @@ Each provenance record contains:
 
 ## Config Snapshots
 
-`config/input.yaml` preserves the exact YAML passed to `vs-prepare`.
+`config/input.yaml` preserves the exact YAML passed to `vs prepare`.
 
 `config/resolved.yaml` contains the fully expanded effective run configuration
 for the prepare stage, including the resolved preprocessing section that drove

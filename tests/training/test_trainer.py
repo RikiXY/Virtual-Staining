@@ -17,7 +17,6 @@ from virtual_staining.config.project import ProjectConfig
 from virtual_staining.data.dataset import PairedManifestDataset
 from virtual_staining.data.manifest import DatasetManifest, Split
 from virtual_staining.experiment.run_paths import RunPaths
-from virtual_staining.models.config import ModelConfig
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.config import (
@@ -122,7 +121,6 @@ def _make_resume_trainer(
     )
     return Trainer(
         config=config,
-        model_config=ModelConfig(),
         run_paths=run_paths,
         generator=generator.to(device),
         discriminator=discriminator.to(device),
@@ -139,6 +137,7 @@ def _make_resume_trainer(
 def _make_trainer(
     tmp_path: Path,
     checkpoint_rate: int,
+    scheduler: LearningRateSchedulerConfig | None = None,
 ) -> tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig]:
     dataset_root = tmp_path / "dataset"
     project = _make_project(dataset_root, tmp_path / "results", "smoke_run")
@@ -154,6 +153,7 @@ def _make_trainer(
         validate_rate=1,
         checkpoint_rate=checkpoint_rate,
         log_rate=1,
+        scheduler=scheduler or LearningRateSchedulerConfig(),
     )
     run_paths = RunPaths(project.run_root)
     run_paths.create_directories()
@@ -168,7 +168,6 @@ def _make_trainer(
     return (
         Trainer(
             config=config,
-            model_config=ModelConfig(),
             run_paths=run_paths,
             generator=UNetGenerator().to(device),
             discriminator=PatchGANDiscriminator().to(device),
@@ -312,7 +311,6 @@ def test_trainer_train_losses_are_epoch_averages(tmp_path: Path) -> None:
     run_paths.create_directories()
     trainer = Trainer(
         config=config,
-        model_config=ModelConfig(),
         run_paths=run_paths,
         generator=UNetGenerator().to("cpu"),
         discriminator=PatchGANDiscriminator().to("cpu"),
@@ -370,7 +368,6 @@ def test_trainer_metrics_csv_includes_configured_loss_components(tmp_path: Path)
 
     trainer = Trainer(
         config=config,
-        model_config=ModelConfig(),
         run_paths=run_paths,
         generator=UNetGenerator().to("cpu"),
         discriminator=PatchGANDiscriminator().to("cpu"),
@@ -467,7 +464,6 @@ def test_validate_image_metrics_do_not_require_discriminator_outputs(tmp_path: P
     losses = LossConfig(generator=(LossTermConfig(name="l1", weight=1.0),), discriminator=())
     trainer = Trainer(
         config=config,
-        model_config=ModelConfig(),
         run_paths=run_paths,
         generator=UNetGenerator().to("cpu"),
         discriminator=_FailingDiscriminator().to("cpu"),
@@ -504,7 +500,6 @@ def test_trainer_checkpoint_round_trip(
 
     trainer_2 = Trainer(
         config=config,
-        model_config=ModelConfig(),
         run_paths=run_paths,
         generator=UNetGenerator().to("cpu"),
         discriminator=PatchGANDiscriminator().to("cpu"),
@@ -517,8 +512,57 @@ def test_trainer_checkpoint_round_trip(
         losses=_pix2pix_losses(),
     )
 
-    start_epoch = trainer_2._checkpoint_manager.load(checkpoint_path)
+    start_epoch = trainer_2.resume(checkpoint_path)
     assert start_epoch == 1
+
+
+def test_resume_accepts_latest_and_relative_checkpoint_names(
+    checkpointing_trainer: tuple[Trainer, TrainingConfig, RunPaths, ProjectConfig],
+) -> None:
+    trainer, config, run_paths, project = checkpointing_trainer
+    trainer.train(seed=42)
+
+    relative_trainer = _make_resume_trainer(
+        config, run_paths, project, UNetGenerator(), PatchGANDiscriminator()
+    )
+    latest_trainer = _make_resume_trainer(
+        config, run_paths, project, UNetGenerator(), PatchGANDiscriminator()
+    )
+
+    assert relative_trainer.resume("ep000.pth") == 1
+    assert latest_trainer.resume("latest") == 1
+
+
+def test_resume_rejects_invalid_checkpoint_paths(tmp_path: Path) -> None:
+    trainer, _config, _run_paths, _project = _make_trainer(tmp_path, checkpoint_rate=1)
+
+    with pytest.raises(ValueError, match=r"must end with '.pth'"):
+        trainer.resume("checkpoint.txt")
+    with pytest.raises(FileNotFoundError, match="resume checkpoint not found"):
+        trainer.resume("missing.pth")
+    with pytest.raises(FileNotFoundError, match="resume='latest'.*no checkpoints found"):
+        trainer.resume("latest")
+
+
+def test_resume_restores_scheduler_state(tmp_path: Path) -> None:
+    trainer, config, run_paths, project = _make_trainer(
+        tmp_path,
+        checkpoint_rate=1,
+        scheduler=LearningRateSchedulerConfig(name="linear_decay", decay_start_epoch=0),
+    )
+    assert trainer._scheduler_G is not None
+    trainer._opt_G.step()
+    trainer._opt_D.step()
+    trainer._step_lr_schedulers(epoch=0, val_metrics=None)
+    checkpoint_path = trainer._checkpoint_manager.save(0)
+
+    resumed = _make_resume_trainer(
+        config, run_paths, project, UNetGenerator(), PatchGANDiscriminator()
+    )
+    assert resumed._scheduler_G is not None
+
+    assert resumed.resume(checkpoint_path) == 1
+    assert resumed._scheduler_G.state_dict()["last_epoch"] == 1
 
 
 def test_checkpoint_architecture_metadata_present(
@@ -540,7 +584,7 @@ def test_checkpoint_architecture_metadata_present(
     assert gen["dropout"] is False
     assert gen["bilinear"] is False
     assert gen["output_activation"] == "tanh"
-    assert ck["architecture"]["name"] == "pix2pix"
+    assert "name" not in ck["architecture"]
     assert ck["format_version"] == 2
     assert ck["normalization_contract"] == {
         "input_range": "[-1, 1]",
@@ -610,7 +654,6 @@ def _make_policy_selection_trainer(
     run_paths.create_directories()
     trainer = Trainer(
         config=config,
-        model_config=ModelConfig(),
         run_paths=run_paths,
         generator=UNetGenerator().to("cpu"),
         discriminator=(discriminator or PatchGANDiscriminator()).to("cpu"),
@@ -971,7 +1014,7 @@ def test_load_checkpoint_validates_matching_architecture(
     trainer_2 = _make_resume_trainer(
         config, run_paths, project, UNetGenerator(), PatchGANDiscriminator()
     )
-    start_epoch = trainer_2._checkpoint_manager.load(checkpoint_path)
+    start_epoch = trainer_2.resume(checkpoint_path)
     assert start_epoch == 1
 
 
@@ -986,7 +1029,7 @@ def test_load_checkpoint_raises_on_architecture_mismatch(
         config, run_paths, project, UNetGenerator(base_channels=32), PatchGANDiscriminator()
     )
     with pytest.raises(ValueError, match="base_channels"):
-        trainer_mismatch._checkpoint_manager.load(checkpoint_path)
+        trainer_mismatch.resume(checkpoint_path)
 
 
 def test_short_run_writes_final_checkpoint(tmp_path: Path) -> None:
@@ -1033,7 +1076,6 @@ def test_checkpoint_rate_creates_multiple_files(tmp_path: Path) -> None:
     )
     trainer = Trainer(
         config=config,
-        model_config=ModelConfig(),
         run_paths=run_paths,
         generator=UNetGenerator().to("cpu"),
         discriminator=PatchGANDiscriminator().to("cpu"),
@@ -1070,4 +1112,4 @@ def test_load_checkpoint_raises_on_missing_architecture(
         config, run_paths, project, UNetGenerator(), PatchGANDiscriminator()
     )
     with pytest.raises(ValueError, match="architecture metadata"):
-        trainer_2._checkpoint_manager.load(no_arch_path)
+        trainer_2.resume(no_arch_path)

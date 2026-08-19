@@ -5,7 +5,7 @@ import math
 import statistics
 from pathlib import Path
 
-from virtual_staining.utils.metrics import DEFAULT_METRICS
+from virtual_staining.metrics import DEFAULT_METRICS
 
 SUMMARY_METRIC_NAMES = list(DEFAULT_METRICS)
 

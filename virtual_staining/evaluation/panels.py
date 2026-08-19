@@ -8,8 +8,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 
+from virtual_staining.metrics import DEFAULT_METRICS, is_higher_better_metric
 from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS, open_rgb, to_float01
-from virtual_staining.utils.metrics import DEFAULT_METRICS, is_higher_better_metric
 
 METRIC_SELECTION_ORDER = list(DEFAULT_METRICS)
 SELECTION_SUMMARY_FIELDNAMES = [

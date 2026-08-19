@@ -7,7 +7,7 @@ upper layers may import from lower layers, never the reverse.
 
 | Layer | Description | Examples |
 |---|---|---|
-| **Library** | Reusable package code with explicit, testable I/O boundaries. Some modules are pure helpers; others are side-effecting services. | `utils/`, `config/`, `experiment/`, `reporting/`, `models/`, `data/`, `training/`, `inference/`, `evaluation/` |
+| **Library** | Reusable package code with explicit, testable I/O boundaries. Some modules are pure helpers; others are side-effecting services. | `metrics.py`, `utils/`, `config/`, `experiment/`, `models/`, `data/`, `training/`, `inference/`, `evaluation/` |
 | **Application** | Use-case orchestrators that wire core modules together | `applications/` |
 | **Adapter** | Entry points that translate CLI arguments into application calls | `cli/` |
 
@@ -15,17 +15,17 @@ upper layers may import from lower layers, never the reverse.
 
 | Package | Responsibility |
 |---|---|
-| `utils/` | Shared primitives: image dimensions, image I/O helpers, pixel-level metric utilities |
+| `metrics.py` | Image metric computations, directions, and quality thresholds |
+| `utils/` | Shared primitives: image dimensions and image I/O helpers |
 | `config/` | YAML loading and validation, typed config dataclasses, per-section accessors |
-| `experiment/` | Run concept: `RunPaths` (directory layout), `RunContext`, `RunMetadata` (run-level provenance), stage/event metadata helpers, environment snapshots |
-| `reporting/` | `Reporter` protocol with `NullReporter`, `LoggingReporter`, and `ConsoleReporter` implementations |
-| `models/` | `UNetGenerator`, `PatchGANDiscriminator`, model factory, model config dataclass |
+| `experiment/` | Run concept: `RunPaths` (directory layout), `RunMetadata` (run-level provenance), `RunProvenance` (stage lifecycle), environment snapshots |
+| `models/` | `UNetGenerator`, `PatchGANDiscriminator`, model config dataclass |
 | `data/` | `DatasetManifest`, `ManifestRecord`, `DatasetBuilder` (preprocessing pipeline), `PatchDataset` |
 | `training/` | `Trainer`, training runner, augmentation, per-step logic, adversarial and L1 losses, checkpoint I/O |
-| `inference/` | `Predictor`, inference runner, output writers |
-| `evaluation/` | Per-image metrics, `Evaluator`, summary statistics, comparison panels, ranking utilities |
+| `inference/` | Inference runner, single-image workflows, canonical output naming |
+| `evaluation/` | Pair evaluation, plots, summary statistics, comparison panels, ranking utilities |
 | `applications/` | Use-case orchestrators (`train.py`, `infer.py`, `evaluate.py`, ...) - no `argparse` |
-| `cli/` | `argparse` entrypoints (`vs-prepare`, `vs-train`, `vs-infer`, `vs-evaluate`, ...) - thin adapters over `applications/` |
+| `cli/` | The `argparse` entrypoint and helpers for `vs <command>` - thin adapters over `applications/` |
 
 ## Purity and I/O Boundaries
 
@@ -38,12 +38,12 @@ Typical examples:
 
 | Kind | Example | Notes |
 |---|---|---|
-| Pure helper | `utils/metrics.py` | Metric computations over arrays/tensors |
+| Pure helper | `metrics.py` | Metric computations over arrays |
 | I/O helper | `utils/image_io.py` | Reads/writes image files |
 | Mostly pure indexing/data model | `data/dataset.py` | Dataset indexing and manifest-backed lookup |
 | Side-effecting preprocessing service | `data/builder.py` | Builds datasets, writes patches/manifests/metadata |
 | Side-effecting training service | `training/trainer.py` | Training loop, checkpoint/log/metric writes |
-| Side-effecting inference service | `inference/predictor.py`, `inference/runner.py` | Model execution plus output writing at runner boundary |
+| Side-effecting inference service | `inference/runner.py`, `inference/single.py` | Model execution plus output writing at runner boundary |
 | Side-effecting evaluation service | `evaluation/` runners/report writers | Metrics computation plus report/CSV output |
 
 The architectural boundary is not “no I/O in library code.” The actual rule is:
@@ -58,12 +58,10 @@ These constraints are enforced by convention and checked in code review:
 
 - **No `argparse` outside `cli/`** - application and core modules accept typed
   dataclasses, not raw CLI strings.
-- **No `print()` outside `cli/` and `reporting/`** - structured progress output
-  goes through the `Reporter` protocol; all other modules use `logging`.
-- **No `sys.exit()` outside `cli/`** - applications raise exceptions; the CLI
-  layer converts them to exit codes.
 - **Core and application modules use `logging`**, never `print`, so callers can
   suppress or redirect output.
+- **No `sys.exit()` outside `cli/`** - applications raise exceptions; the CLI
+  layer converts them to exit codes.
 
 ## Configuration Policy
 

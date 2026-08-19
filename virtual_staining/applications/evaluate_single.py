@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.evaluator import evaluate_pairs
 from virtual_staining.evaluation.io import (
     build_evaluation_pairs,
     collect_image_files,
+    extract_single_sample_id,
 )
 from virtual_staining.evaluation.plotting import save_dataset_plots
 from virtual_staining.evaluation.reports import (
@@ -14,11 +16,22 @@ from virtual_staining.evaluation.reports import (
     write_single_case_csv,
     write_skipped_csv,
 )
-from virtual_staining.evaluation.summaries import write_summary_csv
+from virtual_staining.evaluation.summaries import metric_value, write_summary_csv
+from virtual_staining.experiment.run_paths import RunPaths
+from virtual_staining.metrics import DEFAULT_METRICS
+
+__all__ = [
+    "DEFAULT_METRICS",
+    "DatasetEvalResult",
+    "SingleEvalResult",
+    "evaluate_dataset",
+    "evaluate_pair",
+    "metric_value",
+]
 
 
 @dataclass(frozen=True)
-class EvaluateSingleRequest:
+class _EvaluateRequest:
     target_dir: Path
     generated_dir: Path
     output_dir: Path
@@ -48,11 +61,48 @@ class DatasetEvalResult:
     plot_paths: list[Path] = field(default_factory=list)
 
 
-def evaluate_single(request: EvaluateSingleRequest) -> SingleEvalResult | DatasetEvalResult:
-    """Evaluate a single pair or a full dataset of generated images against targets."""
-    if request.sample_id is not None:
-        return _run_single(request)
-    return _run_dataset(request)
+def evaluate_pair(
+    target_path: Path,
+    generated_path: Path,
+    output_dir: Path | None = None,
+) -> SingleEvalResult:
+    """Evaluate one user-selected target/generated image pair."""
+    return _run_single(
+        _EvaluateRequest(
+            target_dir=target_path.parent,
+            generated_dir=generated_path.parent,
+            output_dir=output_dir or _infer_default_output_dir(generated_path),
+            sample_id=extract_single_sample_id(target_path, generated_path),
+        )
+    )
+
+
+def evaluate_dataset(config_path: Path) -> DatasetEvalResult:
+    """Evaluate the generated dataset selected by a run config."""
+    config = RunConfig.from_yaml(config_path.resolve())
+    eval_cfg = config.evaluation
+    paths = RunPaths(config.project.run_root)
+    return _run_dataset(
+        _EvaluateRequest(
+            target_dir=(
+                eval_cfg.target_dir
+                if eval_cfg and eval_cfg.target_dir
+                else config.project.split_dir("test")
+            ),
+            generated_dir=(
+                eval_cfg.generated_dir
+                if eval_cfg and eval_cfg.generated_dir
+                else paths.output_test_dir
+            ),
+            output_dir=(
+                eval_cfg.output_dir
+                if eval_cfg and eval_cfg.output_dir
+                else config.project.run_root / "evaluation"
+            ),
+            sample_id=None,
+            save_graphs=eval_cfg.save_graphs if eval_cfg else False,
+        )
+    )
 
 
 def _infer_default_output_dir(generated_path: str | Path) -> Path:
@@ -92,14 +142,8 @@ def _infer_default_output_dir(generated_path: str | Path) -> Path:
     return run_dir / "evaluation"
 
 
-def _resolve_output_dir(output_dir: str | None, generated_path: str | Path) -> Path:
-    if output_dir is not None:
-        return Path(output_dir)
-    return _infer_default_output_dir(generated_path)
-
-
-def _run_single(request: EvaluateSingleRequest) -> SingleEvalResult:
-    from virtual_staining.evaluation.metrics import evaluate_pair
+def _run_single(request: _EvaluateRequest) -> SingleEvalResult:
+    from virtual_staining.evaluation.evaluator import evaluate_pair
 
     assert request.sample_id is not None
     target_files = collect_image_files(request.target_dir, "_target", "Target")
@@ -134,7 +178,7 @@ def _run_single(request: EvaluateSingleRequest) -> SingleEvalResult:
     )
 
 
-def _run_dataset(request: EvaluateSingleRequest) -> DatasetEvalResult:
+def _run_dataset(request: _EvaluateRequest) -> DatasetEvalResult:
     target_files = collect_image_files(request.target_dir, "_target", "Target")
     generated_files = collect_image_files(request.generated_dir, "_target_generated", "Generated")
     request.output_dir.mkdir(parents=True, exist_ok=True)

@@ -12,12 +12,9 @@ import numpy as np
 import pytest
 
 from tests.config_helpers import write_queue_config, write_run_config
-from virtual_staining.applications.complete_run import complete_run
-from virtual_staining.applications.evaluate import evaluate
-from virtual_staining.applications.infer import infer
+from virtual_staining.applications.pipeline import run_stage, run_stages
 from virtual_staining.applications.prepare import prepare
 from virtual_staining.applications.run_queue import run_queue
-from virtual_staining.applications.train import train
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.preprocessing import AlignmentMetadata
 
@@ -175,9 +172,9 @@ def test_full_pipeline_smoke(tmp_path: Path) -> None:
     assert prepared.val_count > 0
     assert prepared.test_count > 0
 
-    train(config, config_path)
-    infer(config, config_path)
-    evaluate(config, config_path)
+    run_stage(config_path, "train")
+    run_stage(config_path, "infer")
+    run_stage(config_path, "evaluate")
 
     metrics_csv = tmp_path / "runs" / "smoke_run" / "evaluation" / "per_image_metrics.csv"
     assert metrics_csv.exists()
@@ -193,10 +190,8 @@ def test_full_pipeline_smoke(tmp_path: Path) -> None:
 def test_complete_run_smoke(tmp_path: Path) -> None:
     dataset_root = _make_synthetic_dataset(tmp_path / "dataset")
     config_path = _write_smoke_config(tmp_path, dataset_root)
-    config = RunConfig.from_yaml(config_path)
-
     with _patched_prepare_dependencies():
-        complete_run(config, config_path)
+        run_stages(config_path)
 
     metrics_csv = tmp_path / "runs" / "smoke_run" / "evaluation" / "per_image_metrics.csv"
     assert metrics_csv.exists()
@@ -238,16 +233,14 @@ def test_prepare_smoke_reuses_cached_dataset(tmp_path: Path) -> None:
 def test_complete_run_smoke_reuses_cached_dataset(tmp_path: Path) -> None:
     dataset_root = _make_synthetic_dataset(tmp_path / "dataset")
     config_path = _write_smoke_config(tmp_path, dataset_root)
-    config = RunConfig.from_yaml(config_path)
-
     with _patched_prepare_dependencies():
-        complete_run(config, config_path)
+        run_stages(config_path)
 
     with patch(
         "virtual_staining.data.builder.DatasetBuilder.run_all",
         side_effect=AssertionError("complete_run should reuse the prepared dataset"),
     ):
-        complete_run(config, config_path)
+        run_stages(config_path)
 
     stage_data = json.loads(
         (dataset_root / "metadata" / "stages" / "prepare.json").read_text(encoding="utf-8")

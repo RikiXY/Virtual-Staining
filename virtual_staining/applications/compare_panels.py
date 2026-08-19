@@ -42,6 +42,7 @@ class FromMetricsResult:
     per_metric_representative_rows: dict[str, dict[str, dict[str, str]]]
     saved_aggregated_paths: list[Path]
     metrics_dir: Path
+    hide_graphs_path: bool = False
 
 
 def compare_panels(request: ComparePanelsRequest) -> SinglePanelResult | FromMetricsResult:

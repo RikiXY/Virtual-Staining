@@ -125,6 +125,7 @@ def test_checkpoint_stores_output_activation(tmp_path: Path) -> None:
 
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
 
+    assert "name" not in checkpoint["architecture"]
     assert checkpoint["architecture"]["generator"]["output_activation"] == "tanh"
 
 

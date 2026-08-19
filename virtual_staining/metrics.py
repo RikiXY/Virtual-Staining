@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from dataclasses import dataclass
 from typing import cast
 
 import numpy as np
@@ -12,16 +12,54 @@ except ImportError as exc:
         "Missing dependency: scikit-image. Install it with:\npip install scikit-image"
     ) from exc
 
-from virtual_staining.utils.image_io import load_rgb_image, to_float01
+
+@dataclass(frozen=True)
+class MetricSpec:
+    higher_is_better: bool
+    thresholds: tuple[float, ...]
 
 
-def validate_same_shape(target: np.ndarray, generated: np.ndarray) -> None:
-    """Verifies that target and generated have exactly the same shape."""
-    if target.shape != generated.shape:
+METRIC_SPECS: dict[str, MetricSpec] = {
+    "ssim": MetricSpec(True, (0.85, 0.75, 0.65)),
+    "psnr": MetricSpec(True, (25.0, 20.0, 15.0)),
+    "mae": MetricSpec(False, (0.06, 0.10, 0.16)),
+    "rmse": MetricSpec(False, (0.08, 0.12, 0.20)),
+    "mse": MetricSpec(False, (0.0036, 0.0100, 0.0256)),
+    "pcc_gray": MetricSpec(True, (0.95, 0.90, 0.80)),
+    "pcc_rgb_mean": MetricSpec(True, (0.95, 0.90, 0.80)),
+    "pcc_r": MetricSpec(True, (0.95, 0.90, 0.80)),
+    "pcc_g": MetricSpec(True, (0.95, 0.90, 0.80)),
+    "pcc_b": MetricSpec(True, (0.95, 0.90, 0.80)),
+}
+
+DEFAULT_METRICS = (
+    "ssim",
+    "psnr",
+    "mae",
+    "rmse",
+    "mse",
+    "pcc_rgb_mean",
+    "pcc_gray",
+)
+
+
+def _metric_spec(metric_name: str) -> MetricSpec:
+    try:
+        return METRIC_SPECS[metric_name]
+    except KeyError:
         raise ValueError(
-            "Target and generated images must have the same shape. "
-            f"Got {target.shape} and {generated.shape}."
-        )
+            f"Unsupported metric '{metric_name}'. Supported metrics: {', '.join(METRIC_SPECS)}"
+        ) from None
+
+
+def is_higher_better_metric(metric_name: str) -> bool:
+    """Returns True when larger values are better for a metric."""
+    return _metric_spec(metric_name).higher_is_better
+
+
+def get_metric_thresholds(metric_name: str) -> list[float]:
+    """Returns the default thresholds used by comparison summaries."""
+    return sorted(_metric_spec(metric_name).thresholds)
 
 
 def compute_mae(target: np.ndarray, generated: np.ndarray) -> float:
@@ -41,67 +79,42 @@ def compute_mse(target: np.ndarray, generated: np.ndarray) -> float:
 
 def compute_psnr(target: np.ndarray, generated: np.ndarray) -> float:
     """Computes the PSNR assuming normalised images in the [0,1] range."""
-    mse = float(np.mean((target - generated) ** 2))
-
+    mse = compute_mse(target, generated)
     if mse == 0.0:
         return float("inf")
-
     return float(20.0 * np.log10(1.0 / np.sqrt(mse)))
 
 
 def compute_ssim(target: np.ndarray, generated: np.ndarray) -> float:
     """Computes the SSIM on normalised RGB images."""
     try:
-        result = structural_similarity(
-            target,
-            generated,
-            channel_axis=2,
-            data_range=1.0,
-        )
-        return float(cast(float, result))
+        result = structural_similarity(target, generated, channel_axis=2, data_range=1.0)
     except TypeError:
-        result = structural_similarity(
-            target,
-            generated,
-            multichannel=True,
-            data_range=1.0,
-        )
-        return float(cast(float, result))
+        result = structural_similarity(target, generated, multichannel=True, data_range=1.0)
+    return float(cast(float, result))
 
 
 def compute_pcc(a: np.ndarray, b: np.ndarray) -> float:
     """Computes the Pearson correlation coefficient between two arrays."""
     a_flat = a.reshape(-1).astype(np.float64)
     b_flat = b.reshape(-1).astype(np.float64)
-
     if np.std(a_flat) == 0.0 or np.std(b_flat) == 0.0:
         return float("nan")
-
     return float(np.corrcoef(a_flat, b_flat)[0, 1])
 
 
-def filter_finite_values(values: list[float]) -> list[float]:
-    """Returns only the finite elements from a list, dropping inf and nan."""
-    return [v for v in values if np.isfinite(v)]
-
-
-def rgb_to_gray_float(image: np.ndarray) -> np.ndarray:
-    """Converts an RGB image to grayscale using standard luminance weights."""
+def _rgb_to_gray_float(image: np.ndarray) -> np.ndarray:
     if image.ndim == 2:
         return image.astype(np.float64)
-
     if image.shape[2] < 3:
         return image[..., 0].astype(np.float64)
-
     image = image.astype(np.float64)
     return 0.299 * image[..., 0] + 0.587 * image[..., 1] + 0.114 * image[..., 2]
 
 
 def compute_pcc_gray(target: np.ndarray, generated: np.ndarray) -> float:
     """Computes PCC after converting RGB images to grayscale."""
-    target_gray = rgb_to_gray_float(target)
-    generated_gray = rgb_to_gray_float(generated)
-    return compute_pcc(target_gray, generated_gray)
+    return compute_pcc(_rgb_to_gray_float(target), _rgb_to_gray_float(generated))
 
 
 def compute_pcc_rgb(target: np.ndarray, generated: np.ndarray) -> tuple[float, float, float, float]:
@@ -116,35 +129,3 @@ def compute_pcc_rgb(target: np.ndarray, generated: np.ndarray) -> tuple[float, f
     pcc_values = np.array([pcc_r, pcc_g, pcc_b], dtype=np.float64)
     pcc_rgb_mean = float("nan") if np.isnan(pcc_values).all() else float(np.nanmean(pcc_values))
     return pcc_r, pcc_g, pcc_b, pcc_rgb_mean
-
-
-def evaluate_pair(
-    target_path: str | Path,
-    generated_path: str | Path,
-) -> tuple[dict[str, float], tuple[int, int, int]]:
-    """Computes the standard metrics for a target/generated pair."""
-    target = load_rgb_image(target_path)
-    generated = load_rgb_image(generated_path)
-
-    validate_same_shape(target, generated)
-    shape = target.shape
-
-    target_float = to_float01(target)
-    generated_float = to_float01(generated)
-    mse = compute_mse(target_float, generated_float)
-    pcc_r, pcc_g, pcc_b, pcc_rgb_mean = compute_pcc_rgb(target_float, generated_float)
-
-    metrics = {
-        "mae": compute_mae(target_float, generated_float),
-        "mse": mse,
-        "rmse": float(np.sqrt(mse)),
-        "psnr": compute_psnr(target_float, generated_float),
-        "ssim": compute_ssim(target_float, generated_float),
-        "pcc_gray": compute_pcc_gray(target_float, generated_float),
-        "pcc_r": pcc_r,
-        "pcc_g": pcc_g,
-        "pcc_b": pcc_b,
-        "pcc_rgb_mean": pcc_rgb_mean,
-    }
-
-    return metrics, shape

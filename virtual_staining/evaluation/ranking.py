@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 from pathlib import Path
@@ -7,8 +8,9 @@ from typing import Any
 
 import pandas as pd
 
-from virtual_staining.utils.console import print_info, print_section, style
-from virtual_staining.utils.metrics import DEFAULT_METRICS, is_higher_better_metric
+from virtual_staining.metrics import DEFAULT_METRICS, is_higher_better_metric
+
+logger = logging.getLogger(__name__)
 
 IMAGE_COLUMNS = [
     "generated_path",
@@ -25,7 +27,7 @@ def ensure_parent(path: Path) -> None:
 def place_file(src: Path, dst: Path, mode: str, overwrite: bool = False) -> None:
     """Places a file by hardlink, symlink or copy."""
     if not src.exists():
-        print_info("Warning", style(f"Missing file: {src}", "yellow"))
+        logger.warning("Missing file: %s", src)
         return
 
     ensure_parent(dst)
@@ -40,15 +42,13 @@ def place_file(src: Path, dst: Path, mode: str, overwrite: bool = False) -> None
         try:
             os.link(src, dst)
         except OSError as exc:
-            print_info("Warning", style(f"Hard link failed for {src}: {exc}", "yellow"))
-            print_info("Fallback", "Copying file instead")
+            logger.warning("Hard link failed for %s: %s; copying instead", src, exc)
             shutil.copy2(src, dst)
     elif mode == "symlink":
         try:
             dst.symlink_to(src.resolve())
         except OSError as exc:
-            print_info("Warning", style(f"Symlink failed for {src}: {exc}", "yellow"))
-            print_info("Fallback", "Copying file instead")
+            logger.warning("Symlink failed for %s: %s; copying instead", src, exc)
             shutil.copy2(src, dst)
     elif mode == "copy":
         shutil.copy2(src, dst)
@@ -117,16 +117,13 @@ def organize_metric(
 ) -> dict[str, Any] | None:
     """Organizes files for a single metric."""
     if metric not in df.columns:
-        print_info("Warning", style(f"Metric '{metric}' not found in CSV. Skipping.", "yellow"))
+        logger.warning("Metric %r not found in CSV; skipping", metric)
         return None
 
     try:
         higher_is_better = is_higher_better_metric(metric)
     except ValueError:
-        print_info(
-            "Warning",
-            style(f"Unknown metric direction for '{metric}'. Skipping.", "yellow"),
-        )
+        logger.warning("Unknown metric direction for %r; skipping", metric)
         return None
 
     metric_values = pd.to_numeric(df[metric], errors="coerce")
@@ -134,10 +131,7 @@ def organize_metric(
     valid_df[metric] = metric_values[metric_values.notna()]
 
     if valid_df.empty:
-        print_info(
-            "Warning",
-            style(f"No valid numeric values for metric '{metric}'. Skipping.", "yellow"),
-        )
+        logger.warning("No valid numeric values for metric %r; skipping", metric)
         return None
 
     best_df = valid_df.sort_values(metric, ascending=not higher_is_better).head(top_k)
@@ -197,7 +191,7 @@ def organize_by_metrics(
     mode: str = "hardlink",
     overwrite: bool = False,
     include_all_ranked: bool = False,
-) -> None:
+) -> tuple[list[dict[str, Any]], Path | None, tuple[str, ...]]:
     """
     Read a per_image_metrics.csv and copy/link the top-N and worst-N images
     per metric into <output_dir>/<metric>/best/ and <output_dir>/<metric>/worst/.
@@ -211,22 +205,9 @@ def organize_by_metrics(
         )
 
     if "sample_id" not in df.columns:
-        print_info(
-            "Warning",
-            style(
-                "Column 'sample_id' not found. Ranking will use fallback names.",
-                "yellow",
-            ),
-        )
+        logger.warning("Column 'sample_id' not found; ranking will use fallback names")
 
     selected_metrics = metrics if metrics is not None else list(DEFAULT_METRICS)
-
-    print_section("Organize outputs by metric")
-    print_info("Metrics CSV", str(csv_path))
-    print_info("Output dir", style(str(output_dir), "bold", "magenta"))
-    print_info("Mode", mode)
-    print_info("Top K", str(top_n))
-    print_info("Image columns", ", ".join(image_columns))
 
     summary_rows: list[dict[str, Any]] = []
 
@@ -246,11 +227,5 @@ def organize_by_metrics(
             continue
 
         summary_rows.append(result)
-        print_info("Organized metric", style(metric, "green"))
-
-    if summary_rows:
-        summary_csv = write_organization_summary(summary_rows, output_dir)
-        print_info("Summary CSV", str(summary_csv))
-
-    print_section("Done")
-    print_info("Output written to", style(str(output_dir), "bold", "magenta"))
+    summary_csv = write_organization_summary(summary_rows, output_dir) if summary_rows else None
+    return summary_rows, summary_csv, tuple(image_columns)

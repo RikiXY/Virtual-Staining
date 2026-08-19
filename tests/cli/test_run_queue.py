@@ -8,9 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from tests.config_helpers import write_queue_config, write_run_config, write_yaml
+from virtual_staining import cli
 from virtual_staining.applications.run_queue import load_local_run_queue, run_queue
-from virtual_staining.cli import run_queue as run_queue_cli
-from virtual_staining.config.run import RunConfig
 
 
 def _write_config(tmp_path: Path, section_yaml: str) -> Path:
@@ -45,9 +44,9 @@ def test_run_queue_main_passes_queue_path(tmp_path: Path, monkeypatch: pytest.Mo
         captured["queue_path"] = incoming_path
         return SimpleNamespace(status="completed")
 
-    monkeypatch.setattr(run_queue_cli, "run_queue", _fake_run_queue)
+    monkeypatch.setattr(cli, "run_queue", _fake_run_queue)
 
-    run_queue_cli.main(["--queue", str(queue_path)])
+    cli.main(["queue", "--queue", str(queue_path)])
 
     assert captured["queue_path"] == queue_path.resolve()
 
@@ -144,12 +143,7 @@ def test_run_queue_executes_jobs_in_order_and_persists_state(
     )
     calls: list[tuple[Path, tuple[str, ...]]] = []
 
-    def _fake_run_stages(
-        config: RunConfig,
-        config_path: Path,
-        stages: Sequence[str],
-    ) -> None:
-        del config
+    def _fake_run_stages(config_path: Path, stages: Sequence[str]) -> None:
         calls.append((config_path, tuple(stages)))
 
     monkeypatch.setattr(
@@ -227,8 +221,8 @@ def test_run_queue_ablation_validation_passes_and_writes_summary(
             - training.epochs
           variable_fields:
             - run_name
-            - losses.generator
-            - losses.discriminator
+            - training.losses.generator
+            - training.losses.discriminator
         jobs:
           - config_path: {config_a}
             label: baseline
@@ -238,12 +232,8 @@ def test_run_queue_ablation_validation_passes_and_writes_summary(
     )
     calls: list[Path] = []
 
-    def _fake_run_stages(
-        config: RunConfig,
-        config_path: Path,
-        stages: Sequence[str],
-    ) -> None:
-        del config, stages
+    def _fake_run_stages(config_path: Path, stages: Sequence[str]) -> None:
+        del stages
         calls.append(config_path)
 
     monkeypatch.setattr(
@@ -264,10 +254,10 @@ def test_run_queue_ablation_validation_passes_and_writes_summary(
     assert summary["fixed_values"]["training.epochs"] == 1
     assert summary["jobs"][0]["run_name"] == "ablation_baseline"
     assert summary["jobs"][1]["run_name"] == "ablation_ssim_only"
-    assert summary["jobs"][0]["variable_values"]["losses.generator"][0]["name"] == (
+    assert summary["jobs"][0]["variable_values"]["training.losses.generator"][0]["name"] == (
         "adversarial_bce"
     )
-    assert summary["jobs"][1]["variable_values"]["losses.discriminator"] == []
+    assert summary["jobs"][1]["variable_values"]["training.losses.discriminator"] == []
     assert summary["jobs"][0]["config_hash"].startswith("sha256:")
 
 
@@ -309,7 +299,7 @@ def test_run_queue_ablation_validation_fails_on_undeclared_difference(
     calls: list[Path] = []
     monkeypatch.setattr(
         "virtual_staining.applications.run_queue.run_stages",
-        lambda config, config_path, stages: calls.append(config_path),
+        lambda config_path, stages: calls.append(config_path),
     )
 
     state = run_queue(queue_path)
@@ -381,7 +371,7 @@ def test_run_queue_ablation_canonicalizes_loss_list_order(
     )
     monkeypatch.setattr(
         "virtual_staining.applications.run_queue.run_stages",
-        lambda config, config_path, stages: None,
+        lambda config_path, stages: None,
     )
 
     state = run_queue(queue_path)
@@ -404,12 +394,8 @@ def test_run_queue_stops_on_failure_when_continue_on_failure_is_false(
     )
     calls: list[Path] = []
 
-    def _fake_run_stages(
-        config: RunConfig,
-        config_path: Path,
-        stages: Sequence[str],
-    ) -> None:
-        del config, stages
+    def _fake_run_stages(config_path: Path, stages: Sequence[str]) -> None:
+        del stages
         calls.append(config_path)
         raise RuntimeError("boom")
 
@@ -444,12 +430,8 @@ def test_run_queue_continues_after_failure_when_configured(
     )
     calls: list[Path] = []
 
-    def _fake_run_stages(
-        config: RunConfig,
-        config_path: Path,
-        stages: Sequence[str],
-    ) -> None:
-        del config, stages
+    def _fake_run_stages(config_path: Path, stages: Sequence[str]) -> None:
+        del stages
         calls.append(config_path)
         if config_path == config_a.resolve():
             raise RuntimeError("boom")
@@ -495,12 +477,8 @@ def test_run_queue_preflights_configs_before_running_any_job(
     )
     calls: list[Path] = []
 
-    def _fake_run_stages(
-        config: RunConfig,
-        config_path: Path,
-        stages: Sequence[str],
-    ) -> None:
-        del config, stages
+    def _fake_run_stages(config_path: Path, stages: Sequence[str]) -> None:
+        del stages
         calls.append(config_path)
 
     monkeypatch.setattr(

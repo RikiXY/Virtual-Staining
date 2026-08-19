@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
@@ -10,6 +12,84 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _Stage:
+    details: dict[str, Any] = field(default_factory=dict)
+
+    def result(self, **fields: Any) -> None:
+        """Add fields to the stage's final metadata and event."""
+        self.details.update(fields)
+
+
+@dataclass(frozen=True)
+class RunProvenance:
+    metadata_dir: Path
+    run_name: str
+    config_hash: str
+
+    @contextmanager
+    def stage(
+        self,
+        name: str,
+        *,
+        details: dict[str, Any] | None = None,
+    ) -> Iterator[_Stage]:
+        """Record one stage's running, completed, or failed lifecycle."""
+        started_at = datetime.now(UTC).isoformat()
+        base_details = dict(details or {})
+        stage = _Stage()
+        self._write(name, "running", started_at, None, base_details)
+        try:
+            yield stage
+        except Exception as exc:
+            self._write(
+                name,
+                "failed",
+                started_at,
+                datetime.now(UTC).isoformat(),
+                {**base_details, **stage.details, "error": str(exc)},
+            )
+            raise
+        else:
+            self._write(
+                name,
+                "completed",
+                started_at,
+                datetime.now(UTC).isoformat(),
+                {**base_details, **stage.details},
+            )
+
+    def _write(
+        self,
+        stage: str,
+        status: str,
+        started_at: str,
+        completed_at: str | None,
+        details: dict[str, Any],
+    ) -> None:
+        payload = dict(details)
+        payload.update(
+            stage=stage,
+            status=status,
+            started_at=started_at,
+            completed_at=completed_at,
+            config_hash=self.config_hash,
+        )
+        save_stage_metadata(stage, payload, self.metadata_dir)
+        append_run_event(
+            {
+                "timestamp": started_at if status == "running" else completed_at,
+                "run_name": self.run_name,
+                "stage": stage,
+                "event_type": f"stage_{'started' if status == 'running' else status}",
+                "status": status,
+                "config_hash": self.config_hash,
+                "details": details,
+            },
+            self.metadata_dir,
+        )
 
 
 @dataclass

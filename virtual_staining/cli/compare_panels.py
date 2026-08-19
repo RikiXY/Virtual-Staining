@@ -10,9 +10,7 @@ from virtual_staining.applications.compare_panels import (
     SinglePanelResult,
     compare_panels,
 )
-from virtual_staining.config.run import RunConfig
-from virtual_staining.utils.console import print_info, print_section, style
-from virtual_staining.utils.metrics import color_for_metric
+from virtual_staining.cli._output import color_for_metric, print_info, print_section, style
 
 
 def _print_single_summary(result: SinglePanelResult) -> None:
@@ -147,7 +145,7 @@ def _add_from_metrics_subparser(subparsers: Any) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="vs-compare-panels",
+        prog="vs panels",
         description=(
             "Create side-by-side comparison panels for paired histology images, "
             "or generate representative panels from evaluation CSV files. "
@@ -155,25 +153,19 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Examples:\n"
-            "  vs-compare-panels single\n"
+            "  vs panels single\n"
             "      --source-image local_workspace/datasets/your_run/splits/test/00512_09216_source.tif\n"  # noqa: E501
             "      --generated-image local_workspace/results/your_run/artifacts/output_test/00512_09216_target_generated.tif\n"  # noqa: E501
             "      --target-image local_workspace/datasets/your_run/splits/test/00512_09216_target.tif\n"  # noqa: E501
             "      --with-diagnostics\n"
             "\n"
-            "  vs-compare-panels from-metrics\n"
+            "  vs panels from-metrics\n"
             "      --run-path local_workspace/results/your_run\n\n"
-            "Use 'vs-compare-panels <command> --help' to see the options "
+            "Use 'vs panels <command> --help' to see the options "
             "for a specific command."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
         add_help=True,
-    )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=None,
-        help="Path to run config YAML. Uses the config's compare_panels section.",
     )
     subparsers = parser.add_subparsers(dest="mode")
     _add_single_subparser(subparsers)
@@ -181,51 +173,9 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _run_from_config(config_path: Path) -> None:
-    config = RunConfig.from_yaml(config_path.resolve())
-    panels_cfg = config.compare_panels
-    if panels_cfg is None:
-        raise SystemExit("Config has no 'compare_panels' section.")
-
-    if panels_cfg.mode == "single":
-        if (
-            panels_cfg.source_image is None
-            or panels_cfg.generated_image is None
-            or panels_cfg.target_image is None
-        ):
-            raise SystemExit(
-                "compare_panels.single requires source_image, generated_image, and target_image."
-            )
-        request = ComparePanelsRequest(
-            mode="single",
-            source_image=panels_cfg.source_image,
-            generated_image=panels_cfg.generated_image,
-            target_image=panels_cfg.target_image,
-            save_path=panels_cfg.save_path,
-            with_diagnostics=panels_cfg.with_diagnostics,
-        )
-        result = compare_panels(request)
-        assert isinstance(result, SinglePanelResult)
-        _print_single_summary(result)
-        return
-
-    request = ComparePanelsRequest(
-        mode="from_metrics",
-        run_path=(
-            panels_cfg.run_path if panels_cfg.run_path is not None else config.project.run_root
-        ),
-    )
-    result = compare_panels(request)
-    assert isinstance(result, FromMetricsResult)
-    _print_from_metrics_summary(result, panels_cfg.hide_graphs_path)
-
-
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    if args.config is not None:
-        _run_from_config(args.config)
-        return
     if not hasattr(args, "func"):
-        parser.error("either --config or a compare-panels mode is required")
+        parser.error("a compare-panels mode is required")
     args.func(args)

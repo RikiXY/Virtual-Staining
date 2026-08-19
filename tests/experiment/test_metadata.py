@@ -8,12 +8,14 @@ from unittest.mock import patch
 
 import cv2
 import numpy as np
+import pytest
 
 from tests.config_helpers import write_run_config
 from virtual_staining.applications.prepare import prepare
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.preprocessing import AlignmentMetadata
 from virtual_staining.experiment.metadata import (
+    RunProvenance,
     append_run_event,
     ensure_run_metadata,
     save_stage_metadata,
@@ -67,7 +69,7 @@ def _patched_prepare_dependencies() -> Iterator[None]:
 
 def test_stage_metadata_overwrites_current_state_and_events_append(tmp_path: Path) -> None:
     metadata_dir = tmp_path / "metadata"
-    ensure_run_metadata(metadata_dir / "run.json", run_name="demo", entrypoint="vs-train")
+    ensure_run_metadata(metadata_dir / "run.json", run_name="demo", entrypoint="vs train")
 
     save_stage_metadata(
         "infer",
@@ -124,6 +126,43 @@ def test_stage_metadata_overwrites_current_state_and_events_append(tmp_path: Pat
     assert run_data["stages_present"] == ["infer"]
     assert run_data["last_completed_stage"] == "infer"
     assert run_data["last_event_at"] == "2026-01-01T00:01:00+00:00"
+
+
+def test_run_provenance_records_stage_result(tmp_path: Path) -> None:
+    metadata_dir = tmp_path / "metadata"
+    ensure_run_metadata(metadata_dir / "run.json", run_name="demo")
+
+    run = RunProvenance(metadata_dir, "demo", "sha256:a")
+    with run.stage("infer", details={"attempt": 1}) as stage:
+        stage.result(inferred_count=1)
+        stage.result(inferred_count=2)
+
+    stage_data = json.loads((metadata_dir / "stages" / "infer.json").read_text())
+    events = [json.loads(line) for line in (metadata_dir / "events.jsonl").read_text().splitlines()]
+    assert stage_data["status"] == "completed"
+    assert stage_data["attempt"] == 1
+    assert stage_data["inferred_count"] == 2
+    assert [event["event_type"] for event in events] == [
+        "stage_started",
+        "stage_completed",
+    ]
+    assert events[-1]["details"]["inferred_count"] == 2
+
+
+def test_run_provenance_records_failure_and_reraises(tmp_path: Path) -> None:
+    metadata_dir = tmp_path / "metadata"
+    run = RunProvenance(metadata_dir, "demo", "sha256:a")
+
+    with pytest.raises(RuntimeError, match="boom"), run.stage("infer") as stage:
+        stage.result(inferred_count=1)
+        raise RuntimeError("boom")
+
+    stage_data = json.loads((metadata_dir / "stages" / "infer.json").read_text())
+    events = [json.loads(line) for line in (metadata_dir / "events.jsonl").read_text().splitlines()]
+    assert stage_data["status"] == "failed"
+    assert stage_data["inferred_count"] == 1
+    assert stage_data["error"] == "boom"
+    assert [event["event_type"] for event in events] == ["stage_started", "stage_failed"]
 
 
 def test_prepare_writes_stage_metadata_and_events(tmp_path: Path) -> None:

@@ -8,19 +8,7 @@ from virtual_staining.applications.compare import (
     CompareRequest,
     compare,
 )
-from virtual_staining.config.run import RunConfig
-from virtual_staining.evaluation.statistics import (
-    PairedSummary,
-    UnpairedComparison,
-    UnpairedGroupStats,
-    resolve_comparison_inputs,
-    resolve_comparison_output_dir,
-    resolve_metric_direction,
-    resolve_plot_range,
-    resolve_thresholds,
-)
-from virtual_staining.utils.console import print_info, print_section, style
-from virtual_staining.utils.metrics import color_metric_value
+from virtual_staining.cli._output import color_metric_value, print_info, print_section, style
 
 
 def _color_distance(value: float, good: float, warn: float) -> str:
@@ -61,7 +49,7 @@ def _color_signed_delta(value: float) -> str:
     return style(f"{value:.6f}", "yellow")
 
 
-def _print_unpaired_group_summary(group: UnpairedGroupStats, metric_name: str) -> None:
+def _print_unpaired_group_summary(group: Any, metric_name: str) -> None:
     print_section(f"Group {group.label}")
     print_info("Samples", str(group.n))
     print_info("Mean", color_metric_value(metric_name, group.mean))
@@ -72,22 +60,23 @@ def _print_unpaired_group_summary(group: UnpairedGroupStats, metric_name: str) -
 
 
 def _print_unpaired_cli_summary(
-    group_a: UnpairedGroupStats,
-    group_b: UnpairedGroupStats,
-    comparison: UnpairedComparison,
-    request: CompareRequest,
+    group_a: Any,
+    group_b: Any,
+    comparison: Any,
+    column: str,
+    higher_is_better: bool,
     output_dir: Path,
 ) -> None:
     print_section("Input")
-    print_info("Metric", request.column)
+    print_info("Metric", column)
     print_info(
         "Direction",
-        "higher is better" if request.higher_is_better else "lower is better",
+        "higher is better" if higher_is_better else "lower is better",
     )
     print_info("Output dir", str(output_dir))
 
-    _print_unpaired_group_summary(group_a, request.column)
-    _print_unpaired_group_summary(group_b, request.column)
+    _print_unpaired_group_summary(group_a, column)
+    _print_unpaired_group_summary(group_b, column)
 
     print_section("Distribution comparison")
     comparison_color = "green" if comparison.better_label != "tie" else "yellow"
@@ -130,13 +119,13 @@ def _print_unpaired_cli_summary(
 
 
 def _print_paired_cli_summary(
-    summary: PairedSummary, request: CompareRequest, output_dir: Path
+    summary: Any, column: str, higher_is_better: bool, output_dir: Path
 ) -> None:
     print_section("Input")
-    print_info("Metric", request.column)
+    print_info("Metric", column)
     print_info(
         "Direction",
-        "higher is better" if request.higher_is_better else "lower is better",
+        "higher is better" if higher_is_better else "lower is better",
     )
     print_info("Output dir", str(output_dir))
 
@@ -164,12 +153,13 @@ def _print_paired_cli_summary(
 
 
 def _add_direction_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
+    direction = parser.add_mutually_exclusive_group()
+    direction.add_argument(
         "--higher-is-better",
         action="store_true",
         help="Override the default metric direction for metrics like SSIM and PSNR.",
     )
-    parser.add_argument(
+    direction.add_argument(
         "--lower-is-better",
         action="store_true",
         help="Override the default metric direction for metrics like MAE and RMSE.",
@@ -334,24 +324,24 @@ def _add_paired_subparser(subparsers: Any) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="vs-compare",
+        prog="vs compare",
         description=(
             "Compare metric distributions from per-image CSV files. "
             "Supports both unpaired and paired comparisons."
         ),
         epilog=(
             "Examples:\n"
-            "  vs-compare unpaired \\\n"
+            "  vs compare unpaired \\\n"
             "      --run-a local_workspace/results/run_a \\\n"
             "      --run-b local_workspace/results/run_b \\\n"
             "      --column ssim\n"
             "\n"
-            "  vs-compare paired \\\n"
+            "  vs compare paired \\\n"
             "      --run-a local_workspace/results/L1-25 \\\n"
             "      --run-b local_workspace/results/L1-31 \\\n"
             "      --column ssim\n"
             "\n"
-            "  vs-compare paired \\\n"
+            "  vs compare paired \\\n"
             "      --csv-a custom_a/per_image_metrics.csv \\\n"
             "      --csv-b custom_b/per_image_metrics.csv \\\n"
             "      --label-a custom_a \\\n"
@@ -362,12 +352,6 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawTextHelpFormatter,
         add_help=True,
     )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=None,
-        help="Path to run config YAML. Uses the config's compare section.",
-    )
     subparsers = parser.add_subparsers(dest="mode")
     _add_unpaired_subparser(subparsers)
     _add_paired_subparser(subparsers)
@@ -375,64 +359,31 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _build_request(args: argparse.Namespace) -> CompareRequest:
-    resolve_comparison_inputs(args)
-    output_dir = resolve_comparison_output_dir(args)
-    min_value, max_value = resolve_plot_range(args)
-    thresholds = tuple(resolve_thresholds(args))
     return CompareRequest(
         mode=args.mode,
-        csv_a=args.resolved_csv_a,
-        csv_b=args.resolved_csv_b,
-        label_a=args.resolved_label_a,
-        label_b=args.resolved_label_b,
+        run_a=args.run_a,
+        run_b=args.run_b,
+        csv_a=args.csv_a,
+        csv_b=args.csv_b,
+        label_a=args.label_a,
+        label_b=args.label_b,
         column=args.column,
-        output_dir=output_dir,
-        higher_is_better=args.resolved_higher_is_better,
+        output_dir=Path(args.output_dir) if args.output_dir is not None else None,
+        higher_is_better=(
+            True if args.higher_is_better else False if args.lower_is_better else None
+        ),
         bins=args.bins,
-        min_value=min_value,
-        max_value=max_value,
-        thresholds=thresholds,
+        min_value=args.min_value,
+        max_value=args.max_value,
+        thresholds=(
+            tuple(args.thresholds) if getattr(args, "thresholds", None) is not None else None
+        ),
         tolerance=getattr(args, "tolerance", 0.0),
         sample_id_column=getattr(args, "sample_id_column", "sample_id"),
     )
 
 
-def _build_request_from_config(config_path: Path) -> CompareRequest:
-    config = RunConfig.from_yaml(config_path.resolve())
-    compare_cfg = config.compare
-    if compare_cfg is None:
-        raise SystemExit("Config has no 'compare' section.")
-
-    args = argparse.Namespace(
-        mode=compare_cfg.mode,
-        run_a=(
-            compare_cfg.run_a
-            if compare_cfg.run_a is not None
-            else config.project.run_root
-            if compare_cfg.csv_a is None
-            else None
-        ),
-        run_b=compare_cfg.run_b,
-        csv_a=compare_cfg.csv_a,
-        csv_b=compare_cfg.csv_b,
-        label_a=compare_cfg.label_a,
-        label_b=compare_cfg.label_b,
-        column=compare_cfg.column,
-        output_dir=compare_cfg.output_dir,
-        higher_is_better=compare_cfg.higher_is_better is True,
-        lower_is_better=compare_cfg.lower_is_better is True,
-        bins=compare_cfg.bins,
-        min_value=compare_cfg.min_value,
-        max_value=compare_cfg.max_value,
-        thresholds=list(compare_cfg.thresholds) if compare_cfg.thresholds is not None else None,
-        tolerance=compare_cfg.tolerance,
-        sample_id_column=compare_cfg.sample_id_column,
-    )
-    args.resolved_higher_is_better = resolve_metric_direction(args)
-    return _build_request(args)
-
-
-def _print_result(result: Any, request: CompareRequest) -> None:
+def _print_result(result: Any) -> None:
     if result.mode == "unpaired":
         assert result.group_a is not None
         assert result.group_b is not None
@@ -441,12 +392,18 @@ def _print_result(result: Any, request: CompareRequest) -> None:
             result.group_a,
             result.group_b,
             result.unpaired_comparison,
-            request,
+            result.column,
+            result.higher_is_better,
             result.output_dir,
         )
     elif result.mode == "paired":
         assert result.paired_summary is not None
-        _print_paired_cli_summary(result.paired_summary, request, result.output_dir)
+        _print_paired_cli_summary(
+            result.paired_summary,
+            result.column,
+            result.higher_is_better,
+            result.output_dir,
+        )
     else:
         raise SystemExit(f"Unsupported comparison mode: {result.mode}")
 
@@ -455,20 +412,9 @@ def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    if args.config is not None:
-        request = _build_request_from_config(args.config)
-        result = compare(request)
-        _print_result(result, request)
-        return
-
     if args.mode is None:
-        parser.error("either --config or a comparison mode is required")
-
-    try:
-        args.resolved_higher_is_better = resolve_metric_direction(args)
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
+        parser.error("a comparison mode is required")
 
     request = _build_request(args)
     result = compare(request)
-    _print_result(result, request)
+    _print_result(result)

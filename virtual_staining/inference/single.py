@@ -13,9 +13,8 @@ from torchvision.utils import save_image
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.inference.outputs import generated_filename_for_sample
-from virtual_staining.inference.predictor import Predictor
 from virtual_staining.inference.runner import (
-    _is_amp_enabled,
+    _predict_batch,
     build_inference_transform,
     load_inference_generator,
     resolve_inference_device,
@@ -53,10 +52,10 @@ class DirectoryInferenceResult:
 @dataclass(frozen=True)
 class _InferenceRuntime:
     paths: RunPaths
-    predictor: Predictor
+    generator: torch.nn.Module
     checkpoint_path: Path
     image_size: tuple[int, int]
-    device: str
+    device: torch.device
 
 
 def _sample_id_from_input_path(input_path: Path) -> str:
@@ -149,27 +148,30 @@ def _build_no_resize_transform() -> transforms.Compose:
 
 def _predict_image(
     image: Image.Image,
-    predictor: Predictor,
+    generator: torch.nn.Module,
+    device: torch.device,
     transform: transforms.Compose,
 ) -> torch.Tensor:
     source_tensor = transform(image)
     if not isinstance(source_tensor, torch.Tensor):
         raise TypeError("Inference transform must return a torch.Tensor")
-    return predictor.predict_batch(source_tensor.unsqueeze(0))[0].cpu()
+    return _predict_batch(generator, source_tensor.unsqueeze(0), device)[0].cpu()
 
 
 def _run_resized_prediction(
     image: Image.Image,
-    predictor: Predictor,
+    generator: torch.nn.Module,
+    device: torch.device,
     image_size: tuple[int, int],
 ) -> torch.Tensor:
     transform = build_inference_transform(image_size)
-    return _predict_image(image, predictor, transform)
+    return _predict_image(image, generator, device, transform)
 
 
 def _run_tiled_prediction(
     image: Image.Image,
-    predictor: Predictor,
+    generator: torch.nn.Module,
+    device: torch.device,
     image_size: tuple[int, int],
     tile_overlap: int,
 ) -> torch.Tensor:
@@ -190,7 +192,7 @@ def _run_tiled_prediction(
         for x in x_starts:
             tile = image.crop((x, y, min(x + tile_w, image_w), min(y + tile_h, image_h)))
             actual_w, actual_h = tile.size
-            predicted = _predict_image(_pad_tile(tile, image_size), predictor, transform)
+            predicted = _predict_image(_pad_tile(tile, image_size), generator, device, transform)
             predicted = predicted[:, :actual_h, :actual_w]
             accumulator[:, y : y + actual_h, x : x + actual_w] += predicted
             weights[:, y : y + actual_h, x : x + actual_w] += 1.0
@@ -205,13 +207,12 @@ def _build_runtime(config: RunConfig) -> _InferenceRuntime:
     device = resolve_inference_device()
     logger.info("Image inference device: %s", device)
     generator, checkpoint_path = load_inference_generator(config, paths, device)
-    predictor = Predictor(generator, device, _is_amp_enabled(device))
     return _InferenceRuntime(
         paths=paths,
-        predictor=predictor,
+        generator=generator,
         checkpoint_path=checkpoint_path,
         image_size=config.project.image_size,
-        device=str(device),
+        device=device,
     )
 
 
@@ -258,11 +259,14 @@ def _run_one_image(
     resolved_mode = _resolve_mode(requested_mode, image.size, runtime.image_size)
 
     if resolved_mode == "resize":
-        output = _run_resized_prediction(image, runtime.predictor, runtime.image_size)
+        output = _run_resized_prediction(
+            image, runtime.generator, runtime.device, runtime.image_size
+        )
     else:
         output = _run_tiled_prediction(
             image,
-            runtime.predictor,
+            runtime.generator,
+            runtime.device,
             runtime.image_size,
             tile_overlap,
         )
@@ -281,7 +285,7 @@ def _run_one_image(
         checkpoint_path=runtime.checkpoint_path,
         image_size=runtime.image_size,
         mode=resolved_mode,
-        device=runtime.device,
+        device=str(runtime.device),
     )
 
 
@@ -414,7 +418,7 @@ def run_image_directory_inference(
         output_dir=resolved_output_dir,
         checkpoint_path=runtime.checkpoint_path,
         image_size=runtime.image_size,
-        device=runtime.device,
+        device=str(runtime.device),
         results=tuple(results),
     )
 

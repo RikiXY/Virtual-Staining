@@ -94,7 +94,7 @@ def load_manifest_or_raise(project: ProjectConfig) -> DatasetManifest:
     if not manifest_path.exists():
         raise FileNotFoundError(
             f"Manifest not found at {manifest_path}. "
-            "Run 'vs-prepare' or set 'manifest_path' in your run config."
+            "Run 'vs prepare' or set 'manifest_path' in your run config."
         )
     return DatasetManifest.from_csv(manifest_path, dataset_root=project.dataset_root)
 
@@ -109,7 +109,7 @@ def _warn_on_schema_version_mismatch(manifest_path: Path, expected_version: str)
     if on_disk_version != expected_version:
         logger.warning(
             "Manifest schema version mismatch: file has '%s', code expects '%s'. "
-            "Re-run 'vs-prepare' if you see unexpected errors.",
+            "Re-run 'vs prepare' if you see unexpected errors.",
             on_disk_version,
             expected_version,
         )
@@ -255,7 +255,7 @@ class DatasetManifest:
                     raise ValueError(
                         f"Manifest has no records for required split '{split}'. "
                         f"Present splits: {present_splits}. "
-                        "Check that 'vs-prepare' completed successfully and that "
+                        "Check that 'vs prepare' completed successfully and that "
                         "the correct manifest is being used."
                     )
 

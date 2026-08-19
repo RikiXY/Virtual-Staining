@@ -3,6 +3,8 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
+import yaml
+
 
 def write_yaml(path: Path, content: str) -> Path:
     """Write a dedented YAML snippet and return its path."""
@@ -33,6 +35,15 @@ def write_run_config(
     content = f"dataset_root: {dataset_root}\nresults_path: {results_path}\nrun_name: {run_name}\n"
     if section:
         content += f"{section}\n"
+    data = yaml.safe_load(content)
+    training = data.get("training")
+    if isinstance(training, dict):
+        training["augmentation"] = data.pop("augmentation", training.get("augmentation", {}))
+        training["losses"] = data.pop("losses", training.get("losses", {}))
+    preprocessing = data.get("preprocessing")
+    if isinstance(preprocessing, dict) and "image_size" in preprocessing:
+        preprocessing["patch_size"] = preprocessing.pop("image_size")
+    content = yaml.safe_dump(data, sort_keys=False)
     return write_yaml(tmp_path / filename, content)
 
 

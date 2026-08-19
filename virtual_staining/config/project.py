@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
+
+from virtual_staining.config.validation import reject_unknown_keys
+from virtual_staining.utils.dimensions import parse_wh_size
+
+_PROJECT_KEYS = frozenset(
+    {"dataset_root", "results_path", "run_name", "image_size", "manifest_path"}
+)
 
 SplitName = Literal["train", "val", "test"]
 
@@ -14,6 +21,33 @@ class ProjectConfig:
     run_name: str
     image_size: tuple[int, int]
     manifest_path_override: Path | None = None
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    @classmethod
+    def from_mapping(cls, data: dict[str, Any]) -> ProjectConfig:
+        project_data = {key: value for key, value in data.items() if key in _PROJECT_KEYS}
+        reject_unknown_keys(project_data, _PROJECT_KEYS, "project")
+        manifest_path = project_data.get("manifest_path")
+        return cls(
+            dataset_root=Path(project_data["dataset_root"]),
+            results_path=Path(project_data["results_path"]),
+            run_name=str(project_data["run_name"]),
+            image_size=parse_wh_size(project_data.get("image_size"), (256, 256)),
+            manifest_path_override=Path(manifest_path) if manifest_path else None,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "dataset_root": str(self.dataset_root),
+            "results_path": str(self.results_path),
+            "run_name": self.run_name,
+            "image_size": list(self.image_size),
+        }
+        if self.manifest_path_override is not None:
+            data["manifest_path"] = str(self.manifest_path_override)
+        return data
 
     @property
     def run_root(self) -> Path:

@@ -5,7 +5,7 @@ from collections.abc import Iterable
 import numpy as np
 import torch
 
-from virtual_staining.evaluation.metrics import (
+from virtual_staining.metrics import (
     compute_mae,
     compute_pcc_gray,
     compute_pcc_rgb,

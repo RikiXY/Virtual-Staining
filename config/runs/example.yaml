@@ -16,9 +16,7 @@ run_name: example_run
 image_size: [256, 256]
 
 model:
-  name: pix2pix
   generator:
-    name: unet
     in_channels: 3
     out_channels: 3
     base_channels: 64
@@ -26,7 +24,6 @@ model:
     dropout: false
     bilinear: false
   discriminator:
-    name: patchgan
     in_channels: 6
     ndf: 64
     norm: instance
@@ -113,41 +110,41 @@ training:
   #   patience: 15
   #   min_delta: 0.0
 
-augmentation:
-  # Training-only on-the-fly augmentation. No transformed patches are saved.
-  enabled: false
-  # Effective train epoch length is multiplied by this factor when enabled.
-  expansion_factor: 1
-  # Supported values: light, medium, strong.
-  intensity: light
+  augmentation:
+    # Training-only on-the-fly augmentation. No transformed patches are saved.
+    enabled: false
+    # Effective train epoch length is multiplied by this factor when enabled.
+    expansion_factor: 1
+    # Supported values: light, medium, strong.
+    intensity: light
 
-losses:
-  generator:
-    - name: adversarial_bce
-      weight: 1.0
-    - name: l1
-      weight: 25.0
-    # Optional SSIM term. Leave disabled or set a nonzero weight intentionally.
-    - name: ssim
-      weight: 0.0
-      enabled: false
-      params:
-        data_range: 1.0
-        window_size: 11
-        sigma: 1.5
-        channel_mode: rgb
-        reduction: mean
-        mask:
-          enabled: false
-          source: foreground_mask
-          foreground_weight: 1.0
-          background_weight: 0.25
-          ignore_empty_mask: true
-      schedule:
-        type: constant
-  discriminator:
-    - name: adversarial_bce
-      weight: 1.0
+  losses:
+    generator:
+      - name: adversarial_bce
+        weight: 1.0
+      - name: l1
+        weight: 25.0
+      # Optional SSIM term. Leave disabled or set a nonzero weight intentionally.
+      - name: ssim
+        weight: 0.0
+        enabled: false
+        params:
+          data_range: 1.0
+          window_size: 11
+          sigma: 1.5
+          channel_mode: rgb
+          reduction: mean
+          mask:
+            enabled: false
+            source: foreground_mask
+            foreground_weight: 1.0
+            background_weight: 0.25
+            ignore_empty_mask: true
+        schedule:
+          type: constant
+    discriminator:
+      - name: adversarial_bce
+        weight: 1.0
 
 inference:
   # Supported policies:
@@ -167,33 +164,9 @@ inference:
   # output_dir: local_workspace/results/example_run/artifacts/output_test
 
 evaluation:
-  # Optional shared-field overrides. Defaults:
-  # dataset_root: local_workspace/datasets/your_sample
-  # results_path: local_workspace/results
-  # run_name: example_run
-
   # Optional evaluation directory overrides. Defaults:
   # target_dir: local_workspace/datasets/your_sample/splits/test
   # generated_dir: local_workspace/results/example_run/artifacts/output_test
   # output_dir: local_workspace/results/example_run/evaluation
   save_graphs: true
   # hide_graphs_path: false
-
-# Optional utility targets driven by `make compare`, `make compare-panels`,
-# `make evaluate-single`, and `make organize`.
-#
-# compare:
-#   mode: paired
-#   # Defaults run_a to results_path/run_name when omitted.
-#   run_b: local_workspace/results/baseline_run
-#   column: ssim
-#
-# compare_panels:
-#   mode: from_metrics
-#   # Defaults run_path to results_path/run_name when omitted.
-#   hide_graphs_path: false
-#
-# organize:
-#   # Defaults run_path to results_path/run_name when omitted.
-#   top_k: 20
-#   mode: hardlink
