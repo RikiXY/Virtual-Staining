@@ -6,6 +6,7 @@ from typing import Any
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.builder import DatasetBuilder, DatasetBuildResult
+from virtual_staining.data.pairs import SlidePair, load_pair_manifest, resolve_slide_pairs
 from virtual_staining.experiment.metadata import (
     RunProvenance,
     ensure_run_metadata,
@@ -28,16 +29,19 @@ def _load_json(path: Path) -> dict[str, Any] | None:
         return None
 
 
-def _build_current_fingerprint(config: RunConfig) -> dict[str, Any]:
+def _build_current_fingerprint(config: RunConfig, pairs: tuple[SlidePair, ...]) -> dict[str, Any]:
     if config.preprocessing is None:
         raise ValueError("RunConfig.preprocessing must be present for prepare().")
     dataset_root = config.preprocessing.dataset_root
     preprocessing_payload = config.preprocessing.to_dict()
+    inputs = config.preprocessing.inputs
     return build_dataset_fingerprint_metadata(
         dataset_root=dataset_root,
         preprocessing_config=preprocessing_payload,
-        source_path=dataset_root / config.preprocessing.source_name,
-        target_path=dataset_root / config.preprocessing.target_name,
+        pairs=pairs,
+        inventory_path=(dataset_root / inputs.inventory if inputs else None),
+        hash_cache_path=dataset_root / "metadata" / "input_hashes.json",
+        force_hash_verification=bool(inputs and inputs.hash_verification == "always"),
     )
 
 
@@ -45,16 +49,27 @@ def _dataset_outputs_are_complete(dataset_root: Path) -> bool:
     required_files = (
         dataset_root / "manifests" / "manifest.csv",
         dataset_root / "manifests" / "discarded_manifest.csv",
+        dataset_root / "manifests" / "pairs.csv",
         dataset_root / "metadata" / "dataset_build.json",
         dataset_root / "metadata" / "dataset_fingerprint.json",
+        dataset_root / "metadata" / "split_assignment.csv",
     )
     required_dirs = (
         dataset_root / "splits" / "train",
         dataset_root / "splits" / "val",
         dataset_root / "splits" / "test",
     )
-    return all(path.is_file() for path in required_files) and all(
+    complete = all(path.is_file() for path in required_files) and all(
         path.is_dir() for path in required_dirs
+    )
+    if not complete:
+        return False
+    try:
+        pair_rows = load_pair_manifest(dataset_root / "manifests" / "pairs.csv")
+    except (OSError, ValueError):
+        return False
+    return all(
+        (dataset_root / row["alignment_metadata_path"]).is_file() for row in pair_rows.values()
     )
 
 
@@ -71,7 +86,9 @@ def _build_reused_result(dataset_root: Path) -> DatasetBuildResult:
     )
 
 
-def _reuse_existing_dataset(config: RunConfig) -> DatasetBuildResult | None:
+def _reuse_existing_dataset(
+    config: RunConfig, current: dict[str, Any]
+) -> DatasetBuildResult | None:
     if config.preprocessing is None:
         raise ValueError("RunConfig.preprocessing must be present for prepare().")
 
@@ -83,7 +100,6 @@ def _reuse_existing_dataset(config: RunConfig) -> DatasetBuildResult | None:
     if not _dataset_outputs_are_complete(dataset_root):
         return None
 
-    current = _build_current_fingerprint(config)
     if stored.get("fingerprint") != current["fingerprint"]:
         return None
     return _build_reused_result(dataset_root)
@@ -99,6 +115,7 @@ def prepare(config: RunConfig, config_path: Path) -> DatasetBuildResult:
         raise FileNotFoundError(f"Dataset root not found: {dataset_root}")
     snapshot_paths = resolve_prepare_snapshot_paths(dataset_root)
     metadata_dir = dataset_root / "metadata"
+    pairs = resolve_slide_pairs(config.preprocessing)
 
     config_hash = save_stage_config_snapshots(
         config,
@@ -117,9 +134,14 @@ def prepare(config: RunConfig, config_path: Path) -> DatasetBuildResult:
 
     run = RunProvenance(metadata_dir, config.project.run_name, config_hash)
     with run.stage("prepare", details={"dataset_root": str(dataset_root)}) as stage:
-        result = _reuse_existing_dataset(config)
+        current_fingerprint = _build_current_fingerprint(config, pairs)
+        result = _reuse_existing_dataset(config, current_fingerprint)
         if result is None:
-            builder = DatasetBuilder(config.preprocessing)
+            builder = DatasetBuilder(
+                config.preprocessing,
+                pairs=pairs,
+                fingerprint_metadata=current_fingerprint,
+            )
             result = builder.run_all()
         manifest_path = dataset_root / "manifests" / "manifest.csv"
         stage.result(
@@ -130,5 +152,7 @@ def prepare(config: RunConfig, config_path: Path) -> DatasetBuildResult:
             test_count=result.test_count,
             skipped_count=result.skipped_count,
             reused=result.reused,
+            pair_inventory_count=len(pairs),
+            canonical_inventory_sha256=current_fingerprint.get("canonical_inventory_sha256"),
         )
     return result

@@ -6,7 +6,7 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
     from virtual_staining.config.project import ProjectConfig
@@ -14,12 +14,26 @@ if TYPE_CHECKING:
 Split = Literal["train", "val", "test", "discarded"]
 
 _VALID_SPLITS: frozenset[str] = frozenset({"train", "val", "test", "discarded"})
-MANIFEST_SCHEMA_VERSION = "1.0"
-_REQUIRED_FIELDNAMES = (
+MANIFEST_SCHEMA_VERSION = "2.0"
+V1_FIELDNAMES = (
     "sample_id",
     "split",
     "input_path",
     "target_path",
+    "input_modality",
+    "target_modality",
+    "x",
+    "y",
+    "width",
+    "height",
+)
+V2_FIELDNAMES = (
+    "sample_id",
+    "pair_id",
+    "split",
+    "input_path",
+    "target_path",
+    "foreground_mask_path",
     "input_modality",
     "target_modality",
     "x",
@@ -127,10 +141,14 @@ class ManifestRecord:
     y: int
     width: int
     height: int
+    pair_id: str = "pair_0000"
+    foreground_mask_path: Path | None = None
 
     def __post_init__(self) -> None:
         if not self.sample_id.strip():
             raise ValueError("ManifestRecord.sample_id must be a non-empty string")
+        if not self.pair_id.strip():
+            raise ValueError("ManifestRecord.pair_id must be a non-empty string")
         if self.split not in _VALID_SPLITS:
             raise ValueError(
                 f"ManifestRecord.split must be one of {sorted(_VALID_SPLITS)}, got {self.split!r}"
@@ -154,6 +172,8 @@ class ManifestRecord:
             )
         _validate_manifest_path(self.input_path, "input_path")
         _validate_manifest_path(self.target_path, "target_path")
+        if self.foreground_mask_path is not None:
+            _validate_manifest_path(self.foreground_mask_path, "foreground_mask_path")
 
 
 @dataclass(frozen=True)
@@ -161,14 +181,16 @@ class DatasetManifest:
     SCHEMA_VERSION = MANIFEST_SCHEMA_VERSION
     records: tuple[ManifestRecord, ...]
     dataset_root: Path
+    schema_version: str = "1.0"
 
-    _FIELDNAMES = _REQUIRED_FIELDNAMES
+    _FIELDNAMES = V2_FIELDNAMES
 
     def filter_split(self, split: Split) -> DatasetManifest:
         """Return a new manifest containing only records with the given split."""
         return DatasetManifest(
             records=tuple(record for record in self.records if record.split == split),
             dataset_root=self.dataset_root,
+            schema_version=self.schema_version,
         )
 
     def resolved_input_paths(self) -> list[Path]:
@@ -243,6 +265,10 @@ class DatasetManifest:
                     raise FileNotFoundError(f"Input file not found: {input_path}")
                 if not target_path.exists():
                     raise FileNotFoundError(f"Target file not found: {target_path}")
+                if record.foreground_mask_path is not None:
+                    mask_path = self.dataset_root / record.foreground_mask_path
+                    if not mask_path.exists():
+                        raise FileNotFoundError(f"Foreground mask not found: {mask_path}")
 
         if require_splits:
             present_splits = sorted({record.split for record in self.records})
@@ -262,35 +288,55 @@ class DatasetManifest:
     def to_csv(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=self._FIELDNAMES)
+            fieldnames = V2_FIELDNAMES if self.schema_version == "2.0" else V1_FIELDNAMES
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
             for record in self.records:
-                writer.writerow(
-                    {
-                        "sample_id": record.sample_id,
-                        "split": record.split,
-                        "input_path": record.input_path.as_posix(),
-                        "target_path": record.target_path.as_posix(),
-                        "input_modality": record.input_modality,
-                        "target_modality": record.target_modality,
-                        "x": record.x,
-                        "y": record.y,
-                        "width": record.width,
-                        "height": record.height,
-                    }
-                )
+                row: dict[str, object] = {
+                    "sample_id": record.sample_id,
+                    "split": record.split,
+                    "input_path": record.input_path.as_posix(),
+                    "target_path": record.target_path.as_posix(),
+                    "input_modality": record.input_modality,
+                    "target_modality": record.target_modality,
+                    "x": record.x,
+                    "y": record.y,
+                    "width": record.width,
+                    "height": record.height,
+                }
+                if self.schema_version == "2.0":
+                    row["pair_id"] = record.pair_id
+                    row["foreground_mask_path"] = (
+                        record.foreground_mask_path.as_posix()
+                        if record.foreground_mask_path is not None
+                        else ""
+                    )
+                writer.writerow(cast(Any, row))
 
     @classmethod
     def from_csv(cls, path: Path, dataset_root: Path) -> DatasetManifest:
         with path.open(newline="", encoding="utf-8") as handle:
             reader = csv.DictReader(handle)
-            fieldnames = reader.fieldnames or []
-            missing = [field for field in cls._FIELDNAMES if field not in fieldnames]
-            if missing:
-                raise ValueError(f"Manifest CSV at {path} is missing required columns: {missing}")
-            unexpected = [field for field in fieldnames if field not in cls._FIELDNAMES]
-            if unexpected:
-                raise ValueError(f"Manifest CSV at {path} has unexpected columns: {unexpected}")
+            fieldnames = tuple(reader.fieldnames or ())
+            if fieldnames == V1_FIELDNAMES:
+                schema_version = "1.0"
+            elif fieldnames == V2_FIELDNAMES:
+                schema_version = "2.0"
+            else:
+                missing_v1 = [field for field in V1_FIELDNAMES if field not in fieldnames]
+                unexpected_v1 = [field for field in fieldnames if field not in V1_FIELDNAMES]
+                if missing_v1 and not unexpected_v1:
+                    raise ValueError(
+                        f"Manifest CSV at {path} is missing required columns: {missing_v1}"
+                    )
+                if unexpected_v1 and not missing_v1:
+                    raise ValueError(
+                        f"Manifest CSV at {path} has unexpected columns: {unexpected_v1}"
+                    )
+                raise ValueError(
+                    f"Manifest CSV at {path} must match the exact v1 or v2 columns; "
+                    f"got {list(fieldnames)}"
+                )
             records_list: list[ManifestRecord] = []
             for row_num, row in enumerate(reader, start=2):
                 records_list.append(
@@ -313,11 +359,26 @@ class DatasetManifest:
                         y=_parse_int_field(row["y"], "y", row_num, path),
                         width=_parse_int_field(row["width"], "width", row_num, path),
                         height=_parse_int_field(row["height"], "height", row_num, path),
+                        pair_id=(
+                            _require_nonempty(row["pair_id"], "pair_id", row_num, path)
+                            if schema_version == "2.0"
+                            else "pair_0000"
+                        ),
+                        foreground_mask_path=(
+                            _parse_path_field(
+                                row["foreground_mask_path"],
+                                "foreground_mask_path",
+                                row_num,
+                                path,
+                            )
+                            if schema_version == "2.0" and row["foreground_mask_path"].strip()
+                            else None
+                        ),
                     )
                 )
             records = tuple(records_list)
-        _warn_on_schema_version_mismatch(path, cls.SCHEMA_VERSION)
-        return cls(records=records, dataset_root=dataset_root)
+        _warn_on_schema_version_mismatch(path, schema_version)
+        return cls(records=records, dataset_root=dataset_root, schema_version=schema_version)
 
     def __len__(self) -> int:
         return len(self.records)

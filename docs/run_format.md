@@ -232,11 +232,10 @@ Supported schedule types are `constant`, `linear_warmup`, `linear_decay`,
 
 Mask weighting is optional. When `params.mask.enabled` is `true`, the training
 dataset must provide a `foreground_mask` tensor for every batch. Missing masks
-raise an error instead of being treated as all-foreground. Current datasets look
-for sidecar patch masks named `<sample_id>_foreground_mask<ext>` in the same
-split directory. `vs prepare` writes those sidecar masks for accepted patches
-when `preprocessing.save_masks: true`; the sidecar mask is the aligned target
-foreground mask for that patch.
+raise an error instead of being treated as all-foreground. Manifest v2 loads the
+exact `foreground_mask_path` written when `masks.save_patch_masks: true`; only
+legacy v1 manifests retain sidecar filename discovery. The saved patch mask is
+the aligned target foreground mask.
 
 When configured loss terms are present, `metrics/train.csv`,
 `metrics/validation.csv`, and `metrics/all.csv` add deterministic component

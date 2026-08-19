@@ -11,6 +11,7 @@ from typing import Any, Literal
 import yaml
 
 from virtual_staining.config.run import RunConfig
+from virtual_staining.data.pairs import SlidePair
 from virtual_staining.experiment.environment import collect_environment
 from virtual_staining.experiment.run_paths import RunPaths
 
@@ -131,35 +132,150 @@ def build_file_provenance(path: Path) -> dict[str, Any]:
     }
 
 
+def _cached_file_provenance(
+    path: Path,
+    *,
+    cache: dict[str, Any],
+    force: bool,
+) -> dict[str, Any]:
+    resolved = path.resolve()
+    stat = resolved.stat()
+    key = str(resolved)
+    cached = cache.get(key, {})
+    if (
+        not force
+        and cached.get("size") == stat.st_size
+        and cached.get("mtime_ns") == stat.st_mtime_ns
+        and isinstance(cached.get("sha256"), str)
+    ):
+        digest = cached["sha256"]
+    else:
+        digest = compute_file_sha256(resolved)
+    value = {
+        "path": key,
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "sha256": digest,
+    }
+    cache[key] = value
+    return value
+
+
+def canonical_pair_payload(pairs: tuple[SlidePair, ...]) -> list[dict[str, Any]]:
+    return [
+        {
+            "pair_id": pair.pair_id,
+            "source_path": pair.source_path.as_posix(),
+            "target_path": pair.target_path.as_posix(),
+            "already_aligned": pair.already_aligned,
+            "shared_mask_path": pair.shared_mask_path.as_posix() if pair.shared_mask_path else None,
+            "source_mask_path": pair.source_mask_path.as_posix() if pair.source_mask_path else None,
+            "target_mask_path": pair.target_mask_path.as_posix() if pair.target_mask_path else None,
+            "patient_id": pair.patient_id,
+            "specimen_id": pair.specimen_id,
+            "source_slide_id": pair.source_slide_id,
+            "target_slide_id": pair.target_slide_id,
+        }
+        for pair in sorted(pairs, key=lambda item: item.pair_id)
+    ]
+
+
 def build_dataset_fingerprint_metadata(
     *,
     dataset_root: Path,
     preprocessing_config: dict[str, Any],
-    source_path: Path,
-    target_path: Path,
+    source_path: Path | None = None,
+    target_path: Path | None = None,
+    pairs: tuple[SlidePair, ...] | None = None,
+    inventory_path: Path | None = None,
+    hash_cache_path: Path | None = None,
+    force_hash_verification: bool = False,
     prepared_at: str | None = None,
 ) -> dict[str, Any]:
     """Build machine-readable dataset fingerprint metadata for prepare reuse checks."""
-    source = build_file_provenance(source_path)
-    target = build_file_provenance(target_path)
+    if pairs is None:
+        if source_path is None or target_path is None:
+            raise ValueError("source_path and target_path are required without pairs")
+        source = build_file_provenance(source_path)
+        target = build_file_provenance(target_path)
+    else:
+        cache: dict[str, Any] = {}
+        if hash_cache_path is not None and hash_cache_path.exists():
+            try:
+                cache = json.loads(hash_cache_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                cache = {}
+        files: list[dict[str, Any]] = []
+        for pair in sorted(pairs, key=lambda item: item.pair_id):
+            for role, relative in (
+                ("source", pair.source_path),
+                ("target", pair.target_path),
+                ("shared_mask", pair.shared_mask_path),
+                ("source_mask", pair.source_mask_path),
+                ("target_mask", pair.target_mask_path),
+            ):
+                if relative is not None:
+                    files.append(
+                        {
+                            "pair_id": pair.pair_id,
+                            "role": role,
+                            **_cached_file_provenance(
+                                dataset_root / relative,
+                                cache=cache,
+                                force=force_hash_verification,
+                            ),
+                        }
+                    )
+        if hash_cache_path is not None:
+            hash_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            hash_cache_path.write_text(json.dumps(cache, indent=2), encoding="utf-8")
+        canonical_pairs = canonical_pair_payload(pairs)
+        canonical_inventory_hash = compute_payload_hash(canonical_pairs)
+        raw_inventory_sha256 = (
+            compute_file_sha256(inventory_path) if inventory_path is not None else None
+        )
     dataset_root_resolved = str(dataset_root.resolve())
-    preprocessing_hash = compute_payload_hash(preprocessing_config)
-    fingerprint_payload = {
-        "dataset_root": dataset_root_resolved,
-        "preprocessing": preprocessing_config,
-        "source": source,
-        "target": target,
-    }
-    return {
-        "schema_version": "1.0",
+    semantic_config = json.loads(json.dumps(preprocessing_config))
+    if isinstance(semantic_config.get("inputs"), dict):
+        semantic_config["inputs"].pop("hash_verification", None)
+    preprocessing_hash = compute_payload_hash(semantic_config)
+    if pairs is None:
+        fingerprint_payload = {
+            "dataset_root": dataset_root_resolved,
+            "preprocessing": semantic_config,
+            "source": source,
+            "target": target,
+        }
+    else:
+        fingerprint_payload = {
+            "dataset_root": dataset_root_resolved,
+            "preprocessing": semantic_config,
+            "canonical_inventory": canonical_pairs,
+            "files": files,
+        }
+    result = {
+        "schema_version": "2.0" if pairs is not None else "1.0",
         "fingerprint": compute_payload_hash(fingerprint_payload),
         "prepared_at": prepared_at or datetime.now(UTC).isoformat(),
         "dataset_root": dataset_root_resolved,
-        "preprocessing": preprocessing_config,
+        "preprocessing": semantic_config,
         "preprocessing_hash": preprocessing_hash,
-        "source": source,
-        "target": target,
     }
+    if pairs is None:
+        result.update({"source": source, "target": target})
+    else:
+        result.update(
+            {
+                "canonical_inventory": canonical_pairs,
+                "canonical_inventory_sha256": canonical_inventory_hash,
+                "raw_inventory_sha256": raw_inventory_sha256,
+                "files": files,
+            }
+        )
+        if len(pairs) == 1:
+            result["source"] = next(item for item in files if item["role"] == "source")
+            result["target"] = next(item for item in files if item["role"] == "target")
+    return result
 
 
 def save_dataset_fingerprint(metadata: dict[str, Any], dest: Path) -> None:

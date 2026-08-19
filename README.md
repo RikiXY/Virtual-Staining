@@ -124,18 +124,31 @@ run_name: your_run_name
 image_size: [256, 256]
 
 preprocessing:
-  source_name: label_free.tif
-  target_name: stained.tif
-  # For very large local TIFF/PNG/JPEG/BMP inputs, read previews and patch
-  # regions on demand instead of keeping full-resolution images resident.
-  # tiled_io: true
-  # mask_scale: 0.25
-  train_ratio: 0.80
-  val_ratio: 0.05
-  test_ratio: 0.15
-  min_foreground_ratio: 0.25
-  save_discarded_patches: false
-  seed: 42
+  inputs:
+    inventory: inputs/pairs.csv
+    source_modality: autofluorescence
+    target_modality: H&E
+  patching:
+    patch_size: [256, 256]
+    grid_movement: [256, 256]
+    margin: 200
+  masks:
+    provided_layout: auto
+    generation: if_missing
+    scale: 0.25
+  alignment:
+    mode: auto
+  filtering:
+    foreground: {enabled: true, policy: both, min_ratio: 0.25}
+  split:
+    unit: patient
+    train: 0.80
+    val: 0.10
+    test: 0.10
+    seed: 42
+  io:
+    tiled: true
+    backend: auto
 
 training:
   batch_size: 8

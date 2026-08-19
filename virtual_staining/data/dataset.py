@@ -53,12 +53,19 @@ class PairedManifestDataset(Dataset):
 
         mask_image: Image.Image | None = None
         if self.include_foreground_mask:
-            mask_path = _find_foreground_mask_path(
-                self.manifest.dataset_root,
-                record.sample_id,
-                record.input_path,
-                record.target_path,
-            )
+            if self.manifest.schema_version == "2.0":
+                if record.foreground_mask_path is None:
+                    raise FileNotFoundError(
+                        f"Manifest v2 has no foreground_mask_path for {record.sample_id!r}"
+                    )
+                mask_path = self.manifest.dataset_root / record.foreground_mask_path
+            else:
+                mask_path = _find_foreground_mask_path(
+                    self.manifest.dataset_root,
+                    record.sample_id,
+                    record.input_path,
+                    record.target_path,
+                )
             mask_image = Image.open(mask_path).convert("L")
 
         if self.paired_transform is not None:

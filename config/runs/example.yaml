@@ -32,44 +32,49 @@ model:
     use_sigmoid: false
 
 preprocessing:
-  # Full-size paired input files inside dataset_root.
-  source_name: label_free.tif
-  target_name: stained.tif
-
-  # Optional size override. Defaults to the top-level image_size. [width, height].
-  # patch_size: [256, 256]
-
-  grid_movement: [256, 256]
-  margin: 200
-  # Tissue mask strategy: connected_components (default) or hsv.
-  mask_strategy: connected_components
-  # Optional modality-specific overrides.
-  # source_mask_strategy: connected_components
-  # target_mask_strategy: hsv
-  # Optional: compute tissue masks at reduced resolution to save memory.
-  # mask_scale: 0.25
-  # Optional: keep reduced-resolution masks for patch foreground filtering.
-  # lowres_mask_filtering: true
-  # Optional: read previews and patch regions through the region-reader path.
-  # tiled_io: true
-  # Optional: fail early if the estimated working set would exceed this limit.
-  # max_memory_gb: 8.0
-
-  # Dataset split; ratios should sum to 1.0.
-  train_ratio: 0.80
-  val_ratio: 0.05
-  test_ratio: 0.15
-
-  # Patch quality filters.
-  min_foreground_ratio: 0.25
-  max_white_ratio: 0.70
-  white_threshold: 250
-  max_largest_white_component_ratio: 0.20
-
-  # Save rejected patch images for debugging. The discard CSV is always written.
-  save_discarded_patches: false
-  save_masks: false
-  seed: 42
+  inputs:
+    inventory: inputs/pairs.csv
+    source_modality: autofluorescence
+    target_modality: H&E
+    hash_verification: cached  # use always for publication verification
+  patching:
+    patch_size: [256, 256]
+    grid_movement: [256, 256]
+    margin: 200
+    save_discarded_patches: false
+  masks:
+    provided_layout: auto
+    generation: if_missing
+    strategy: connected_components
+    source_strategy: connected_components
+    target_strategy: hsv
+    scale: 0.25
+    lowres_filtering: true
+    save_resolved_masks: false
+    save_patch_masks: false
+  alignment:
+    mode: auto
+    method: affine_sift
+    validate_declared: true
+    on_failure: error
+  filtering:
+    foreground:
+      enabled: true
+      policy: both
+      min_ratio: 0.25
+    max_white_ratio: 0.70
+    white_threshold: 250
+    max_largest_white_component_ratio: 0.20
+  split:
+    unit: patient
+    train: 0.80
+    val: 0.10
+    test: 0.10
+    seed: 42
+  io:
+    tiled: true
+    backend: auto
+    max_memory_gb: 8.0
 
 training:
   batch_size: 8

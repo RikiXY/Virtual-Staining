@@ -25,6 +25,7 @@
           linuxRuntimeLibs = [
             pkgs.stdenv.cc.cc.lib
             pkgs.zlib
+            pkgs.openslide
           ];
         in {
           default = pkgs.mkShell ({

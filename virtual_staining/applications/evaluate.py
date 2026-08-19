@@ -5,10 +5,11 @@ from pathlib import Path
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.manifest import load_manifest_or_raise
+from virtual_staining.data.pairs import load_pair_manifest
 from virtual_staining.evaluation.evaluator import evaluate_pairs
 from virtual_staining.evaluation.plotting import save_dataset_plots
 from virtual_staining.evaluation.reports import write_skipped_csv
-from virtual_staining.evaluation.summaries import write_summary_csv
+from virtual_staining.evaluation.summaries import write_grouped_summaries, write_summary_csv
 from virtual_staining.experiment.metadata import (
     RunProvenance,
     ensure_run_metadata,
@@ -92,13 +93,13 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
     }
     run = RunProvenance(paths.metadata_dir, project.run_name, config_hash)
     with run.stage("evaluate", details=evaluation_details) as stage:
-        pairs: list[tuple[Path, Path, str]] = []
+        pairs: list[tuple[Path, Path, str, str]] = []
         pairing_skipped: list[dict[str, str]] = []
         for record in test_records:
             target_path = project.dataset_root / record.target_path
             generated_path = generated_path_for_record(record, generated_dir)
             if target_path.exists() and generated_path.exists():
-                pairs.append((target_path, generated_path, record.sample_id))
+                pairs.append((target_path, generated_path, record.sample_id, record.pair_id))
                 continue
 
             reason = "missing_target" if not target_path.exists() else "missing_generated"
@@ -119,6 +120,17 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
 
         if result.rows:
             result.summary_csv = write_summary_csv(result.rows, output_dir)
+            if manifest.schema_version == "2.0":
+                pair_manifest_path = project.dataset_root / "manifests" / "pairs.csv"
+                pair_rows = load_pair_manifest(pair_manifest_path)
+                grouped_paths = write_grouped_summaries(
+                    result.rows,
+                    pair_rows,
+                    output_dir,
+                    bootstrap_iterations=(eval_cfg.bootstrap_iterations if eval_cfg else 10_000),
+                    bootstrap_seed=eval_cfg.bootstrap_seed if eval_cfg else 0,
+                )
+                evaluation_details["grouped_summary_paths"] = [str(path) for path in grouped_paths]
 
         if save_graphs and result.rows:
             save_dataset_plots(result.rows, output_dir)

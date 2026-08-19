@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import numpy as np
 from PIL import Image
@@ -17,6 +17,12 @@ VALID_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
 class ImageMetadata:
     width: int
     height: int
+    level_count: int = 1
+    level_dimensions: tuple[tuple[int, int], ...] = ()
+    level_downsamples: tuple[float, ...] = ()
+    mpp_x: float | None = None
+    mpp_y: float | None = None
+    vendor: str | None = None
 
 
 class RegionImageReader(Protocol):
@@ -44,6 +50,10 @@ class RegionImageReader(Protocol):
 
     def read_full(self) -> np.ndarray:
         """Read the full image as BGR uint8."""
+        ...
+
+    def close(self) -> None:
+        """Release backend resources."""
         ...
 
 
@@ -75,7 +85,9 @@ class PillowRegionImageReader:
     @property
     def metadata(self) -> ImageMetadata:
         width, height = self._size
-        return ImageMetadata(width=width, height=height)
+        return ImageMetadata(
+            width=width, height=height, level_dimensions=(self._size,), level_downsamples=(1.0,)
+        )
 
     def _open(self) -> Image.Image:
         original_max_image_pixels = Image.MAX_IMAGE_PIXELS
@@ -118,9 +130,93 @@ class PillowRegionImageReader:
     def read_full(self) -> np.ndarray:
         return self.read_preview(1.0)
 
+    def close(self) -> None:
+        return None
 
-def open_image_reader(path: str | Path) -> RegionImageReader:
-    """Open a local image through the default region-reader backend."""
+
+class OpenSlideRegionImageReader:
+    """Optional OpenSlide-backed level-0 region reader."""
+
+    def __init__(self, path: str | Path) -> None:
+        try:
+            import openslide  # pyright: ignore[reportMissingImports]
+        except ImportError as exc:
+            raise RuntimeError(
+                "OpenSlide backend requested; install the 'wsi' extra and native OpenSlide"
+            ) from exc
+        self.path = Path(path)
+        if not self.path.is_file():
+            raise FileNotFoundError(f"Image not found: {self.path}")
+        if openslide.OpenSlide.detect_format(str(self.path)) is None:
+            raise ValueError(f"OpenSlide does not support: {self.path}")
+        self._slide: Any = openslide.OpenSlide(str(self.path))
+
+    @property
+    def size(self) -> tuple[int, int]:
+        return tuple(self._slide.dimensions)
+
+    @property
+    def metadata(self) -> ImageMetadata:
+        properties = self._slide.properties
+
+        def optional_float(name: str) -> float | None:
+            try:
+                return float(properties[name])
+            except (KeyError, TypeError, ValueError):
+                return None
+
+        width, height = self.size
+        return ImageMetadata(
+            width=width,
+            height=height,
+            level_count=int(self._slide.level_count),
+            level_dimensions=tuple(tuple(size) for size in self._slide.level_dimensions),
+            level_downsamples=tuple(float(value) for value in self._slide.level_downsamples),
+            mpp_x=optional_float("openslide.mpp-x"),
+            mpp_y=optional_float("openslide.mpp-y"),
+            vendor=properties.get("openslide.vendor"),
+        )
+
+    def read_region(self, x: int, y: int, width: int, height: int) -> np.ndarray:
+        if width <= 0 or height <= 0:
+            raise ValueError("Region width and height must be positive")
+        image = self._slide.read_region((x, y), 0, (width, height)).convert("RGB")
+        return _pil_to_bgr_array(image)
+
+    def read_preview(self, scale: float) -> np.ndarray:
+        if not (0.0 < scale <= 1.0):
+            raise ValueError(f"Preview scale must be in (0.0, 1.0], got {scale}")
+        width, height = self.size
+        output_size = (max(1, math.floor(width * scale)), max(1, math.floor(height * scale)))
+        level = self._slide.get_best_level_for_downsample(1.0 / scale)
+        level_size = tuple(self._slide.level_dimensions[level])
+        image = self._slide.read_region((0, 0), level, level_size).convert("RGB")
+        if image.size != output_size:
+            image = image.resize(output_size, Image.Resampling.BILINEAR)
+        return _pil_to_bgr_array(image)
+
+    def read_full(self) -> np.ndarray:
+        width, height = self.size
+        return self.read_region(0, 0, width, height)
+
+    def close(self) -> None:
+        self._slide.close()
+
+
+def open_image_reader(path: str | Path, backend: str = "auto") -> RegionImageReader:
+    """Open a local image with Pillow or the optional native WSI backend."""
+    if backend not in {"auto", "pillow", "openslide"}:
+        raise ValueError("backend must be auto, pillow, or openslide")
+    if backend == "pillow":
+        return PillowRegionImageReader(path)
+    if backend == "openslide":
+        return OpenSlideRegionImageReader(path)
+    try:
+        import openslide  # pyright: ignore[reportMissingImports]
+    except ImportError:
+        return PillowRegionImageReader(path)
+    if openslide.OpenSlide.detect_format(str(path)) is not None:
+        return OpenSlideRegionImageReader(path)
     return PillowRegionImageReader(path)
 
 

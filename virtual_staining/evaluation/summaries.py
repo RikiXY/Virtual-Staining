@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import csv
 import math
+import random
 import statistics
 from pathlib import Path
+from typing import Any
 
 from virtual_staining.metrics import DEFAULT_METRICS
 
@@ -161,3 +163,87 @@ def read_per_image_metrics_csv(path: str | Path) -> list[dict[str, str]]:
 
     with csv_path.open("r", newline="", encoding="utf-8") as file:
         return list(csv.DictReader(file))
+
+
+def write_grouped_summaries(
+    rows: list[dict[str, object]],
+    pair_rows: dict[str, dict[str, str]],
+    output_dir: Path,
+    *,
+    bootstrap_iterations: int,
+    bootstrap_seed: int,
+) -> list[Path]:
+    """Write unit means and deterministic CIs for every complete biological level."""
+    written: list[Path] = []
+    for unit, field in (
+        ("pair", "pair_id"),
+        ("specimen", "specimen_id"),
+        ("patient", "patient_id"),
+    ):
+        groups: dict[str, list[dict[str, object]]] = {}
+        incomplete = False
+        for row in rows:
+            pair_id = str(row["pair_id"])
+            pair = pair_rows.get(pair_id)
+            group_id = pair_id if unit == "pair" else (pair or {}).get(field, "")
+            if not group_id:
+                incomplete = True
+                break
+            groups.setdefault(group_id, []).append(row)
+        if incomplete or not groups:
+            continue
+
+        unit_rows: list[dict[str, Any]] = []
+        for group_id, group_rows in sorted(groups.items()):
+            unit_rows.append(
+                {
+                    "unit": unit,
+                    "group_id": group_id,
+                    "patch_count": len(group_rows),
+                    **{
+                        metric: statistics.mean(metric_value(row, metric) for row in group_rows)
+                        for metric in SUMMARY_METRIC_NAMES
+                    },
+                }
+            )
+        metrics_path = output_dir / f"{unit}_metrics.csv"
+        with metrics_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=["unit", "group_id", "patch_count", *SUMMARY_METRIC_NAMES],
+            )
+            writer.writeheader()
+            writer.writerows(unit_rows)
+        written.append(metrics_path)
+
+        rng = random.Random(bootstrap_seed)
+        summary_path = output_dir / f"summary_{unit}.csv"
+        with summary_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=["unit", "metric", "count", "mean", "ci95_low", "ci95_high"],
+            )
+            writer.writeheader()
+            for metric in SUMMARY_METRIC_NAMES:
+                values = [float(row[metric]) for row in unit_rows]
+                bootstrap = sorted(
+                    statistics.mean(rng.choice(values) for _ in values)
+                    for _ in range(bootstrap_iterations)
+                )
+                if bootstrap:
+                    low = bootstrap[int(0.025 * (len(bootstrap) - 1))]
+                    high = bootstrap[int(0.975 * (len(bootstrap) - 1))]
+                else:
+                    low = high = float("nan")
+                writer.writerow(
+                    {
+                        "unit": unit,
+                        "metric": metric,
+                        "count": len(values),
+                        "mean": statistics.mean(values),
+                        "ci95_low": low,
+                        "ci95_high": high,
+                    }
+                )
+        written.append(summary_path)
+    return written

@@ -85,3 +85,45 @@ def test_invalid_mapping_is_rejected(overrides: dict[str, object], match: str) -
             dataset_root=Path("/data"),
             default_image_size=(256, 256),
         )
+
+
+def test_inventory_config_parses_nested_policies() -> None:
+    config = PreprocessingConfig.from_mapping(
+        {
+            "inputs": {
+                "inventory": "inputs/pairs.csv",
+                "source_modality": "AF",
+                "target_modality": "H&E",
+            },
+            "patching": {"patch_size": [64, 32], "margin": 10},
+            "masks": {"generation": "never"},
+            "alignment": {"mode": "never"},
+            "filtering": {"foreground": {"enabled": False}},
+            "split": {"unit": "pair", "train": 0.8, "val": 0.1, "test": 0.1},
+            "io": {"tiled": True, "backend": "pillow"},
+        },
+        dataset_root=Path("/data"),
+        default_image_size=(256, 256),
+    )
+    assert config.inputs is not None
+    assert config.inputs.inventory == Path("inputs/pairs.csv")
+    assert config.patch_size == (64, 32)
+    assert config.effective_split.unit == "pair"
+    assert config.to_dict()["inputs"]["source_modality"] == "AF"
+
+
+def test_inventory_and_legacy_inputs_cannot_be_mixed() -> None:
+    with pytest.raises(ValueError, match="cannot be combined"):
+        PreprocessingConfig.from_mapping(
+            {
+                "source_name": "source.tif",
+                "target_name": "target.tif",
+                "inputs": {
+                    "inventory": "pairs.csv",
+                    "source_modality": "AF",
+                    "target_modality": "H&E",
+                },
+            },
+            dataset_root=Path("/data"),
+            default_image_size=(256, 256),
+        )

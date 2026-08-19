@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -61,14 +62,16 @@ def evaluate_pair(
 
 
 def evaluate_pairs(
-    pairs: list[tuple[Path, Path, str]],
+    pairs: Sequence[tuple[Path, Path, str] | tuple[Path, Path, str, str]],
     output_dir: Path,
 ) -> EvaluationResult:
     """Computes image quality metrics for a list of target/generated pairs."""
     output_dir.mkdir(parents=True, exist_ok=True)
     result = EvaluationResult(output_dir=output_dir)
 
-    for target_path, generated_path, sample_id in pairs:
+    for pair in pairs:
+        target_path, generated_path, sample_id = pair[:3]
+        pair_id = pair[3] if len(pair) == 4 else "pair_0000"
         if not generated_path.exists():
             logger.warning("Generated image not found, skipping: %s", generated_path)
             result.num_skipped += 1
@@ -97,7 +100,9 @@ def evaluate_pairs(
             )
             continue
 
-        row = build_metric_row(sample_id, target_path, generated_path, shape, metrics)
+        row = build_metric_row(
+            sample_id, target_path, generated_path, shape, metrics, pair_id=pair_id
+        )
         result.rows.append(row)
         result.num_evaluated += 1
 

@@ -224,7 +224,7 @@ def test_run_all_result_counts_match_saved_files(
         ("val", result.val_count),
         ("test", result.test_count),
     ]:
-        files = list((root / "splits" / split_name).iterdir())
+        files = [path for path in (root / "splits" / split_name).rglob("*") if path.is_file()]
         expected_file_count = count * 2
         assert len(files) == expected_file_count, (
             f"{split_name}: expected {expected_file_count} files, got {len(files)}"
@@ -535,7 +535,18 @@ def test_stream_patches_to_disk_writes_valid_patches_to_final_splits(
     assert len(valid_rows) == 81
     assert discarded_rows == []
     assert all(
-        set(row) == {"sample_id", "split", "x", "y", "source", "target"} for row in valid_rows
+        set(row)
+        == {
+            "sample_id",
+            "pair_id",
+            "split",
+            "x",
+            "y",
+            "source",
+            "target",
+            "foreground_mask",
+        }
+        for row in valid_rows
     )
     assert all(
         not any(isinstance(value, np.ndarray) for value in row.values()) for row in valid_rows
@@ -543,7 +554,10 @@ def test_stream_patches_to_disk_writes_valid_patches_to_final_splits(
 
     root = builder_config.dataset_root
     split_files = [
-        path for split in ("train", "val", "test") for path in (root / "splits" / split).iterdir()
+        path
+        for split in ("train", "val", "test")
+        for path in (root / "splits" / split).rglob("*")
+        if path.is_file()
     ]
     assert len(split_files) == len(valid_rows) * 2
     assert not (root / "processed").exists()
@@ -567,13 +581,16 @@ def test_stream_patches_to_disk_writes_foreground_masks_when_enabled(
 
     root = config.dataset_root
     split_files = [
-        path for split in ("train", "val", "test") for path in (root / "splits" / split).iterdir()
+        path
+        for split in ("train", "val", "test")
+        for path in (root / "splits" / split).rglob("*")
+        if path.is_file()
     ]
     assert len(split_files) == len(valid_rows) * 3
     for row in valid_rows:
         split = row["split"]
         sample_id = row["sample_id"]
-        mask_path = root / "splits" / split / f"{sample_id}_foreground_mask.png"
+        mask_path = root / "splits" / split / row["pair_id"] / f"{sample_id}_foreground_mask.png"
         assert mask_path.exists()
         mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
         assert mask is not None
@@ -694,12 +711,26 @@ def test_stream_patches_to_disk_records_discarded_rows_without_images_by_default
     assert valid_rows
     assert discarded_rows
     assert all(
-        set(row) == {"sample_id", "split", "x", "y", "source", "target"} for row in valid_rows
+        set(row)
+        == {
+            "sample_id",
+            "pair_id",
+            "split",
+            "x",
+            "y",
+            "source",
+            "target",
+            "foreground_mask",
+        }
+        for row in valid_rows
     )
     assert all("reasons" in row for row in discarded_rows)
     assert all(
         {
             "sample_id",
+            "pair_id",
+            "x",
+            "y",
             "source_name",
             "target_name",
             "source_foreground_ratio",
@@ -716,7 +747,10 @@ def test_stream_patches_to_disk_records_discarded_rows_without_images_by_default
 
     root = builder_config.dataset_root
     split_files = [
-        path for split in ("train", "val", "test") for path in (root / "splits" / split).iterdir()
+        path
+        for split in ("train", "val", "test")
+        for path in (root / "splits" / split).rglob("*")
+        if path.is_file()
     ]
     assert len(split_files) == len(valid_rows) * 2
     assert not (root / "discarded_patches" / "source").exists()
@@ -758,8 +792,12 @@ def test_stream_patches_to_disk_writes_discarded_patch_images_when_enabled(
     root = config.dataset_root
     assert valid_rows
     assert discarded_rows
-    assert len(list((root / "discarded_patches" / "source").iterdir())) == len(discarded_rows)
-    assert len(list((root / "discarded_patches" / "target").iterdir())) == len(discarded_rows)
+    assert len(list((root / "discarded_patches" / "pair_0000" / "source").iterdir())) == len(
+        discarded_rows
+    )
+    assert len(list((root / "discarded_patches" / "pair_0000" / "target").iterdir())) == len(
+        discarded_rows
+    )
 
 
 def test_assign_splits_and_finalize_writes_manifest_for_streamed_split_files(
@@ -802,9 +840,9 @@ def test_assign_splits_and_finalize_writes_manifest_for_streamed_split_files(
     root = builder_config.dataset_root
     assert not (root / "processed").exists()
 
-    train_files = list((root / "splits" / "train").iterdir())
-    val_files = list((root / "splits" / "val").iterdir())
-    test_files = list((root / "splits" / "test").iterdir())
+    train_files = [path for path in (root / "splits" / "train").rglob("*") if path.is_file()]
+    val_files = [path for path in (root / "splits" / "val").rglob("*") if path.is_file()]
+    test_files = [path for path in (root / "splits" / "test").rglob("*") if path.is_file()]
     assert len(train_files) == result.train_count * 2
     assert len(val_files) == result.val_count * 2
     assert len(test_files) == result.test_count * 2
@@ -862,8 +900,12 @@ def test_assign_splits_and_finalize_preserves_discarded_patch_files(
         builder._assign_splits_and_finalize(valid_rows, discarded_rows)
 
     root = config.dataset_root
-    assert len(list((root / "discarded_patches" / "source").iterdir())) == len(discarded_rows)
-    assert len(list((root / "discarded_patches" / "target").iterdir())) == len(discarded_rows)
+    assert len(list((root / "discarded_patches" / "pair_0000" / "source").iterdir())) == len(
+        discarded_rows
+    )
+    assert len(list((root / "discarded_patches" / "pair_0000" / "target").iterdir())) == len(
+        discarded_rows
+    )
 
 
 def test_assign_splits_and_finalize_is_deterministic_for_fixed_seed(
@@ -1226,9 +1268,11 @@ def test_run_all_writes_manifest_columns_and_relative_paths(
 
     assert reader.fieldnames == [
         "sample_id",
+        "pair_id",
         "split",
         "input_path",
         "target_path",
+        "foreground_mask_path",
         "input_modality",
         "target_modality",
         "x",
@@ -1333,7 +1377,7 @@ def test_run_all_writes_manifest_metadata(builder_config: PreprocessingConfig) -
     metadata_path = builder_config.dataset_root / "manifests" / "manifest_metadata.json"
     data = json.loads(metadata_path.read_text(encoding="utf-8"))
 
-    assert data["schema_version"] == "1.0"
+    assert data["schema_version"] == "2.0"
     assert data["created_at"]
     assert data["record_count"] == result.train_count + result.val_count + result.test_count
     assert data["splits"] == {

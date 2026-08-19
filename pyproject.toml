@@ -18,6 +18,9 @@ dependencies = [
     "torchvision>=0.15",
 ]
 
+[project.optional-dependencies]
+wsi = ["openslide-python>=1.4"]
+
 [project.scripts]
 vs = "virtual_staining.cli:main"
 
