@@ -32,17 +32,17 @@ from virtual_staining.training.helpers import (
     save_images,
     unpack_batch,
 )
-from virtual_staining.training.logging import (
+from virtual_staining.training.losses import (
+    ConfiguredLossEvaluator,
+    LossEvaluationContext,
+    StepLosses,
+)
+from virtual_staining.training.progress import (
     ProgressTracker,
     TrainingLogSession,
     emit_progress_update,
     finish_console_progress,
     format_duration,
-)
-from virtual_staining.training.losses import (
-    ConfiguredLossEvaluator,
-    LossEvaluationContext,
-    StepLosses,
 )
 from virtual_staining.training.results import EpochMetrics, TrainingResult
 from virtual_staining.training.steps import Pix2PixTrainingStep
@@ -56,41 +56,30 @@ checkpoint_logger = logging.getLogger("virtual_staining.training.checkpoints")
 
 
 @dataclass
-class _TrainingStatus:
+class _TrainingSession:
+    start_epoch: int
+    start_time: float
+    progress_tracker: ProgressTracker
+    train_metrics_writer: csv.DictWriter
+    validation_metrics_writer: csv.DictWriter
+    all_metrics_writer: csv.DictWriter
+    train_metrics_file: TextIO
+    validation_metrics_file: TextIO
+    all_metrics_file: TextIO
     last_checkpoint: str
     best_checkpoint: str = "none"
+    best_checkpoint_path: Path | None = None
     best_loss_G_val: float | None = None
     latest_eval_losses: StepLosses | None = None
     latest_eval_epoch: int | None = None
-
-
-@dataclass
-class _BestCheckpointState:
-    path: Path | None = None
-
-
-@dataclass
-class _EarlyStoppingState:
-    best_value: float | None = None
-    best_epoch: int | None = None
-    stale_count: int = 0
+    early_stopping_best_value: float | None = None
+    early_stopping_best_epoch: int | None = None
+    early_stopping_stale_count: int = 0
     stopped: bool = False
     stop_epoch: int | None = None
     stop_reason: str | None = None
-
-
-@dataclass(frozen=True)
-class _EpochResult:
-    metrics: EpochMetrics
-    stopped_early: bool = False
-
-
-@dataclass(frozen=True)
-class _TrainingLoopResult:
-    final_epoch: int
-    stopped_early: bool
-    stop_reason: str | None
-    early_stopping_state: _EarlyStoppingState | None
+    final_epoch: int = -1
+    final_metrics: EpochMetrics | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +188,28 @@ class Trainer:
     # Public API
     # ------------------------------------------------------------------
 
+    def resume(self, checkpoint: str | Path) -> int:
+        """Load a checkpoint and return the next epoch to train."""
+        if checkpoint == "latest":
+            checkpoint_path = self._checkpoint_manager.latest()
+            if checkpoint_path is None:
+                raise FileNotFoundError(
+                    f"resume='latest' but no checkpoints found in {self._checkpoints_dir}"
+                )
+        else:
+            checkpoint_path = Path(checkpoint)
+            if not checkpoint_path.is_absolute():
+                checkpoint_path = self._checkpoints_dir / checkpoint_path
+            checkpoint_path = checkpoint_path.resolve()
+            if checkpoint_path.suffix != ".pth":
+                raise ValueError(
+                    f"resume checkpoint path must end with '.pth'; got {checkpoint_path}"
+                )
+            if not checkpoint_path.is_file():
+                raise FileNotFoundError(f"resume checkpoint not found: {checkpoint_path}")
+
+        return self._checkpoint_manager.load(checkpoint_path)
+
     def train(
         self,
         seed: int,
@@ -213,33 +224,22 @@ class Trainer:
             self._clear_training_outputs()
             self._log_training_start(seed, start_epoch, log_file)
 
-            progress_tracker = self._start_progress_tracker(start_epoch)
-            training_status = self._initial_training_status()
-            best_state = self._load_resumed_best_checkpoint(start_epoch, training_status)
+            session = self._run_training_epochs(start_epoch=start_epoch, start_time=start_time)
 
-            loop_result = self._run_training_epochs(
-                start_epoch=start_epoch,
-                progress_tracker=progress_tracker,
-                training_status=training_status,
-                best_state=best_state,
-                start_time=start_time,
-            )
-
-            if best_state.path is None:
-                best_state.path = self._checkpoint_manager.latest()
-                if best_state.path is not None:
-                    training_status.best_checkpoint = best_state.path.name
+            if session.best_checkpoint_path is None:
+                session.best_checkpoint_path = self._checkpoint_manager.latest()
+                if session.best_checkpoint_path is not None:
+                    session.best_checkpoint = session.best_checkpoint_path.name
 
             finish_console_progress()
             total_seconds = time.time() - start_time
             logger.info("Execution completed. Total time = %.2f seconds", total_seconds)
-            early_state = loop_result.early_stopping_state
             return TrainingResult(
-                final_epoch=loop_result.final_epoch,
-                best_checkpoint_path=best_state.path,
-                stopped_early=loop_result.stopped_early,
-                stop_epoch=early_state.stop_epoch if early_state is not None else None,
-                stop_reason=loop_result.stop_reason,
+                final_epoch=session.final_epoch,
+                best_checkpoint_path=session.best_checkpoint_path,
+                stopped_early=session.stopped,
+                stop_epoch=session.stop_epoch,
+                stop_reason=session.stop_reason,
                 early_stopping_monitor=(
                     self.config.early_stopping.monitor
                     if self.config.early_stopping is not None
@@ -250,12 +250,8 @@ class Trainer:
                     if self.config.early_stopping is not None
                     else None
                 ),
-                early_stopping_best_epoch=(
-                    early_state.best_epoch if early_state is not None else None
-                ),
-                early_stopping_best_value=(
-                    early_state.best_value if early_state is not None else None
-                ),
+                early_stopping_best_epoch=session.early_stopping_best_epoch,
+                early_stopping_best_value=session.early_stopping_best_value,
             )
 
     # ------------------------------------------------------------------
@@ -356,36 +352,17 @@ class Trainer:
         progress_tracker.start()
         return progress_tracker
 
-    def _initial_training_status(self) -> _TrainingStatus:
-        last_checkpoint = Path(self.config.resume).name if self.config.resume else "none"
-        return _TrainingStatus(last_checkpoint=last_checkpoint)
-
-    def _load_resumed_best_checkpoint(
-        self,
-        start_epoch: int,
-        training_status: _TrainingStatus,
-    ) -> _BestCheckpointState:
-        del start_epoch, training_status
-        return _BestCheckpointState()
-
     def _run_training_epochs(
         self,
         *,
         start_epoch: int,
-        progress_tracker: ProgressTracker,
-        training_status: _TrainingStatus,
-        best_state: _BestCheckpointState,
         start_time: float,
-    ) -> _TrainingLoopResult:
+    ) -> _TrainingSession:
         loss_names = configured_loss_names(self.losses)
         train_metrics_path = self._run_paths.metrics_dir / "train.csv"
         validation_metrics_path = self._run_paths.metrics_dir / "validation.csv"
         all_metrics_path = self._run_paths.metrics_dir / "all.csv"
-        last_epoch_metrics: EpochMetrics | None = None
-        final_epoch = max(start_epoch, self.config.epochs) - 1
-        early_stopping_state = (
-            _EarlyStoppingState() if self.config.early_stopping is not None else None
-        )
+        progress_tracker = self._start_progress_tracker(start_epoch)
 
         with (
             open(train_metrics_path, "w", newline="", encoding="utf-8") as train_metrics_file,
@@ -407,73 +384,46 @@ class Trainer:
                 all_metrics_file,
                 fieldnames=metrics_fieldnames(loss_names) + VALIDATION_IMAGE_METRIC_NAMES,
             )
+            session = _TrainingSession(
+                start_epoch=start_epoch,
+                start_time=start_time,
+                progress_tracker=progress_tracker,
+                train_metrics_writer=train_metrics_writer,
+                validation_metrics_writer=validation_metrics_writer,
+                all_metrics_writer=all_metrics_writer,
+                train_metrics_file=train_metrics_file,
+                validation_metrics_file=validation_metrics_file,
+                all_metrics_file=all_metrics_file,
+                last_checkpoint=(Path(self.config.resume).name if self.config.resume else "none"),
+                final_epoch=max(start_epoch, self.config.epochs) - 1,
+            )
             train_metrics_writer.writeheader()
             validation_metrics_writer.writeheader()
             all_metrics_writer.writeheader()
 
             for epoch in range(start_epoch, self.config.epochs):
-                epoch_result = self._run_training_epoch(
-                    epoch=epoch,
-                    train_metrics_writer=train_metrics_writer,
-                    validation_metrics_writer=validation_metrics_writer,
-                    all_metrics_writer=all_metrics_writer,
-                    train_metrics_file=train_metrics_file,
-                    validation_metrics_file=validation_metrics_file,
-                    all_metrics_file=all_metrics_file,
-                    progress_tracker=progress_tracker,
-                    training_status=training_status,
-                    best_state=best_state,
-                    start_time=start_time,
-                    early_stopping_state=early_stopping_state,
-                )
-                last_epoch_metrics = epoch_result.metrics
-                final_epoch = epoch
-                if epoch_result.stopped_early:
+                session.final_metrics = self._run_training_epoch(epoch=epoch, session=session)
+                session.final_epoch = epoch
+                if session.stopped:
                     break
 
-        self._save_final_checkpoint_if_needed(
-            start_epoch=start_epoch,
-            final_epoch=final_epoch,
-            final_metrics=last_epoch_metrics,
-            progress_tracker=progress_tracker,
-            training_status=training_status,
-            best_state=best_state,
-            start_time=start_time,
-        )
-        return _TrainingLoopResult(
-            final_epoch=final_epoch,
-            stopped_early=bool(early_stopping_state and early_stopping_state.stopped),
-            stop_reason=early_stopping_state.stop_reason if early_stopping_state else None,
-            early_stopping_state=early_stopping_state,
-        )
+        self._save_final_checkpoint_if_needed(session)
+        return session
 
     def _run_training_epoch(
         self,
         *,
         epoch: int,
-        train_metrics_writer: csv.DictWriter,
-        validation_metrics_writer: csv.DictWriter,
-        all_metrics_writer: csv.DictWriter,
-        train_metrics_file: TextIO,
-        validation_metrics_file: TextIO,
-        all_metrics_file: TextIO,
-        progress_tracker: ProgressTracker,
-        training_status: _TrainingStatus,
-        best_state: _BestCheckpointState,
-        start_time: float,
-        early_stopping_state: _EarlyStoppingState | None,
-    ) -> _EpochResult:
+        session: _TrainingSession,
+    ) -> EpochMetrics:
         logger.debug("Starting epoch %s", epoch)
-        epoch_metrics = self._train_epoch(epoch, progress_tracker, training_status)
+        epoch_metrics = self._train_epoch(epoch, session)
         logger.debug("Finished epoch %s", epoch)
 
         val_metrics, validation_checkpoint_path = self._validate_and_update_best(
             epoch=epoch,
             epoch_metrics=epoch_metrics,
-            progress_tracker=progress_tracker,
-            training_status=training_status,
-            best_state=best_state,
-            start_time=start_time,
+            session=session,
         )
         if val_metrics is None:
             self._step_lr_schedulers(epoch=epoch, val_metrics=None)
@@ -481,36 +431,27 @@ class Trainer:
         self._save_scheduled_checkpoint(
             epoch=epoch,
             epoch_metrics=epoch_metrics,
-            progress_tracker=progress_tracker,
-            training_status=training_status,
-            start_time=start_time,
+            session=session,
             existing_checkpoint_path=validation_checkpoint_path,
         )
 
-        self._write_train_metrics(train_metrics_writer, epoch, epoch_metrics)
-        train_metrics_file.flush()
+        self._write_train_metrics(session.train_metrics_writer, epoch, epoch_metrics)
+        session.train_metrics_file.flush()
         if val_metrics is not None:
-            self._write_validation_metrics(validation_metrics_writer, epoch, val_metrics)
-            validation_metrics_file.flush()
-        self._write_all_metrics(all_metrics_writer, epoch, epoch_metrics, val_metrics)
-        all_metrics_file.flush()
-        stopped_early = False
-        if val_metrics is not None and early_stopping_state is not None:
-            stopped_early = self._update_early_stopping(
-                epoch=epoch,
-                val_metrics=val_metrics,
-                state=early_stopping_state,
-            )
-        return _EpochResult(metrics=epoch_metrics, stopped_early=stopped_early)
+            self._write_validation_metrics(session.validation_metrics_writer, epoch, val_metrics)
+            session.validation_metrics_file.flush()
+        self._write_all_metrics(session.all_metrics_writer, epoch, epoch_metrics, val_metrics)
+        session.all_metrics_file.flush()
+        if val_metrics is not None and self.config.early_stopping is not None:
+            self._update_early_stopping(epoch=epoch, val_metrics=val_metrics, session=session)
+        return epoch_metrics
 
     def _save_scheduled_checkpoint(
         self,
         *,
         epoch: int,
         epoch_metrics: EpochMetrics,
-        progress_tracker: ProgressTracker,
-        training_status: _TrainingStatus,
-        start_time: float,
+        session: _TrainingSession,
         existing_checkpoint_path: Path | None = None,
     ) -> Path | None:
         if (epoch + 1) % self.config.checkpoint_rate != 0:
@@ -519,14 +460,12 @@ class Trainer:
         checkpoint_path = existing_checkpoint_path
         if checkpoint_path is None:
             checkpoint_path = self._checkpoint_manager.save(epoch)
-            training_status.last_checkpoint = checkpoint_path.name
+            session.last_checkpoint = checkpoint_path.name
             logger.info("Checkpoint saved to %s at epoch %s", checkpoint_path, epoch)
         self._emit_epoch_progress(
             epoch=epoch,
             epoch_metrics=epoch_metrics,
-            progress_tracker=progress_tracker,
-            training_status=training_status,
-            start_time=start_time,
+            session=session,
             eta_str="0s" if epoch == self.config.epochs - 1 else "--",
         )
         return checkpoint_path
@@ -536,20 +475,17 @@ class Trainer:
         *,
         epoch: int,
         epoch_metrics: EpochMetrics,
-        progress_tracker: ProgressTracker,
-        training_status: _TrainingStatus,
-        best_state: _BestCheckpointState,
-        start_time: float,
+        session: _TrainingSession,
     ) -> tuple[EpochMetrics | None, Path | None]:
         if (epoch + 1) % self.config.validate_rate != 0:
             return None, None
 
         val_metrics = self._validate(epoch)
-        training_status.latest_eval_losses = StepLosses(
+        session.latest_eval_losses = StepLosses(
             loss_G=val_metrics.loss_G,
             loss_D=val_metrics.loss_D,
         )
-        training_status.latest_eval_epoch = epoch
+        session.latest_eval_epoch = epoch
         self._step_lr_schedulers(epoch=epoch, val_metrics=val_metrics)
         checkpoint_metrics = self._checkpoint_selection_metrics(val_metrics)
         ranked_checkpoint_path: Path | None = None
@@ -559,7 +495,7 @@ class Trainer:
             ranked_checkpoint_path = self._ensure_best_checkpoint_path(
                 epoch=epoch,
                 checkpoint_path=None,
-                training_status=training_status,
+                session=session,
             )
             config_hash = self._read_config_hash()
             loss_config = self.losses.to_dict() if self.losses is not None else None
@@ -576,9 +512,7 @@ class Trainer:
         self._emit_epoch_progress(
             epoch=epoch,
             epoch_metrics=epoch_metrics,
-            progress_tracker=progress_tracker,
-            training_status=training_status,
-            start_time=start_time,
+            session=session,
             eta_str="0s" if epoch == self.config.epochs - 1 else "--",
         )
         return val_metrics, ranked_checkpoint_path
@@ -633,7 +567,7 @@ class Trainer:
         *,
         epoch: int,
         val_metrics: EpochMetrics,
-        state: _EarlyStoppingState,
+        session: _TrainingSession,
     ) -> bool:
         early_config = self.config.early_stopping
         if early_config is None:
@@ -648,22 +582,23 @@ class Trainer:
             )
             return False
 
-        if self._is_early_stopping_improvement(metric_value, state.best_value):
-            state.best_value = metric_value
-            state.best_epoch = epoch
-            state.stale_count = 0
+        if self._is_early_stopping_improvement(metric_value, session.early_stopping_best_value):
+            session.early_stopping_best_value = metric_value
+            session.early_stopping_best_epoch = epoch
+            session.early_stopping_stale_count = 0
             return False
 
-        state.stale_count += 1
-        if state.stale_count >= early_config.patience:
-            state.stopped = True
-            state.stop_epoch = epoch
-            state.stop_reason = (
+        session.early_stopping_stale_count += 1
+        if session.early_stopping_stale_count >= early_config.patience:
+            session.stopped = True
+            session.stop_epoch = epoch
+            session.stop_reason = (
                 f"early_stopping: {early_config.monitor} did not improve by at least "
                 f"{early_config.min_delta:g} for {early_config.patience} validation event(s); "
-                f"best epoch {state.best_epoch} value {state.best_value:.6g}"
+                f"best epoch {session.early_stopping_best_epoch} "
+                f"value {session.early_stopping_best_value:.6g}"
             )
-            logger.info("Stopping early at epoch %s: %s", epoch, state.stop_reason)
+            logger.info("Stopping early at epoch %s: %s", epoch, session.stop_reason)
             return True
         return False
 
@@ -741,13 +676,13 @@ class Trainer:
         *,
         epoch: int,
         checkpoint_path: Path | None,
-        training_status: _TrainingStatus,
+        session: _TrainingSession,
     ) -> Path:
         if checkpoint_path is not None:
             return checkpoint_path
 
         checkpoint_path = self._checkpoint_manager.save(epoch)
-        training_status.last_checkpoint = checkpoint_path.name
+        session.last_checkpoint = checkpoint_path.name
         logger.info(
             "Checkpoint saved to %s at epoch %s for checkpoint selection",
             checkpoint_path,
@@ -808,35 +743,23 @@ class Trainer:
                 row[name] = f"{value:.6f}" if math.isfinite(value) else ""
         metrics_writer.writerow(row)
 
-    def _save_final_checkpoint_if_needed(
-        self,
-        *,
-        start_epoch: int,
-        final_epoch: int,
-        final_metrics: EpochMetrics | None,
-        progress_tracker: ProgressTracker,
-        training_status: _TrainingStatus,
-        best_state: _BestCheckpointState,
-        start_time: float,
-    ) -> None:
-        if start_epoch >= self.config.epochs or final_metrics is None:
+    def _save_final_checkpoint_if_needed(self, session: _TrainingSession) -> None:
+        if session.start_epoch >= self.config.epochs or session.final_metrics is None:
             return
 
-        if (final_epoch + 1) % self.config.checkpoint_rate == 0:
+        if (session.final_epoch + 1) % self.config.checkpoint_rate == 0:
             return
 
-        checkpoint_path = self._checkpoint_manager.save(final_epoch)
-        training_status.last_checkpoint = checkpoint_path.name
-        logger.info("Final checkpoint saved to %s (epoch %s)", checkpoint_path, final_epoch)
-        if best_state.path is None:
-            best_state.path = checkpoint_path
-            training_status.best_checkpoint = checkpoint_path.name
+        checkpoint_path = self._checkpoint_manager.save(session.final_epoch)
+        session.last_checkpoint = checkpoint_path.name
+        logger.info("Final checkpoint saved to %s (epoch %s)", checkpoint_path, session.final_epoch)
+        if session.best_checkpoint_path is None:
+            session.best_checkpoint_path = checkpoint_path
+            session.best_checkpoint = checkpoint_path.name
         self._emit_epoch_progress(
-            epoch=final_epoch,
-            epoch_metrics=final_metrics,
-            progress_tracker=progress_tracker,
-            training_status=training_status,
-            start_time=start_time,
+            epoch=session.final_epoch,
+            epoch_metrics=session.final_metrics,
+            session=session,
             progress=1.0,
             eta_str="0s",
         )
@@ -846,39 +769,38 @@ class Trainer:
         *,
         epoch: int,
         epoch_metrics: EpochMetrics,
-        progress_tracker: ProgressTracker,
-        training_status: _TrainingStatus,
-        start_time: float,
+        session: _TrainingSession,
         eta_str: str,
         progress: float | None = None,
     ) -> None:
         emit_progress_update(
             progress=(
-                progress if progress is not None else (epoch + 1) / progress_tracker.total_epochs
+                progress
+                if progress is not None
+                else (epoch + 1) / session.progress_tracker.total_epochs
             ),
             epoch_progress=1.0,
             epoch=epoch,
             batch_index=len(self.train_loader) - 1,
-            progress_tracker=progress_tracker,
+            progress_tracker=session.progress_tracker,
             step_losses=StepLosses(
                 loss_G=epoch_metrics.loss_G,
                 loss_D=epoch_metrics.loss_D,
             ),
-            elapsed_str=format_duration(time.time() - start_time),
+            elapsed_str=format_duration(time.time() - session.start_time),
             eta_str=eta_str,
             end_time_str=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            last_checkpoint_name=training_status.last_checkpoint,
-            best_checkpoint_name=training_status.best_checkpoint,
-            best_checkpoint_loss_G_val=training_status.best_loss_G_val,
-            eval_losses=training_status.latest_eval_losses,
-            eval_epoch=training_status.latest_eval_epoch,
+            last_checkpoint_name=session.last_checkpoint,
+            best_checkpoint_name=session.best_checkpoint,
+            best_checkpoint_loss_G_val=session.best_loss_G_val,
+            eval_losses=session.latest_eval_losses,
+            eval_epoch=session.latest_eval_epoch,
         )
 
     def _train_epoch(
         self,
         epoch: int,
-        progress_tracker: ProgressTracker,
-        training_status: _TrainingStatus,
+        session: _TrainingSession,
     ) -> EpochMetrics:
         self.generator.train()
         self.discriminator.train()
@@ -906,10 +828,10 @@ class Trainer:
             )
             num_batches += 1
 
-            progress, elapsed, eta, end_time = progress_tracker.calculate_progress(epoch, i)
+            progress, elapsed, eta, end_time = session.progress_tracker.calculate_progress(epoch, i)
             elapsed_str = format_duration(elapsed)
             eta_str = format_duration(eta)
-            epoch_progress = (i + 1) / progress_tracker.total_batches
+            epoch_progress = (i + 1) / session.progress_tracker.total_batches
             end_time_str = (
                 "warming up"
                 if end_time is None
@@ -925,16 +847,16 @@ class Trainer:
                     epoch_progress=epoch_progress,
                     epoch=epoch,
                     batch_index=i,
-                    progress_tracker=progress_tracker,
+                    progress_tracker=session.progress_tracker,
                     step_losses=step_losses,
                     elapsed_str=elapsed_str,
                     eta_str=eta_str,
                     end_time_str=end_time_str,
-                    last_checkpoint_name=training_status.last_checkpoint,
-                    best_checkpoint_name=training_status.best_checkpoint,
-                    best_checkpoint_loss_G_val=training_status.best_loss_G_val,
-                    eval_losses=training_status.latest_eval_losses,
-                    eval_epoch=training_status.latest_eval_epoch,
+                    last_checkpoint_name=session.last_checkpoint,
+                    best_checkpoint_name=session.best_checkpoint,
+                    best_checkpoint_loss_G_val=session.best_loss_G_val,
+                    eval_losses=session.latest_eval_losses,
+                    eval_epoch=session.latest_eval_epoch,
                 )
 
         if num_batches == 0:

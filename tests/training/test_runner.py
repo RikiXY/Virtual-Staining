@@ -13,9 +13,8 @@ from tests.config_helpers import write_run_config
 from tests.image_helpers import write_rgb_pair
 from tests.manifest_helpers import make_manifest_record, write_manifest_csv
 from virtual_staining.config.run import RunConfig
-from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.training.results import TrainingResult
-from virtual_staining.training.runner import _resolve_resume_checkpoint_path, run_training
+from virtual_staining.training.runner import run_training
 
 
 def _write_train_config(tmp_path: Path, dataset_root: Path) -> Path:
@@ -62,40 +61,6 @@ def _write_missing_file_manifest(dataset_root: Path) -> None:
         make_manifest_record("00256_00000", "val", ext=".png"),
     )
     write_manifest_csv(dataset_root, records)
-
-
-def test_resolve_resume_checkpoint_path_rejects_missing_explicit_path(tmp_path: Path) -> None:
-    paths = RunPaths(tmp_path / "run")
-    paths.create_directories()
-    expected_path = (paths.checkpoints_dir / "missing.pth").resolve()
-
-    with pytest.raises(FileNotFoundError) as exc_info:
-        _resolve_resume_checkpoint_path("missing.pth", paths)
-
-    assert str(expected_path) in str(exc_info.value)
-
-
-def test_resolve_resume_checkpoint_path_rejects_wrong_suffix(tmp_path: Path) -> None:
-    paths = RunPaths(tmp_path / "run")
-    paths.create_directories()
-    expected_path = (paths.checkpoints_dir / "checkpoint.txt").resolve()
-
-    with pytest.raises(ValueError) as exc_info:
-        _resolve_resume_checkpoint_path("checkpoint.txt", paths)
-
-    assert ".pth" in str(exc_info.value)
-    assert str(expected_path) in str(exc_info.value)
-
-
-def test_resolve_resume_checkpoint_path_accepts_relative_checkpoint_name(tmp_path: Path) -> None:
-    paths = RunPaths(tmp_path / "run")
-    paths.create_directories()
-    checkpoint_path = paths.checkpoints_dir / "ep000.pth"
-    checkpoint_path.write_bytes(b"placeholder")
-
-    resolved_path = _resolve_resume_checkpoint_path("ep000.pth", paths)
-
-    assert resolved_path == checkpoint_path.resolve()
 
 
 def test_run_training_raises_if_manifest_missing(tmp_path: Path) -> None:

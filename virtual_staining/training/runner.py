@@ -27,7 +27,6 @@ from virtual_staining.experiment.snapshots import (
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.training.augmentation import build_training_paired_transform
-from virtual_staining.training.checkpoints import CheckpointManager
 from virtual_staining.training.results import TrainingResult
 from virtual_staining.training.trainer import Trainer
 from virtual_staining.utils.dimensions import to_torchvision_hw
@@ -232,13 +231,7 @@ def run_training(
 
     start_epoch = 0
     if training.resume is not None:
-        start_epoch = _resume_from_checkpoint(
-            training.resume,
-            trainer,
-            paths,
-            config.project.image_size,
-            device,
-        )
+        start_epoch = trainer.resume(training.resume)
 
     run = RunProvenance(paths.metadata_dir, config.project.run_name, config_hash)
     with run.stage("train", details=train_details) as stage:
@@ -259,56 +252,3 @@ def run_training(
             ),
         )
     return result
-
-
-def _resume_from_checkpoint(
-    resume: str,
-    trainer: Trainer,
-    paths: RunPaths,
-    image_size: tuple[int, int],
-    device: torch.device,
-) -> int:
-    """Resolve a resume target and return the next epoch to train."""
-    ckpt_manager = CheckpointManager(
-        checkpoints_dir=paths.checkpoints_dir,
-        generator=trainer.generator,
-        discriminator=trainer.discriminator,
-        opt_G=trainer._opt_G,
-        opt_D=trainer._opt_D,
-        scaler_G=trainer._scaler_G,
-        scaler_D=trainer._scaler_D,
-        image_size=image_size,
-        device=device,
-        lr_g=trainer.config.lr_g,
-        lr_d=trainer.config.lr_d,
-        beta1=trainer.config.beta1,
-        beta2=trainer.config.beta2,
-        batch_size=trainer.config.batch_size,
-        num_workers=trainer.config.num_workers,
-    )
-
-    if resume == "latest":
-        checkpoint_path = ckpt_manager.latest()
-        if checkpoint_path is None:
-            raise FileNotFoundError(
-                f"resume='latest' but no checkpoints found in {paths.checkpoints_dir}"
-            )
-    else:
-        checkpoint_path = _resolve_resume_checkpoint_path(resume, paths)
-
-    return ckpt_manager.load(checkpoint_path)
-
-
-def _resolve_resume_checkpoint_path(resume: str, paths: RunPaths) -> Path:
-    """Resolve and preflight an explicit resume checkpoint path."""
-    checkpoint_path = Path(resume)
-    if not checkpoint_path.is_absolute():
-        checkpoint_path = paths.checkpoints_dir / checkpoint_path
-    checkpoint_path = checkpoint_path.resolve()
-
-    if checkpoint_path.suffix != ".pth":
-        raise ValueError(f"resume checkpoint path must end with '.pth'; got {checkpoint_path}")
-    if not checkpoint_path.is_file():
-        raise FileNotFoundError(f"resume checkpoint not found: {checkpoint_path}")
-
-    return checkpoint_path
