@@ -1,6 +1,5 @@
 """Shared terminal presentation helpers for CLI adapters."""
 
-from virtual_staining.metrics import METRIC_SPECS
 from virtual_staining.utils.console import print_info, print_section, style
 
 _COLORS = ("green", "yellow", "orange")
@@ -20,6 +19,8 @@ _FORMATS = {
 
 def color_for_metric(metric_name: str, value: float) -> str:
     """Returns the ANSI color name for a metric value. Fallback: 'cyan'."""
+    from virtual_staining.metrics import METRIC_SPECS
+
     spec = METRIC_SPECS.get(metric_name)
     if spec is None:
         return "cyan"

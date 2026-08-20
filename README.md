@@ -19,6 +19,7 @@ generation of virtually stained images from label-free microscopy inputs (and vi
 | `vs panels` | Build source / generated / target comparison panels |
 | `vs organize` | Organise run outputs |
 | `vs queue` | Execute full or staged runs sequentially from a queue file |
+| `vs status` | Check dependencies, system memory, OpenSlide, and GPU support |
 
 ## Quick Start
 
@@ -53,6 +54,7 @@ Or call the CLI directly:
 ```bash
 vs run --config config/runs/local/my_run.yaml
 vs run --config config/runs/local/my_run.yaml --stages train infer evaluate
+vs status
 ```
 
 Evaluate one generated image without adding another top-level command:

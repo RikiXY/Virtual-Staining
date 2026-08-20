@@ -22,6 +22,7 @@ COMMANDS = (
     "panels",
     "organize",
     "queue",
+    "status",
 )
 
 

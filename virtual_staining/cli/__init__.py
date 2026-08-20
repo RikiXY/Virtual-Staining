@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import Protocol
 
-from virtual_staining.applications.pipeline import VALID_STAGES, run_stage, run_stages
-from virtual_staining.applications.run_queue import run_queue
-from virtual_staining.cli import compare, compare_panels, evaluate, infer_images, organize
 from virtual_staining.cli._common import (
     add_config_argument,
     add_log_level_argument,
@@ -15,6 +14,12 @@ from virtual_staining.cli._common import (
 )
 
 Command = Callable[[list[str] | None], None]
+VALID_STAGES = ("prepare", "train", "infer", "evaluate")
+
+
+class _QueueResult(Protocol):
+    status: str
+
 
 _COMMAND_HELP = {
     "prepare": "Prepare the paired-image dataset.",
@@ -27,7 +32,30 @@ _COMMAND_HELP = {
     "panels": "Build source/generated/target comparison panels.",
     "organize": "Organize run outputs by metric ranking.",
     "queue": "Execute pipeline runs from a queue file.",
+    "status": "Check the runtime environment and optional hardware support.",
 }
+
+
+def run_stage(config_path: Path, stage: str) -> object:
+    from virtual_staining.applications.pipeline import run_stage as run
+
+    return run(config_path, stage)
+
+
+def run_stages(config_path: Path, stages: tuple[str, ...] | list[str] | None = None) -> object:
+    from virtual_staining.applications.pipeline import run_stages as run
+
+    return run(config_path) if stages is None else run(config_path, stages)
+
+
+def run_queue(queue_path: Path) -> _QueueResult:
+    from virtual_staining.applications.run_queue import run_queue as run
+
+    return run(queue_path)
+
+
+def _run_cli_module(name: str, argv: list[str] | None) -> None:
+    importlib.import_module(f"virtual_staining.cli.{name}").main(argv)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -83,12 +111,13 @@ def _commands() -> dict[str, Command]:
         "run": _run_pipeline,
         "train": lambda argv: _run_stage_command("train", argv),
         "infer": lambda argv: _run_stage_command("infer", argv),
-        "infer-images": infer_images.main,
-        "evaluate": evaluate.main,
-        "compare": compare.main,
-        "panels": compare_panels.main,
-        "organize": organize.main,
+        "infer-images": lambda argv: _run_cli_module("infer_images", argv),
+        "evaluate": lambda argv: _run_cli_module("evaluate", argv),
+        "compare": lambda argv: _run_cli_module("compare", argv),
+        "panels": lambda argv: _run_cli_module("compare_panels", argv),
+        "organize": lambda argv: _run_cli_module("organize", argv),
         "queue": _run_queue,
+        "status": lambda argv: _run_cli_module("status", argv),
     }
 
 
