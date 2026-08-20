@@ -19,7 +19,9 @@ from tests.manifest_helpers import make_manifest_record, write_manifest_csv
 from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.evaluator import evaluate_pair
 from virtual_staining.evaluation.io import collect_image_files, extract_single_sample_id
+from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.inference import InferenceResult
+from virtual_staining.inference import single as single_module
 from virtual_staining.inference.runner import (
     InferenceResult as RunnerInferenceResult,
 )
@@ -28,6 +30,7 @@ from virtual_staining.inference.runner import (
 )
 from virtual_staining.inference.single import (
     SingleInferenceResult,
+    _write_tiled_rgb,
     run_image_directory_inference,
     run_image_path_inference,
     run_single_image_inference,
@@ -239,6 +242,71 @@ def test_single_image_inference_writes_default_output_without_manifest(tmp_path:
     assert expected_output.exists()
     with Image.open(expected_output) as generated:
         assert generated.size == (64, 64)
+
+
+def test_region_tiled_inference_matches_source_with_overlap(tmp_path: Path) -> None:
+    source = np.arange(5 * 7 * 3, dtype=np.uint8).reshape(5, 7, 3)
+
+    class Reader:
+        size = (7, 5)
+
+        def read_region(self, x: int, y: int, width: int, height: int) -> np.ndarray:
+            return source[y : y + height, x : x + width, ::-1].copy()
+
+    output_path = tmp_path / "generated.rgb"
+    _write_tiled_rgb(
+        Reader(),  # type: ignore[arg-type]
+        output_path,
+        torch.nn.Identity(),
+        torch.device("cpu"),
+        (4, 4),
+        2,
+    )
+
+    actual = np.fromfile(output_path, dtype=np.uint8).reshape(source.shape)
+    np.testing.assert_array_equal(actual, source)
+
+
+def test_single_image_inference_routes_wsi_without_pillow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    input_path = tmp_path / "source.tif"
+    output_path = tmp_path / "generated.tif"
+    input_path.touch()
+
+    class Reader:
+        size = (64, 64)
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    reader = Reader()
+    monkeypatch.setattr(single_module, "OpenSlideRegionImageReader", Reader)
+    monkeypatch.setattr(single_module, "open_image_reader", lambda _path: reader)
+    monkeypatch.setattr(
+        single_module,
+        "open_rgb",
+        lambda _path: pytest.fail("WSI inference must not use Pillow"),
+    )
+    monkeypatch.setattr(
+        single_module,
+        "_run_wsi_prediction",
+        lambda _reader, path, *_args: path.touch(),
+    )
+    runtime = single_module._InferenceRuntime(
+        paths=RunPaths(tmp_path / "run"),
+        generator=torch.nn.Identity(),
+        checkpoint_path=tmp_path / "checkpoint.pth",
+        image_size=(32, 32),
+        device=torch.device("cpu"),
+    )
+
+    result = single_module._run_one_image(runtime, input_path, output_path=output_path)
+
+    assert result.output_path == output_path
+    assert output_path.exists()
+    assert reader.closed is True
 
 
 def test_single_image_inference_resize_mode_writes_configured_size(tmp_path: Path) -> None:

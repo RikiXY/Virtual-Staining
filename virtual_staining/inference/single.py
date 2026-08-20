@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import logging
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
+import numpy as np
 import torch
 from PIL import Image
 from torchvision import transforms
@@ -19,7 +22,13 @@ from virtual_staining.inference.runner import (
     load_inference_generator,
     resolve_inference_device,
 )
-from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS, open_rgb
+from virtual_staining.utils.image_io import (
+    VALID_IMAGE_EXTENSIONS,
+    OpenSlideRegionImageReader,
+    RegionImageReader,
+    open_image_reader,
+    open_rgb,
+)
 
 logger = logging.getLogger(__name__)
 DEFAULT_TILE_OVERLAP = 16
@@ -200,6 +209,139 @@ def _run_tiled_prediction(
     return (accumulator / weights.clamp_min(1.0)).clamp(0, 1)
 
 
+def _write_tiled_rgb(
+    reader: RegionImageReader,
+    output_path: Path,
+    generator: torch.nn.Module,
+    device: torch.device,
+    image_size: tuple[int, int],
+    tile_overlap: int,
+) -> None:
+    """Run tiled inference into a disk-backed RGB byte buffer."""
+    _validate_tile_overlap(image_size, tile_overlap)
+
+    image_w, image_h = reader.size
+    tile_w, tile_h = image_size
+    x_starts = _tile_starts(image_w, tile_w, tile_w - tile_overlap)
+    y_starts = _tile_starts(image_h, tile_h, tile_h - tile_overlap)
+    x_weights = np.zeros(image_w, dtype=np.uint32)
+    y_weights = np.zeros(image_h, dtype=np.uint32)
+    for x in x_starts:
+        x_weights[x : min(x + tile_w, image_w)] += 1
+    for y in y_starts:
+        y_weights[y : min(y + tile_h, image_h)] += 1
+
+    accumulator_path = output_path.with_suffix(".float32")
+    accumulator = np.memmap(
+        accumulator_path, mode="w+", dtype=np.float32, shape=(image_h, image_w, 3)
+    )
+    transform = _build_no_resize_transform()
+    try:
+        for y in y_starts:
+            for x in x_starts:
+                actual_w = min(tile_w, image_w - x)
+                actual_h = min(tile_h, image_h - y)
+                region = reader.read_region(x, y, actual_w, actual_h)
+                tile = Image.fromarray(region[:, :, ::-1].copy())
+                predicted = _predict_image(
+                    _pad_tile(tile, image_size), generator, device, transform
+                )[:, :actual_h, :actual_w]
+                accumulator[y : y + actual_h, x : x + actual_w] += predicted.permute(
+                    1, 2, 0
+                ).numpy()
+
+        output = np.memmap(output_path, mode="w+", dtype=np.uint8, shape=(image_h, image_w, 3))
+        try:
+            for y in range(0, image_h, tile_h):
+                bottom = min(y + tile_h, image_h)
+                weights = y_weights[y:bottom, None] * x_weights[None, :]
+                output[y:bottom] = np.clip(
+                    accumulator[y:bottom] / weights[:, :, None] * 255.0 + 0.5,
+                    0,
+                    255,
+                ).astype(np.uint8)
+            output.flush()
+        finally:
+            del output
+    finally:
+        del accumulator
+        accumulator_path.unlink(missing_ok=True)
+
+
+def _save_pyramidal_tiff(raw_path: Path, output_path: Path, size: tuple[int, int]) -> None:
+    """Encode a raw RGB buffer as an OpenSlide-readable pyramidal BigTIFF."""
+    width, height = size
+    native_path = raw_path.with_suffix(".v")
+    generated_path = raw_path.with_suffix(".tif")
+    try:
+        subprocess.run(
+            [
+                "vips",
+                "rawload",
+                str(raw_path),
+                str(native_path),
+                str(width),
+                str(height),
+                "3",
+                "--format=uchar",
+                "--interpretation=srgb",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            [
+                "vips",
+                "tiffsave",
+                str(native_path),
+                str(generated_path),
+                "--tile",
+                "--pyramid",
+                "--bigtiff",
+                "--compression=lzw",
+                "--tile-width=256",
+                "--tile-height=256",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("libvips is required; run this command inside 'nix develop'") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or "").strip() or (exc.stdout or "").strip() or str(exc)
+        raise RuntimeError(f"Could not write pyramidal TIFF: {detail}") from exc
+
+    generated = OpenSlideRegionImageReader(generated_path)
+    try:
+        if generated.size != size:
+            raise RuntimeError(
+                f"Generated dimensions differ: expected {size}, got {generated.size}"
+            )
+    finally:
+        generated.close()
+    generated_path.replace(output_path)
+
+
+def _run_wsi_prediction(
+    reader: OpenSlideRegionImageReader,
+    output_path: Path,
+    generator: torch.nn.Module,
+    device: torch.device,
+    image_size: tuple[int, int],
+    tile_overlap: int,
+) -> None:
+    if output_path.suffix.lower() not in {".tif", ".tiff"}:
+        raise ValueError("Full-resolution WSI output must use .tif or .tiff")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f".{output_path.stem}.", dir=output_path.parent) as tmp:
+        raw_path = Path(tmp) / "generated.rgb"
+        _write_tiled_rgb(reader, raw_path, generator, device, image_size, tile_overlap)
+        _save_pyramidal_tiff(raw_path, output_path, reader.size)
+
+
 def _build_runtime(config: RunConfig) -> _InferenceRuntime:
     paths = RunPaths(config.project.run_root)
     paths.create_directories()
@@ -255,23 +397,50 @@ def _run_one_image(
 
     requested_mode = _validate_mode(mode)
 
-    image = open_rgb(input_path)
-    resolved_mode = _resolve_mode(requested_mode, image.size, runtime.image_size)
+    reader = open_image_reader(input_path)
+    try:
+        resolved_mode = _resolve_mode(requested_mode, reader.size, runtime.image_size)
+        pillow_limit = Image.MAX_IMAGE_PIXELS
+        if (
+            resolved_mode == "tile"
+            and not isinstance(reader, OpenSlideRegionImageReader)
+            and pillow_limit is not None
+            and reader.size[0] * reader.size[1] > 2 * pillow_limit
+        ):
+            raise RuntimeError(
+                "Large tiled inference requires OpenSlide; install the 'wsi' extra and "
+                "native OpenSlide, then run inside 'nix develop'"
+            )
+        if resolved_mode == "tile" and isinstance(reader, OpenSlideRegionImageReader):
+            _run_wsi_prediction(
+                reader,
+                output_path,
+                runtime.generator,
+                runtime.device,
+                runtime.image_size,
+                tile_overlap,
+            )
+            output = None
+        else:
+            image = open_rgb(input_path)
+            if resolved_mode == "resize":
+                output = _run_resized_prediction(
+                    image, runtime.generator, runtime.device, runtime.image_size
+                )
+            else:
+                output = _run_tiled_prediction(
+                    image,
+                    runtime.generator,
+                    runtime.device,
+                    runtime.image_size,
+                    tile_overlap,
+                )
+    finally:
+        reader.close()
 
-    if resolved_mode == "resize":
-        output = _run_resized_prediction(
-            image, runtime.generator, runtime.device, runtime.image_size
-        )
-    else:
-        output = _run_tiled_prediction(
-            image,
-            runtime.generator,
-            runtime.device,
-            runtime.image_size,
-            tile_overlap,
-        )
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    save_image(output, output_path)
+    if output is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        save_image(output, output_path)
 
     logger.info(
         "Single-image inference complete: %s -> %s (mode=%s)",
