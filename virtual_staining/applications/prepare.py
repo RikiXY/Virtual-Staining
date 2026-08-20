@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,10 @@ from virtual_staining.experiment.snapshots import (
     save_environment_snapshot,
     save_stage_config_snapshots,
 )
+from virtual_staining.utils.console import style
+from virtual_staining.utils.image_io import detect_openslide_format
+
+logger = logging.getLogger(__name__)
 
 
 def _load_json(path: Path) -> dict[str, Any] | None:
@@ -86,6 +91,77 @@ def _build_reused_result(dataset_root: Path) -> DatasetBuildResult:
     )
 
 
+def _warn_image_backend(config: RunConfig, pairs: tuple[SlidePair, ...]) -> None:
+    preprocessing = config.preprocessing
+    if preprocessing is None or not preprocessing.tiled_io:
+        return
+
+    root = preprocessing.dataset_root
+    paths = tuple(
+        sorted(
+            {
+                root / path
+                for pair in pairs
+                for path in (pair.source_path, pair.target_path)
+                if (root / path).is_file()
+            }
+        )
+    )
+    if not paths:
+        return
+    try:
+        incompatible = tuple(path for path in paths if detect_openslide_format(path) is None)
+    except RuntimeError:
+        if preprocessing.io_backend == "openslide":
+            message = "OpenSlide is unavailable, so tiled preparation cannot start."
+        else:
+            message = "Tiled preparation is using Pillow because OpenSlide is unavailable."
+        message += (
+            " Enter 'nix develop' and install the Python dependency with 'uv sync --extra wsi'."
+        )
+        logger.warning(style(message, "yellow"))
+        return
+
+    if preprocessing.io_backend == "pillow":
+        if incompatible:
+            message = (
+                "Tiled preparation is using Pillow, and "
+                f"{len(incompatible)} configured slide image(s) are not OpenSlide-compatible."
+            )
+        else:
+            message = (
+                "Tiled preparation is using Pillow even though the configured slide images "
+                "are OpenSlide-compatible. Set 'io.backend: openslide' or 'auto' to avoid "
+                "memory-heavy reads."
+            )
+            logger.warning(style(message, "yellow"))
+            return
+    elif not incompatible:
+        return
+    elif preprocessing.io_backend == "auto":
+        message = (
+            f"{len(incompatible)} configured slide image(s) are not OpenSlide-compatible; "
+            "automatic tiled I/O will use memory-heavy Pillow reads for them."
+        )
+    else:
+        message = (
+            f"{len(incompatible)} configured slide image(s) are not OpenSlide-compatible, "
+            "so tiled preparation cannot read them with OpenSlide."
+        )
+
+    shown = ", ".join(str(path) for path in incompatible[:3])
+    remaining = len(incompatible) - 3
+    if remaining > 0:
+        shown += f" (+{remaining} more)"
+    message += (
+        " Convert them first, for example: 'vs convert /path/to/slides --output-dir "
+        "/path/to/converted-slides', then update the inventory paths."
+    )
+    if shown:
+        message += f" Affected: {shown}."
+    logger.warning(style(message, "yellow"))
+
+
 def _reuse_existing_dataset(
     config: RunConfig, current: dict[str, Any]
 ) -> DatasetBuildResult | None:
@@ -137,6 +213,7 @@ def prepare(config: RunConfig, config_path: Path) -> DatasetBuildResult:
         current_fingerprint = _build_current_fingerprint(config, pairs)
         result = _reuse_existing_dataset(config, current_fingerprint)
         if result is None:
+            _warn_image_backend(config, pairs)
             builder = DatasetBuilder(
                 config.preprocessing,
                 pairs=pairs,

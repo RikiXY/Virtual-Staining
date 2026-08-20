@@ -138,17 +138,13 @@ class OpenSlideRegionImageReader:
     """Optional OpenSlide-backed level-0 region reader."""
 
     def __init__(self, path: str | Path) -> None:
-        try:
-            import openslide  # pyright: ignore[reportMissingImports]
-        except ImportError as exc:
-            raise RuntimeError(
-                "OpenSlide backend requested; install the 'wsi' extra and native OpenSlide"
-            ) from exc
         self.path = Path(path)
         if not self.path.is_file():
             raise FileNotFoundError(f"Image not found: {self.path}")
-        if openslide.OpenSlide.detect_format(str(self.path)) is None:
+        if detect_openslide_format(self.path) is None:
             raise ValueError(f"OpenSlide does not support: {self.path}")
+        import openslide  # pyright: ignore[reportMissingImports]
+
         self._slide: Any = openslide.OpenSlide(str(self.path))
 
     @property
@@ -212,12 +208,23 @@ def open_image_reader(path: str | Path, backend: str = "auto") -> RegionImageRea
     if backend == "openslide":
         return OpenSlideRegionImageReader(path)
     try:
-        import openslide  # pyright: ignore[reportMissingImports]
-    except ImportError:
+        detected = detect_openslide_format(path)
+    except RuntimeError:
         return PillowRegionImageReader(path)
-    if openslide.OpenSlide.detect_format(str(path)) is not None:
+    if detected is not None:
         return OpenSlideRegionImageReader(path)
     return PillowRegionImageReader(path)
+
+
+def detect_openslide_format(path: str | Path) -> str | None:
+    """Return the OpenSlide format name without decoding the image."""
+    try:
+        import openslide  # pyright: ignore[reportMissingImports]
+    except ImportError as exc:
+        raise RuntimeError(
+            "OpenSlide is unavailable; install the 'wsi' extra and native OpenSlide"
+        ) from exc
+    return openslide.OpenSlide.detect_format(str(path))
 
 
 def open_rgb(path: str | Path) -> Image.Image:

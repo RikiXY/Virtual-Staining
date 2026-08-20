@@ -19,6 +19,7 @@ COMMANDS = (
     "infer-images",
     "evaluate",
     "compare",
+    "convert",
     "panels",
     "organize",
     "queue",

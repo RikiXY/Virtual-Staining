@@ -16,6 +16,7 @@ generation of virtually stained images from label-free microscopy inputs (and vi
 | `vs infer-images` | Run inference on one image file or a directory of images |
 | `vs evaluate` | Evaluate a configured run or one image pair |
 | `vs compare` | Compare metric distributions across runs |
+| `vs convert` | Convert TIFF images to OpenSlide-compatible pyramidal BigTIFFs |
 | `vs panels` | Build source / generated / target comparison panels |
 | `vs organize` | Organise run outputs |
 | `vs queue` | Execute full or staged runs sequentially from a queue file |
@@ -55,6 +56,14 @@ Or call the CLI directly:
 vs run --config config/runs/local/my_run.yaml
 vs run --config config/runs/local/my_run.yaml --stages train infer evaluate
 vs status
+```
+
+Convert one or more large TIFFs—or a whole directory recursively—without loading them fully
+into memory. Directory inputs keep their relative layout under the output directory:
+
+```bash
+vs convert raw/source.tif raw/target.tif --output-dir converted
+vs convert raw/slides --output-dir converted
 ```
 
 Evaluate one generated image without adding another top-level command:
