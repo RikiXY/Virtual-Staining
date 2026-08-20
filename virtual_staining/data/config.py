@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import isclose
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from virtual_staining.config.validation import parse_bool_strict, reject_unknown_keys
 from virtual_staining.data.preprocessing import ALLOWED_MASK_STRATEGIES
@@ -424,8 +424,8 @@ class PreprocessingConfig:
         max_memory = data.get("max_memory_gb")
         return cls(
             dataset_root=dataset_root,
-            source_name=data.get("source_name"),
-            target_name=data.get("target_name"),
+            source_name=cast(str, data.get("source_name")),
+            target_name=cast(str, data.get("target_name")),
             patch_size=parse_wh_size(data.get("patch_size"), default_image_size),
             grid_movement=_pair(data.get("grid_movement"), default_image_size),
             margin=int(data.get("margin", 200)),

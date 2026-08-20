@@ -193,6 +193,11 @@ def builder_scaled_config(tmp_path: Path) -> PreprocessingConfig:
 # ---------------------------------------------------------------------------
 
 
+def test_builder_rejects_empty_pairs(builder_config: PreprocessingConfig) -> None:
+    with pytest.raises(ValueError, match="at least one slide pair"):
+        DatasetBuilder(builder_config, pairs=())
+
+
 def test_run_all_creates_split_directories(builder_config: PreprocessingConfig) -> None:
     with _patched_builder_dependencies():
         DatasetBuilder(builder_config).run_all()

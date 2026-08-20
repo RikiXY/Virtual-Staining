@@ -1058,6 +1058,8 @@ class DatasetBuilder:
             if pairs is not None
             else (SlidePair("pair_0000", Path(config.source_name), Path(config.target_name)),)
         )
+        if not self.pairs:
+            raise ValueError("DatasetBuilder requires at least one slide pair")
         self.fingerprint_metadata = fingerprint_metadata
         self._single = PairProcessor(config, self.pairs[0]) if len(self.pairs) == 1 else None
 
@@ -1475,11 +1477,12 @@ class DatasetBuilder:
                 prepared_at=build_metadata["completed_at"],
             )
         else:
+            pair = next(iter(self.pairs))
             fingerprint = build_dataset_fingerprint_metadata(
                 dataset_root=root,
                 preprocessing_config=self.config.to_dict(),
-                source_path=root / self.pairs[0].source_path,
-                target_path=root / self.pairs[0].target_path,
+                source_path=root / pair.source_path,
+                target_path=root / pair.target_path,
                 prepared_at=build_metadata["completed_at"],
             )
         save_dataset_fingerprint(fingerprint, metadata_dir / "dataset_fingerprint.json")
