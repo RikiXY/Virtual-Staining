@@ -13,7 +13,10 @@ import torch.optim as optim
 from torch.amp import GradScaler
 
 from virtual_staining.experiment.run_paths import RunPaths
-from virtual_staining.training.checkpoint_selection import update_checkpoint_selection
+from virtual_staining.training.checkpoint_selection import (
+    load_best_checkpoint_record,
+    update_checkpoint_selection,
+)
 from virtual_staining.training.checkpoints import CheckpointManager
 from virtual_staining.training.config import (
     SUPPORTED_CHECKPOINT_METRICS,
@@ -355,6 +358,8 @@ class Trainer:
                 last_checkpoint=(Path(self.config.resume).name if self.config.resume else "none"),
                 final_epoch=max(start_epoch, self.config.epochs) - 1,
             )
+            if start_epoch > 0:
+                self._sync_best_checkpoint(session)
 
             for epoch in range(start_epoch, self.config.epochs):
                 session.final_metrics = self._run_training_epoch(epoch=epoch, session=session)
@@ -459,6 +464,7 @@ class Trainer:
                 config_hash=config_hash,
                 loss_config=loss_config,
             )
+            self._sync_best_checkpoint(session)
         self._emit_epoch_progress(
             epoch=epoch,
             epoch_metrics=epoch_metrics,
@@ -633,6 +639,19 @@ class Trainer:
             return None
         value = self._run_paths.config_hash.read_text(encoding="utf-8").strip()
         return value or None
+
+    def _sync_best_checkpoint(self, session: _TrainingSession) -> None:
+        try:
+            record = load_best_checkpoint_record(
+                self._checkpoints_dir,
+                policy="best",
+                metric="loss_G_val",
+            )
+        except FileNotFoundError:
+            return
+        session.best_checkpoint_path = record.checkpoint_path
+        session.best_checkpoint = record.checkpoint_path.name
+        session.best_loss_G_val = record.metric_value
 
     def _ensure_best_checkpoint_path(
         self,

@@ -19,6 +19,7 @@ from virtual_staining.data.manifest import DatasetManifest, Split
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
+from virtual_staining.training.checkpoint_selection import update_checkpoint_selection
 from virtual_staining.training.config import (
     EarlyStoppingConfig,
     LearningRateSchedulerConfig,
@@ -766,6 +767,65 @@ def test_training_best_checkpoint_policy_uses_lower_is_better_metric(
         for record in mae_selection["records"]
     ]
     assert ranked_values == [(1, 1, 0.1), (2, 0, 0.4)]
+
+
+def test_training_reports_ranked_loss_checkpoint_in_progress_and_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trainer, run_paths = _make_policy_selection_trainer(tmp_path)
+    progress_updates: list[dict[str, object]] = []
+
+    monkeypatch.setattr(trainer, "_train_epoch", lambda *args: _stub_optimizer_epoch(trainer))
+    monkeypatch.setattr(
+        trainer,
+        "_validate",
+        lambda epoch: EpochMetrics(loss_G=float(epoch + 1), loss_D=1.0),
+    )
+    monkeypatch.setattr(
+        "virtual_staining.training.trainer.emit_progress_update",
+        lambda **kwargs: progress_updates.append(kwargs),
+    )
+
+    result = trainer.train(seed=0)
+
+    assert result.best_checkpoint_path == run_paths.checkpoints_dir / "ep000.pth"
+    assert progress_updates[-1]["best_checkpoint_name"] == "ep000.pth"
+    assert progress_updates[-1]["best_checkpoint_loss_G_val"] == pytest.approx(1.0)
+
+
+def test_resumed_training_restores_ranked_loss_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trainer, run_paths = _make_policy_selection_trainer(tmp_path)
+    checkpoint_path = trainer._checkpoint_manager.save(0)
+    update_checkpoint_selection(
+        run_paths.checkpoints_dir,
+        metrics={"loss_G_val": 0.5},
+        modes={"loss_G_val": "min"},
+        top_k=3,
+        epoch=0,
+        checkpoint_path=checkpoint_path,
+    )
+    progress_updates: list[dict[str, object]] = []
+
+    monkeypatch.setattr(trainer, "_train_epoch", lambda *args: _stub_optimizer_epoch(trainer))
+    monkeypatch.setattr(
+        trainer,
+        "_validate",
+        lambda epoch: EpochMetrics(loss_G=float("nan"), loss_D=1.0),
+    )
+    monkeypatch.setattr(
+        "virtual_staining.training.trainer.emit_progress_update",
+        lambda **kwargs: progress_updates.append(kwargs),
+    )
+
+    result = trainer.train(seed=0, start_epoch=1)
+
+    assert result.best_checkpoint_path == checkpoint_path
+    assert progress_updates[-1]["best_checkpoint_name"] == "ep000.pth"
+    assert progress_updates[-1]["best_checkpoint_loss_G_val"] == pytest.approx(0.5)
 
 
 def test_linear_decay_scheduler_steps_active_optimizers(
