@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import subprocess
 import uuid
 from pathlib import Path
 
 from virtual_staining.utils.image_io import OpenSlideRegionImageReader, PillowRegionImageReader
+
+logger = logging.getLogger(__name__)
 
 
 def _conversion_paths(inputs: tuple[Path, ...], output_dir: Path) -> tuple[tuple[Path, Path], ...]:
@@ -49,9 +52,11 @@ def convert_images(inputs: tuple[Path, ...], output_dir: Path) -> tuple[Path, ..
 
     output_dir.mkdir(parents=True, exist_ok=True)
     completed: list[Path] = []
-    for source, destination in conversions:
+    total = len(conversions)
+    for index, (source, destination) in enumerate(conversions, start=1):
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.parent / f".{destination.stem}.{uuid.uuid4().hex}.tmp.tif"
+        logger.info("[%d/%d] Converting %s -> %s", index, total, source, destination)
         try:
             try:
                 subprocess.run(
@@ -91,6 +96,7 @@ def convert_images(inputs: tuple[Path, ...], output_dir: Path) -> tuple[Path, ..
                 reader.close()
             temporary.replace(destination)
             completed.append(destination)
+            logger.info("[%d/%d] Converted %s", index, total, destination)
         finally:
             temporary.unlink(missing_ok=True)
 

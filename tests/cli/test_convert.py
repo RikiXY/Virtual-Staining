@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,7 +20,9 @@ class _Reader:
 
 
 def test_convert_images_uses_lossless_pyramidal_tiff_and_validates_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     source = tmp_path / "source.tif"
     source.write_bytes(b"input")
@@ -36,7 +39,8 @@ def test_convert_images_uses_lossless_pyramidal_tiff_and_validates_output(
     )
     monkeypatch.setattr(convert_app, "OpenSlideRegionImageReader", _Reader)
 
-    result = convert_app.convert_images((source,), output_dir)
+    with caplog.at_level(logging.INFO, logger="virtual_staining.applications.convert"):
+        result = convert_app.convert_images((source,), output_dir)
 
     destination = output_dir / source.name
     assert result == (destination,)
@@ -49,6 +53,10 @@ def test_convert_images_uses_lossless_pyramidal_tiff_and_validates_output(
         "--compression=lzw",
         "--tile-width=256",
         "--tile-height=256",
+    ]
+    assert caplog.messages == [
+        f"[1/1] Converting {source.resolve()} -> {destination}",
+        f"[1/1] Converted {destination}",
     ]
 
 
@@ -103,15 +111,18 @@ def test_convert_cli_resolves_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     source = tmp_path / "source.tif"
     output = tmp_path / "output"
     captured: list[tuple[tuple[Path, ...], Path]] = []
+    levels: list[str] = []
     monkeypatch.setattr(
         convert_cli,
         "convert_images",
         lambda inputs, output_dir: captured.append((inputs, output_dir)) or (),
     )
+    monkeypatch.setattr(convert_cli, "configure_logging", levels.append)
 
     convert_cli.main([str(source), "--output-dir", str(output)])
 
     assert captured == [((source.resolve(),), output.resolve())]
+    assert levels == ["INFO"]
 
 
 def test_convert_images_reports_missing_vips(
@@ -130,7 +141,9 @@ def test_convert_images_reports_missing_vips(
 
 
 def test_convert_images_reports_vips_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     source = tmp_path / "source.tif"
     source.write_bytes(b"input")
@@ -142,8 +155,14 @@ def test_convert_images_reports_vips_failure(
         ),
     )
 
-    with pytest.raises(RuntimeError, match="bad TIFF"):
+    with (
+        caplog.at_level(logging.INFO, logger="virtual_staining.applications.convert"),
+        pytest.raises(RuntimeError, match="bad TIFF"),
+    ):
         convert_app.convert_images((source,), tmp_path / "output")
+
+    assert any("Converting" in message for message in caplog.messages)
+    assert not any("Converted" in message for message in caplog.messages)
 
 
 @pytest.mark.parametrize("kind", ["missing", "non_tiff", "empty"])

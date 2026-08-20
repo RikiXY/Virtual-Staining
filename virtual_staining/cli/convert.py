@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 
 from virtual_staining.applications.convert import convert_images
-from virtual_staining.cli._output import print_info
+from virtual_staining.cli._common import add_log_level_argument, configure_logging
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -19,17 +19,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "inputs", nargs="+", type=Path, metavar="INPUT", help="TIFF file or directory."
     )
     parser.add_argument("--output-dir", required=True, type=Path)
+    add_log_level_argument(parser)
     return parser
 
 
 def main(argv: list[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
-    outputs = convert_images(
+    configure_logging(args.log_level)
+    convert_images(
         tuple(path.resolve() for path in args.inputs),
         args.output_dir.resolve(),
     )
-    for output in outputs:
-        print_info("Converted", str(output))
 
 
 if __name__ == "__main__":
