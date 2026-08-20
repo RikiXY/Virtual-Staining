@@ -7,6 +7,7 @@ from typing import Any
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.builder import DatasetBuilder, DatasetBuildResult
+from virtual_staining.data.config import PreprocessingConfig
 from virtual_staining.data.pairs import SlidePair, load_pair_manifest, resolve_slide_pairs
 from virtual_staining.experiment.metadata import (
     RunProvenance,
@@ -89,6 +90,77 @@ def _build_reused_result(dataset_root: Path) -> DatasetBuildResult:
         output_root=dataset_root,
         reused=True,
     )
+
+
+def _log_prepare_summary(
+    preprocessing: PreprocessingConfig,
+    pairs: tuple[SlidePair, ...],
+    *,
+    reused: bool,
+) -> None:
+    masks = preprocessing.effective_masks
+    alignment = preprocessing.effective_alignment
+    patch_w, patch_h = preprocessing.patch_size
+    step_w, step_h = preprocessing.grid_movement
+    io_mode = "tiled" if preprocessing.tiled_io else "full"
+    logger.info(
+        "Prepare summary | dataset=%s | pairs=%d | action=%s | io=%s/%s | "
+        "patch=%dx%d | stride=%dx%d | margin=%d | masks=%s/%s@%gx",
+        preprocessing.dataset_root,
+        len(pairs),
+        "reuse" if reused else "build",
+        preprocessing.io_backend,
+        io_mode,
+        patch_w,
+        patch_h,
+        step_w,
+        step_h,
+        preprocessing.margin,
+        masks.generation,
+        masks.strategy,
+        masks.scale,
+    )
+
+    for pair in pairs:
+        declared = {True: "yes", False: "no", None: "unspecified"}[pair.already_aligned]
+        estimate_alignment = alignment.mode == "always" or (
+            alignment.mode == "auto" and pair.already_aligned is not True
+        )
+        alignment_action = alignment.method if estimate_alignment else "identity"
+
+        supplied = any(
+            path is not None
+            for path in (pair.shared_mask_path, pair.source_mask_path, pair.target_mask_path)
+        )
+        if supplied and masks.generation == "always":
+            mask_action = "conflict: supplied with generation=always"
+        elif pair.shared_mask_path is not None:
+            mask_action = f"shared {pair.shared_mask_path}"
+        elif pair.source_mask_path is not None and pair.target_mask_path is not None:
+            mask_action = f"separate source={pair.source_mask_path},target={pair.target_mask_path}"
+        elif supplied:
+            mask_action = "conflict: incomplete separate masks"
+        elif masks.generation == "never":
+            mask_action = "none"
+        else:
+            source_strategy = masks.source_strategy or masks.strategy
+            target_strategy = masks.target_strategy or masks.strategy
+            strategy = (
+                source_strategy
+                if source_strategy == target_strategy
+                else f"source={source_strategy},target={target_strategy}"
+            )
+            mask_action = f"generate {strategy}@{masks.scale:g}x"
+
+        logger.info(
+            "Pair %s | source=%s | target=%s | aligned=%s | alignment=%s | masks=%s",
+            pair.pair_id,
+            pair.source_path,
+            pair.target_path,
+            declared,
+            alignment_action,
+            mask_action,
+        )
 
 
 def _warn_image_backend(config: RunConfig, pairs: tuple[SlidePair, ...]) -> None:
@@ -212,6 +284,7 @@ def prepare(config: RunConfig, config_path: Path) -> DatasetBuildResult:
     with run.stage("prepare", details={"dataset_root": str(dataset_root)}) as stage:
         current_fingerprint = _build_current_fingerprint(config, pairs)
         result = _reuse_existing_dataset(config, current_fingerprint)
+        _log_prepare_summary(config.preprocessing, pairs, reused=result is not None)
         if result is None:
             _warn_image_backend(config, pairs)
             builder = DatasetBuilder(

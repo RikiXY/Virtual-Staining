@@ -215,8 +215,13 @@ class PairProcessor:
     @staticmethod
     def _calculate_mask(img: np.ndarray, *, strategy: str) -> np.ndarray:
         if strategy == "connected_components":
-            return calculate_mask_with_multiple_parameters(img, MASK_PARAMETER_GRID)
-        return calculate_mask_by_strategy(img, strategy=strategy, parameters=MASK_PARAMETER_GRID)
+            mask = calculate_mask_with_multiple_parameters(img, MASK_PARAMETER_GRID)
+        else:
+            mask = calculate_mask_by_strategy(
+                img, strategy=strategy, parameters=MASK_PARAMETER_GRID
+            )
+        mask[np.all(img == 0, axis=2)] = 0
+        return mask
 
     @staticmethod
     def _shape_from_size(size: tuple[int, int]) -> tuple[int, int]:
@@ -277,12 +282,36 @@ class PairProcessor:
             self._maskless = True
             return True
 
-        root = self.config.dataset_root
-        source_mask = cv2.imread(str(root / paths[0]), cv2.IMREAD_GRAYSCALE)
-        target_mask = cv2.imread(str(root / paths[1]), cv2.IMREAD_GRAYSCALE)
-        if source_mask is None or target_mask is None:
-            raise ValueError(f"Pair {self.pair.pair_id}: could not read supplied masks")
         assert self._source_image is not None and self._target_image is not None
+
+        def load(path: Path, expected_size: tuple[int, int]) -> np.ndarray:
+            full_path = self.config.dataset_root / path
+            if not self.config.tiled_io:
+                mask = cv2.imread(str(full_path), cv2.IMREAD_GRAYSCALE)
+                if mask is None:
+                    raise ValueError(f"Pair {self.pair.pair_id}: could not read {path}")
+                return mask
+
+            reader = open_image_reader(full_path, backend=self.config.io_backend)
+            try:
+                image = (
+                    reader.read_preview(masks.scale)
+                    if reader.size == expected_size
+                    else reader.read_full()
+                )
+            finally:
+                reader.close()
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            return np.where(gray > 0, 255, 0).astype(np.uint8)
+
+        source_size = (self._source_image.shape[1], self._source_image.shape[0])
+        target_size = (self._target_image.shape[1], self._target_image.shape[0])
+        if self._source_shape is not None:
+            source_size = (self._source_shape[1], self._source_shape[0])
+        if self._target_shape is not None:
+            target_size = (self._target_shape[1], self._target_shape[0])
+        source_mask = load(paths[0], source_size)
+        target_mask = source_mask if paths[0] == paths[1] else load(paths[1], target_size)
         if self.config.tiled_io:
             source_mask = cv2.resize(
                 source_mask,

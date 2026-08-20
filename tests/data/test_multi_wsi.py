@@ -28,17 +28,19 @@ def _image(path: Path, value: int = 100) -> None:
 
 
 def test_pair_inventory_is_strict_and_row_order_independent(tmp_path: Path) -> None:
-    for name in ("s1.png", "t1.png", "s2.png", "t2.png"):
+    for name in ("s1.png", "t1.png", "s2.png", "t2.png", "m2.png"):
         _image(tmp_path / "raw" / name)
-    header = "pair_id,source_path,target_path,already_aligned,patient_id\n"
+    header = "pair_id,source_path,target_path,already_aligned,shared_mask_path,patient_id\n"
     rows = [
-        "P002,raw/s2.png,raw/t2.png,true,PT2\n",
-        "P001,raw/s1.png,raw/t1.png,false,PT1\n",
+        "P002,raw/s2.png,raw/t2.png,true,raw/m2.png,PT2\n",
+        "P001,raw/s1.png,raw/t1.png,false,,PT1\n",
     ]
     inventory = tmp_path / "pairs.csv"
     inventory.write_text(header + "".join(rows), encoding="utf-8")
     pairs = load_pair_inventory(inventory, tmp_path)
     assert [pair.pair_id for pair in pairs] == ["P001", "P002"]
+    assert pairs[0].shared_mask_path is None
+    assert pairs[1].shared_mask_path == Path("raw/m2.png")
 
     inventory.write_text(header + "".join(reversed(rows)), encoding="utf-8")
     reordered = load_pair_inventory(inventory, tmp_path)

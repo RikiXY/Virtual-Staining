@@ -7,7 +7,7 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import cv2
 import numpy as np
@@ -17,8 +17,9 @@ from tests.config_helpers import write_run_config, yaml_section
 from virtual_staining.applications.prepare import prepare
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data import builder as builder_module
-from virtual_staining.data.builder import DatasetBuilder, DatasetBuildResult
-from virtual_staining.data.config import PreprocessingConfig
+from virtual_staining.data.builder import DatasetBuilder, DatasetBuildResult, PairProcessor
+from virtual_staining.data.config import MaskConfig, PreprocessingConfig
+from virtual_staining.data.pairs import SlidePair
 from virtual_staining.data.preprocessing import AlignmentMetadata, assign_split_by_hash
 
 # ---------------------------------------------------------------------------
@@ -191,6 +192,51 @@ def builder_scaled_config(tmp_path: Path) -> PreprocessingConfig:
 # ---------------------------------------------------------------------------
 # Smoke tests
 # ---------------------------------------------------------------------------
+
+
+def test_generated_mask_excludes_black_slide_padding() -> None:
+    image = np.zeros((128, 128, 3), dtype=np.uint8)
+    image[32:96, 32:96] = 80
+
+    mask = PairProcessor._calculate_mask(image, strategy="connected_components")
+
+    assert mask[0, 0] == 0
+    assert mask[64, 64] == 255
+
+
+def test_tiled_shared_mask_is_loaded_once_at_preview_scale(
+    builder_config: PreprocessingConfig,
+) -> None:
+    config = dataclasses.replace(
+        builder_config,
+        tiled_io=True,
+        io_backend="openslide",
+        masks=MaskConfig(provided_layout="auto", generation="if_missing", scale=0.25),
+    )
+    pair = SlidePair(
+        "P1",
+        Path("source.png"),
+        Path("target.png"),
+        already_aligned=True,
+        shared_mask_path=Path("mask.tif"),
+    )
+    processor = PairProcessor(config, pair)
+    processor._source_image = np.zeros((10, 10, 3), dtype=np.uint8)
+    processor._target_image = np.zeros((10, 10, 3), dtype=np.uint8)
+    processor._source_shape = (40, 40)
+    processor._target_shape = (40, 40)
+    reader = MagicMock()
+    reader.size = (40, 40)
+    reader.read_preview.return_value = np.full((10, 10, 3), 255, dtype=np.uint8)
+
+    with patch("virtual_staining.data.builder.open_image_reader", return_value=reader) as open_:
+        assert processor._load_supplied_masks() is True
+
+    open_.assert_called_once_with(builder_config.dataset_root / "mask.tif", backend="openslide")
+    reader.read_preview.assert_called_once_with(0.25)
+    reader.close.assert_called_once()
+    assert np.all(processor._source_mask == 255)
+    assert np.all(processor._target_mask == 255)
 
 
 def test_builder_rejects_empty_pairs(builder_config: PreprocessingConfig) -> None:
