@@ -303,11 +303,9 @@ uv lock           # re-resolve dependencies
 
 ## Data Split Caveat
 
-The default split is **patch-level**: train, validation, and test patches are all drawn
-from the same slide. Metrics on `splits/test/` measure same-slide internal validation,
-not independent generalization. For generalizability evidence, use a slide-level,
-patient-level, or spatial-block split strategy - the current pipeline does not implement
-these.
+The default split is **patch-level**: train, validation, and test patches may be drawn
+from the same slide. For independent generalization evidence, configure `split.unit` as
+`pair`, `specimen`, or `patient`; spatial-block splitting is not implemented.
 
 ## Method
 

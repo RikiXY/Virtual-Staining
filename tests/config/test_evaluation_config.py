@@ -12,6 +12,7 @@ from tests.image_helpers import write_rgb_image, write_rgb_pair
 from tests.manifest_helpers import make_manifest_record, write_manifest_csv
 from virtual_staining.applications.evaluate import evaluate
 from virtual_staining.config.run import RunConfig
+from virtual_staining.data.pairs import PAIR_MANIFEST_FIELDS
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.inference.outputs import (
     generated_filename_for_sample,
@@ -22,6 +23,22 @@ from virtual_staining.inference.outputs import (
 def _write_test_manifest(dataset_root: Path, sample_ids: list[str]) -> None:
     records = tuple(make_manifest_record(sample_id, "test", ext=".png") for sample_id in sample_ids)
     write_manifest_csv(dataset_root, records)
+    with (dataset_root / "manifests" / "pairs.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as handle:
+        writer = csv.DictWriter(handle, fieldnames=PAIR_MANIFEST_FIELDS)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "pair_id": "P1",
+                "split": "test",
+                "source_path": "raw/source.png",
+                "target_path": "raw/target.png",
+                "status": "processed",
+                "alignment_method": "identity",
+                "alignment_metadata_path": "metadata/pairs/P1.json",
+            }
+        )
 
 
 def _write_evaluate_config(

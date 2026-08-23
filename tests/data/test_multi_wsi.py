@@ -12,8 +12,11 @@ from virtual_staining.config.run import RunConfig
 from virtual_staining.data.builder import DatasetBuilder
 from virtual_staining.data.config import (
     AlignmentConfig,
+    FilteringConfig,
+    ForegroundFilterConfig,
     InputConfig,
     MaskConfig,
+    PatchingConfig,
     PreprocessingConfig,
     SplitConfig,
 )
@@ -108,16 +111,13 @@ def test_multi_pair_builder_writes_v2_without_cross_pair_cleanup(tmp_path: Path)
         masks=MaskConfig(generation="never"),
         alignment=AlignmentConfig(mode="auto"),
         split=SplitConfig(unit="pair", train=1 / 3, val=1 / 3, test=1 / 3, seed=7),
-        patch_size=(16, 16),
-        grid_movement=(16, 16),
-        margin=4,
-        foreground_enabled=False,
+        patching=PatchingConfig(patch_size=(16, 16), grid_movement=(16, 16), margin=4),
+        filtering=FilteringConfig(foreground=ForegroundFilterConfig(enabled=False)),
     )
     result = DatasetBuilder(config, tuple(pairs)).run_all()
     assert (result.train_count, result.val_count, result.test_count) == (4, 4, 4)
 
     manifest = DatasetManifest.from_csv(tmp_path / "manifests/manifest.csv", tmp_path)
-    assert manifest.schema_version == "2.0"
     assert len({record.sample_id for record in manifest.records}) == 12
     assert {record.x for record in manifest.records} == {4, 20}
     assert {record.y for record in manifest.records} == {4, 20}
@@ -178,7 +178,4 @@ preprocessing:
     second = prepare(config, config_path)
     assert first.reused is False
     assert second.reused is True
-    assert (
-        DatasetManifest.from_csv(dataset / "manifests/manifest.csv", dataset).schema_version
-        == "2.0"
-    )
+    DatasetManifest.from_csv(dataset / "manifests/manifest.csv", dataset)

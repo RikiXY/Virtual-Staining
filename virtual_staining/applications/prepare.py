@@ -40,14 +40,13 @@ def _build_current_fingerprint(config: RunConfig, pairs: tuple[SlidePair, ...]) 
         raise ValueError("RunConfig.preprocessing must be present for prepare().")
     dataset_root = config.preprocessing.dataset_root
     preprocessing_payload = config.preprocessing.to_dict()
-    inputs = config.preprocessing.inputs
     return build_dataset_fingerprint_metadata(
         dataset_root=dataset_root,
         preprocessing_config=preprocessing_payload,
         pairs=pairs,
-        inventory_path=(dataset_root / inputs.inventory if inputs else None),
+        inventory_path=dataset_root / config.preprocessing.inputs.inventory,
         hash_cache_path=dataset_root / "metadata" / "input_hashes.json",
-        force_hash_verification=bool(inputs and inputs.hash_verification == "always"),
+        force_hash_verification=config.preprocessing.inputs.hash_verification == "always",
     )
 
 
@@ -98,24 +97,24 @@ def _log_prepare_summary(
     *,
     reused: bool,
 ) -> None:
-    masks = preprocessing.effective_masks
-    alignment = preprocessing.effective_alignment
-    patch_w, patch_h = preprocessing.patch_size
-    step_w, step_h = preprocessing.grid_movement
-    io_mode = "tiled" if preprocessing.tiled_io else "full"
+    masks = preprocessing.masks
+    alignment = preprocessing.alignment
+    patch_w, patch_h = preprocessing.patching.patch_size
+    step_w, step_h = preprocessing.patching.grid_movement
+    io_mode = "tiled" if preprocessing.io.tiled else "full"
     logger.info(
         "Prepare summary | dataset=%s | pairs=%d | action=%s | io=%s/%s | "
         "patch=%dx%d | stride=%dx%d | margin=%d | masks=%s/%s@%gx",
         preprocessing.dataset_root,
         len(pairs),
         "reuse" if reused else "build",
-        preprocessing.io_backend,
+        preprocessing.io.backend,
         io_mode,
         patch_w,
         patch_h,
         step_w,
         step_h,
-        preprocessing.margin,
+        preprocessing.patching.margin,
         masks.generation,
         masks.strategy,
         masks.scale,
@@ -165,7 +164,7 @@ def _log_prepare_summary(
 
 def _warn_image_backend(config: RunConfig, pairs: tuple[SlidePair, ...]) -> None:
     preprocessing = config.preprocessing
-    if preprocessing is None or not preprocessing.tiled_io:
+    if preprocessing is None or not preprocessing.io.tiled:
         return
 
     root = preprocessing.dataset_root
@@ -184,7 +183,7 @@ def _warn_image_backend(config: RunConfig, pairs: tuple[SlidePair, ...]) -> None
     try:
         incompatible = tuple(path for path in paths if detect_openslide_format(path) is None)
     except RuntimeError:
-        if preprocessing.io_backend == "openslide":
+        if preprocessing.io.backend == "openslide":
             message = "OpenSlide is unavailable, so tiled preparation cannot start."
         else:
             message = "Tiled preparation is using Pillow because OpenSlide is unavailable."
@@ -194,7 +193,7 @@ def _warn_image_backend(config: RunConfig, pairs: tuple[SlidePair, ...]) -> None
         logger.warning(style(message, "yellow"))
         return
 
-    if preprocessing.io_backend == "pillow":
+    if preprocessing.io.backend == "pillow":
         if incompatible:
             message = (
                 "Tiled preparation is using Pillow, and "
@@ -210,7 +209,7 @@ def _warn_image_backend(config: RunConfig, pairs: tuple[SlidePair, ...]) -> None
             return
     elif not incompatible:
         return
-    elif preprocessing.io_backend == "auto":
+    elif preprocessing.io.backend == "auto":
         message = (
             f"{len(incompatible)} configured slide image(s) are not OpenSlide-compatible; "
             "automatic tiled I/O will use memory-heavy Pillow reads for them."

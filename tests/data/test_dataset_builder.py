@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from weakref import WeakKeyDictionary
 
 import cv2
 import numpy as np
@@ -18,13 +19,24 @@ from virtual_staining.applications.prepare import prepare
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data import builder as builder_module
 from virtual_staining.data.builder import DatasetBuilder, DatasetBuildResult, PairProcessor
-from virtual_staining.data.config import MaskConfig, PreprocessingConfig
+from virtual_staining.data.config import (
+    FilteringConfig,
+    ForegroundFilterConfig,
+    InputConfig,
+    IOConfig,
+    MaskConfig,
+    PatchingConfig,
+    PreprocessingConfig,
+    SplitConfig,
+)
 from virtual_staining.data.pairs import SlidePair
 from virtual_staining.data.preprocessing import AlignmentMetadata, assign_split_by_hash
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_PROCESSORS: WeakKeyDictionary[DatasetBuilder, PairProcessor] = WeakKeyDictionary()
 
 
 def _make_synthetic_image(seed: int = 0) -> np.ndarray:
@@ -39,37 +51,55 @@ def _write_prepare_config(
     filename: str = "prepare.yaml",
     preprocessing_patch_size: tuple[int, int] | None = None,
 ) -> Path:
+    inputs = builder_config.dataset_root / "inputs"
+    inputs.mkdir(exist_ok=True)
+    with (inputs / "pairs.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["pair_id", "source_path", "target_path"])
+        writer.writeheader()
+        writer.writerow({"pair_id": "P1", "source_path": "source.png", "target_path": "target.png"})
+    patch_size = preprocessing_patch_size or builder_config.patching.patch_size
     preprocessing_lines = [
-        f"source_name: {builder_config.source_name}",
-        f"target_name: {builder_config.target_name}",
+        "inputs:",
+        "  inventory: inputs/pairs.csv",
+        "  source_modality: source",
+        "  target_modality: target",
+        "patching:",
+        f"  patch_size: [{patch_size[0]}, {patch_size[1]}]",
+        (
+            "  grid_movement: "
+            f"[{builder_config.patching.grid_movement[0]}, "
+            f"{builder_config.patching.grid_movement[1]}]"
+        ),
+        f"  margin: {builder_config.patching.margin}",
+        "masks:",
+        "  generation: if_missing",
+        "alignment:",
+        "  mode: always",
+        "  validate_declared: false",
+        "filtering:",
+        "  foreground:",
+        "    enabled: true",
+        "    policy: both",
+        f"    min_ratio: {builder_config.filtering.foreground.min_ratio}",
+        f"  max_white_ratio: {builder_config.filtering.max_white_ratio}",
+        f"  white_threshold: {builder_config.filtering.white_threshold}",
+        (
+            "  max_largest_white_component_ratio: "
+            f"{builder_config.filtering.max_largest_white_component_ratio}"
+        ),
+        "split:",
+        "  unit: patch",
+        f"  train: {builder_config.split.train}",
+        f"  val: {builder_config.split.val}",
+        f"  test: {builder_config.split.test}",
+        f"  seed: {builder_config.split.seed}",
+        "io:",
+        "  tiled: false",
+        "  backend: pillow",
     ]
-    if preprocessing_patch_size is not None:
-        preprocessing_lines.append(
-            f"patch_size: [{preprocessing_patch_size[0]}, {preprocessing_patch_size[1]}]"
-        )
-    preprocessing_lines.extend(
-        [
-            (
-                "grid_movement: "
-                f"[{builder_config.grid_movement[0]}, {builder_config.grid_movement[1]}]"
-            ),
-            f"margin: {builder_config.margin}",
-            f"seed: {builder_config.seed}",
-            "save_masks: false",
-            f"train_ratio: {builder_config.train_ratio}",
-            f"val_ratio: {builder_config.val_ratio}",
-            f"test_ratio: {builder_config.test_ratio}",
-            f"min_foreground_ratio: {builder_config.min_foreground_ratio}",
-            f"max_white_ratio: {builder_config.max_white_ratio}",
-            f"white_threshold: {builder_config.white_threshold}",
-            (
-                "max_largest_white_component_ratio: "
-                f"{builder_config.max_largest_white_component_ratio}"
-            ),
-        ]
-    )
+    image_w, image_h = builder_config.patching.patch_size
     section = (
-        f"image_size: [{builder_config.patch_size[0]}, {builder_config.patch_size[1]}]\n"
+        f"image_size: [{image_w}, {image_h}]\n"
         f"{yaml_section('preprocessing', chr(10).join(preprocessing_lines))}"
     )
     return write_run_config(
@@ -87,9 +117,24 @@ def _white_mask(img: np.ndarray, _params: object) -> np.ndarray:
     return np.full((img.shape[0], img.shape[1]), 255, dtype=np.uint8)
 
 
+def _builder(
+    config: PreprocessingConfig,
+    pairs: tuple[SlidePair, ...] | None = None,
+    *args: object,
+    **kwargs: object,
+) -> DatasetBuilder:
+    resolved = (
+        pairs if pairs is not None else (SlidePair("P1", Path("source.png"), Path("target.png")),)
+    )
+    return DatasetBuilder(config, resolved, *args, **kwargs)  # type: ignore[arg-type]
+
+
 def _single(builder: DatasetBuilder) -> PairProcessor:
-    assert builder._single is not None
-    return builder._single
+    processor = _PROCESSORS.get(builder)
+    if processor is None:
+        processor = PairProcessor(builder.config, builder.pairs[0])
+        _PROCESSORS[builder] = processor
+    return processor
 
 
 def _identity_align(
@@ -149,20 +194,16 @@ def builder_config(tmp_path: Path) -> PreprocessingConfig:
 
     return PreprocessingConfig(
         dataset_root=root,
-        source_name="source.png",
-        target_name="target.png",
-        patch_size=(64, 64),
-        grid_movement=(64, 64),
-        margin=0,
-        seed=42,
-        save_masks=False,
-        train_ratio=0.8,
-        val_ratio=0.1,
-        test_ratio=0.1,
-        min_foreground_ratio=0.0,
-        max_white_ratio=1.0,
-        white_threshold=250,
-        max_largest_white_component_ratio=1.0,
+        inputs=InputConfig(Path("inputs/pairs.csv"), "source", "target"),
+        patching=PatchingConfig(patch_size=(64, 64), grid_movement=(64, 64), margin=0),
+        split=SplitConfig(train=0.8, val=0.1, test=0.1, seed=42),
+        filtering=FilteringConfig(
+            foreground=ForegroundFilterConfig(min_ratio=0.0),
+            max_white_ratio=1.0,
+            white_threshold=250,
+            max_largest_white_component_ratio=1.0,
+        ),
+        io=IOConfig(tiled=False, backend="pillow"),
     )
 
 
@@ -176,21 +217,17 @@ def builder_scaled_config(tmp_path: Path) -> PreprocessingConfig:
 
     return PreprocessingConfig(
         dataset_root=root,
-        source_name="source.png",
-        target_name="target.png",
-        patch_size=(64, 64),
-        grid_movement=(64, 64),
-        margin=0,
-        seed=42,
-        save_masks=False,
-        mask_scale=0.25,
-        train_ratio=0.8,
-        val_ratio=0.1,
-        test_ratio=0.1,
-        min_foreground_ratio=0.0,
-        max_white_ratio=1.0,
-        white_threshold=250,
-        max_largest_white_component_ratio=1.0,
+        inputs=InputConfig(Path("inputs/pairs.csv"), "source", "target"),
+        patching=PatchingConfig(patch_size=(64, 64), grid_movement=(64, 64), margin=0),
+        masks=MaskConfig(scale=0.25),
+        split=SplitConfig(train=0.8, val=0.1, test=0.1, seed=42),
+        filtering=FilteringConfig(
+            foreground=ForegroundFilterConfig(min_ratio=0.0),
+            max_white_ratio=1.0,
+            white_threshold=250,
+            max_largest_white_component_ratio=1.0,
+        ),
+        io=IOConfig(tiled=False, backend="pillow"),
     )
 
 
@@ -214,8 +251,7 @@ def test_tiled_shared_mask_is_loaded_once_at_preview_scale(
 ) -> None:
     config = dataclasses.replace(
         builder_config,
-        tiled_io=True,
-        io_backend="openslide",
+        io=IOConfig(tiled=True, backend="openslide"),
         masks=MaskConfig(provided_layout="auto", generation="if_missing", scale=0.25),
     )
     pair = SlidePair(
@@ -246,12 +282,12 @@ def test_tiled_shared_mask_is_loaded_once_at_preview_scale(
 
 def test_builder_rejects_empty_pairs(builder_config: PreprocessingConfig) -> None:
     with pytest.raises(ValueError, match="at least one slide pair"):
-        DatasetBuilder(builder_config, pairs=())
+        _builder(builder_config, pairs=())
 
 
 def test_run_all_creates_split_directories(builder_config: PreprocessingConfig) -> None:
     with _patched_builder_dependencies():
-        DatasetBuilder(builder_config).run_all()
+        _builder(builder_config).run_all()
 
     root = builder_config.dataset_root
     assert (root / "splits" / "train").exists()
@@ -266,7 +302,7 @@ def test_run_all_result_counts_match_saved_files(
     builder_config: PreprocessingConfig,
 ) -> None:
     with _patched_builder_dependencies():
-        result = DatasetBuilder(builder_config).run_all()
+        result = _builder(builder_config).run_all()
 
     root = builder_config.dataset_root
     assert result.output_root == root
@@ -294,7 +330,7 @@ def test_builder_logs_stage_progress(
         _patched_builder_dependencies(),
         caplog.at_level(logging.INFO, logger="virtual_staining.data.builder"),
     ):
-        DatasetBuilder(builder_config).run_all()
+        _builder(builder_config).run_all()
 
     messages = [record.message for record in caplog.records]
     assert any(message == "Seed set to 42" for message in messages)
@@ -307,7 +343,7 @@ def test_builder_logs_stage_progress(
 def test_compute_masks_with_mask_scale(
     builder_scaled_config: PreprocessingConfig,
 ) -> None:
-    builder = DatasetBuilder(builder_scaled_config)
+    builder = _builder(builder_scaled_config)
     processor = _single(builder)
     source_calls: list[tuple[int, int, int]] = []
     target_calls: list[tuple[int, int, int]] = []
@@ -338,8 +374,11 @@ def test_compute_masks_with_mask_scale(
 def test_compute_masks_with_lowres_mask_filtering_keeps_scaled_masks(
     builder_scaled_config: PreprocessingConfig,
 ) -> None:
-    config = dataclasses.replace(builder_scaled_config, lowres_mask_filtering=True)
-    builder = DatasetBuilder(config)
+    config = dataclasses.replace(
+        builder_scaled_config,
+        masks=dataclasses.replace(builder_scaled_config.masks, lowres_filtering=True),
+    )
+    builder = _builder(config)
     processor = _single(builder)
 
     with patch(
@@ -363,11 +402,14 @@ def test_compute_masks_allows_source_and_target_mask_strategy_overrides(
 ) -> None:
     config = dataclasses.replace(
         builder_config,
-        mask_strategy="connected_components",
-        source_mask_strategy="hsv",
-        target_mask_strategy="connected_components",
+        masks=dataclasses.replace(
+            builder_config.masks,
+            strategy="connected_components",
+            source_strategy="hsv",
+            target_strategy="connected_components",
+        ),
     )
-    builder = DatasetBuilder(config)
+    builder = _builder(config)
 
     with (
         patch(
@@ -389,26 +431,11 @@ def test_compute_masks_allows_source_and_target_mask_strategy_overrides(
 def test_compute_masks_raises_if_estimated_memory_exceeds_limit(
     builder_config: PreprocessingConfig,
 ) -> None:
-    config = PreprocessingConfig(
-        dataset_root=builder_config.dataset_root,
-        source_name=builder_config.source_name,
-        target_name=builder_config.target_name,
-        patch_size=builder_config.patch_size,
-        grid_movement=builder_config.grid_movement,
-        margin=builder_config.margin,
-        seed=builder_config.seed,
-        save_masks=builder_config.save_masks,
-        mask_scale=builder_config.mask_scale,
-        max_memory_gb=0.0001,
-        train_ratio=builder_config.train_ratio,
-        val_ratio=builder_config.val_ratio,
-        test_ratio=builder_config.test_ratio,
-        min_foreground_ratio=builder_config.min_foreground_ratio,
-        max_white_ratio=builder_config.max_white_ratio,
-        white_threshold=builder_config.white_threshold,
-        max_largest_white_component_ratio=builder_config.max_largest_white_component_ratio,
+    config = dataclasses.replace(
+        builder_config,
+        io=dataclasses.replace(builder_config.io, max_memory_gb=0.0001),
     )
-    builder = DatasetBuilder(config)
+    builder = _builder(config)
 
     with (
         patch(
@@ -419,14 +446,14 @@ def test_compute_masks_raises_if_estimated_memory_exceeds_limit(
     ):
         _single(builder).compute_masks()
 
-    assert "mask_scale" in str(exc_info.value)
+    assert "masks.scale" in str(exc_info.value)
 
 
 def test_compute_masks_warns_when_estimate_is_high_without_limit(
     builder_config: PreprocessingConfig,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    builder = DatasetBuilder(builder_config)
+    builder = _builder(builder_config)
 
     with (
         _patched_builder_dependencies(),
@@ -435,7 +462,7 @@ def test_compute_masks_warns_when_estimate_is_high_without_limit(
     ):
         _single(builder).compute_masks()
 
-    assert any("mask_scale: 0.25" in message for message in caplog.messages)
+    assert any("masks.scale: 0.25" in message for message in caplog.messages)
 
 
 def test_estimate_memory_gb_decreases_with_mask_scale() -> None:
@@ -478,7 +505,7 @@ def test_builder_logs_memory_after_stages(
         _patched_builder_dependencies(),
         caplog.at_level(logging.INFO, logger="virtual_staining.data.builder"),
     ):
-        DatasetBuilder(builder_config).run_all()
+        _builder(builder_config).run_all()
 
     memory_messages = [
         record.message for record in caplog.records if "Memory after" in record.message
@@ -501,91 +528,16 @@ def test_builder_logs_memory_after_stages(
 def test_dataset_builder_does_not_expose_old_patch_stage_methods(
     builder_config: PreprocessingConfig,
 ) -> None:
-    builder = DatasetBuilder(builder_config)
+    builder = _builder(builder_config)
     assert not hasattr(builder, "extract_patches")
     assert not hasattr(builder, "filter_patches")
     assert not hasattr(builder, "split_and_save")
 
 
-def test_run_all_produces_same_output_as_old_stages(tmp_path: Path) -> None:
-    import csv as csv_module
-
-    def _make_config(dataset_root: Path) -> PreprocessingConfig:
-        return PreprocessingConfig(
-            dataset_root=dataset_root,
-            source_name="source.png",
-            target_name="target.png",
-            patch_size=(64, 64),
-            grid_movement=(64, 64),
-            margin=0,
-            seed=42,
-            save_masks=False,
-            train_ratio=0.8,
-            val_ratio=0.1,
-            test_ratio=0.1,
-            min_foreground_ratio=0.0,
-            max_white_ratio=1.0,
-            white_threshold=250,
-            max_largest_white_component_ratio=1.0,
-        )
-
-    def _write_pair(dataset_root: Path) -> None:
-        dataset_root.mkdir()
-        cv2.imwrite(str(dataset_root / "source.png"), _make_synthetic_image(seed=0))
-        cv2.imwrite(str(dataset_root / "target.png"), _make_synthetic_image(seed=1))
-
-    def _manifest_rows(dataset_root: Path) -> list[dict[str, str]]:
-        manifest_path = dataset_root / "manifests" / "manifest.csv"
-        with manifest_path.open(encoding="utf-8", newline="") as f:
-            reader = csv_module.DictReader(f)
-            return sorted(
-                list(reader),
-                key=lambda row: (
-                    row["sample_id"],
-                    row["split"],
-                    row["input_path"],
-                    row["target_path"],
-                ),
-            )
-
-    streaming_root = tmp_path / "streaming"
-    staged_root = tmp_path / "staged"
-    _write_pair(streaming_root)
-    _write_pair(staged_root)
-
-    streaming_builder = DatasetBuilder(_make_config(streaming_root))
-    staged_builder = DatasetBuilder(_make_config(staged_root))
-
-    with _patched_builder_dependencies():
-        streaming_result = streaming_builder.run_all()
-
-    with _patched_builder_dependencies():
-        _single(staged_builder)._started_at = "2026-01-01T00:00:00+00:00"
-        _single(staged_builder)._effective_seed = staged_builder.config.seed
-        _single(staged_builder).compute_masks()
-        _single(staged_builder).align()
-        valid_rows, discarded_rows = _single(staged_builder)._stream_patches_to_disk()
-        staged_result = _single(staged_builder)._assign_splits_and_finalize(
-            valid_rows, discarded_rows
-        )
-
-    assert streaming_result.train_count == staged_result.train_count
-    assert streaming_result.val_count == staged_result.val_count
-    assert streaming_result.test_count == staged_result.test_count
-    assert streaming_result.skipped_count == staged_result.skipped_count
-    assert _manifest_rows(streaming_root) == _manifest_rows(staged_root)
-    for split in ("train", "val", "test"):
-        streaming_files = sorted(
-            path.name for path in (streaming_root / "splits" / split).iterdir()
-        )
-        staged_files = sorted(path.name for path in (staged_root / "splits" / split).iterdir())
-        assert streaming_files == staged_files
-
-
 def test_stream_patches_to_disk_writes_valid_patches_to_final_splits(
     builder_config: PreprocessingConfig,
 ) -> None:
-    builder = DatasetBuilder(builder_config)
+    builder = _builder(builder_config)
 
     with _patched_builder_dependencies():
         _single(builder).compute_masks()
@@ -628,8 +580,11 @@ def test_stream_patches_to_disk_writes_valid_patches_to_final_splits(
 def test_stream_patches_to_disk_writes_foreground_masks_when_enabled(
     builder_config: PreprocessingConfig,
 ) -> None:
-    config = dataclasses.replace(builder_config, save_masks=True)
-    builder = DatasetBuilder(config)
+    config = dataclasses.replace(
+        builder_config,
+        masks=dataclasses.replace(builder_config.masks, save_patch_masks=True),
+    )
+    builder = _builder(config)
 
     with _patched_builder_dependencies():
         _single(builder).compute_masks()
@@ -654,13 +609,13 @@ def test_stream_patches_to_disk_writes_foreground_masks_when_enabled(
         assert mask_path.exists()
         mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
         assert mask is not None
-        assert mask.shape == config.patch_size[::-1]
+        assert mask.shape == config.patching.patch_size[::-1]
 
 
 def test_stream_patches_to_disk_uses_min_foreground_ratio_for_source_prefilter(
     builder_config: PreprocessingConfig,
 ) -> None:
-    builder = DatasetBuilder(builder_config)
+    builder = _builder(builder_config)
 
     with (
         _patched_builder_dependencies(),
@@ -671,14 +626,20 @@ def test_stream_patches_to_disk_uses_min_foreground_ratio_for_source_prefilter(
         _single(builder).align()
         _single(builder)._stream_patches_to_disk()
 
-    assert mock_iter.call_args.kwargs["max_mask_percentage"] == builder_config.min_foreground_ratio
+    assert (
+        mock_iter.call_args.kwargs["max_mask_percentage"]
+        == builder_config.filtering.foreground.min_ratio
+    )
 
 
 def test_stream_patches_to_disk_lowres_mask_filtering_keeps_mask_out_of_iterator(
     builder_scaled_config: PreprocessingConfig,
 ) -> None:
-    config = dataclasses.replace(builder_scaled_config, lowres_mask_filtering=True)
-    builder = DatasetBuilder(config)
+    config = dataclasses.replace(
+        builder_scaled_config,
+        masks=dataclasses.replace(builder_scaled_config.masks, lowres_filtering=True),
+    )
+    builder = _builder(config)
 
     with (
         _patched_builder_dependencies(),
@@ -695,17 +656,14 @@ def test_stream_patches_to_disk_lowres_mask_filtering_keeps_mask_out_of_iterator
 def test_run_all_with_lowres_mask_filtering_writes_patches(
     builder_scaled_config: PreprocessingConfig,
 ) -> None:
-    config = dataclasses.replace(builder_scaled_config, lowres_mask_filtering=True)
-    builder = DatasetBuilder(config)
-    processor = _single(builder)
-
+    config = dataclasses.replace(
+        builder_scaled_config,
+        masks=dataclasses.replace(builder_scaled_config.masks, lowres_filtering=True),
+    )
+    builder = _builder(config)
     with _patched_builder_dependencies():
         result = builder.run_all()
 
-    assert processor._source_mask is not None
-    assert processor._target_mask is not None
-    assert processor._source_mask.shape == (150, 150)
-    assert processor._target_mask.shape == (150, 150)
     assert result.train_count + result.val_count + result.test_count > 0
 
 
@@ -714,12 +672,10 @@ def test_run_all_with_tiled_io_uses_region_readers_without_cv2_imread(
 ) -> None:
     config = dataclasses.replace(
         builder_scaled_config,
-        tiled_io=True,
-        lowres_mask_filtering=True,
+        io=dataclasses.replace(builder_scaled_config.io, tiled=True),
+        masks=dataclasses.replace(builder_scaled_config.masks, lowres_filtering=True),
     )
-    builder = DatasetBuilder(config)
-    processor = _single(builder)
-
+    builder = _builder(config)
     with (
         _patched_builder_dependencies(),
         patch(
@@ -729,19 +685,13 @@ def test_run_all_with_tiled_io_uses_region_readers_without_cv2_imread(
     ):
         result = builder.run_all()
 
-    assert processor._source_reader is not None
-    assert processor._target_reader is not None
-    assert processor._source_image is not None
-    assert processor._target_image is not None
-    assert processor._source_image.shape[:2] == (150, 150)
-    assert processor._target_image.shape[:2] == (150, 150)
     assert result.train_count + result.val_count + result.test_count > 0
 
 
 def test_stream_patches_to_disk_records_discarded_rows_without_images_by_default(
     builder_config: PreprocessingConfig,
 ) -> None:
-    builder = DatasetBuilder(builder_config)
+    builder = _builder(builder_config)
     validation_results = [
         (
             index % 2 == 0,
@@ -822,8 +772,11 @@ def test_stream_patches_to_disk_records_discarded_rows_without_images_by_default
 def test_stream_patches_to_disk_writes_discarded_patch_images_when_enabled(
     builder_config: PreprocessingConfig,
 ) -> None:
-    config = dataclasses.replace(builder_config, save_discarded_patches=True)
-    builder = DatasetBuilder(config)
+    config = dataclasses.replace(
+        builder_config,
+        patching=dataclasses.replace(builder_config.patching, save_discarded_patches=True),
+    )
+    builder = _builder(config)
     validation_results = [
         (
             index % 2 == 0,
@@ -854,167 +807,12 @@ def test_stream_patches_to_disk_writes_discarded_patch_images_when_enabled(
     root = config.dataset_root
     assert valid_rows
     assert discarded_rows
-    assert len(list((root / "discarded_patches" / "pair_0000" / "source").iterdir())) == len(
+    assert len(list((root / "discarded_patches" / "P1" / "source").iterdir())) == len(
         discarded_rows
     )
-    assert len(list((root / "discarded_patches" / "pair_0000" / "target").iterdir())) == len(
+    assert len(list((root / "discarded_patches" / "P1" / "target").iterdir())) == len(
         discarded_rows
     )
-
-
-def test_assign_splits_and_finalize_writes_manifest_for_streamed_split_files(
-    builder_config: PreprocessingConfig,
-) -> None:
-    builder = DatasetBuilder(builder_config)
-    validation_results = [
-        (
-            index % 2 == 0,
-            {
-                "source_foreground_ratio": 1.0,
-                "target_foreground_ratio": 1.0,
-                "source_white_ratio": 0.0,
-                "target_white_ratio": 0.0,
-                "source_largest_white_component_ratio": 0.0,
-                "target_largest_white_component_ratio": 0.0,
-                "reasons": [] if index % 2 == 0 else ["synthetic_rejection"],
-            },
-        )
-        for index in range(81)
-    ]
-
-    with (
-        _patched_builder_dependencies(),
-        patch(
-            "virtual_staining.data.builder.is_valid_patch_pair",
-            side_effect=validation_results,
-        ),
-    ):
-        _single(builder).compute_masks()
-        _single(builder).align()
-        _single(builder)._started_at = "2026-01-01T00:00:00+00:00"
-        _single(builder)._effective_seed = builder_config.seed
-        valid_rows, discarded_rows = _single(builder)._stream_patches_to_disk()
-        result = _single(builder)._assign_splits_and_finalize(valid_rows, discarded_rows)
-
-    assert result.train_count + result.val_count + result.test_count == len(valid_rows)
-    assert result.skipped_count == len(discarded_rows)
-
-    root = builder_config.dataset_root
-    assert not (root / "processed").exists()
-
-    train_files = [path for path in (root / "splits" / "train").rglob("*") if path.is_file()]
-    val_files = [path for path in (root / "splits" / "val").rglob("*") if path.is_file()]
-    test_files = [path for path in (root / "splits" / "test").rglob("*") if path.is_file()]
-    assert len(train_files) == result.train_count * 2
-    assert len(val_files) == result.val_count * 2
-    assert len(test_files) == result.test_count * 2
-
-    manifest = builder_config.dataset_root / "manifests" / "manifest.csv"
-    discarded_manifest = builder_config.dataset_root / "manifests" / "discarded_manifest.csv"
-    discarded_log = builder_config.dataset_root / "discarded_patches" / "discarded_log.csv"
-    assert manifest.exists()
-    assert discarded_manifest.exists()
-    assert discarded_log.exists()
-
-    import csv as csv_module
-
-    with manifest.open(encoding="utf-8", newline="") as f:
-        reader = csv_module.DictReader(f)
-        rows = list(reader)
-    assert len(rows) == len(valid_rows)
-    assert {row["split"] for row in rows} <= {"train", "val", "test"}
-    assert {row["input_path"].split("/")[0] for row in rows} == {"splits"}
-
-
-def test_assign_splits_and_finalize_preserves_discarded_patch_files(
-    builder_config: PreprocessingConfig,
-) -> None:
-    config = dataclasses.replace(builder_config, save_discarded_patches=True)
-    builder = DatasetBuilder(config)
-    validation_results = [
-        (
-            False,
-            {
-                "source_foreground_ratio": 1.0,
-                "target_foreground_ratio": 1.0,
-                "source_white_ratio": 0.0,
-                "target_white_ratio": 0.0,
-                "source_largest_white_component_ratio": 0.0,
-                "target_largest_white_component_ratio": 0.0,
-                "reasons": ["synthetic_rejection"],
-            },
-        )
-        for _ in range(81)
-    ]
-
-    with (
-        _patched_builder_dependencies(),
-        patch(
-            "virtual_staining.data.builder.is_valid_patch_pair",
-            side_effect=validation_results,
-        ),
-    ):
-        _single(builder).compute_masks()
-        _single(builder).align()
-        _single(builder)._started_at = "2026-01-01T00:00:00+00:00"
-        _single(builder)._effective_seed = config.seed
-        valid_rows, discarded_rows = _single(builder)._stream_patches_to_disk()
-        _single(builder)._assign_splits_and_finalize(valid_rows, discarded_rows)
-
-    root = config.dataset_root
-    assert len(list((root / "discarded_patches" / "pair_0000" / "source").iterdir())) == len(
-        discarded_rows
-    )
-    assert len(list((root / "discarded_patches" / "pair_0000" / "target").iterdir())) == len(
-        discarded_rows
-    )
-
-
-def test_assign_splits_and_finalize_is_deterministic_for_fixed_seed(
-    tmp_path: Path,
-) -> None:
-    import csv as csv_module
-
-    def _run_finalize(dataset_root: Path) -> dict[str, str]:
-        config = PreprocessingConfig(
-            dataset_root=dataset_root,
-            source_name="source.png",
-            target_name="target.png",
-            patch_size=(64, 64),
-            grid_movement=(64, 64),
-            margin=0,
-            seed=42,
-            save_masks=False,
-            train_ratio=0.8,
-            val_ratio=0.1,
-            test_ratio=0.1,
-            min_foreground_ratio=0.0,
-            max_white_ratio=1.0,
-            white_threshold=250,
-            max_largest_white_component_ratio=1.0,
-        )
-        dataset_root.mkdir()
-        cv2.imwrite(str(dataset_root / "source.png"), _make_synthetic_image(seed=0))
-        cv2.imwrite(str(dataset_root / "target.png"), _make_synthetic_image(seed=1))
-
-        builder = DatasetBuilder(config)
-        with _patched_builder_dependencies():
-            _single(builder).compute_masks()
-            _single(builder).align()
-            _single(builder)._started_at = "2026-01-01T00:00:00+00:00"
-            _single(builder)._effective_seed = config.seed
-            valid_rows, discarded_rows = _single(builder)._stream_patches_to_disk()
-            _single(builder)._assign_splits_and_finalize(valid_rows, discarded_rows)
-
-        manifest = dataset_root / "manifests" / "manifest.csv"
-        with manifest.open(encoding="utf-8", newline="") as f:
-            reader = csv_module.DictReader(f)
-            return {row["sample_id"]: row["split"] for row in reader}
-
-    first_assignment = _run_finalize(tmp_path / "run_one")
-    second_assignment = _run_finalize(tmp_path / "run_two")
-
-    assert first_assignment == second_assignment
 
 
 def test_hash_split_assignment_is_stable_and_approximately_matches_ratios() -> None:
@@ -1064,7 +862,7 @@ def test_log_memory_handles_missing_resource(caplog: pytest.LogCaptureFixture) -
 
 def test_run_all_discarded_log_is_written(builder_config: PreprocessingConfig) -> None:
     with _patched_builder_dependencies():
-        result = DatasetBuilder(builder_config).run_all()
+        result = _builder(builder_config).run_all()
 
     log = builder_config.dataset_root / "discarded_patches" / "discarded_log.csv"
     assert log.exists()
@@ -1077,7 +875,7 @@ def test_run_all_does_not_create_canonical_snapshot_files(
     builder_config: PreprocessingConfig,
 ) -> None:
     with _patched_builder_dependencies():
-        DatasetBuilder(builder_config).run_all()
+        _builder(builder_config).run_all()
 
     root = builder_config.dataset_root
     assert not (root / "config" / "input.yaml").exists()
@@ -1104,7 +902,7 @@ def test_run_all_preserves_bootstrapped_snapshot_files(
     environment_path.write_text('{"python":"3"}\n', encoding="utf-8")
 
     with _patched_builder_dependencies():
-        DatasetBuilder(builder_config).run_all()
+        _builder(builder_config).run_all()
 
     assert input_path.read_text(encoding="utf-8") == "input\n"
     assert resolved_path.read_text(encoding="utf-8") == "resolved\n"
@@ -1168,8 +966,8 @@ def test_prepare_rebuilds_when_preprocessing_changes(builder_config: Preprocessi
     config_path = _write_prepare_config(builder_config, preprocessing_patch_size=(32, 64))
     original_config_path = builder_config.dataset_root.parent / "original.yaml"
     original_config_text = config_path.read_text(encoding="utf-8").replace(
-        "  patch_size:\n  - 32\n  - 64",
-        "  patch_size:\n  - 64\n  - 64",
+        "  patch_size:\n    - 32\n    - 64",
+        "  patch_size:\n    - 64\n    - 64",
         1,
     )
     original_config_path.write_text(
@@ -1205,7 +1003,7 @@ def test_prepare_rebuilds_when_source_content_changes(builder_config: Preprocess
         prepare(run_config, config_path)
 
     cv2.imwrite(
-        str(builder_config.dataset_root / builder_config.source_name),
+        str(builder_config.dataset_root / "source.png"),
         _make_synthetic_image(seed=99),
     )
 
@@ -1232,7 +1030,7 @@ def test_prepare_rebuilds_when_target_content_changes(builder_config: Preprocess
         prepare(run_config, config_path)
 
     cv2.imwrite(
-        str(builder_config.dataset_root / builder_config.target_name),
+        str(builder_config.dataset_root / "target.png"),
         _make_synthetic_image(seed=123),
     )
 
@@ -1283,7 +1081,7 @@ def test_run_all_saves_manifest_layout_and_resolved_config(
     from virtual_staining.data.manifest import DatasetManifest
 
     with _patched_builder_dependencies():
-        result = DatasetBuilder(builder_config).run_all()
+        result = _builder(builder_config).run_all()
 
     root = builder_config.dataset_root
     assert not (root / "processed").exists()
@@ -1300,7 +1098,7 @@ def test_run_all_saves_manifest_layout_and_resolved_config(
 def test_align_keeps_warp_matrix_without_materializing_aligned_target(
     builder_config: PreprocessingConfig,
 ) -> None:
-    builder = DatasetBuilder(builder_config)
+    builder = _builder(builder_config)
 
     with _patched_builder_dependencies():
         _single(builder).compute_masks()
@@ -1321,7 +1119,7 @@ def test_run_all_writes_manifest_columns_and_relative_paths(
     import csv as csv_module
 
     with _patched_builder_dependencies():
-        DatasetBuilder(builder_config).run_all()
+        _builder(builder_config).run_all()
 
     manifest = builder_config.dataset_root / "manifests" / "manifest.csv"
     with manifest.open(encoding="utf-8", newline="") as f:
@@ -1349,8 +1147,8 @@ def test_run_all_writes_manifest_columns_and_relative_paths(
         assert row["target_path"].startswith(f"splits/{row['split']}/")
         assert row["input_modality"] == "source"
         assert row["target_modality"] == "target"
-        assert int(row["width"]) == builder_config.patch_size[0]
-        assert int(row["height"]) == builder_config.patch_size[1]
+        assert int(row["width"]) == builder_config.patching.patch_size[0]
+        assert int(row["height"]) == builder_config.patching.patch_size[1]
 
 
 def test_run_all_manifest_modalities_follow_configured_filenames(tmp_path: Path) -> None:
@@ -1360,19 +1158,21 @@ def test_run_all_manifest_modalities_follow_configured_filenames(tmp_path: Path)
     cv2.imwrite(str(root / "label_free.tif"), _make_synthetic_image(seed=1))
     config = PreprocessingConfig(
         dataset_root=root,
-        source_name="stained.tif",
-        target_name="label_free.tif",
-        patch_size=(64, 64),
-        grid_movement=(64, 64),
-        margin=0,
-        seed=42,
-        min_foreground_ratio=0.0,
-        max_white_ratio=1.0,
-        max_largest_white_component_ratio=1.0,
+        inputs=InputConfig(Path("inputs/pairs.csv"), "stained", "label_free"),
+        patching=PatchingConfig(patch_size=(64, 64), grid_movement=(64, 64), margin=0),
+        split=SplitConfig(seed=42),
+        filtering=FilteringConfig(
+            foreground=ForegroundFilterConfig(min_ratio=0.0),
+            max_white_ratio=1.0,
+            max_largest_white_component_ratio=1.0,
+        ),
     )
 
     with _patched_builder_dependencies():
-        DatasetBuilder(config).run_all()
+        _builder(
+            config,
+            (SlidePair("P1", Path("stained.tif"), Path("label_free.tif")),),
+        ).run_all()
 
     manifest = root / "manifests" / "manifest.csv"
     rows = list(csv.DictReader(manifest.open(encoding="utf-8", newline="")))
@@ -1386,7 +1186,7 @@ def test_run_all_writes_dataset_build_metadata(builder_config: PreprocessingConf
     import json
 
     with _patched_builder_dependencies():
-        result = DatasetBuilder(builder_config).run_all()
+        result = _builder(builder_config).run_all()
 
     metadata_path = builder_config.dataset_root / "metadata" / "dataset_build.json"
     data = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -1401,40 +1201,37 @@ def test_run_all_writes_dataset_build_metadata(builder_config: PreprocessingConf
     assert data["num_train"] == result.train_count
     assert data["num_val"] == result.val_count
     assert data["num_test"] == result.test_count
-    assert data["seed"] == builder_config.seed
+    assert data["seed"] == builder_config.split.seed
 
 
 def test_run_all_writes_dataset_fingerprint_metadata(builder_config: PreprocessingConfig) -> None:
     import json
 
     with _patched_builder_dependencies():
-        DatasetBuilder(builder_config).run_all()
+        _builder(builder_config).run_all()
 
     metadata_path = builder_config.dataset_root / "metadata" / "dataset_fingerprint.json"
     data = json.loads(metadata_path.read_text(encoding="utf-8"))
 
-    assert data["schema_version"] == "1.0"
+    assert data["schema_version"] == "2.0"
     assert data["fingerprint"].startswith("sha256:")
     assert data["prepared_at"]
     assert data["dataset_root"] == str(builder_config.dataset_root.resolve())
-    assert data["preprocessing"]["source_name"] == builder_config.source_name
-    assert data["preprocessing"]["target_name"] == builder_config.target_name
-    assert data["preprocessing"]["patch_size"] == list(builder_config.patch_size)
-    assert data["source"]["path"] == str((builder_config.dataset_root / "source.png").resolve())
-    assert data["target"]["path"] == str((builder_config.dataset_root / "target.png").resolve())
-    assert data["source"]["size"] > 0
-    assert data["target"]["size"] > 0
-    assert isinstance(data["source"]["mtime_ns"], int)
-    assert isinstance(data["target"]["mtime_ns"], int)
-    assert data["source"]["sha256"].startswith("sha256:")
-    assert data["target"]["sha256"].startswith("sha256:")
+    assert data["preprocessing"]["inputs"]["source_modality"] == "source"
+    assert data["preprocessing"]["patching"]["patch_size"] == list(
+        builder_config.patching.patch_size
+    )
+    assert data["canonical_inventory"][0]["source_path"] == "source.png"
+    assert all(item["size"] > 0 for item in data["files"])
+    assert all(isinstance(item["mtime_ns"], int) for item in data["files"])
+    assert all(item["sha256"].startswith("sha256:") for item in data["files"])
 
 
 def test_run_all_writes_manifest_metadata(builder_config: PreprocessingConfig) -> None:
     import json
 
     with _patched_builder_dependencies():
-        result = DatasetBuilder(builder_config).run_all()
+        result = _builder(builder_config).run_all()
 
     metadata_path = builder_config.dataset_root / "manifests" / "manifest_metadata.json"
     data = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -1452,54 +1249,34 @@ def test_run_all_writes_manifest_metadata(builder_config: PreprocessingConfig) -
 def test_missing_dataset_root_raises(tmp_path: Path) -> None:
     config = PreprocessingConfig(
         dataset_root=tmp_path / "nonexistent",
-        source_name="source.png",
-        target_name="target.png",
+        inputs=InputConfig(Path("inputs/pairs.csv"), "source", "target"),
     )
     with pytest.raises(FileNotFoundError):
-        _single(DatasetBuilder(config)).compute_masks()
+        _single(_builder(config)).compute_masks()
 
 
 def test_align_requires_masks(builder_config: PreprocessingConfig) -> None:
-    builder = DatasetBuilder(builder_config)
+    builder = _builder(builder_config)
     with pytest.raises(RuntimeError, match="compute_masks"):
         _single(builder).align()
 
 
 def test_stream_patches_to_disk_requires_align(builder_config: PreprocessingConfig) -> None:
-    builder = DatasetBuilder(builder_config)
+    builder = _builder(builder_config)
     with pytest.raises(RuntimeError, match="align"):
         _single(builder)._stream_patches_to_disk()
 
 
-def test_assign_splits_and_finalize_accepts_empty_rows(
-    builder_config: PreprocessingConfig,
-) -> None:
-    builder = DatasetBuilder(builder_config)
-    _single(builder)._started_at = "2026-01-01T00:00:00+00:00"
-    _single(builder)._effective_seed = builder_config.seed
-    result = _single(builder)._assign_splits_and_finalize([], [])
-
-    assert result.train_count == 0
-    assert result.val_count == 0
-    assert result.test_count == 0
-    assert result.skipped_count == 0
-
-
-# ---------------------------------------------------------------------------
-# split_manifest.csv tests
-# ---------------------------------------------------------------------------
-
-
 def test_split_manifest_csv_is_not_written(builder_config: PreprocessingConfig) -> None:
     with _patched_builder_dependencies():
-        DatasetBuilder(builder_config).run_all()
+        _builder(builder_config).run_all()
 
     manifest = builder_config.dataset_root / "split_manifest.csv"
     assert not manifest.exists()
 
 
 # ---------------------------------------------------------------------------
-# alignment_metadata.json tests
+# Per-pair alignment metadata tests
 # ---------------------------------------------------------------------------
 
 
@@ -1507,13 +1284,13 @@ def test_run_all_saves_alignment_metadata(builder_config: PreprocessingConfig) -
     import json
 
     with _patched_builder_dependencies():
-        DatasetBuilder(builder_config).run_all()
+        _builder(builder_config).run_all()
 
-    metadata_file = builder_config.dataset_root / "alignment_metadata.json"
+    metadata_file = builder_config.dataset_root / "metadata" / "pairs" / "P1.json"
     assert metadata_file.exists()
 
     data = json.loads(metadata_file.read_text(encoding="utf-8"))
-    assert set(data.keys()) >= {
+    assert set(data["alignment"].keys()) >= {
         "n_keypoints_src",
         "n_keypoints_tgt",
         "n_matches",
@@ -1532,7 +1309,7 @@ def test_run_all_saves_alignment_metadata(builder_config: PreprocessingConfig) -
 def test_stream_patches_to_disk_raises_on_count_mismatch(
     builder_config: PreprocessingConfig,
 ) -> None:
-    builder = DatasetBuilder(builder_config)
+    builder = _builder(builder_config)
     dummy = np.zeros((64, 64, 3), dtype=np.uint8)
     dummy_mask = np.zeros((64, 64), dtype=np.uint8)
 
@@ -1553,7 +1330,7 @@ def test_stream_patches_to_disk_raises_on_count_mismatch(
 def test_stream_patches_to_disk_does_not_use_bulk_patch_helpers(
     builder_config: PreprocessingConfig,
 ) -> None:
-    builder = DatasetBuilder(builder_config)
+    builder = _builder(builder_config)
 
     with _patched_builder_dependencies():
         _single(builder).compute_masks()

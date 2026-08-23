@@ -13,8 +13,8 @@ P001,raw/source/S001.svs,raw/target/T001.svs,false,PT001,SP001
 P002,raw/source/S002.svs,raw/target/T002.svs,true,PT002,SP002
 ```
 
-Legacy `source_name`/`target_name` YAML remains readable with a deprecation
-warning and becomes the synthetic pair `pair_0000`.
+The pair inventory is required; single-pair datasets use the same format with
+one row.
 
 ## Prepared layout
 
@@ -58,9 +58,8 @@ input_modality,target_modality,x,y,width,height
   guesses mask filenames.
 - Output ordering is `pair_id`, `y`, then `x`.
 
-The loader continues to accept only the exact v1 column set or exact v2 column
-set. V1 records normalize to `pair_id=pair_0000` and retain legacy sidecar-mask
-discovery.
+The loader accepts this exact v2 column set only. Older manifests must be
+rebuilt with `vs prepare`.
 
 `manifests/pairs.csv` is the normalized cohort contract. It contains one row
 per input pair, its assigned split, biological IDs, mask inputs, processing
@@ -74,9 +73,8 @@ a stable hash of the seed and group ID. Every nonzero split receives at least
 one independent group or preparation fails. `metadata/split_assignment.csv`
 freezes the result; an optional assignment file must exactly match the cohort.
 
-Patch mode is retained for compatibility and leakage ablations. Training still
-pools and shuffles all training patches each epoch; validation and test remain
-unshuffled.
+Patch mode supports leakage ablations. Training pools and shuffles all training
+patches each epoch; validation and test remain unshuffled.
 
 ## Masks and alignment
 
@@ -105,7 +103,7 @@ may reuse cached content hashes when path, size, and nanosecond mtime match;
 
 ## Evaluation
 
-Evaluation preserves patch-level outputs and, for v2 datasets, writes pair
-summaries plus specimen/patient summaries when those IDs are complete. Metrics
+Evaluation preserves patch-level outputs and writes pair summaries plus
+specimen/patient summaries when those IDs are complete. Metrics
 are averaged within each independent unit before aggregate statistics and
 deterministic percentile bootstrap confidence intervals are computed.

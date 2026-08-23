@@ -8,6 +8,7 @@ import yaml
 
 from tests.config_helpers import write_run_config
 from virtual_staining.config.run import RunConfig
+from virtual_staining.data.pairs import SlidePair
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
     build_dataset_fingerprint_metadata,
@@ -179,29 +180,24 @@ def test_dataset_fingerprint_changes_with_preprocessing_fields(tmp_path: Path) -
     target_path = dataset_root / "target.png"
     source_path.write_bytes(b"source")
     target_path.write_bytes(b"target")
+    pairs = (SlidePair("P1", Path("source.png"), Path("target.png")),)
 
     first = build_dataset_fingerprint_metadata(
         dataset_root=dataset_root,
         preprocessing_config={
-            "dataset_root": str(dataset_root.resolve()),
-            "source_name": "source.png",
-            "target_name": "target.png",
-            "image_size": [64, 64],
+            "inputs": {"inventory": "inputs/pairs.csv"},
+            "patching": {"patch_size": [64, 64]},
         },
-        source_path=source_path,
-        target_path=target_path,
+        pairs=pairs,
         prepared_at="2026-01-01T00:00:00+00:00",
     )
     second = build_dataset_fingerprint_metadata(
         dataset_root=dataset_root,
         preprocessing_config={
-            "dataset_root": str(dataset_root.resolve()),
-            "source_name": "source.png",
-            "target_name": "target.png",
-            "image_size": [128, 64],
+            "inputs": {"inventory": "inputs/pairs.csv"},
+            "patching": {"patch_size": [128, 64]},
         },
-        source_path=source_path,
-        target_path=target_path,
+        pairs=pairs,
         prepared_at="2026-01-01T00:00:00+00:00",
     )
 
@@ -219,18 +215,15 @@ def test_dataset_fingerprint_changes_with_input_file_content(tmp_path: Path) -> 
     kwargs = {
         "dataset_root": dataset_root,
         "preprocessing_config": {
-            "dataset_root": str(dataset_root.resolve()),
-            "source_name": "source.png",
-            "target_name": "target.png",
-            "image_size": [64, 64],
+            "inputs": {"inventory": "inputs/pairs.csv"},
+            "patching": {"patch_size": [64, 64]},
         },
-        "source_path": source_path,
-        "target_path": target_path,
+        "pairs": (SlidePair("P1", Path("source.png"), Path("target.png")),),
         "prepared_at": "2026-01-01T00:00:00+00:00",
     }
     first = build_dataset_fingerprint_metadata(**kwargs)
     source_path.write_bytes(b"source-v2")
     second = build_dataset_fingerprint_metadata(**kwargs)
 
-    assert first["source"]["sha256"] != second["source"]["sha256"]
+    assert first["files"][0]["sha256"] != second["files"][0]["sha256"]
     assert first["fingerprint"] != second["fingerprint"]

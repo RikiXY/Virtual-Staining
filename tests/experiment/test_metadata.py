@@ -171,25 +171,39 @@ def test_prepare_writes_stage_metadata_and_events(tmp_path: Path) -> None:
     image = np.full((192, 192, 3), 64, dtype=np.uint8)
     cv2.imwrite(str(dataset_root / "source.png"), image)
     cv2.imwrite(str(dataset_root / "target.png"), image + 8)
+    (dataset_root / "inputs").mkdir()
+    (dataset_root / "inputs" / "pairs.csv").write_text(
+        "pair_id,source_path,target_path\nP1,source.png,target.png\n",
+        encoding="utf-8",
+    )
 
     config_path = write_run_config(
         tmp_path,
         """\
-        image_size: [64, 64]
-        preprocessing:
-          source_name: source.png
-          target_name: target.png
-          image_size: [64, 64]
-          grid_movement: [64, 64]
-          margin: 0
-          seed: 42
-          train_ratio: 0.8
-          val_ratio: 0.1
-          test_ratio: 0.1
-          min_foreground_ratio: 0.0
-          max_white_ratio: 1.0
-          white_threshold: 250
-          max_largest_white_component_ratio: 1.0
+            image_size: [64, 64]
+            preprocessing:
+              inputs:
+                inventory: inputs/pairs.csv
+                source_modality: source
+                target_modality: target
+              patching:
+                patch_size: [64, 64]
+                grid_movement: [64, 64]
+                margin: 0
+              filtering:
+                foreground:
+                  min_ratio: 0.0
+                max_white_ratio: 1.0
+                white_threshold: 250
+                max_largest_white_component_ratio: 1.0
+              split:
+                unit: patch
+                train: 1.0
+                val: 0.0
+                test: 0.0
+                seed: 42
+              io:
+                tiled: false
         """,
         filename="prepare.yaml",
         dataset_root=dataset_root,
@@ -219,6 +233,8 @@ def test_prepare_writes_stage_metadata_and_events(tmp_path: Path) -> None:
     assert stage_data["reused"] is False
     assert stage_data["manifest_path"].endswith("manifests/manifest.csv")
     assert fingerprint_data["fingerprint"].startswith("sha256:")
-    assert fingerprint_data["source"]["path"] == str((dataset_root / "source.png").resolve())
-    assert fingerprint_data["target"]["path"] == str((dataset_root / "target.png").resolve())
+    assert {item["path"] for item in fingerprint_data["files"]} == {
+        str((dataset_root / "source.png").resolve()),
+        str((dataset_root / "target.png").resolve()),
+    }
     assert [event["event_type"] for event in events] == ["stage_started", "stage_completed"]

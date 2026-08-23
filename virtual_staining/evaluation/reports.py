@@ -30,7 +30,7 @@ def build_metric_row(
     generated_path: str | Path,
     shape: tuple[int, int, int],
     metrics: dict[str, float],
-    pair_id: str = "pair_0000",
+    pair_id: str,
 ) -> dict[str, object]:
     """Builds a standard row for per_image_metrics.csv."""
     height, width, channels = shape

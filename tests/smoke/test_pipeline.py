@@ -36,6 +36,11 @@ def _make_synthetic_dataset(dataset_root: Path, size: int = 192) -> Path:
     target = np.clip(source.astype(np.int16) + np.array([12, 6, 18], dtype=np.int16), 0, 255)
     cv2.imwrite(str(dataset_root / "source.tif"), source)
     cv2.imwrite(str(dataset_root / "target.tif"), target.astype(np.uint8))
+    (dataset_root / "inputs").mkdir()
+    (dataset_root / "inputs" / "pairs.csv").write_text(
+        "pair_id,source_path,target_path\nP1,source.tif,target.tif\n",
+        encoding="utf-8",
+    )
     return dataset_root
 
 
@@ -93,19 +98,28 @@ def _write_smoke_config(tmp_path: Path, dataset_root: Path, *, run_name: str = "
         image_size: [64, 64]
 
         preprocessing:
-          source_name: source.tif
-          target_name: target.tif
-          image_size: [64, 64]
-          grid_movement: [64, 64]
-          margin: 0
-          seed: 42
-          train_ratio: 0.6
-          val_ratio: 0.2
-          test_ratio: 0.2
-          min_foreground_ratio: 0.0
-          max_white_ratio: 1.0
-          white_threshold: 250
-          max_largest_white_component_ratio: 1.0
+          inputs:
+            inventory: inputs/pairs.csv
+            source_modality: source
+            target_modality: target
+          patching:
+            patch_size: [64, 64]
+            grid_movement: [64, 64]
+            margin: 0
+          filtering:
+            foreground:
+              min_ratio: 0.0
+            max_white_ratio: 1.0
+            white_threshold: 250
+            max_largest_white_component_ratio: 1.0
+          split:
+            unit: patch
+            train: 0.6
+            val: 0.2
+            test: 0.2
+            seed: 42
+          io:
+            tiled: false
 
         model:
           generator:

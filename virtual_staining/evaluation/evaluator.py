@@ -62,16 +62,14 @@ def evaluate_pair(
 
 
 def evaluate_pairs(
-    pairs: Sequence[tuple[Path, Path, str] | tuple[Path, Path, str, str]],
+    pairs: Sequence[tuple[Path, Path, str, str]],
     output_dir: Path,
 ) -> EvaluationResult:
     """Computes image quality metrics for a list of target/generated pairs."""
     output_dir.mkdir(parents=True, exist_ok=True)
     result = EvaluationResult(output_dir=output_dir)
 
-    for pair in pairs:
-        target_path, generated_path, sample_id = pair[:3]
-        pair_id = pair[3] if len(pair) == 4 else "pair_0000"
+    for target_path, generated_path, sample_id, pair_id in pairs:
         if not generated_path.exists():
             logger.warning("Generated image not found, skipping: %s", generated_path)
             result.num_skipped += 1

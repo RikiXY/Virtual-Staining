@@ -130,6 +130,7 @@ def test_paired_manifest_dataset_can_return_foreground_mask(tmp_path: Path) -> N
         y=0,
         width=16,
         height=16,
+        foreground_mask_path=Path("splits/train/00000_00000_foreground_mask.png"),
     )
     manifest = DatasetManifest(records=(record,), dataset_root=tmp_path)
     dataset = PairedManifestDataset(
@@ -160,6 +161,7 @@ def test_paired_manifest_dataset_uses_paired_transform_for_images_and_mask(
         y=0,
         width=16,
         height=16,
+        foreground_mask_path=Path("splits/train/00000_00000_foreground_mask.png"),
     )
     manifest = DatasetManifest(records=(record,), dataset_root=tmp_path)
 

@@ -20,6 +20,8 @@ def make_manifest_record(
     y: int | None = None,
     input_path: Path | None = None,
     target_path: Path | None = None,
+    pair_id: str = "P1",
+    foreground_mask_path: Path | None = None,
 ) -> ManifestRecord:
     """Return one synthetic manifest record using the canonical split path layout."""
     if x is None or y is None:
@@ -41,6 +43,8 @@ def make_manifest_record(
         y=y,
         width=width,
         height=height,
+        pair_id=pair_id,
+        foreground_mask_path=foreground_mask_path,
     )
 
 
