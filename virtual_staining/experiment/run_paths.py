@@ -49,10 +49,6 @@ class RunPaths:
         return self.root / "evaluation"
 
     @property
-    def comparisons_dir(self) -> Path:
-        return self.root / "comparisons"
-
-    @property
     def input_config(self) -> Path:
         return self.config_dir / "input.yaml"
 
@@ -72,20 +68,11 @@ class RunPaths:
     def config_hash(self) -> Path:
         return self.metadata_dir / "config_hash.txt"
 
-    @property
-    def stages_dir(self) -> Path:
-        return self.metadata_dir / "stages"
-
-    @property
-    def events_log(self) -> Path:
-        return self.metadata_dir / "events.jsonl"
-
     def create_directories(self) -> None:
-        """Create all run sub-directories."""
+        """Create directories used directly by training and inference."""
         for directory in [
             self.config_dir,
             self.metadata_dir,
-            self.stages_dir,
             self.logs_dir,
             self.checkpoints_dir,
             self.metrics_dir,
@@ -93,7 +80,5 @@ class RunPaths:
             self.output_train_dir,
             self.output_val_dir,
             self.output_test_dir,
-            self.evaluation_dir,
-            self.comparisons_dir,
         ]:
             directory.mkdir(parents=True, exist_ok=True)

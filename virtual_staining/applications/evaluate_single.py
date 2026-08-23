@@ -1,30 +1,22 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
-from virtual_staining.config.run import RunConfig
-from virtual_staining.evaluation.evaluator import evaluate_pairs
 from virtual_staining.evaluation.io import (
-    build_evaluation_pairs,
     collect_image_files,
     extract_single_sample_id,
 )
-from virtual_staining.evaluation.plotting import save_dataset_plots
 from virtual_staining.evaluation.reports import (
     build_metric_row,
     write_single_case_csv,
-    write_skipped_csv,
 )
-from virtual_staining.evaluation.summaries import metric_value, write_summary_csv
-from virtual_staining.experiment.run_paths import RunPaths
+from virtual_staining.evaluation.summaries import metric_value
 from virtual_staining.metrics import DEFAULT_METRICS
 
 __all__ = [
     "DEFAULT_METRICS",
-    "DatasetEvalResult",
     "SingleEvalResult",
-    "evaluate_dataset",
     "evaluate_pair",
     "metric_value",
 ]
@@ -35,8 +27,7 @@ class _EvaluateRequest:
     target_dir: Path
     generated_dir: Path
     output_dir: Path
-    sample_id: str | None  # None → dataset mode
-    save_graphs: bool = False
+    sample_id: str
 
 
 @dataclass
@@ -46,19 +37,6 @@ class SingleEvalResult:
     metrics: dict[str, float]
     shape: tuple[int, int, int]
     single_case_csv: Path
-
-
-@dataclass
-class DatasetEvalResult:
-    target_files: dict[str, Path]
-    generated_files: dict[str, Path]
-    per_image_rows: list[dict[str, object]]
-    skipped_rows: list[dict[str, str]]
-    output_dir: Path
-    per_image_csv: Path
-    summary_csv: Path
-    skipped_csv: Path
-    plot_paths: list[Path] = field(default_factory=list)
 
 
 def evaluate_pair(
@@ -73,34 +51,6 @@ def evaluate_pair(
             generated_dir=generated_path.parent,
             output_dir=output_dir or _infer_default_output_dir(generated_path),
             sample_id=extract_single_sample_id(target_path, generated_path),
-        )
-    )
-
-
-def evaluate_dataset(config_path: Path) -> DatasetEvalResult:
-    """Evaluate the generated dataset selected by a run config."""
-    config = RunConfig.from_yaml(config_path.resolve())
-    eval_cfg = config.evaluation
-    paths = RunPaths(config.project.run_root)
-    return _run_dataset(
-        _EvaluateRequest(
-            target_dir=(
-                eval_cfg.target_dir
-                if eval_cfg and eval_cfg.target_dir
-                else config.project.split_dir("test")
-            ),
-            generated_dir=(
-                eval_cfg.generated_dir
-                if eval_cfg and eval_cfg.generated_dir
-                else paths.output_test_dir
-            ),
-            output_dir=(
-                eval_cfg.output_dir
-                if eval_cfg and eval_cfg.output_dir
-                else config.project.run_root / "evaluation"
-            ),
-            sample_id=None,
-            save_graphs=eval_cfg.save_graphs if eval_cfg else False,
         )
     )
 
@@ -145,7 +95,6 @@ def _infer_default_output_dir(generated_path: str | Path) -> Path:
 def _run_single(request: _EvaluateRequest) -> SingleEvalResult:
     from virtual_staining.evaluation.evaluator import evaluate_pair
 
-    assert request.sample_id is not None
     target_files = collect_image_files(request.target_dir, "_target", "Target")
     generated_files = collect_image_files(request.generated_dir, "_target_generated", "Generated")
 
@@ -175,53 +124,4 @@ def _run_single(request: _EvaluateRequest) -> SingleEvalResult:
         metrics=metrics,
         shape=shape,
         single_case_csv=single_case_csv,
-    )
-
-
-def _run_dataset(request: _EvaluateRequest) -> DatasetEvalResult:
-    target_files = collect_image_files(request.target_dir, "_target", "Target")
-    generated_files = collect_image_files(request.generated_dir, "_target_generated", "Generated")
-    request.output_dir.mkdir(parents=True, exist_ok=True)
-
-    paired_samples, skipped_ids = build_evaluation_pairs(request.target_dir, request.generated_dir)
-    skipped_rows: list[dict[str, str]] = [
-        {
-            "sample_id": sid,
-            "reason": "missing_target" if sid not in target_files else "missing_generated",
-            "target_path": str(target_files.get(sid, "")),
-            "generated_path": str(generated_files.get(sid, "")),
-        }
-        for sid in skipped_ids
-    ]
-
-    evaluation = evaluate_pairs(paired_samples, request.output_dir)
-    per_image_rows = evaluation.rows
-    skipped_rows.extend(evaluation.skipped_rows)
-
-    per_image_csv = request.output_dir / "per_image_metrics.csv"
-    skipped_csv = request.output_dir / "skipped.csv"
-    summary_csv = write_summary_csv(
-        per_image_rows,
-        request.output_dir,
-        num_targets_found=len(target_files),
-        num_generated_found=len(generated_files),
-        num_pairs_evaluated=len(per_image_rows),
-        num_skipped=len(skipped_rows),
-    )
-    write_skipped_csv(skipped_rows, skipped_csv)
-
-    plot_paths: list[Path] = []
-    if request.save_graphs and per_image_rows:
-        plot_paths = save_dataset_plots(per_image_rows, request.output_dir)
-
-    return DatasetEvalResult(
-        target_files=target_files,
-        generated_files=generated_files,
-        per_image_rows=per_image_rows,
-        skipped_rows=skipped_rows,
-        output_dir=request.output_dir,
-        per_image_csv=per_image_csv,
-        summary_csv=summary_csv,
-        skipped_csv=skipped_csv,
-        plot_paths=plot_paths,
     )

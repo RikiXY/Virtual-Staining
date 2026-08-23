@@ -87,6 +87,11 @@ def _white_mask(img: np.ndarray, _params: object) -> np.ndarray:
     return np.full((img.shape[0], img.shape[1]), 255, dtype=np.uint8)
 
 
+def _single(builder: DatasetBuilder) -> PairProcessor:
+    assert builder._single is not None
+    return builder._single
+
+
 def _identity_align(
     src: np.ndarray,
     tgt: np.ndarray,
@@ -303,6 +308,7 @@ def test_compute_masks_with_mask_scale(
     builder_scaled_config: PreprocessingConfig,
 ) -> None:
     builder = DatasetBuilder(builder_scaled_config)
+    processor = _single(builder)
     source_calls: list[tuple[int, int, int]] = []
     target_calls: list[tuple[int, int, int]] = []
 
@@ -317,16 +323,16 @@ def test_compute_masks_with_mask_scale(
         "virtual_staining.data.builder.calculate_mask_with_multiple_parameters",
         side_effect=_record_mask_shape,
     ):
-        builder.compute_masks()
+        processor.compute_masks()
 
     assert source_calls == [(150, 150, 3)]
     assert target_calls == [(150, 150, 3)]
-    assert builder._source_image is not None
-    assert builder._target_image is not None
-    assert builder._source_mask is not None
-    assert builder._target_mask is not None
-    assert builder._source_mask.shape == builder._source_image.shape[:2]
-    assert builder._target_mask.shape == builder._target_image.shape[:2]
+    assert processor._source_image is not None
+    assert processor._target_image is not None
+    assert processor._source_mask is not None
+    assert processor._target_mask is not None
+    assert processor._source_mask.shape == processor._source_image.shape[:2]
+    assert processor._target_mask.shape == processor._target_image.shape[:2]
 
 
 def test_compute_masks_with_lowres_mask_filtering_keeps_scaled_masks(
@@ -334,21 +340,22 @@ def test_compute_masks_with_lowres_mask_filtering_keeps_scaled_masks(
 ) -> None:
     config = dataclasses.replace(builder_scaled_config, lowres_mask_filtering=True)
     builder = DatasetBuilder(config)
+    processor = _single(builder)
 
     with patch(
         "virtual_staining.data.builder.calculate_mask_with_multiple_parameters",
         return_value=np.full((150, 150), 255, dtype=np.uint8),
     ):
-        builder.compute_masks()
+        processor.compute_masks()
 
-    assert builder._source_image is not None
-    assert builder._target_image is not None
-    assert builder._source_mask is not None
-    assert builder._target_mask is not None
-    assert builder._source_mask.shape == (150, 150)
-    assert builder._target_mask.shape == (150, 150)
-    assert builder._source_mask.shape != builder._source_image.shape[:2]
-    assert builder._target_mask.shape != builder._target_image.shape[:2]
+    assert processor._source_image is not None
+    assert processor._target_image is not None
+    assert processor._source_mask is not None
+    assert processor._target_mask is not None
+    assert processor._source_mask.shape == (150, 150)
+    assert processor._target_mask.shape == (150, 150)
+    assert processor._source_mask.shape != processor._source_image.shape[:2]
+    assert processor._target_mask.shape != processor._target_image.shape[:2]
 
 
 def test_compute_masks_allows_source_and_target_mask_strategy_overrides(
@@ -372,7 +379,7 @@ def test_compute_masks_allows_source_and_target_mask_strategy_overrides(
             return_value=np.full((600, 600), 255, dtype=np.uint8),
         ) as mock_connected_components,
     ):
-        builder.compute_masks()
+        _single(builder).compute_masks()
 
     assert mock_strategy.call_count == 1
     assert mock_strategy.call_args.kwargs["strategy"] == "hsv"
@@ -410,7 +417,7 @@ def test_compute_masks_raises_if_estimated_memory_exceeds_limit(
         ),
         pytest.raises(MemoryError, match="max_memory_gb") as exc_info,
     ):
-        builder.compute_masks()
+        _single(builder).compute_masks()
 
     assert "mask_scale" in str(exc_info.value)
 
@@ -426,7 +433,7 @@ def test_compute_masks_warns_when_estimate_is_high_without_limit(
         patch("virtual_staining.data.builder._estimate_memory_gb", return_value=9.0),
         caplog.at_level(logging.WARNING, logger="virtual_staining.data.builder"),
     ):
-        builder.compute_masks()
+        _single(builder).compute_masks()
 
     assert any("mask_scale: 0.25" in message for message in caplog.messages)
 
@@ -553,12 +560,14 @@ def test_run_all_produces_same_output_as_old_stages(tmp_path: Path) -> None:
         streaming_result = streaming_builder.run_all()
 
     with _patched_builder_dependencies():
-        staged_builder._started_at = "2026-01-01T00:00:00+00:00"
-        staged_builder._effective_seed = staged_builder.config.seed
-        staged_builder.compute_masks()
-        staged_builder.align()
-        valid_rows, discarded_rows = staged_builder._stream_patches_to_disk()
-        staged_result = staged_builder._assign_splits_and_finalize(valid_rows, discarded_rows)
+        _single(staged_builder)._started_at = "2026-01-01T00:00:00+00:00"
+        _single(staged_builder)._effective_seed = staged_builder.config.seed
+        _single(staged_builder).compute_masks()
+        _single(staged_builder).align()
+        valid_rows, discarded_rows = _single(staged_builder)._stream_patches_to_disk()
+        staged_result = _single(staged_builder)._assign_splits_and_finalize(
+            valid_rows, discarded_rows
+        )
 
     assert streaming_result.train_count == staged_result.train_count
     assert streaming_result.val_count == staged_result.val_count
@@ -579,9 +588,9 @@ def test_stream_patches_to_disk_writes_valid_patches_to_final_splits(
     builder = DatasetBuilder(builder_config)
 
     with _patched_builder_dependencies():
-        builder.compute_masks()
-        builder.align()
-        valid_rows, discarded_rows = builder._stream_patches_to_disk()
+        _single(builder).compute_masks()
+        _single(builder).align()
+        valid_rows, discarded_rows = _single(builder)._stream_patches_to_disk()
 
     assert len(valid_rows) == 81
     assert discarded_rows == []
@@ -623,9 +632,9 @@ def test_stream_patches_to_disk_writes_foreground_masks_when_enabled(
     builder = DatasetBuilder(config)
 
     with _patched_builder_dependencies():
-        builder.compute_masks()
-        builder.align()
-        valid_rows, discarded_rows = builder._stream_patches_to_disk()
+        _single(builder).compute_masks()
+        _single(builder).align()
+        valid_rows, discarded_rows = _single(builder)._stream_patches_to_disk()
 
     assert len(valid_rows) == 81
     assert discarded_rows == []
@@ -658,9 +667,9 @@ def test_stream_patches_to_disk_uses_min_foreground_ratio_for_source_prefilter(
         patch("virtual_staining.data.builder.iter_image_with_grid") as mock_iter,
     ):
         mock_iter.return_value = iter(())
-        builder.compute_masks()
-        builder.align()
-        builder._stream_patches_to_disk()
+        _single(builder).compute_masks()
+        _single(builder).align()
+        _single(builder)._stream_patches_to_disk()
 
     assert mock_iter.call_args.kwargs["max_mask_percentage"] == builder_config.min_foreground_ratio
 
@@ -676,9 +685,9 @@ def test_stream_patches_to_disk_lowres_mask_filtering_keeps_mask_out_of_iterator
         patch("virtual_staining.data.builder.iter_image_with_grid") as mock_iter,
     ):
         mock_iter.return_value = iter(())
-        builder.compute_masks()
-        builder.align()
-        builder._stream_patches_to_disk()
+        _single(builder).compute_masks()
+        _single(builder).align()
+        _single(builder)._stream_patches_to_disk()
 
     assert mock_iter.call_args.args[3] is None
 
@@ -688,14 +697,15 @@ def test_run_all_with_lowres_mask_filtering_writes_patches(
 ) -> None:
     config = dataclasses.replace(builder_scaled_config, lowres_mask_filtering=True)
     builder = DatasetBuilder(config)
+    processor = _single(builder)
 
     with _patched_builder_dependencies():
         result = builder.run_all()
 
-    assert builder._source_mask is not None
-    assert builder._target_mask is not None
-    assert builder._source_mask.shape == (150, 150)
-    assert builder._target_mask.shape == (150, 150)
+    assert processor._source_mask is not None
+    assert processor._target_mask is not None
+    assert processor._source_mask.shape == (150, 150)
+    assert processor._target_mask.shape == (150, 150)
     assert result.train_count + result.val_count + result.test_count > 0
 
 
@@ -708,6 +718,7 @@ def test_run_all_with_tiled_io_uses_region_readers_without_cv2_imread(
         lowres_mask_filtering=True,
     )
     builder = DatasetBuilder(config)
+    processor = _single(builder)
 
     with (
         _patched_builder_dependencies(),
@@ -718,12 +729,12 @@ def test_run_all_with_tiled_io_uses_region_readers_without_cv2_imread(
     ):
         result = builder.run_all()
 
-    assert builder._source_reader is not None
-    assert builder._target_reader is not None
-    assert builder._source_image is not None
-    assert builder._target_image is not None
-    assert builder._source_image.shape[:2] == (150, 150)
-    assert builder._target_image.shape[:2] == (150, 150)
+    assert processor._source_reader is not None
+    assert processor._target_reader is not None
+    assert processor._source_image is not None
+    assert processor._target_image is not None
+    assert processor._source_image.shape[:2] == (150, 150)
+    assert processor._target_image.shape[:2] == (150, 150)
     assert result.train_count + result.val_count + result.test_count > 0
 
 
@@ -754,9 +765,9 @@ def test_stream_patches_to_disk_records_discarded_rows_without_images_by_default
             side_effect=validation_results,
         ),
     ):
-        builder.compute_masks()
-        builder.align()
-        valid_rows, discarded_rows = builder._stream_patches_to_disk()
+        _single(builder).compute_masks()
+        _single(builder).align()
+        valid_rows, discarded_rows = _single(builder)._stream_patches_to_disk()
 
     assert len(valid_rows) + len(discarded_rows) == 81
     assert valid_rows
@@ -836,9 +847,9 @@ def test_stream_patches_to_disk_writes_discarded_patch_images_when_enabled(
             side_effect=validation_results,
         ),
     ):
-        builder.compute_masks()
-        builder.align()
-        valid_rows, discarded_rows = builder._stream_patches_to_disk()
+        _single(builder).compute_masks()
+        _single(builder).align()
+        valid_rows, discarded_rows = _single(builder)._stream_patches_to_disk()
 
     root = config.dataset_root
     assert valid_rows
@@ -878,12 +889,12 @@ def test_assign_splits_and_finalize_writes_manifest_for_streamed_split_files(
             side_effect=validation_results,
         ),
     ):
-        builder.compute_masks()
-        builder.align()
-        builder._started_at = "2026-01-01T00:00:00+00:00"
-        builder._effective_seed = builder_config.seed
-        valid_rows, discarded_rows = builder._stream_patches_to_disk()
-        result = builder._assign_splits_and_finalize(valid_rows, discarded_rows)
+        _single(builder).compute_masks()
+        _single(builder).align()
+        _single(builder)._started_at = "2026-01-01T00:00:00+00:00"
+        _single(builder)._effective_seed = builder_config.seed
+        valid_rows, discarded_rows = _single(builder)._stream_patches_to_disk()
+        result = _single(builder)._assign_splits_and_finalize(valid_rows, discarded_rows)
 
     assert result.train_count + result.val_count + result.test_count == len(valid_rows)
     assert result.skipped_count == len(discarded_rows)
@@ -943,12 +954,12 @@ def test_assign_splits_and_finalize_preserves_discarded_patch_files(
             side_effect=validation_results,
         ),
     ):
-        builder.compute_masks()
-        builder.align()
-        builder._started_at = "2026-01-01T00:00:00+00:00"
-        builder._effective_seed = config.seed
-        valid_rows, discarded_rows = builder._stream_patches_to_disk()
-        builder._assign_splits_and_finalize(valid_rows, discarded_rows)
+        _single(builder).compute_masks()
+        _single(builder).align()
+        _single(builder)._started_at = "2026-01-01T00:00:00+00:00"
+        _single(builder)._effective_seed = config.seed
+        valid_rows, discarded_rows = _single(builder)._stream_patches_to_disk()
+        _single(builder)._assign_splits_and_finalize(valid_rows, discarded_rows)
 
     root = config.dataset_root
     assert len(list((root / "discarded_patches" / "pair_0000" / "source").iterdir())) == len(
@@ -988,12 +999,12 @@ def test_assign_splits_and_finalize_is_deterministic_for_fixed_seed(
 
         builder = DatasetBuilder(config)
         with _patched_builder_dependencies():
-            builder.compute_masks()
-            builder.align()
-            builder._started_at = "2026-01-01T00:00:00+00:00"
-            builder._effective_seed = config.seed
-            valid_rows, discarded_rows = builder._stream_patches_to_disk()
-            builder._assign_splits_and_finalize(valid_rows, discarded_rows)
+            _single(builder).compute_masks()
+            _single(builder).align()
+            _single(builder)._started_at = "2026-01-01T00:00:00+00:00"
+            _single(builder)._effective_seed = config.seed
+            valid_rows, discarded_rows = _single(builder)._stream_patches_to_disk()
+            _single(builder)._assign_splits_and_finalize(valid_rows, discarded_rows)
 
         manifest = dataset_root / "manifests" / "manifest.csv"
         with manifest.open(encoding="utf-8", newline="") as f:
@@ -1292,16 +1303,16 @@ def test_align_keeps_warp_matrix_without_materializing_aligned_target(
     builder = DatasetBuilder(builder_config)
 
     with _patched_builder_dependencies():
-        builder.compute_masks()
-        assert builder._target_image is not None
-        assert builder._target_mask is not None
-        builder.align()
+        _single(builder).compute_masks()
+        assert _single(builder)._target_image is not None
+        assert _single(builder)._target_mask is not None
+        _single(builder).align()
 
-    assert builder._warp_matrix is not None
-    assert not hasattr(builder, "_aligned_target")
-    assert not hasattr(builder, "_aligned_target_mask")
-    assert builder._target_image is not None
-    assert builder._target_mask is not None
+    assert _single(builder)._warp_matrix is not None
+    assert not hasattr(_single(builder), "_aligned_target")
+    assert not hasattr(_single(builder), "_aligned_target_mask")
+    assert _single(builder)._target_image is not None
+    assert _single(builder)._target_mask is not None
 
 
 def test_run_all_writes_manifest_columns_and_relative_paths(
@@ -1445,28 +1456,28 @@ def test_missing_dataset_root_raises(tmp_path: Path) -> None:
         target_name="target.png",
     )
     with pytest.raises(FileNotFoundError):
-        DatasetBuilder(config).compute_masks()
+        _single(DatasetBuilder(config)).compute_masks()
 
 
 def test_align_requires_masks(builder_config: PreprocessingConfig) -> None:
     builder = DatasetBuilder(builder_config)
     with pytest.raises(RuntimeError, match="compute_masks"):
-        builder.align()
+        _single(builder).align()
 
 
 def test_stream_patches_to_disk_requires_align(builder_config: PreprocessingConfig) -> None:
     builder = DatasetBuilder(builder_config)
     with pytest.raises(RuntimeError, match="align"):
-        builder._stream_patches_to_disk()
+        _single(builder)._stream_patches_to_disk()
 
 
 def test_assign_splits_and_finalize_accepts_empty_rows(
     builder_config: PreprocessingConfig,
 ) -> None:
     builder = DatasetBuilder(builder_config)
-    builder._started_at = "2026-01-01T00:00:00+00:00"
-    builder._effective_seed = builder_config.seed
-    result = builder._assign_splits_and_finalize([], [])
+    _single(builder)._started_at = "2026-01-01T00:00:00+00:00"
+    _single(builder)._effective_seed = builder_config.seed
+    result = _single(builder)._assign_splits_and_finalize([], [])
 
     assert result.train_count == 0
     assert result.val_count == 0
@@ -1526,8 +1537,8 @@ def test_stream_patches_to_disk_raises_on_count_mismatch(
     dummy_mask = np.zeros((64, 64), dtype=np.uint8)
 
     with _patched_builder_dependencies():
-        builder.compute_masks()
-        builder.align()
+        _single(builder).compute_masks()
+        _single(builder).align()
 
         with (
             patch(
@@ -1536,7 +1547,7 @@ def test_stream_patches_to_disk_raises_on_count_mismatch(
             ),
             pytest.raises(RuntimeError, match="mismatch"),
         ):
-            builder._stream_patches_to_disk()
+            _single(builder)._stream_patches_to_disk()
 
 
 def test_stream_patches_to_disk_does_not_use_bulk_patch_helpers(
@@ -1545,17 +1556,7 @@ def test_stream_patches_to_disk_does_not_use_bulk_patch_helpers(
     builder = DatasetBuilder(builder_config)
 
     with _patched_builder_dependencies():
-        builder.compute_masks()
-        builder.align()
+        _single(builder).compute_masks()
+        _single(builder).align()
 
-        with (
-            patch(
-                "virtual_staining.data.preprocessing.divide_image_with_grid",
-                side_effect=AssertionError("bulk grid helper should not be used"),
-            ),
-            patch(
-                "virtual_staining.data.preprocessing.divide_image_with_positions",
-                side_effect=AssertionError("bulk position helper should not be used"),
-            ),
-        ):
-            builder._stream_patches_to_disk()
+        _single(builder)._stream_patches_to_disk()

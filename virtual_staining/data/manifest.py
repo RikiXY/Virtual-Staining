@@ -193,12 +193,6 @@ class DatasetManifest:
             schema_version=self.schema_version,
         )
 
-    def resolved_input_paths(self) -> list[Path]:
-        return [self.dataset_root / record.input_path for record in self.records]
-
-    def resolved_target_paths(self) -> list[Path]:
-        return [self.dataset_root / record.target_path for record in self.records]
-
     def validate(
         self,
         check_files_exist: bool = False,

@@ -121,11 +121,6 @@ def _estimate_memory_gb(
     return estimated_bytes / (1024**3)
 
 
-def _modality_from_filename(path: Path) -> str:
-    """Derive a human-readable modality label from a configured image filename."""
-    return path.stem
-
-
 def _foreground_mask_patch_name(sample_id: str, suffix: str) -> str:
     return f"{sample_id}_foreground_mask{suffix}"
 
@@ -222,11 +217,6 @@ class PairProcessor:
             )
         mask[np.all(img == 0, axis=2)] = 0
         return mask
-
-    @staticmethod
-    def _shape_from_size(size: tuple[int, int]) -> tuple[int, int]:
-        width, height = size
-        return height, width
 
     @staticmethod
     def _fullres_warp_from_preview(warp_matrix: np.ndarray, preview_scale: float) -> np.ndarray:
@@ -1091,51 +1081,6 @@ class DatasetBuilder:
             raise ValueError("DatasetBuilder requires at least one slide pair")
         self.fingerprint_metadata = fingerprint_metadata
         self._single = PairProcessor(config, self.pairs[0]) if len(self.pairs) == 1 else None
-
-    def __getattr__(self, name: str) -> Any:
-        if self._single is not None:
-            return getattr(self._single, name)
-        raise AttributeError(name)
-
-    @property
-    def _started_at(self) -> str | None:
-        return self._single._started_at if self._single else None
-
-    @_started_at.setter
-    def _started_at(self, value: str | None) -> None:
-        if self._single is not None:
-            self._single._started_at = value
-
-    @property
-    def _effective_seed(self) -> int | None:
-        return self._single._effective_seed if self._single else None
-
-    @_effective_seed.setter
-    def _effective_seed(self, value: int | None) -> None:
-        if self._single is not None:
-            self._single._effective_seed = value
-
-    def compute_masks(self) -> None:
-        if self._single is None:
-            raise RuntimeError("compute_masks() is pair-scoped; use run_all() for multiple pairs")
-        self._single.compute_masks()
-
-    def align(self) -> None:
-        if self._single is None:
-            raise RuntimeError("align() is pair-scoped; use run_all() for multiple pairs")
-        self._single.align()
-
-    def _stream_patches_to_disk(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        if self._single is None:
-            raise RuntimeError("patch streaming is pair-scoped; use run_all() for multiple pairs")
-        return self._single._stream_patches_to_disk()
-
-    def _assign_splits_and_finalize(
-        self, valid_rows: list[dict[str, Any]], discarded_rows: list[dict[str, Any]]
-    ) -> DatasetBuildResult:
-        if self._single is None:
-            raise RuntimeError("finalization is dataset-scoped; use run_all() for multiple pairs")
-        return self._single._assign_splits_and_finalize(valid_rows, discarded_rows)
 
     def _initialize_output_tree_once(self) -> None:
         root = self.config.dataset_root

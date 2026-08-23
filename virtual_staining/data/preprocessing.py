@@ -763,69 +763,6 @@ def extract_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray
     return img[y : y + h, x : x + w]
 
 
-def divide_image_with_grid(
-    img: np.ndarray,
-    img_size: tuple[int, int],
-    grid_movement: tuple[int, int],
-    mask: np.ndarray | None = None,
-    max_mask_percentage: float = 0.4,
-) -> tuple[list[np.ndarray], list[np.ndarray] | None, list[tuple[int, int]]]:
-    """
-    Divides the input image into a grid of sub-images of size `img_size`.
-
-    Parameters
-    ----------
-    img : np.ndarray
-        Input image.
-    img_size : tuple[int, int]
-        Patch size as ``(width, height)``.  ``img_size[0]`` is the number of
-        columns extracted and ``img_size[1]`` is the number of rows, matching
-        the ``(width, height)`` convention used throughout the codebase.
-    grid_movement : tuple[int, int]
-        Step size for moving the grid ``(x_step, y_step)``.
-    mask : np.ndarray, optional
-        Image mask for filtering. Default is None.
-    max_mask_percentage : float, optional
-        Minimum required foreground ratio for a region to be included.
-        Default is 0.4.
-
-    Returns
-    -------
-    images : list[np.ndarray]
-        List of extracted sub-images.
-    masks : list[np.ndarray] or None
-        List of extracted mask regions, or None if no mask is provided.
-    positions : list[tuple[int, int]]
-        List of positions (x, y) of the top-left corner of each extracted sub-image.
-    """
-    images = []
-    masks = []
-    positions = []
-
-    for x in range(0, img.shape[1], grid_movement[0]):
-        for y in range(0, img.shape[0], grid_movement[1]):
-            roi_img = extract_image(img, x, y, img_size[0], img_size[1])
-
-            if roi_img.shape[0] < img_size[1] or roi_img.shape[1] < img_size[0]:
-                continue
-
-            # If the mask is too black, skip the image as it is mostly background
-            roi_mask = None
-            if mask is not None:
-                roi_mask = extract_image(mask, x, y, img_size[0], img_size[1])
-                if cv2.countNonZero(roi_mask) < max_mask_percentage * roi_mask.size:
-                    continue
-            images.append(roi_img)
-            if mask is not None:
-                masks.append(roi_mask)
-            positions.append((x, y))
-
-    # If the mask is None, do not return it
-    if mask is None:
-        masks = None
-    return images, masks, positions
-
-
 def iter_image_with_grid(
     img: np.ndarray,
     img_size: tuple[int, int],
@@ -853,49 +790,6 @@ def iter_image_with_grid(
                     continue
 
             yield (x, y), roi_img, roi_mask
-
-
-def divide_image_with_positions(
-    img: np.ndarray, img_size: tuple[int, int], positions: list[tuple[int, int]]
-) -> list[np.ndarray]:
-    """
-    Splits the image into a grid of images of size img_size using the specified positions.
-
-    Parameters
-    ----------
-    img : np.ndarray
-        Input image.
-    img_size : tuple[int, int]
-        Patch size as ``(width, height)``.
-    positions : list[tuple[int, int]]
-        List of positions for the split images.
-
-    Returns
-    -------
-    images : list[np.ndarray]
-        List of the split images.
-    """
-    images = []
-    for x, y in positions:
-        roi_img = extract_image(img, x, y, img_size[0], img_size[1])
-
-        if roi_img.shape[0] < img_size[1] or roi_img.shape[1] < img_size[0]:
-            continue
-        images.append(roi_img)
-
-    return images
-
-
-def iter_image_with_positions(
-    img: np.ndarray, img_size: tuple[int, int], positions: Sequence[tuple[int, int]]
-) -> Iterator[tuple[tuple[int, int], np.ndarray]]:
-    """Yield image patches for known positions one at a time."""
-    for x, y in positions:
-        roi_img = extract_image(img, x, y, img_size[0], img_size[1])
-
-        if roi_img.shape[0] < img_size[1] or roi_img.shape[1] < img_size[0]:
-            continue
-        yield (x, y), roi_img
 
 
 def split_items(items: list[T], ratios: Sequence[float]) -> list[list[T]]:
@@ -950,27 +844,6 @@ def validate_image_filename(filename: str, role: str) -> Path:
     return file_path
 
 
-def compute_white_ratio(img: np.ndarray, white_threshold: int = 240) -> float:
-    """
-    Computes the ratio of near-white pixels in the input image.
-
-    Parameters
-    ----------
-    img : np.ndarray
-        Input image.
-    white_threshold : int, optional
-        Pixels with grayscale intensity greater than or equal to this threshold
-        are considered white background. Default is 240.
-
-    Returns
-    -------
-    white_ratio : float
-        Ratio of near-white pixels in the image.
-    """
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    return float(np.mean(gray >= white_threshold))
-
-
 def compute_white_stats(
     img: np.ndarray,
     white_threshold: int = 245,
@@ -998,30 +871,6 @@ def compute_white_stats(
 
     largest_area = int(np.max(stats[1:, cv2.CC_STAT_AREA]))
     return white_ratio, float(largest_area / white_mask_u8.size)
-
-
-def compute_largest_white_component_ratio(
-    img: np.ndarray,
-    white_threshold: int = 245,
-) -> float:
-    """
-    Computes the area ratio of the largest connected near-white component.
-
-    Parameters
-    ----------
-    img : np.ndarray
-        Input image.
-    white_threshold : int, optional
-        Pixels with grayscale intensity greater than or equal to this threshold
-        are considered white. Default is 245.
-
-    Returns
-    -------
-    largest_component_ratio : float
-        Ratio between the largest white connected component area and the total
-        patch area.
-    """
-    return compute_white_stats(img, white_threshold)[1]
 
 
 def ensure_clean_directory(directory: str | Path) -> None:

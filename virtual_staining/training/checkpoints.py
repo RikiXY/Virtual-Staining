@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -15,17 +14,6 @@ logger = logging.getLogger(__name__)
 CHECKPOINT_FORMAT_VERSION: int = 2
 GENERATOR_OUTPUT_ACTIVATION = "tanh"
 NORMALIZATION_CONTRACT = {"input_range": "[-1, 1]", "output_range": "[-1, 1]"}
-
-
-@dataclass
-class CheckpointState:
-    epoch: int
-    generator_state_dict: dict[str, Any]
-    discriminator_state_dict: dict[str, Any]
-    opt_G_state_dict: dict[str, Any]
-    opt_D_state_dict: dict[str, Any]
-    scaler_G_state_dict: dict[str, Any]
-    scaler_D_state_dict: dict[str, Any]
 
 
 def _make_arch_metadata(generator: nn.Module, discriminator: nn.Module) -> dict[str, Any]:
