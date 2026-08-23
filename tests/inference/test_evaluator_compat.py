@@ -16,6 +16,7 @@ from torchvision import transforms
 from tests.config_helpers import write_run_config, yaml_section
 from tests.image_helpers import make_rgb_image, write_rgb_image, write_rgb_pair
 from tests.manifest_helpers import make_manifest_record, write_manifest_csv
+from virtual_staining.applications.infer import infer as _run_inference_impl
 from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.evaluator import evaluate_pair
 from virtual_staining.evaluation.io import collect_image_files, extract_single_sample_id
@@ -24,9 +25,6 @@ from virtual_staining.inference import InferenceResult
 from virtual_staining.inference import single as single_module
 from virtual_staining.inference.runner import (
     InferenceResult as RunnerInferenceResult,
-)
-from virtual_staining.inference.runner import (
-    run_inference as _run_inference_impl,
 )
 from virtual_staining.inference.single import (
     SingleInferenceResult,

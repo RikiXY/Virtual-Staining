@@ -209,10 +209,10 @@ From H&E staining to label-free:
 - `experiment/` - run paths, metadata, stage lifecycle, and environment snapshots
 - `models/` - UNetGenerator, PatchGANDiscriminator, model config
 - `data/` - dataset, manifest, builder, preprocessing pipeline
-- `training/` - Trainer, runner, steps, losses, checkpoint management
-- `inference/` - inference runner, single-image workflows, canonical output naming
+- `training/` - training mechanics: Trainer, steps, losses, validation, checkpoints
+- `inference/` - reusable model loading, prediction, single-image workflows, output naming
 - `evaluation/` - evaluator, plots, summaries, panels, ranking
-- `applications/` - use-case orchestrators (no argparse)
+- `applications/` - stage lifecycle owners (`prepare`, `train`, `infer`, `evaluate`) and other use cases
 - `cli/` - thin argparse entrypoints delegating to `applications/`
 
 See [`docs/architecture.md`](docs/architecture.md) for the full description and layer boundaries.

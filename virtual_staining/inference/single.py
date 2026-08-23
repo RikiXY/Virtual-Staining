@@ -17,9 +17,9 @@ from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.inference.outputs import generated_filename_for_sample
 from virtual_staining.inference.runner import (
-    _predict_batch,
     build_inference_transform,
     load_inference_generator,
+    predict_batch,
     resolve_inference_device,
 )
 from virtual_staining.utils.image_io import (
@@ -164,7 +164,7 @@ def _predict_image(
     source_tensor = transform(image)
     if not isinstance(source_tensor, torch.Tensor):
         raise TypeError("Inference transform must return a torch.Tensor")
-    return _predict_batch(generator, source_tensor.unsqueeze(0), device)[0].cpu()
+    return predict_batch(generator, source_tensor.unsqueeze(0), device)[0].cpu()
 
 
 def _run_resized_prediction(
