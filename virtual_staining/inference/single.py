@@ -272,7 +272,7 @@ def _write_tiled_rgb(
 def _save_pyramidal_tiff(raw_path: Path, output_path: Path, metadata: ImageMetadata) -> None:
     """Encode a raw RGB buffer as an OpenSlide-readable pyramidal BigTIFF."""
     try:
-        import pyvips
+        import pyvips  # pyright: ignore[reportMissingImports]
     except (ImportError, OSError) as exc:
         raise RuntimeError(
             "pyvips and libvips are required; install the 'wsi' extra and run inside 'nix develop'"
