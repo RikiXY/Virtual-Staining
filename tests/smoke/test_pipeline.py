@@ -37,8 +37,9 @@ def _make_synthetic_dataset(dataset_root: Path, size: int = 192) -> Path:
     cv2.imwrite(str(dataset_root / "source.tif"), source)
     cv2.imwrite(str(dataset_root / "target.tif"), target.astype(np.uint8))
     (dataset_root / "inputs").mkdir()
-    (dataset_root / "inputs" / "pairs.csv").write_text(
-        "pair_id,source_path,target_path\nP1,source.tif,target.tif\n",
+    (dataset_root / "inputs" / "slide_sets.csv").write_text(
+        "set_id,input__source_path,input__source_aligned,target_path,target_aligned\n"
+        "P1,source.tif,true,target.tif,true\n",
         encoding="utf-8",
     )
     return dataset_root
@@ -99,8 +100,9 @@ def _write_smoke_config(tmp_path: Path, dataset_root: Path, *, run_name: str = "
 
         preprocessing:
           inputs:
-            inventory: inputs/pairs.csv
-            source_modality: source
+            inventory: inputs/slide_sets.csv
+            modalities: [source]
+            reference: source
             target_modality: target
           patching:
             patch_size: [64, 64]
@@ -122,11 +124,12 @@ def _write_smoke_config(tmp_path: Path, dataset_root: Path, *, run_name: str = "
             tiled: false
 
         model:
+          inputs: [source]
+          target: target
           generator:
             base_channels: 16
           discriminator:
             ndf: 16
-
         training:
           batch_size: 4
           epochs: 1

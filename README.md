@@ -9,7 +9,7 @@ generation of virtually stained images from label-free microscopy inputs (and vi
 
 | Command | Purpose |
 |---|---|
-| `vs prepare` | Build the patch dataset from full-size image pairs |
+| `vs prepare` | Build the patch dataset from full-size slide sets |
 | `vs run` | Run the complete pipeline or selected stages |
 | `vs train` | Train the Pix2Pix model |
 | `vs infer` | Run inference on the test split |
@@ -72,14 +72,33 @@ Evaluate one generated image without adding another top-level command:
 vs evaluate --pair target.png target_generated.png --output-dir evaluation
 ```
 
-Run inference on one image or a directory:
+Run inference on one image or a directory. Multi-input models take one named
+path per configured modality; paths must already be spatially registered and
+have identical pixel dimensions.
+
+For one image per modality:
 
 ```bash
 vs infer-images \
   --config config/runs/local/my_run.yaml \
-  --input examples \
+  --input AF=examples/sample_af.png \
+  --input LF=examples/sample_lf.png \
+  --output local_workspace/results/my_run/sample.png
+```
+
+For directory batches, matching files must have exactly the same relative
+paths, including extensions. Recursive subdirectories are preserved:
+
+```bash
+vs infer-images \
+  --config config/runs/local/my_run.yaml \
+  --input AF=examples/af \
+  --input LF=examples/lf \
+  --recursive \
   --output local_workspace/results/my_run/example_outputs
 ```
+
+Single-input models retain the shorthand `--input PATH`.
 
 `vs infer-images` accepts `.bmp`, `.jpg`, `.jpeg`, `.png`, `.tif`, and `.tiff`.
 It defaults to `--mode auto`: patch-sized inputs use the standard single-patch
@@ -130,37 +149,25 @@ All experiment parameters live in a single YAML file. Copy
 dataset_root: local_workspace/datasets/your_sample
 results_path: local_workspace/results
 run_name: your_run_name
-
-# [width, height] - e.g. [320, 256] means 320 px wide, 256 px tall
 image_size: [256, 256]
+
+model:
+  inputs: [autofluorescence, label_free]
+  target: H&E
+  generator: {architecture: concat_unet, base_channels: 64, norm: batch, dropout: false, bilinear: false}
+  discriminator: {ndf: 64, norm: instance, use_sigmoid: false}
 
 preprocessing:
   inputs:
-    inventory: inputs/pairs.csv
-    source_modality: autofluorescence
+    inventory: inputs/slide_sets.csv
+    modalities: [autofluorescence, label_free]
+    reference: label_free
     target_modality: H&E
-  patching:
-    patch_size: [256, 256]
-    grid_movement: [256, 256]
-    margin: 200
-  masks:
-    provided_layout: auto
-    generation: if_missing
-    scale: 0.25
-  alignment:
-    mode: auto
-  filtering:
-    foreground: {enabled: true, policy: both, min_ratio: 0.25}
-  split:
-    unit: patient
-    train: 0.80
-    val: 0.10
-    test: 0.10
-    seed: 42
-  io:
-    tiled: true
-    backend: auto
-
+  masks: {generation: if_missing, strategy: connected_components, scale: 0.25}
+  alignment: {mode: auto, method: affine_sift}
+  filtering: {foreground: {enabled: true, policy: reference, min_ratio: 0.25}}
+  split: {unit: patient, train: 0.80, val: 0.10, test: 0.10, seed: 42}
+  io: {tiled: true, backend: auto}
 training:
   batch_size: 8
   epochs: 100
@@ -305,7 +312,7 @@ uv lock           # re-resolve dependencies
 
 The default split is **patch-level**: train, validation, and test patches may be drawn
 from the same slide. For independent generalization evidence, configure `split.unit` as
-`pair`, `specimen`, or `patient`; spatial-block splitting is not implemented.
+`set`, `specimen`, or `patient`; spatial-block splitting is not implemented.
 
 ## Method
 

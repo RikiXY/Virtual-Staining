@@ -10,7 +10,7 @@ from torchvision import transforms
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.run_paths import RunPaths
-from virtual_staining.models.generator import UNetGenerator
+from virtual_staining.models.generator import ConcatUNetGenerator
 from virtual_staining.training.checkpoint_selection import resolve_best_checkpoint_path
 from virtual_staining.training.checkpoints import (
     _check_generator_arch,
@@ -29,11 +29,11 @@ class InferenceResult:
 @torch.no_grad()
 def predict_batch(
     generator: nn.Module,
-    source: torch.Tensor,
+    inputs: dict[str, torch.Tensor],
     device: torch.device,
 ) -> torch.Tensor:
     with autocast(device_type=device.type, enabled=device.type == "cuda"):
-        output = generator(source.to(device))
+        output = generator({name: value.to(device) for name, value in inputs.items()})
     return (output * 0.5 + 0.5).clamp(0, 1)
 
 
@@ -105,15 +105,14 @@ def load_inference_generator(
     checkpoint_arch = _validate_checkpoint_metadata(checkpoint, checkpoint_path)
 
     generator_config = config.model.generator
-    generator = UNetGenerator(
-        in_channels=generator_config.in_channels,
-        out_channels=generator_config.out_channels,
+    generator = ConcatUNetGenerator(
+        config.model.inputs,
         base_channels=generator_config.base_channels,
         norm=generator_config.norm,
         dropout=generator_config.dropout,
         bilinear=generator_config.bilinear,
     ).to(device)
-    _check_generator_arch(checkpoint_arch, generator)
+    _check_generator_arch(checkpoint_arch, generator, target_modality=config.model.target)
     generator.load_state_dict(checkpoint["generator_state_dict"])
     generator.eval()
     return generator, checkpoint_path

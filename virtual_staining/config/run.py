@@ -30,6 +30,16 @@ class RunConfig:
     preprocessing: PreprocessingConfig | None
     evaluation: EvaluationConfig | None
 
+    def __post_init__(self) -> None:
+        if self.preprocessing is None:
+            return
+        configured = set(self.preprocessing.inputs.modalities)
+        requested = set(self.model.inputs)
+        if not requested.issubset(configured):
+            raise ValueError("model.inputs must be a subset of preprocessing.inputs.modalities")
+        if self.model.target != self.preprocessing.inputs.target_modality:
+            raise ValueError("model.target must equal preprocessing.inputs.target_modality")
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> RunConfig:
         raw = load_yaml_mapping(path)

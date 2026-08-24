@@ -5,7 +5,7 @@ import dataclasses
 import datetime
 import json
 import logging
-import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -14,8 +14,7 @@ import numpy as np
 from PIL import Image
 
 from virtual_staining.data.config import PreprocessingConfig
-from virtual_staining.data.manifest import DatasetManifest, ManifestRecord, Split
-from virtual_staining.data.pairs import SlidePair
+from virtual_staining.data.manifest import DatasetManifest, ManifestMetadata, ManifestRecord, Split
 from virtual_staining.data.preprocessing import (
     MASK_PARAMETER_GRID,
     assign_split_by_hash,
@@ -23,17 +22,15 @@ from virtual_staining.data.preprocessing import (
     calculate_mask_with_multiple_parameters,
     ensure_clean_directory,
     estimate_affine_from_scaled,
-    foreground_ratio_for_patch,
     is_valid_patch_pair,
-    iter_image_with_grid,
     mask_window_for_patch,
-    validate_image_filename,
     warp_aligned_mask_patch_from_mask_space,
     warp_aligned_patch,
 )
+from virtual_staining.data.slide_sets import SlideAsset, SlideSet
 from virtual_staining.data.splitting import (
     assign_group_splits,
-    group_id_for_pair,
+    group_id_for_set,
     write_split_assignment,
 )
 from virtual_staining.experiment.snapshots import (
@@ -43,10 +40,9 @@ from virtual_staining.experiment.snapshots import (
 from virtual_staining.utils.image_io import RegionImageReader, open_image_reader
 
 logger = logging.getLogger(__name__)
-_MEMORY_WARNING_THRESHOLD_GB = 8.0
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class DatasetBuildResult:
     train_count: int
     val_count: int
@@ -56,1199 +52,580 @@ class DatasetBuildResult:
     reused: bool = False
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class AlignmentResult:
     method: str
     warp_matrix: np.ndarray
     metadata: dict[str, Any]
 
 
-@dataclasses.dataclass(frozen=True)
-class PairBuildResult:
-    pair_id: str
+@dataclass
+class AssetState:
+    asset: SlideAsset
+    reader: RegionImageReader | None = None
+    preview: np.ndarray | None = None
+    mask: np.ndarray | None = None
+    shape: tuple[int, int] | None = None
+    alignment: AlignmentResult | None = None
+
+
+@dataclass(frozen=True)
+class SetBuildResult:
+    set_id: str
     split: Split | None
     records: tuple[ManifestRecord, ...]
     discarded_records: tuple[ManifestRecord, ...]
     metadata: dict[str, Any]
 
 
-def _log_memory(stage: str) -> None:
-    try:
-        import resource
-    except ImportError:
-        logger.info("Memory after %s: (not available on this platform)", stage)
+def _identity() -> np.ndarray:
+    return np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+
+
+def _mask_to_image_space(mask: np.ndarray, state: AssetState) -> np.ndarray:
+    if state.shape is None or mask.shape[:2] == state.shape:
+        return mask
+    return cv2.resize(mask, (state.shape[1], state.shape[0]), interpolation=cv2.INTER_NEAREST)
+
+
+def _validate_identity(reference: AssetState, moving: AssetState, policy: Any) -> None:
+    if not policy.validate_declared:
         return
-
-    max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    rss_mb = max_rss / 1024 if sys.platform == "linux" else max_rss / (1024 * 1024)
-    logger.info("Memory after %s: max_rss=%.1f MB", stage, rss_mb)
-
-
-def _build_manifest_metadata(records: list[ManifestRecord]) -> dict[str, Any]:
-    return {
-        "schema_version": DatasetManifest.SCHEMA_VERSION,
-        "created_at": datetime.datetime.now(datetime.UTC).isoformat(),
-        "record_count": len(records),
-        "splits": {
-            split: sum(1 for record in records if record.split == split)
-            for split in ("train", "val", "test")
-        },
-    }
+    if reference.shape != moving.shape:
+        raise ValueError(f"identity alignment requires equal geometry for {moving.asset.modality}")
+    if reference.reader is None or moving.reader is None:
+        return
+    for name in ("mpp_x", "mpp_y"):
+        left, right = (
+            getattr(reference.reader.metadata, name, None),
+            getattr(moving.reader.metadata, name, None),
+        )
+        if left is not None and right is not None and not np.isclose(left, right, rtol=0.01):
+            raise ValueError(
+                f"identity alignment has incompatible {name} for {moving.asset.modality}"
+            )
 
 
-def _estimate_memory_gb(
-    h: int,
-    w: int,
-    *,
-    mask_scale: float = 1.0,
-    lowres_mask_filtering: bool = False,
-    tiled_io: bool = False,
-) -> float:
-    """Rough working-set estimate for processing a single image pair."""
-    pixels = h * w
-    scaled_h = max(1, int(h * mask_scale))
-    scaled_w = max(1, int(w * mask_scale))
-    scaled_pixels = scaled_h * scaled_w
-
-    # Full-resolution resident state kept across the pipeline.
-    resident_mask_pixels = scaled_pixels if lowres_mask_filtering else pixels
-    image_pixels = scaled_pixels if tiled_io else pixels
-    full_res_bytes = image_pixels * (2 * 3 + (3 + 1)) + resident_mask_pixels * 2
-    # Mask computation scales with the downsampled image area when mask_scale < 1.0.
-    scaled_mask_bytes = scaled_pixels * (2 * 3 + 2) * 3
-    estimated_bytes = full_res_bytes + scaled_mask_bytes
-    return estimated_bytes / (1024**3)
-
-
-def _foreground_mask_patch_name(sample_id: str, suffix: str) -> str:
-    return f"{sample_id}_foreground_mask{suffix}"
+def resolve_alignment(reference: AssetState, moving: AssetState, policy: Any) -> AlignmentResult:
+    if (
+        reference.shape is None
+        or moving.shape is None
+        or reference.preview is None
+        or moving.preview is None
+    ):
+        raise RuntimeError("Asset masks and previews must be loaded before alignment")
+    declared = moving.asset.already_aligned
+    estimate = declared is not True and (declared is False or policy.mode in {"auto", "always"})
+    if policy.mode == "never" and declared is False:
+        raise ValueError(
+            f"alignment.mode=never contradicts already_aligned=false for {moving.asset.modality}"
+        )
+    if not estimate:
+        _validate_identity(reference, moving, policy)
+        matrix = _identity()
+        return AlignmentResult(
+            "identity",
+            matrix,
+            {
+                "method": "identity",
+                "reason": "declared_aligned" if declared is True else "policy_never",
+                "warp_matrix": matrix.tolist(),
+            },
+        )
+    if reference.mask is None or moving.mask is None:
+        raise ValueError(f"affine registration requires masks for {moving.asset.modality}")
+    matrix, metadata = estimate_affine_from_scaled(
+        reference.preview,
+        moving.preview,
+        mask_1=_mask_to_image_space(reference.mask, reference),
+        mask_2=_mask_to_image_space(moving.mask, moving),
+        scale=0.5,
+    )
+    preview_scale = reference.preview.shape[1] / reference.shape[1]
+    if preview_scale != 1.0:
+        matrix = np.asarray(matrix, dtype=np.float64).copy()
+        matrix[:, 2] /= preview_scale
+        metadata.translation_x = float(matrix[0, 2])
+        metadata.translation_y = float(matrix[1, 2])
+    metadata_dict = dataclasses.asdict(metadata)
+    metadata_dict.update({"method": "affine_sift", "warp_matrix": matrix.tolist()})
+    return AlignmentResult("affine_sift", matrix, metadata_dict)
 
 
 def _read_image_size(path: Path) -> tuple[int, int]:
-    """
-    Read image size from metadata only.
-
-    Pillow's decompression-bomb guard can fire on legitimate whole-slide or
-    microscopy images even when reading only headers, so disable it briefly
-    for this metadata-only check and restore it immediately afterward.
-    """
-    original_max_image_pixels = Image.MAX_IMAGE_PIXELS
+    original = Image.MAX_IMAGE_PIXELS
     try:
         Image.MAX_IMAGE_PIXELS = None
-        with Image.open(path) as img:
-            return img.size
+        with Image.open(path) as image:
+            return image.size[1], image.size[0]
     finally:
-        Image.MAX_IMAGE_PIXELS = original_max_image_pixels
+        Image.MAX_IMAGE_PIXELS = original
 
 
-class PairProcessor:
-    """
-    Orchestrates the full dataset preparation pipeline.
-
-    Owns the config, loaded images, and all stage-to-stage intermediate results.
-    Low-level image operations are delegated to pure functions in preprocessing.py.
-
-    Call run_all() to execute the complete pipeline, or call individual stage
-    methods in order (compute_masks -> align) to run incrementally.
-    """
-
+class SlideSetProcessor:
     def __init__(
-        self,
-        config: PreprocessingConfig,
-        pair: SlidePair,
-        assigned_split: Split | None = None,
+        self, config: PreprocessingConfig, slide_set: SlideSet, assigned_split: Split | None = None
     ) -> None:
         self.config = config
-        self.pair = pair
+        self.slide_set = slide_set
         self.assigned_split = assigned_split
-        self._source_file = validate_image_filename(str(self.pair.source_path), "Source")
-        self._target_file = validate_image_filename(str(self.pair.target_path), "Target")
-        self._source_suffix = self._source_file.suffix.lower()
-        self._target_suffix = self._target_file.suffix.lower()
-
-        self._source_image: np.ndarray | None = None
-        self._target_image: np.ndarray | None = None
-        self._source_mask: np.ndarray | None = None
-        self._target_mask: np.ndarray | None = None
-        self._warp_matrix: np.ndarray | None = None
-        self._alignment_metadata: dict[str, Any] | None = None
-        self._alignment_result: AlignmentResult | None = None
-        self._source_reader: RegionImageReader | None = None
-        self._target_reader: RegionImageReader | None = None
-        self._source_shape: tuple[int, int] | None = None
-        self._target_shape: tuple[int, int] | None = None
-        self._alignment_preview_scale: float = 1.0
+        self.inputs = {asset.modality: AssetState(asset) for asset in slide_set.inputs}
+        self.target = AssetState(slide_set.target)
+        self.reference = self.inputs[slide_set.reference_modality]
         self._started_at: str | None = None
         self._effective_seed: int | None = None
         self._maskless = False
 
-    def _uses_lowres_mask_filtering(self) -> bool:
-        masks = self.config.masks
-        return masks.lowres_filtering and masks.scale < 1.0
+    def _states(self) -> tuple[AssetState, ...]:
+        return (*self.inputs.values(), self.target)
 
-    def _uses_mask_space_filtering(self) -> bool:
-        return self._uses_lowres_mask_filtering() or self.config.io.tiled
-
-    @staticmethod
-    def _mask_in_image_space(mask: np.ndarray, image: np.ndarray) -> np.ndarray:
-        image_h, image_w = image.shape[:2]
-        if mask.shape[:2] == (image_h, image_w):
-            return mask
-        return cv2.resize(mask, (image_w, image_h), interpolation=cv2.INTER_NEAREST)
-
-    def _source_mask_strategy(self) -> str:
-        masks = self.config.masks
-        return masks.source_strategy or masks.strategy
-
-    def _target_mask_strategy(self) -> str:
-        masks = self.config.masks
-        return masks.target_strategy or masks.strategy
-
-    @staticmethod
-    def _calculate_mask(img: np.ndarray, *, strategy: str) -> np.ndarray:
-        if strategy == "connected_components":
-            mask = calculate_mask_with_multiple_parameters(img, MASK_PARAMETER_GRID)
-        else:
-            mask = calculate_mask_by_strategy(
-                img, strategy=strategy, parameters=MASK_PARAMETER_GRID
+    def _calculate_mask(self, image: np.ndarray) -> np.ndarray:
+        strategy = self.config.masks.strategy
+        mask = (
+            calculate_mask_with_multiple_parameters(image, MASK_PARAMETER_GRID)
+            if strategy == "connected_components"
+            else calculate_mask_by_strategy(
+                image, strategy=strategy, parameters=MASK_PARAMETER_GRID
             )
-        mask[np.all(img == 0, axis=2)] = 0
+        )
+        mask[np.all(image == 0, axis=2)] = 0
         return mask
 
-    @staticmethod
-    def _fullres_warp_from_preview(warp_matrix: np.ndarray, preview_scale: float) -> np.ndarray:
-        fullres_matrix = np.asarray(warp_matrix, dtype=np.float64).copy()
-        if preview_scale != 1.0:
-            fullres_matrix[:, 2] /= preview_scale
-        return fullres_matrix
-
-    def _supplied_mask_paths(self) -> tuple[Path, Path] | None:
-        masks = self.config.masks
-        shared = self.pair.shared_mask_path
-        source = self.pair.source_mask_path
-        target = self.pair.target_mask_path
-        supplied = [path for path in (shared, source, target) if path is not None]
-        if masks.generation == "always" and supplied:
-            raise ValueError(
-                f"Pair {self.pair.pair_id}: generation=always cannot be combined with masks"
-            )
-        if shared is not None and (source is not None or target is not None):
-            raise ValueError(f"Pair {self.pair.pair_id}: shared and separate masks cannot be mixed")
-        if (source is None) != (target is None):
-            raise ValueError(f"Pair {self.pair.pair_id}: separate masks require both paths")
-        actual = "shared" if shared else "separate" if source and target else "none"
-        if masks.provided_layout != "auto" and masks.provided_layout != actual:
-            raise ValueError(
-                f"Pair {self.pair.pair_id}: masks.provided_layout={masks.provided_layout!r} "
-                f"does not match {actual!r}"
-            )
-        if shared is not None:
-            if self.pair.already_aligned is not True:
-                raise ValueError(
-                    f"Pair {self.pair.pair_id}: shared masks require already_aligned=true"
-                )
-            return shared, shared
-        if source is not None and target is not None:
-            return source, target
-        return None
-
-    def _load_supplied_masks(self) -> bool:
-        paths = self._supplied_mask_paths()
-        masks = self.config.masks
-        if paths is None:
-            if masks.generation != "never":
-                return False
-            if self.config.filtering.foreground.enabled:
-                raise ValueError(
-                    f"Pair {self.pair.pair_id}: maskless processing requires "
-                    "foreground.enabled=false"
-                )
-            assert self._source_image is not None and self._target_image is not None
-            self._source_mask = np.full(self._source_image.shape[:2], 255, dtype=np.uint8)
-            self._target_mask = np.full(self._target_image.shape[:2], 255, dtype=np.uint8)
-            self._maskless = True
-            return True
-
-        assert self._source_image is not None and self._target_image is not None
-
-        def load(path: Path, expected_size: tuple[int, int]) -> np.ndarray:
-            full_path = self.config.dataset_root / path
-            if not self.config.io.tiled:
-                mask = cv2.imread(str(full_path), cv2.IMREAD_GRAYSCALE)
-                if mask is None:
-                    raise ValueError(f"Pair {self.pair.pair_id}: could not read {path}")
-                return mask
-
-            reader = open_image_reader(full_path, backend=self.config.io.backend)
-            try:
-                image = (
-                    reader.read_preview(masks.scale)
-                    if reader.size == expected_size
-                    else reader.read_full()
-                )
-            finally:
-                reader.close()
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            return np.where(gray > 0, 255, 0).astype(np.uint8)
-
-        source_size = (self._source_image.shape[1], self._source_image.shape[0])
-        target_size = (self._target_image.shape[1], self._target_image.shape[0])
-        if self._source_shape is not None:
-            source_size = (self._source_shape[1], self._source_shape[0])
-        if self._target_shape is not None:
-            target_size = (self._target_shape[1], self._target_shape[0])
-        source_mask = load(paths[0], source_size)
-        target_mask = source_mask if paths[0] == paths[1] else load(paths[1], target_size)
-        if self.config.io.tiled:
-            source_mask = cv2.resize(
-                source_mask,
-                (self._source_image.shape[1], self._source_image.shape[0]),
-                interpolation=cv2.INTER_NEAREST,
-            )
-            target_mask = cv2.resize(
-                target_mask,
-                (self._target_image.shape[1], self._target_image.shape[0]),
-                interpolation=cv2.INTER_NEAREST,
-            )
-        self._source_mask, self._target_mask = source_mask, target_mask
-        return True
-
-    @staticmethod
-    def _warp_target_region_patch(
-        reader: RegionImageReader,
-        warp_matrix: np.ndarray,
-        *,
-        x: int,
-        y: int,
-        output_size: tuple[int, int],
-        border: int = 2,
-    ) -> np.ndarray:
-        patch_w, patch_h = output_size
-        inverse_matrix = cv2.invertAffineTransform(np.asarray(warp_matrix, dtype=np.float64))
-        corners = np.array(
-            [
-                [x, y],
-                [x + patch_w, y],
-                [x, y + patch_h],
-                [x + patch_w, y + patch_h],
-            ],
-            dtype=np.float64,
-        )
-        target_corners = cv2.transform(corners[None, :, :], inverse_matrix)[0]
-        region_x = int(np.floor(target_corners[:, 0].min())) - border
-        region_y = int(np.floor(target_corners[:, 1].min())) - border
-        region_right = int(np.ceil(target_corners[:, 0].max())) + border
-        region_bottom = int(np.ceil(target_corners[:, 1].max())) + border
-        region_w = max(1, region_right - region_x)
-        region_h = max(1, region_bottom - region_y)
-
-        region = reader.read_region(region_x, region_y, region_w, region_h)
-        region_matrix = np.asarray(warp_matrix, dtype=np.float64).copy()
-        region_matrix[:, 2] += region_matrix[:, :2] @ np.array([region_x, region_y])
-        return warp_aligned_patch(
-            region,
-            region_matrix,
-            x=x,
-            y=y,
-            output_size=output_size,
-            is_mask=False,
-        )
-
-    # ------------------------------------------------------------------
-    # Pipeline stages
-    # ------------------------------------------------------------------
-
     def compute_masks(self) -> None:
-        """Load source and target images and compute tissue masks for both."""
         root = self.config.dataset_root
-        if not root.exists():
+        if not root.is_dir():
             raise FileNotFoundError(f"Dataset root not found: {root}")
-
-        source_path = root / self._source_file
-        target_path = root / self._target_file
-        if self.config.io.tiled:
-            self._source_reader = open_image_reader(source_path, backend=self.config.io.backend)
-            self._target_reader = open_image_reader(target_path, backend=self.config.io.backend)
-            source_w, source_h = self._source_reader.size
-            target_w, target_h = self._target_reader.size
-            self._source_shape = (source_h, source_w)
-            self._target_shape = (target_h, target_w)
-        else:
-            source_w, source_h = _read_image_size(source_path)
-
-        estimated_gb = _estimate_memory_gb(
-            source_h,
-            source_w,
-            mask_scale=self.config.masks.scale,
-            lowres_mask_filtering=self._uses_mask_space_filtering(),
-            tiled_io=self.config.io.tiled,
-        )
-        if self.config.io.max_memory_gb is not None and estimated_gb > self.config.io.max_memory_gb:
-            raise MemoryError(
-                f"Estimated working-set size {estimated_gb:.1f} GB exceeds configured "
-                f"max_memory_gb={self.config.io.max_memory_gb}. Consider using 'masks.scale: 0.25' "
-                "in your preprocessing config, splitting large images, or increasing "
-                "max_memory_gb."
-            )
-        if self.config.io.max_memory_gb is None and estimated_gb > _MEMORY_WARNING_THRESHOLD_GB:
-            logger.warning(
-                "Estimated working-set size %.1f GB is large. If the process is killed, "
-                "use 'masks.scale: 0.25' to reduce memory usage.",
-                estimated_gb,
-            )
-
-        if self.config.io.tiled:
-            assert self._source_reader is not None
-            assert self._target_reader is not None
-            preview_scale = self.config.masks.scale
-            self._alignment_preview_scale = preview_scale
-            self._source_image = self._source_reader.read_preview(preview_scale)
-            self._target_image = self._target_reader.read_preview(preview_scale)
-        else:
-            self._source_image = cv2.imread(str(source_path))
-            self._target_image = cv2.imread(str(target_path))
-            if self._source_image is None or self._target_image is None:
-                raise FileNotFoundError(
-                    f"Missing paired files for pair {self.pair.pair_id!r} inside: {root}"
-                )
-            self._source_shape = self._source_image.shape[:2]
-            self._target_shape = self._target_image.shape[:2]
-
-        if self._load_supplied_masks():
-            self._save_resolved_masks()
-            _log_memory("compute_masks")
-            return
-
-        logger.info("Calculating masks...")
-        scale = self.config.masks.scale
-        if self.config.io.tiled:
-            source_mask = self._calculate_mask(
-                self._source_image,
-                strategy=self._source_mask_strategy(),
-            )
-            target_mask = self._calculate_mask(
-                self._target_image,
-                strategy=self._target_mask_strategy(),
-            )
-            self._source_mask = source_mask
-            self._target_mask = target_mask
-        elif scale < 1.0:
-            assert self._source_image is not None and self._target_image is not None
-            source_h, source_w = self._source_image.shape[:2]
-            target_h, target_w = self._target_image.shape[:2]
-            scaled_source_size = (max(1, int(source_w * scale)), max(1, int(source_h * scale)))
-            scaled_target_size = (max(1, int(target_w * scale)), max(1, int(target_h * scale)))
-
-            small_source = cv2.resize(self._source_image, scaled_source_size)
-            small_target = cv2.resize(self._target_image, scaled_target_size)
-            source_mask = self._calculate_mask(
-                small_source,
-                strategy=self._source_mask_strategy(),
-            )
-            target_mask = self._calculate_mask(
-                small_target,
-                strategy=self._target_mask_strategy(),
-            )
-            if self._uses_mask_space_filtering():
-                self._source_mask = source_mask
-                self._target_mask = target_mask
+        for state in self._states():
+            path = root / state.asset.path
+            if self.config.io.tiled:
+                state.reader = open_image_reader(path, backend=self.config.io.backend)
+                width, height = state.reader.size
+                state.shape = (height, width)
+                state.preview = state.reader.read_preview(self.config.masks.scale)
             else:
-                self._source_mask = cv2.resize(
-                    source_mask,
-                    (source_w, source_h),
-                    interpolation=cv2.INTER_NEAREST,
-                )
-                self._target_mask = cv2.resize(
-                    target_mask,
-                    (target_w, target_h),
-                    interpolation=cv2.INTER_NEAREST,
-                )
-        else:
-            self._source_mask = self._calculate_mask(
-                self._source_image,
-                strategy=self._source_mask_strategy(),
-            )
-            self._target_mask = self._calculate_mask(
-                self._target_image,
-                strategy=self._target_mask_strategy(),
-            )
-
-        self._save_resolved_masks()
-
-        _log_memory("compute_masks")
-
-    def _save_resolved_masks(self) -> None:
-        if not self.config.masks.save_resolved_masks:
-            return
-        assert self._source_mask is not None and self._target_mask is not None
-        assert self._source_image is not None and self._target_image is not None
-        output = self.config.dataset_root / "resolved_masks" / self.pair.pair_id
-        output.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(
-            str(output / "source.tif"),
-            self._mask_in_image_space(self._source_mask, self._source_image),
-        )
-        cv2.imwrite(
-            str(output / "target.tif"),
-            self._mask_in_image_space(self._target_mask, self._target_image),
-        )
+                state.shape = _read_image_size(path)
+                state.preview = cv2.imread(str(path))
+                if state.preview is None:
+                    raise FileNotFoundError(f"Image not found: {path}")
+            if state.asset.mask_path is not None:
+                supplied = cv2.imread(str(root / state.asset.mask_path), cv2.IMREAD_GRAYSCALE)
+                if supplied is None:
+                    raise ValueError(f"Could not read mask {state.asset.mask_path}")
+                state.mask = supplied
+            elif self.config.masks.generation == "never":
+                if self.config.filtering.foreground.enabled:
+                    raise ValueError("maskless processing requires foreground.enabled=false")
+                state.mask = np.full(state.preview.shape[:2], 255, dtype=np.uint8)
+                self._maskless = True
+            else:
+                state.mask = self._calculate_mask(state.preview)
 
     def align(self) -> None:
-        """Align the target image to the source reference frame."""
-        if (
-            self._source_image is None
-            or self._target_image is None
-            or self._source_mask is None
-            or self._target_mask is None
-        ):
+        if self.reference.preview is None:
             raise RuntimeError("compute_masks() must be called before align()")
-
-        policy = self.config.alignment
-        if policy.mode == "never" and self.pair.already_aligned is False:
-            raise ValueError(
-                f"Pair {self.pair.pair_id}: alignment.mode=never contradicts already_aligned=false"
-            )
-        estimate = policy.mode == "always" or (
-            policy.mode == "auto" and self.pair.already_aligned is not True
+        self.reference.alignment = AlignmentResult(
+            "identity",
+            _identity(),
+            {"method": "identity", "reason": "reference", "warp_matrix": _identity().tolist()},
         )
-        if self.pair.shared_mask_path is not None and estimate:
-            raise ValueError(f"Pair {self.pair.pair_id}: a shared mask requires identity alignment")
-        if self._maskless and estimate:
-            raise ValueError(
-                f"Pair {self.pair.pair_id}: affine registration requires source and target masks"
-            )
+        for state in (*self.inputs.values(), self.target):
+            if state is not self.reference:
+                state.alignment = resolve_alignment(self.reference, state, self.config.alignment)
 
-        if not estimate:
-            if policy.validate_declared:
-                if self._source_shape != self._target_shape:
-                    raise ValueError(
-                        f"Pair {self.pair.pair_id}: identity alignment requires equal geometry"
-                    )
-                if self._source_reader is not None and self._target_reader is not None:
-                    source_metadata = self._source_reader.metadata
-                    target_metadata = self._target_reader.metadata
-                    for name in ("mpp_x", "mpp_y"):
-                        source_mpp = getattr(source_metadata, name, None)
-                        target_mpp = getattr(target_metadata, name, None)
-                        if (
-                            source_mpp is not None
-                            and target_mpp is not None
-                            and not np.isclose(source_mpp, target_mpp, rtol=0.01)
-                        ):
-                            raise ValueError(
-                                f"Pair {self.pair.pair_id}: identity alignment has "
-                                f"incompatible {name}"
-                            )
-            identity = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
-            self._warp_matrix = identity
-            self._alignment_metadata = {
-                "method": "identity",
-                "reason": "declared_aligned" if self.pair.already_aligned else "policy_never",
-                "warp_matrix": identity.tolist(),
-            }
-            self._alignment_result = AlignmentResult(
-                method="identity", warp_matrix=identity, metadata=self._alignment_metadata
-            )
-            _log_memory("align")
-            return
-
-        logger.info("Aligning images...")
-        source_alignment_mask = self._mask_in_image_space(self._source_mask, self._source_image)
-        target_alignment_mask = self._mask_in_image_space(self._target_mask, self._target_image)
-        warp_matrix, metadata = estimate_affine_from_scaled(
-            self._source_image,
-            self._target_image,
-            mask_1=source_alignment_mask,
-            mask_2=target_alignment_mask,
-            scale=0.5,
+    @staticmethod
+    def _warp_reader_patch(
+        state: AssetState, *, x: int, y: int, size: tuple[int, int]
+    ) -> np.ndarray:
+        assert state.reader is not None and state.alignment is not None
+        matrix = state.alignment.warp_matrix
+        inverse = cv2.invertAffineTransform(matrix)
+        width, height = size
+        corners = cv2.transform(
+            np.array(
+                [[[x, y], [x + width, y], [x, y + height], [x + width, y + height]]],
+                dtype=np.float64,
+            ),
+            inverse,
+        )[0]
+        rx, ry = int(np.floor(corners[:, 0].min())) - 2, int(np.floor(corners[:, 1].min())) - 2
+        rw, rh = (
+            max(1, int(np.ceil(corners[:, 0].max())) + 2 - rx),
+            max(1, int(np.ceil(corners[:, 1].max())) + 2 - ry),
         )
-        if self.config.io.tiled:
-            warp_matrix = self._fullres_warp_from_preview(
-                warp_matrix,
-                self._alignment_preview_scale,
+        region = state.reader.read_region(rx, ry, rw, rh)
+        local = matrix.copy()
+        local[:, 2] += local[:, :2] @ np.array([rx, ry])
+        return warp_aligned_patch(region, local, x=x, y=y, output_size=size, is_mask=False)
+
+    def extract_asset_patch(
+        self, state: AssetState, *, x: int, y: int, width: int, height: int
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if state.alignment is None or state.shape is None or state.mask is None:
+            raise RuntimeError("compute_masks() and align() must be called before extraction")
+        size = (width, height)
+        if state.alignment.method == "identity":
+            if state.reader is not None:
+                image = state.reader.read_region(x, y, width, height)
+            elif state.preview is not None:
+                image = state.preview[y : y + height, x : x + width]
+            else:
+                raise RuntimeError("Asset preview must be loaded before extraction")
+            mask_window = mask_window_for_patch(
+                state.mask, state.shape, x=x, y=y, width=width, height=height
             )
-            metadata.warp_matrix = warp_matrix.tolist()
-            metadata.translation_x = float(warp_matrix[0, 2])
-            metadata.translation_y = float(warp_matrix[1, 2])
-        self._warp_matrix = warp_matrix
-        self._alignment_metadata = dataclasses.asdict(metadata)
-
-        self._alignment_metadata["method"] = "affine_sift"
-        self._alignment_result = AlignmentResult(
-            method="affine_sift",
-            warp_matrix=warp_matrix,
-            metadata=self._alignment_metadata,
-        )
-        _log_memory("align")
-
-    def _stream_patches_to_disk(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """
-        Extract, filter, and write patches in a single pass.
-
-        Returns metadata rows for valid and discarded patches without retaining
-        patch arrays on the builder.
-        """
-        if (
-            (self._source_image is None and not self.config.io.tiled)
-            or self._source_mask is None
-            or (self._target_image is None and not self.config.io.tiled)
-            or self._target_mask is None
-            or self._warp_matrix is None
-            or self._source_shape is None
-            or self._target_shape is None
-        ):
-            raise RuntimeError("align() must be called before _stream_patches_to_disk()")
-
-        root = self.config.dataset_root
-        splits_root = root / "splits"
-        discarded_src_dir = root / "discarded_patches" / self.pair.pair_id / "source"
-        discarded_tgt_dir = root / "discarded_patches" / self.pair.pair_id / "target"
-        split_dirs: dict[Split, Path] = {
-            "train": splits_root / "train" / self.pair.pair_id,
-            "val": splits_root / "val" / self.pair.pair_id,
-            "test": splits_root / "test" / self.pair.pair_id,
-        }
-        for split_name, path in split_dirs.items():
-            if self.assigned_split is None or split_name == self.assigned_split:
-                path.mkdir(parents=True, exist_ok=True)
-        if self.config.patching.save_discarded_patches:
-            for path in [discarded_src_dir, discarded_tgt_dir]:
-                path.mkdir(parents=True, exist_ok=True)
-
-        m = self.config.patching.margin
-
-        def _crop(img: np.ndarray) -> np.ndarray:
-            # img[0:-0] returns an empty array, so treat margin=0 as no crop.
-            return img[m:-m, m:-m] if m > 0 else img
-
-        use_mask_space_filtering = self._uses_mask_space_filtering()
-        if self.config.io.tiled:
-            source_h, source_w = self._source_shape
-            cropped_w = max(0, source_w - 2 * m)
-            cropped_h = max(0, source_h - 2 * m)
-
-            def _source_iter() -> Any:
-                if self._source_reader is None:
-                    raise RuntimeError("Tiled source reader is not available")
-                patch_w, patch_h = self.config.patching.patch_size
-                step_x, step_y = self.config.patching.grid_movement
-                for x in range(0, cropped_w, step_x):
-                    for y in range(0, cropped_h, step_y):
-                        if y + patch_h > cropped_h or x + patch_w > cropped_w:
-                            continue
-                        yield (
-                            (x, y),
-                            self._source_reader.read_region(
-                                x + m,
-                                y + m,
-                                patch_w,
-                                patch_h,
-                            ),
-                            None,
-                        )
-
-            source_iter = _source_iter()
+            mask = cv2.resize(mask_window, size, interpolation=cv2.INTER_NEAREST)
+        elif state.reader is not None:
+            image = self._warp_reader_patch(state, x=x, y=y, size=size)
+            mask = warp_aligned_mask_patch_from_mask_space(
+                state.mask, state.alignment.warp_matrix, state.shape, x=x, y=y, output_size=size
+            )
         else:
-            assert self._source_image is not None
-            cropped_source = _crop(self._source_image)
-            foreground = self.config.filtering.foreground
-            source_prefilter = foreground.enabled and foreground.policy in {
-                "source",
-                "both",
-                "intersection",
-            }
-            cropped_source_mask = (
-                None
-                if use_mask_space_filtering or not source_prefilter
-                else _crop(self._source_mask)
+            assert state.preview is not None
+            image = warp_aligned_patch(
+                state.preview,
+                state.alignment.warp_matrix,
+                x=x,
+                y=y,
+                output_size=size,
+                is_mask=False,
             )
-            source_iter = iter_image_with_grid(
-                cropped_source,
-                self.config.patching.patch_size,
-                self.config.patching.grid_movement,
-                cropped_source_mask,
-                max_mask_percentage=foreground.min_ratio,
+            mask = warp_aligned_patch(
+                state.mask, state.alignment.warp_matrix, x=x, y=y, output_size=size, is_mask=True
             )
+        if image.shape[:2] != (height, width) or mask.shape[:2] != (height, width):
+            raise RuntimeError(
+                f"Patch extraction mismatch for {state.asset.modality}: {image.shape}, {mask.shape}"
+            )
+        return image, mask
 
-        extracted_pairs = 0
-        _log_memory("extract_patches")
-        valid_rows: list[dict[str, Any]] = []
-        discarded_rows: list[dict[str, Any]] = []
-        patch_w, patch_h = self.config.patching.patch_size
-        split_seed = (
-            self._effective_seed if self._effective_seed is not None else self.config.split.seed
+    def _foreground_ratios(self, masks: dict[str, np.ndarray]) -> dict[str, float]:
+        ratios = {name: float(cv2.countNonZero(mask) / mask.size) for name, mask in masks.items()}
+        ratios["all"] = min(ratios.values())
+        combined_intersection = masks[next(iter(masks))]
+        combined_union = masks[next(iter(masks))]
+        for mask in list(masks.values())[1:]:
+            combined_intersection = cv2.bitwise_and(combined_intersection, mask)
+            combined_union = cv2.bitwise_or(combined_union, mask)
+        ratios["intersection"] = float(
+            cv2.countNonZero(combined_intersection) / combined_intersection.size
         )
-        split_ratios = (self.config.split.train, self.config.split.val, self.config.split.test)
-        for (x, y), src, src_mask in source_iter:
-            target_x = x + m
-            target_y = y + m
-            if use_mask_space_filtering:
-                source_foreground_ratio = foreground_ratio_for_patch(
-                    self._source_mask,
-                    self._source_shape,
-                    x=target_x,
-                    y=target_y,
-                    width=patch_w,
-                    height=patch_h,
-                )
-                if (
-                    self.config.filtering.foreground.enabled
-                    and self.config.filtering.foreground.policy
-                    in {"source", "both", "intersection"}
-                    and source_foreground_ratio < self.config.filtering.foreground.min_ratio
-                ):
-                    continue
-                source_mask_window = mask_window_for_patch(
-                    self._source_mask,
-                    self._source_shape,
-                    x=target_x,
-                    y=target_y,
-                    width=patch_w,
-                    height=patch_h,
-                )
-                src_mask = cv2.resize(
-                    source_mask_window,
-                    (patch_w, patch_h),
-                    interpolation=cv2.INTER_NEAREST,
-                )
-            elif src_mask is None:
-                src_mask = self._source_mask[
-                    target_y : target_y + patch_h,
-                    target_x : target_x + patch_w,
-                ]
-            if self.config.io.tiled:
-                if self._target_reader is None:
-                    raise RuntimeError("Tiled target reader is not available")
-                tgt = self._warp_target_region_patch(
-                    self._target_reader,
-                    self._warp_matrix,
-                    x=target_x,
-                    y=target_y,
-                    output_size=(patch_w, patch_h),
-                )
-            else:
-                assert self._target_image is not None
-                tgt = warp_aligned_patch(
-                    self._target_image,
-                    self._warp_matrix,
-                    x=target_x,
-                    y=target_y,
-                    output_size=(patch_w, patch_h),
-                    is_mask=False,
-                )
-            if use_mask_space_filtering:
-                tgt_mask = warp_aligned_mask_patch_from_mask_space(
-                    self._target_mask,
-                    self._warp_matrix,
-                    self._target_shape,
-                    x=target_x,
-                    y=target_y,
-                    output_size=(patch_w, patch_h),
-                )
-            else:
-                tgt_mask = warp_aligned_patch(
-                    self._target_mask,
-                    self._warp_matrix,
-                    x=target_x,
-                    y=target_y,
-                    output_size=(patch_w, patch_h),
-                    is_mask=True,
-                )
-            if (
-                tgt.shape[0] < patch_h
-                or tgt.shape[1] < patch_w
-                or tgt_mask.shape[0] < patch_h
-                or tgt_mask.shape[1] < patch_w
-            ):
-                raise RuntimeError(
-                    "Patch extraction mismatch after extraction: "
-                    f"source=({x}, {y}), target_shape={tgt.shape}, "
-                    f"target_mask_shape={tgt_mask.shape}"
-                )
+        ratios["union"] = float(cv2.countNonZero(combined_union) / combined_union.size)
+        return ratios
 
-            extracted_pairs += 1
-            canonical_x, canonical_y = x + m, y + m
-            sample_id = f"{self.pair.pair_id}__x{canonical_x:08}_y{canonical_y:08}"
-            patch_source_name = f"{sample_id}_source{self._source_suffix}"
-            patch_target_name = f"{sample_id}_target{self._target_suffix}"
-            patch_mask_name = _foreground_mask_patch_name(sample_id, self._target_suffix)
-
-            is_valid, debug_info = is_valid_patch_pair(
-                source_img=src,
-                target_img=tgt,
-                source_mask=src_mask,
-                target_mask=tgt_mask,
-                min_foreground_ratio=0.0,
-                max_white_ratio=self.config.filtering.max_white_ratio,
-                white_threshold=self.config.filtering.white_threshold,
-                max_largest_white_component_ratio=(
-                    self.config.filtering.max_largest_white_component_ratio
-                ),
-            )
-            if self.config.filtering.foreground.enabled:
-                source_ratio = float(cv2.countNonZero(src_mask) / src_mask.size)
-                target_ratio = float(cv2.countNonZero(tgt_mask) / tgt_mask.size)
-                intersection_ratio = float(
-                    cv2.countNonZero(cv2.bitwise_and(src_mask, tgt_mask)) / src_mask.size
+    def stream_patches(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        if self.reference.shape is None or self.reference.alignment is None:
+            raise RuntimeError("align() must be called before stream_patches()")
+        patch_w, patch_h = self.config.patching.patch_size
+        step_x, step_y = self.config.patching.grid_movement
+        margin = self.config.patching.margin
+        ref_h, ref_w = self.reference.shape
+        split_dirs = {
+            name: self.config.dataset_root / "splits" / name / self.slide_set.set_id
+            for name in ("train", "val", "test")
+        }
+        for path in split_dirs.values():
+            path.mkdir(parents=True, exist_ok=True)
+        discarded_dirs = {
+            name: self.config.dataset_root / "discarded_patches" / self.slide_set.set_id / name
+            for name in (*self.inputs, "target")
+        }
+        if self.config.patching.save_discarded_patches:
+            for path in discarded_dirs.values():
+                path.mkdir(parents=True, exist_ok=True)
+        valid: list[dict[str, Any]] = []
+        discarded: list[dict[str, Any]] = []
+        foreground = self.config.filtering.foreground
+        foreground_policy = (
+            self.slide_set.reference_modality
+            if foreground.policy == "reference"
+            else foreground.policy
+        )
+        for x in range(margin, max(margin, ref_w - margin - patch_w + 1), step_x):
+            for y in range(margin, max(margin, ref_h - margin - patch_h + 1), step_y):
+                patches, masks = {}, {}
+                for name, state in (*self.inputs.items(), ("target", self.target)):
+                    patches[name], masks[name] = self.extract_asset_patch(
+                        state, x=x, y=y, width=patch_w, height=patch_h
+                    )
+                ratios = self._foreground_ratios(masks)
+                source = patches[self.slide_set.reference_modality]
+                target = patches["target"]
+                is_valid, debug = is_valid_patch_pair(
+                    source_img=source,
+                    target_img=target,
+                    source_mask=masks[self.slide_set.reference_modality],
+                    target_mask=masks["target"],
+                    min_foreground_ratio=0.0,
+                    max_white_ratio=self.config.filtering.max_white_ratio,
+                    white_threshold=self.config.filtering.white_threshold,
+                    max_largest_white_component_ratio=self.config.filtering.max_largest_white_component_ratio,
                 )
-                union_ratio = float(
-                    cv2.countNonZero(cv2.bitwise_or(src_mask, tgt_mask)) / src_mask.size
-                )
-                ratios = {
-                    "source": source_ratio,
-                    "target": target_ratio,
-                    "both": min(source_ratio, target_ratio),
-                    "intersection": intersection_ratio,
-                    "union": union_ratio,
-                }
-                foreground = self.config.filtering.foreground
-                if ratios[foreground.policy] < foreground.min_ratio:
+                if foreground.enabled and ratios[foreground_policy] < foreground.min_ratio:
                     is_valid = False
-                    cast(list[str], debug_info["reasons"]).append(f"foreground_{foreground.policy}")
-            if is_valid:
-                split_name = self.assigned_split or cast(
-                    Split,
-                    assign_split_by_hash(seed=split_seed, sample_id=sample_id, ratios=split_ratios),
-                )
-                split_dir = split_dirs[cast(Split, split_name)]
-                cv2.imwrite(str(split_dir / patch_source_name), src)
-                cv2.imwrite(str(split_dir / patch_target_name), tgt)
-                if self.config.masks.save_patch_masks and not self._maskless:
-                    cv2.imwrite(str(split_dir / patch_mask_name), tgt_mask)
-                valid_rows.append(
-                    {
-                        "sample_id": sample_id,
-                        "pair_id": self.pair.pair_id,
-                        "split": split_name,
-                        "x": canonical_x,
-                        "y": canonical_y,
-                        "source": patch_source_name,
-                        "target": patch_target_name,
-                        "foreground_mask": (
-                            patch_mask_name
-                            if self.config.masks.save_patch_masks and not self._maskless
-                            else None
+                    cast(list[str], debug["reasons"]).append(f"foreground_{foreground.policy}")
+                sample_id = f"{self.slide_set.set_id}__x{x:08}_y{y:08}"
+                suffixes = {
+                    name: Path(state.asset.path).suffix.lower()
+                    for name, state in (*self.inputs.items(), ("target", self.target))
+                }
+                names = {
+                    name: f"{sample_id}__input__{name}{suffixes[name]}" for name in self.inputs
+                }
+                names["target"] = f"{sample_id}__target{suffixes['target']}"
+                names["foreground_mask"] = f"{sample_id}__foreground_mask{suffixes['target']}"
+                row = {
+                    "sample_id": sample_id,
+                    "x": x,
+                    "y": y,
+                    "inputs": names,
+                    "target": names["target"],
+                    "foreground_mask": names["foreground_mask"],
+                }
+                if is_valid:
+                    split = self.assigned_split or assign_split_by_hash(
+                        seed=self._effective_seed or self.config.split.seed,
+                        sample_id=sample_id,
+                        ratios=(
+                            self.config.split.train,
+                            self.config.split.val,
+                            self.config.split.test,
                         ),
-                    }
-                )
-            else:
-                if self.config.patching.save_discarded_patches:
-                    cv2.imwrite(str(discarded_src_dir / patch_source_name), src)
-                    cv2.imwrite(str(discarded_tgt_dir / patch_target_name), tgt)
-                discarded_rows.append(
-                    {
-                        "sample_id": sample_id,
-                        "pair_id": self.pair.pair_id,
-                        "x": canonical_x,
-                        "y": canonical_y,
-                        "source_name": patch_source_name,
-                        "target_name": patch_target_name,
-                        "source_foreground_ratio": debug_info["source_foreground_ratio"],
-                        "target_foreground_ratio": debug_info["target_foreground_ratio"],
-                        "source_white_ratio": debug_info["source_white_ratio"],
-                        "target_white_ratio": debug_info["target_white_ratio"],
-                        "source_largest_white_component_ratio": debug_info[
-                            "source_largest_white_component_ratio"
-                        ],
-                        "target_largest_white_component_ratio": debug_info[
-                            "target_largest_white_component_ratio"
-                        ],
-                        "reasons": ";".join(cast(list[str], debug_info["reasons"])),
-                    }
-                )
+                    )
+                    for modality, image in patches.items():
+                        cv2.imwrite(str(split_dirs[split] / names[modality]), image)
+                    if self.config.masks.save_patch_masks and not self._maskless:
+                        cv2.imwrite(
+                            str(split_dirs[split] / names["foreground_mask"]), masks["target"]
+                        )
+                    valid.append({**row, "split": split})
+                else:
+                    if self.config.patching.save_discarded_patches:
+                        for modality, image in patches.items():
+                            cv2.imwrite(str(discarded_dirs[modality] / names[modality]), image)
+                    discarded.append(
+                        {
+                            **row,
+                            "ratios": ratios,
+                            "reasons": ";".join(cast(list[str], debug["reasons"])),
+                        }
+                    )
+        return valid, discarded
 
-        logger.info("Extracted %s patch pairs", extracted_pairs)
-        _log_memory("filter_patches")
-        return valid_rows, discarded_rows
+    def close(self) -> None:
+        for state in self._states():
+            if state.reader is not None:
+                state.reader.close()
 
 
 class DatasetBuilder:
-    """Own one complete dataset build; PairProcessor owns each source/target pair."""
-
     def __init__(
         self,
         config: PreprocessingConfig,
-        pairs: tuple[SlidePair, ...],
+        slide_sets: tuple[SlideSet, ...],
         fingerprint_metadata: dict[str, Any] | None = None,
     ) -> None:
-        self.config = config
-        self.pairs = pairs
-        if not self.pairs:
-            raise ValueError("DatasetBuilder requires at least one slide pair")
-        self.fingerprint_metadata = fingerprint_metadata
-
-    def _initialize_output_tree_once(self) -> None:
-        root = self.config.dataset_root
-        for path in (
-            root / "splits" / "train",
-            root / "splits" / "val",
-            root / "splits" / "test",
-            root / "manifests",
-            root / "discarded_patches",
-            root / "metadata" / "pairs",
-            root / "resolved_masks",
-        ):
-            ensure_clean_directory(path)
-
-    @staticmethod
-    def _close_processor(processor: PairProcessor) -> None:
-        for reader in (processor._source_reader, processor._target_reader):
-            if reader is not None:
-                close = getattr(reader, "close", None)
-                if close is not None:
-                    close()
+        if not slide_sets:
+            raise ValueError("DatasetBuilder requires at least one slide set")
+        self.config, self.slide_sets, self.fingerprint_metadata = (
+            config,
+            slide_sets,
+            fingerprint_metadata,
+        )
 
     def _records(
         self, rows: list[dict[str, Any]], *, discarded: bool = False
     ) -> tuple[ManifestRecord, ...]:
-        records: list[ManifestRecord] = []
+        records = []
         for row in rows:
-            pair_id = cast(str, row["pair_id"])
-            sample_id = cast(str, row["sample_id"])
-            split = cast(Split, "discarded" if discarded else row["split"])
+            split = "discarded" if discarded else row["split"]
+            root = Path("discarded_patches") if discarded else Path("splits") / split
             if discarded:
-                input_path = Path(
-                    f"discarded_patches/{pair_id}/source/{cast(str, row['source_name'])}"
-                )
-                target_path = Path(
-                    f"discarded_patches/{pair_id}/target/{cast(str, row['target_name'])}"
-                )
-                foreground_mask_path = None
+                inputs = {
+                    name: root / self._current_set_id / name / filename
+                    for name, filename in row["inputs"].items()
+                    if name in self.config.inputs.modalities
+                }
+                target = root / self._current_set_id / "target" / row["target"]
+                mask = None
             else:
-                input_path = Path(f"splits/{split}/{pair_id}/{cast(str, row['source'])}")
-                target_path = Path(f"splits/{split}/{pair_id}/{cast(str, row['target'])}")
-                foreground_mask_path = (
-                    Path(f"splits/{split}/{pair_id}/{cast(str, row['foreground_mask'])}")
-                    if row.get("foreground_mask")
+                base = root / self._current_set_id
+                inputs = {
+                    name: base / filename
+                    for name, filename in row["inputs"].items()
+                    if name in self.config.inputs.modalities
+                }
+                target = base / row["target"]
+                mask = (
+                    base / row["foreground_mask"]
+                    if row.get("foreground_mask") and self.config.masks.save_patch_masks
                     else None
                 )
             records.append(
                 ManifestRecord(
-                    sample_id=sample_id,
-                    pair_id=pair_id,
+                    sample_id=row["sample_id"],
+                    set_id=self._current_set_id,
                     split=split,
-                    input_path=input_path,
-                    target_path=target_path,
-                    foreground_mask_path=foreground_mask_path,
-                    input_modality=self.config.inputs.source_modality,
-                    target_modality=self.config.inputs.target_modality,
-                    x=cast(int, row["x"]),
-                    y=cast(int, row["y"]),
+                    input_paths=inputs,
+                    target_path=target,
+                    foreground_mask_path=mask,
+                    x=row["x"],
+                    y=row["y"],
                     width=self.config.patching.patch_size[0],
                     height=self.config.patching.patch_size[1],
                 )
             )
-        return tuple(sorted(records, key=lambda record: (record.pair_id, record.y, record.x)))
+        return tuple(records)
 
     def run_all(self) -> DatasetBuildResult:
         root = self.config.dataset_root
-        started_at = datetime.datetime.now(datetime.UTC).isoformat()
-        split = self.config.split
-        logger.info("Seed set to %s", split.seed)
-        ratios = (split.train, split.val, split.test)
-        pair_assignments = assign_group_splits(
-            self.pairs,
-            unit=split.unit,
-            ratios=ratios,
-            seed=split.seed,
-            assignment_file=split.assignment_file,
+        for path in (root / "splits" / name for name in ("train", "val", "test")):
+            ensure_clean_directory(path)
+        (root / "manifests").mkdir(parents=True, exist_ok=True)
+        (root / "metadata").mkdir(parents=True, exist_ok=True)
+        assignments = assign_group_splits(
+            self.slide_sets,
+            unit=self.config.split.unit,
+            ratios=(self.config.split.train, self.config.split.val, self.config.split.test),
+            seed=self.config.split.seed,
+            assignment_file=self.config.split.assignment_file,
             dataset_root=root,
         )
-        self._initialize_output_tree_once()
-
-        valid_rows: list[dict[str, Any]] = []
-        discarded_rows: list[dict[str, Any]] = []
-        pair_rows: list[dict[str, Any]] = []
-        excluded_rows: list[dict[str, str]] = []
-        pair_results: list[PairBuildResult] = []
-        for pair in sorted(self.pairs, key=lambda item: item.pair_id):
-            assigned = pair_assignments.get(pair.pair_id)
-            processor = PairProcessor(self.config, pair, assigned)
-            processor.assigned_split = assigned
-            processor._started_at = started_at
-            processor._effective_seed = split.seed
+        valid_records: list[ManifestRecord] = []
+        discarded_records: list[ManifestRecord] = []
+        set_rows: list[dict[str, Any]] = []
+        excluded: list[dict[str, str]] = []
+        for slide_set in sorted(self.slide_sets, key=lambda item: item.set_id):
+            self._current_set_id = slide_set.set_id
+            processor = SlideSetProcessor(self.config, slide_set, assignments.get(slide_set.set_id))
+            processor._effective_seed = self.config.split.seed
             error: Exception | None = None
-            pair_valid: list[dict[str, Any]] = []
-            pair_discarded: list[dict[str, Any]] = []
-            source_details: dict[str, Any] = {"path": pair.source_path.as_posix()}
-            target_details: dict[str, Any] = {"path": pair.target_path.as_posix()}
+            valid_rows: list[dict[str, Any]] = []
+            discarded_rows: list[dict[str, Any]] = []
             try:
                 processor.compute_masks()
-                for details, reader, shape in (
-                    (source_details, processor._source_reader, processor._source_shape),
-                    (target_details, processor._target_reader, processor._target_shape),
-                ):
-                    if reader is not None:
-                        details.update(dataclasses.asdict(reader.metadata))
-                    elif shape is not None:
-                        details.update({"width": shape[1], "height": shape[0]})
-                try:
-                    processor.align()
-                except Exception as exc:
-                    if self.config.alignment.on_failure != "skip_pair":
-                        raise
-                    error = exc
-                    excluded_rows.append(
-                        {"pair_id": pair.pair_id, "split": assigned or "", "error": str(exc)}
-                    )
-                if error is None:
-                    pair_valid, pair_discarded = processor._stream_patches_to_disk()
-                    valid_rows.extend(pair_valid)
-                    discarded_rows.extend(pair_discarded)
-            finally:
-                self._close_processor(processor)
-
-            metadata_path = Path(f"metadata/pairs/{pair.pair_id}.json")
-            metadata = {
-                "pair_id": pair.pair_id,
-                "split": assigned,
-                "status": "excluded" if error else "processed",
-                "source": source_details,
-                "target": target_details,
-                "masks": {
-                    "layout": (
-                        "shared"
-                        if pair.shared_mask_path
-                        else "separate"
-                        if pair.source_mask_path and pair.target_mask_path
-                        else "none"
-                        if processor._maskless
-                        else "generated"
-                    ),
-                    "source_origin": (
-                        "none"
-                        if processor._maskless
-                        else "provided"
-                        if pair.shared_mask_path or pair.source_mask_path
-                        else "generated"
-                    ),
-                    "target_origin": (
-                        "none"
-                        if processor._maskless
-                        else "provided"
-                        if pair.shared_mask_path or pair.target_mask_path
-                        else "generated"
-                    ),
-                },
-                "alignment": processor._alignment_metadata,
-                "patches": {
-                    "candidate": len(pair_valid) + len(pair_discarded),
-                    "accepted": len(pair_valid),
-                    "discarded": len(pair_discarded),
-                },
-                **({"error": str(error)} if error else {}),
-            }
-            (root / metadata_path).write_text(
-                json.dumps(metadata, indent=2, default=str), encoding="utf-8"
-            )
-            pair_results.append(
-                PairBuildResult(
-                    pair_id=pair.pair_id,
-                    split=assigned,
-                    records=self._records(pair_valid),
-                    discarded_records=self._records(pair_discarded, discarded=True),
-                    metadata=metadata,
-                )
-            )
-            pair_rows.append(
-                {
-                    "pair_id": pair.pair_id,
-                    "split": assigned or "",
-                    "source_path": pair.source_path.as_posix(),
-                    "target_path": pair.target_path.as_posix(),
-                    "patient_id": pair.patient_id or "",
-                    "specimen_id": pair.specimen_id or "",
-                    "source_slide_id": pair.source_slide_id or "",
-                    "target_slide_id": pair.target_slide_id or "",
-                    "already_aligned": (
-                        "" if pair.already_aligned is None else str(pair.already_aligned).lower()
-                    ),
-                    "shared_mask_path": pair.shared_mask_path.as_posix()
-                    if pair.shared_mask_path
-                    else "",
-                    "source_mask_path": pair.source_mask_path.as_posix()
-                    if pair.source_mask_path
-                    else "",
-                    "target_mask_path": pair.target_mask_path.as_posix()
-                    if pair.target_mask_path
-                    else "",
-                    "status": "excluded" if error else "processed",
-                    "alignment_method": (
-                        processor._alignment_metadata.get("method", "")
-                        if processor._alignment_metadata
-                        else ""
-                    ),
-                    "alignment_metadata_path": metadata_path.as_posix(),
-                }
-            )
-
-        records = tuple(
-            sorted(
-                (record for result in pair_results for record in result.records),
-                key=lambda record: (record.pair_id, record.y, record.x),
-            )
-        )
-        discarded_records = tuple(
-            sorted(
-                (record for result in pair_results for record in result.discarded_records),
-                key=lambda record: (record.pair_id, record.y, record.x),
-            )
-        )
-        manifest = DatasetManifest(records, root)
-        manifest.validate()
-        required = {
-            name for name, ratio in zip(("train", "val", "test"), ratios, strict=True) if ratio > 0
-        }
-        manifest.validate(require_splits=required)
-        manifests = root / "manifests"
-        manifest.to_csv(manifests / "manifest.csv")
-        DatasetManifest(discarded_records, root).to_csv(manifests / "discarded_manifest.csv")
-        (manifests / "manifest_metadata.json").write_text(
-            json.dumps(_build_manifest_metadata(list(records)), indent=2), encoding="utf-8"
-        )
-
-        pair_fields = [
-            "pair_id",
-            "split",
-            "source_path",
-            "target_path",
-            "patient_id",
-            "specimen_id",
-            "source_slide_id",
-            "target_slide_id",
-            "already_aligned",
-            "shared_mask_path",
-            "source_mask_path",
-            "target_mask_path",
-            "status",
-            "alignment_method",
-            "alignment_metadata_path",
-        ]
-        with (manifests / "pairs.csv").open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=pair_fields)
-            writer.writeheader()
-            writer.writerows(pair_rows)
-
-        assignment_rows: dict[str, Split]
-        if split.unit == "patch":
-            assignment_rows = {record.sample_id: cast(Split, record.split) for record in records}
-        else:
-            assignment_rows = {
-                group_id_for_pair(pair, split.unit): pair_assignments[pair.pair_id]
-                for pair in self.pairs
-            }
-        write_split_assignment(
-            root / "metadata" / "split_assignment.csv",
-            unit=split.unit,
-            assignments=assignment_rows,
-        )
-        with (root / "metadata" / "excluded_pairs.csv").open(
-            "w", newline="", encoding="utf-8"
-        ) as handle:
-            writer = csv.DictWriter(handle, fieldnames=["pair_id", "split", "error"])
-            writer.writeheader()
-            writer.writerows(excluded_rows)
-
-        with (root / "discarded_patches" / "discarded_log.csv").open(
-            "w", newline="", encoding="utf-8"
-        ) as handle:
-            fields = [
-                "sample_id",
-                "pair_id",
-                "x",
-                "y",
-                "source_name",
-                "target_name",
-                "source_foreground_ratio",
-                "target_foreground_ratio",
-                "source_white_ratio",
-                "target_white_ratio",
-                "reasons",
-                "source_largest_white_component_ratio",
-                "target_largest_white_component_ratio",
-            ]
-            writer = csv.DictWriter(handle, fieldnames=fields)
-            writer.writeheader()
-            writer.writerows(discarded_rows)
-
-        counts = {
-            name: sum(record.split == name for record in records)
-            for name in ("train", "val", "test")
-        }
-        processed_pairs = [row for row in pair_rows if row["status"] == "processed"]
-        groups_by_split = {
-            name: (
-                len({record.sample_id for record in records if record.split == name})
-                if split.unit == "patch"
-                else len(
+                processor.align()
+                valid_rows, discarded_rows = processor.stream_patches()
+            except Exception as exc:
+                if self.config.alignment.on_failure != "skip_set":
+                    processor.close()
+                    raise
+                error = exc
+                excluded.append(
                     {
-                        group_id_for_pair(pair, split.unit)
-                        for pair in self.pairs
-                        if pair_assignments[pair.pair_id] == name
+                        "set_id": slide_set.set_id,
+                        "split": assignments.get(slide_set.set_id, ""),
+                        "error": str(exc),
                     }
                 )
+            finally:
+                processor.close()
+            valid_records.extend(self._records(valid_rows))
+            discarded_records.extend(self._records(discarded_rows, discarded=True))
+            set_rows.append(
+                {
+                    "set_id": slide_set.set_id,
+                    "split": assignments.get(slide_set.set_id, ""),
+                    "patient_id": slide_set.patient_id or "",
+                    "specimen_id": slide_set.specimen_id or "",
+                    "status": "excluded" if error else "processed",
+                    **{
+                        f"{name}__alignment_method": state.alignment.method
+                        if state.alignment
+                        else ""
+                        for name, state in (*processor.inputs.items(), ("target", processor.target))
+                    },
+                    **{
+                        f"{name}__alignment_metadata": json.dumps(
+                            state.alignment.metadata, sort_keys=True
+                        )
+                        if state.alignment
+                        else ""
+                        for name, state in (*processor.inputs.items(), ("target", processor.target))
+                    },
+                }
             )
-            for name in ("train", "val", "test")
+        metadata = ManifestMetadata(
+            "3.0",
+            cast(tuple[str, ...], self.config.inputs.modalities),
+            self.config.inputs.reference,
+            self.config.inputs.target_modality,
+        )
+        manifest = DatasetManifest(tuple(valid_records), root, metadata)
+        manifest.validate()
+        manifest.to_csv(root / "manifests" / "manifest.csv")
+        DatasetManifest(tuple(discarded_records), root, metadata).to_csv(
+            root / "manifests" / "discarded_manifest.csv"
+        )
+        manifest_meta = {
+            **metadata.to_dict(),
+            "created_at": datetime.datetime.now(datetime.UTC).isoformat(),
+            "record_count": len(valid_records),
+            "splits": {
+                name: sum(record.split == name for record in valid_records)
+                for name in ("train", "val", "test")
+            },
         }
-        pairs_by_split = {
-            name: len({record.pair_id for record in records if record.split == name})
-            for name in ("train", "val", "test")
-        }
-        build_metadata = {
-            "dataset_name": root.name,
-            "status": "completed",
-            "started_at": started_at,
-            "completed_at": datetime.datetime.now(datetime.UTC).isoformat(),
-            "num_pairs": len(self.pairs),
-            "num_pairs_processed": len(processed_pairs),
-            "num_pairs_excluded": len(excluded_rows),
-            "num_patients": len({pair.patient_id for pair in self.pairs if pair.patient_id}),
-            "num_specimens": len({pair.specimen_id for pair in self.pairs if pair.specimen_id}),
-            "splitting": {"unit": split.unit, "seed": split.seed},
-            "groups": groups_by_split,
-            "pairs": pairs_by_split,
-            "patches": {**counts, "discarded": len(discarded_records)},
-            # Compatibility counters consumed by prepare reuse and existing callers.
-            "num_train": counts["train"],
-            "num_val": counts["val"],
-            "num_test": counts["test"],
-            "num_patches_discarded": len(discarded_records),
-            "num_patches_total": len(records) + len(discarded_records),
-            "num_patches_valid": len(records),
-            "seed": split.seed,
-            "canonical_inventory_sha256": (
-                self.fingerprint_metadata.get("canonical_inventory_sha256")
-                if self.fingerprint_metadata
-                else None
+        (root / "manifests" / "manifest_metadata.json").write_text(
+            json.dumps(manifest_meta, indent=2), encoding="utf-8"
+        )
+        fields = ["set_id", "split", "patient_id", "specimen_id", "status"]
+        fields.extend(
+            f"{name}__alignment_method" for name in (*self.config.inputs.modalities, "target")
+        )
+        fields.extend(
+            f"{name}__alignment_metadata" for name in (*self.config.inputs.modalities, "target")
+        )
+        with (root / "manifests" / "slide_sets.csv").open(
+            "w", newline="", encoding="utf-8"
+        ) as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(set_rows)
+        with (root / "metadata" / "excluded_sets.csv").open(
+            "w", newline="", encoding="utf-8"
+        ) as handle:
+            writer = csv.DictWriter(handle, fieldnames=["set_id", "split", "error"])
+            writer.writeheader()
+            writer.writerows(excluded)
+        assignments_out: dict[str, Split] = cast(
+            dict[str, Split],
+            (
+                {record.sample_id: record.split for record in valid_records}
+                if self.config.split.unit == "patch"
+                else {
+                    group_id_for_set(item, self.config.split.unit): assignments[item.set_id]
+                    for item in self.slide_sets
+                }
             ),
+        )
+        write_split_assignment(
+            root / "metadata" / "split_assignment.csv",
+            unit=self.config.split.unit,
+            assignments=assignments_out,
+        )
+        fingerprint = self.fingerprint_metadata or build_dataset_fingerprint_metadata(
+            dataset_root=root,
+            preprocessing_config=self.config.to_dict(),
+            slide_sets=self.slide_sets,
+        )
+        save_dataset_fingerprint(fingerprint, root / "metadata" / "dataset_fingerprint.json")
+        counts = {
+            name: sum(record.split == name for record in valid_records)
+            for name in ("train", "val", "test")
         }
-        metadata_dir = root / "metadata"
-        (metadata_dir / "dataset_build.json").write_text(
-            json.dumps(build_metadata, indent=2), encoding="utf-8"
+        (root / "metadata").mkdir(parents=True, exist_ok=True)
+        (root / "metadata" / "dataset_build.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "3.0",
+                    "num_sets": len(self.slide_sets),
+                    "num_sets_excluded": len(excluded),
+                    "patches": {**counts, "discarded": len(discarded_records)},
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
         )
-        if self.fingerprint_metadata is not None:
-            fingerprint = dict(self.fingerprint_metadata)
-            fingerprint["prepared_at"] = build_metadata["completed_at"]
-        else:
-            fingerprint = build_dataset_fingerprint_metadata(
-                dataset_root=root,
-                preprocessing_config=self.config.to_dict(),
-                pairs=self.pairs,
-                prepared_at=build_metadata["completed_at"],
-            )
-        save_dataset_fingerprint(fingerprint, metadata_dir / "dataset_fingerprint.json")
-        logger.info(
-            "Saved: train=%s, val=%s, test=%s, discarded=%s",
-            counts["train"],
-            counts["val"],
-            counts["test"],
-            len(discarded_records),
-        )
-        _log_memory("split_and_save")
         return DatasetBuildResult(
-            train_count=counts["train"],
-            val_count=counts["val"],
-            test_count=counts["test"],
-            skipped_count=len(discarded_records),
-            output_root=root,
+            counts["train"], counts["val"], counts["test"], len(discarded_records), root
         )

@@ -1,60 +1,58 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from unittest.mock import patch
 
-from virtual_staining.data.pairs import SlidePair
+from virtual_staining.data.slide_sets import SlideAsset, SlideSet
 from virtual_staining.experiment.snapshots import build_dataset_fingerprint_metadata
 
 
-def test_canonical_inventory_hash_ignores_row_order(tmp_path: Path) -> None:
-    for name, content in (("s1", b"a"), ("t1", b"b"), ("s2", b"c"), ("t2", b"d")):
-        (tmp_path / name).write_bytes(content)
-    pairs = (
-        SlidePair("P1", Path("s1"), Path("t1"), patient_id="PT1"),
-        SlidePair("P2", Path("s2"), Path("t2"), patient_id="PT2"),
+def _sets(root: Path) -> tuple[SlideSet, ...]:
+    for name in ("lf", "af", "third", "target", "lf-mask"):
+        (root / name).write_bytes(name.encode())
+    return (
+        SlideSet(
+            "S1",
+            (
+                SlideAsset("LF", Path("lf"), already_aligned=True, mask_path=Path("lf-mask")),
+                SlideAsset("AF", Path("af"), already_aligned=False),
+                SlideAsset("TH", Path("third"), already_aligned=True),
+            ),
+            SlideAsset("target", Path("target"), already_aligned=True),
+            "LF",
+            patient_id="P1",
+            specimen_id="SP1",
+        ),
     )
-    kwargs = {
-        "dataset_root": tmp_path,
-        "preprocessing_config": {"split": {"unit": "patient"}},
-    }
-    first = build_dataset_fingerprint_metadata(**kwargs, pairs=pairs)
-    second = build_dataset_fingerprint_metadata(**kwargs, pairs=tuple(reversed(pairs)))
-    assert first["fingerprint"] == second["fingerprint"]
-    assert first["canonical_inventory_sha256"] == second["canonical_inventory_sha256"]
 
 
-def test_hash_cache_and_force_verification(tmp_path: Path) -> None:
-    (tmp_path / "source").write_bytes(b"source")
-    (tmp_path / "target").write_bytes(b"target")
-    pair = (SlidePair("P1", Path("source"), Path("target")),)
-    cache = tmp_path / "metadata/input_hashes.json"
-    kwargs = {
-        "dataset_root": tmp_path,
-        "preprocessing_config": {},
-        "pairs": pair,
-        "hash_cache_path": cache,
-    }
-    build_dataset_fingerprint_metadata(**kwargs)
-    with patch(
-        "virtual_staining.experiment.snapshots.compute_file_sha256",
-        side_effect=AssertionError("cache should be reused"),
-    ):
-        build_dataset_fingerprint_metadata(**kwargs)
+def _fingerprint(root: Path, sets: tuple[SlideSet, ...]) -> str:
+    return build_dataset_fingerprint_metadata(
+        dataset_root=root,
+        preprocessing_config={"inputs": {"modalities": ["LF", "AF", "TH"]}},
+        slide_sets=sets,
+    )["fingerprint"]
 
-    with patch(
-        "virtual_staining.experiment.snapshots.compute_file_sha256",
-        wraps=lambda path: f"sha256:{Path(path).name}",
-    ) as digest:
-        build_dataset_fingerprint_metadata(**kwargs, force_hash_verification=True)
-    assert digest.call_count == 2
 
-    stat = (tmp_path / "source").stat()
-    os.utime(tmp_path / "source", ns=(stat.st_atime_ns, stat.st_mtime_ns + 1))
-    with patch(
-        "virtual_staining.experiment.snapshots.compute_file_sha256",
-        wraps=lambda path: f"sha256:{Path(path).name}",
-    ) as digest:
-        build_dataset_fingerprint_metadata(**kwargs)
-    assert digest.call_count == 1
+def test_fingerprint_is_row_order_independent_and_schema_v3(tmp_path: Path) -> None:
+    sets = _sets(tmp_path)
+    first = build_dataset_fingerprint_metadata(
+        dataset_root=tmp_path,
+        preprocessing_config={"inputs": {"modalities": ["LF", "AF", "TH"]}},
+        slide_sets=sets,
+    )
+    reordered = _fingerprint(tmp_path, tuple(reversed(sets)))
+    assert first["schema_version"] == "3.0"
+    assert first["fingerprint"] == reordered
+
+
+def test_each_asset_and_mask_changes_fingerprint(tmp_path: Path) -> None:
+    sets = _sets(tmp_path)
+    baseline = _fingerprint(tmp_path, sets)
+    changed = list(sets[0].inputs)
+    (tmp_path / "af").write_bytes(b"changed")
+    assert _fingerprint(tmp_path, sets) != baseline
+    (tmp_path / "af").write_bytes(b"af")
+    changed[2] = SlideAsset("TH", Path("third"), already_aligned=False)
+    assert (
+        _fingerprint(tmp_path, (SlideSet("S1", tuple(changed), sets[0].target, "LF"),)) != baseline
+    )

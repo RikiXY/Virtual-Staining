@@ -174,16 +174,18 @@ def test_evaluate_requires_exactly_one_mode() -> None:
         cli.main(["evaluate", "--config", "run.yaml", "--pair", "a.png", "b.png"])
 
 
-def test_infer_images_passes_path_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_infer_images_passes_repeated_named_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config_path = _write_config(tmp_path)
     captured: dict[str, object] = {}
 
     def fake_infer_images(
-        config: Path, input_path: Path, output_path: Path | None, **kwargs: object
+        config: Path, input_specs: tuple[str, ...], output_path: Path | None, **kwargs: object
     ) -> object:
-        captured.update(config=config, input=input_path, output=output_path, **kwargs)
+        captured.update(config=config, input=input_specs, output=output_path, **kwargs)
         return SimpleNamespace(
-            input_path=input_path,
+            input_paths={"LF": Path("lf.png"), "AF": Path("af.png")},
             checkpoint_path=Path("checkpoint.pth"),
             output_path=output_path,
             mode=kwargs["mode"],
@@ -196,7 +198,9 @@ def test_infer_images_passes_path_options(tmp_path: Path, monkeypatch: pytest.Mo
             "--config",
             str(config_path),
             "--input",
-            str(tmp_path / "input.png"),
+            "AF=af.png",
+            "--input",
+            "LF=lf.png",
             "--output",
             str(tmp_path / "output.png"),
             "--mode",
@@ -205,6 +209,7 @@ def test_infer_images_passes_path_options(tmp_path: Path, monkeypatch: pytest.Mo
     )
 
     assert captured["config"] == config_path.resolve()
+    assert captured["input"] == ("AF=af.png", "LF=lf.png")
     assert captured["mode"] == "tile"
 
 

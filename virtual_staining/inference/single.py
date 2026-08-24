@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
@@ -41,7 +42,7 @@ SUPPORTED_OUTPUT_FORMATS: frozenset[str] = frozenset(
 
 @dataclass(frozen=True)
 class SingleInferenceResult:
-    input_path: Path
+    input_paths: dict[str, Path]
     output_path: Path
     checkpoint_path: Path
     image_size: tuple[int, int]
@@ -51,7 +52,7 @@ class SingleInferenceResult:
 
 @dataclass(frozen=True)
 class DirectoryInferenceResult:
-    input_dir: Path
+    input_dirs: dict[str, Path]
     output_dir: Path
     checkpoint_path: Path
     image_size: tuple[int, int]
@@ -66,6 +67,13 @@ class _InferenceRuntime:
     checkpoint_path: Path
     image_size: tuple[int, int]
     device: torch.device
+
+
+def _generator_input_names(generator: torch.nn.Module) -> tuple[str, ...]:
+    names = getattr(generator, "input_names", None)
+    if not isinstance(names, tuple) or not all(isinstance(name, str) for name in names):
+        raise ValueError("Inference generator must expose tuple[str, ...] input_names")
+    return names
 
 
 def _sample_id_from_input_path(input_path: Path) -> str:
@@ -156,30 +164,33 @@ def _build_no_resize_transform() -> transforms.Compose:
     )
 
 
-def _predict_image(
-    image: Image.Image,
+def _predict_images(
+    images: dict[str, Image.Image],
     generator: torch.nn.Module,
     device: torch.device,
     transform: transforms.Compose,
 ) -> torch.Tensor:
-    source_tensor = transform(image)
-    if not isinstance(source_tensor, torch.Tensor):
-        raise TypeError("Inference transform must return a torch.Tensor")
-    return predict_batch(generator, source_tensor.unsqueeze(0), device)[0].cpu()
+    inputs: dict[str, torch.Tensor] = {}
+    for name in _generator_input_names(generator):
+        source_tensor = transform(images[name])
+        if not isinstance(source_tensor, torch.Tensor):
+            raise TypeError("Inference transform must return a torch.Tensor")
+        inputs[name] = source_tensor.unsqueeze(0)
+    return predict_batch(generator, inputs, device)[0].cpu()
 
 
 def _run_resized_prediction(
-    image: Image.Image,
+    images: dict[str, Image.Image],
     generator: torch.nn.Module,
     device: torch.device,
     image_size: tuple[int, int],
 ) -> torch.Tensor:
     transform = build_inference_transform(image_size)
-    return _predict_image(image, generator, device, transform)
+    return _predict_images(images, generator, device, transform)
 
 
 def _run_tiled_prediction(
-    image: Image.Image,
+    images: dict[str, Image.Image],
     generator: torch.nn.Module,
     device: torch.device,
     image_size: tuple[int, int],
@@ -187,7 +198,7 @@ def _run_tiled_prediction(
 ) -> torch.Tensor:
     _validate_tile_overlap(image_size, tile_overlap)
 
-    image_w, image_h = image.size
+    image_w, image_h = images[_generator_input_names(generator)[0]].size
     tile_w, tile_h = image_size
     stride_w = tile_w - tile_overlap
     stride_h = tile_h - tile_overlap
@@ -200,9 +211,16 @@ def _run_tiled_prediction(
 
     for y in y_starts:
         for x in x_starts:
-            tile = image.crop((x, y, min(x + tile_w, image_w), min(y + tile_h, image_h)))
-            actual_w, actual_h = tile.size
-            predicted = _predict_image(_pad_tile(tile, image_size), generator, device, transform)
+            tiles = {
+                name: _pad_tile(
+                    image.crop((x, y, min(x + tile_w, image_w), min(y + tile_h, image_h))),
+                    image_size,
+                )
+                for name, image in images.items()
+            }
+            actual_w = min(x + tile_w, image_w) - x
+            actual_h = min(y + tile_h, image_h) - y
+            predicted = _predict_images(tiles, generator, device, transform)
             predicted = predicted[:, :actual_h, :actual_w]
             accumulator[:, y : y + actual_h, x : x + actual_w] += predicted
             weights[:, y : y + actual_h, x : x + actual_w] += 1.0
@@ -211,7 +229,7 @@ def _run_tiled_prediction(
 
 
 def _write_tiled_rgb(
-    reader: RegionImageReader,
+    readers: Mapping[str, RegionImageReader],
     output_path: Path,
     generator: torch.nn.Module,
     device: torch.device,
@@ -221,7 +239,7 @@ def _write_tiled_rgb(
     """Run tiled inference into a disk-backed RGB byte buffer."""
     _validate_tile_overlap(image_size, tile_overlap)
 
-    image_w, image_h = reader.size
+    image_w, image_h = readers[_generator_input_names(generator)[0]].size
     tile_w, tile_h = image_size
     x_starts = _tile_starts(image_w, tile_w, tile_w - tile_overlap)
     y_starts = _tile_starts(image_h, tile_h, tile_h - tile_overlap)
@@ -242,11 +260,16 @@ def _write_tiled_rgb(
             for x in x_starts:
                 actual_w = min(tile_w, image_w - x)
                 actual_h = min(tile_h, image_h - y)
-                region = reader.read_region(x, y, actual_w, actual_h)
-                tile = Image.fromarray(region[:, :, ::-1].copy())
-                predicted = _predict_image(
-                    _pad_tile(tile, image_size), generator, device, transform
-                )[:, :actual_h, :actual_w]
+                images = {
+                    name: Image.fromarray(
+                        reader.read_region(x, y, actual_w, actual_h)[:, :, ::-1].copy()
+                    )
+                    for name, reader in readers.items()
+                }
+                images = {name: _pad_tile(image, image_size) for name, image in images.items()}
+                predicted = _predict_images(images, generator, device, transform)[
+                    :, :actual_h, :actual_w
+                ]
                 accumulator[y : y + actual_h, x : x + actual_w] += predicted.permute(
                     1, 2, 0
                 ).numpy()
@@ -360,7 +383,7 @@ def _save_pyramidal_tiff(raw_path: Path, output_path: Path, metadata: ImageMetad
 
 
 def _run_wsi_prediction(
-    reader: OpenSlideRegionImageReader,
+    readers: dict[str, OpenSlideRegionImageReader],
     output_path: Path,
     generator: torch.nn.Module,
     device: torch.device,
@@ -371,10 +394,11 @@ def _run_wsi_prediction(
         raise ValueError("Full-resolution WSI output must use .tif or .tiff")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    first_reader = readers[_generator_input_names(generator)[0]]
     with tempfile.TemporaryDirectory(prefix=f".{output_path.stem}.", dir=output_path.parent) as tmp:
         raw_path = Path(tmp) / "generated.rgb"
-        _write_tiled_rgb(reader, raw_path, generator, device, image_size, tile_overlap)
-        _save_pyramidal_tiff(raw_path, output_path, reader.metadata)
+        _write_tiled_rgb(readers, raw_path, generator, device, image_size, tile_overlap)
+        _save_pyramidal_tiff(raw_path, output_path, first_reader.metadata)
 
 
 def _build_runtime(config: RunConfig) -> _InferenceRuntime:
@@ -418,37 +442,60 @@ def _resolve_output_path(
 
 def _run_one_image(
     runtime: _InferenceRuntime,
-    input_image: Path,
+    input_images: dict[str, Path],
     *,
     output_path: Path,
     mode: SingleInferenceMode = "auto",
     tile_overlap: int = DEFAULT_TILE_OVERLAP,
 ) -> SingleInferenceResult:
-    input_path = Path(input_image)
-    if not input_path.is_file():
-        raise FileNotFoundError(f"Input image not found: {input_path}")
-    _validate_supported_image_path(input_path, label="input_image")
+    input_names = _generator_input_names(runtime.generator)
+    if tuple(input_images) != input_names:
+        raise ValueError(
+            f"Input paths must match generator input order {input_names}, got {tuple(input_images)}"
+        )
+    for name, input_path in input_images.items():
+        if not input_path.is_file():
+            raise FileNotFoundError(f"Input image {name} not found: {input_path}")
+        _validate_supported_image_path(input_path, label=f"input_image[{name}]")
     _validate_supported_image_path(output_path, label="output_image")
 
     requested_mode = _validate_mode(mode)
-
-    reader = open_image_reader(input_path)
+    readers: dict[str, RegionImageReader] = {}
     try:
-        resolved_mode = _resolve_mode(requested_mode, reader.size, runtime.image_size)
+        for name, input_path in input_images.items():
+            readers[name] = open_image_reader(input_path)
+        sizes = {reader.size for reader in readers.values()}
+        if len(sizes) != 1:
+            details = ", ".join(f"{name}={reader.size}" for name, reader in readers.items())
+            raise ValueError(f"Input image dimensions must match; got {details}")
+
+        first_reader = readers[input_names[0]]
+        resolved_mode = _resolve_mode(requested_mode, first_reader.size, runtime.image_size)
         pillow_limit = Image.MAX_IMAGE_PIXELS
         if (
             resolved_mode == "tile"
-            and not isinstance(reader, OpenSlideRegionImageReader)
+            and not all(
+                isinstance(reader, OpenSlideRegionImageReader) for reader in readers.values()
+            )
             and pillow_limit is not None
-            and reader.size[0] * reader.size[1] > 2 * pillow_limit
+            and first_reader.size[0] * first_reader.size[1] > 2 * pillow_limit
         ):
             raise RuntimeError(
                 "Large tiled inference requires OpenSlide; install the 'wsi' extra and "
                 "native OpenSlide, then run inside 'nix develop'"
             )
-        if resolved_mode == "tile" and isinstance(reader, OpenSlideRegionImageReader):
+        if resolved_mode == "tile" and any(
+            isinstance(reader, OpenSlideRegionImageReader) for reader in readers.values()
+        ):
+            if not all(
+                isinstance(reader, OpenSlideRegionImageReader) for reader in readers.values()
+            ):
+                raise ValueError(
+                    "Full-resolution multi-input WSI inference requires every input "
+                    "to use OpenSlide"
+                )
             _run_wsi_prediction(
-                reader,
+                readers,  # type: ignore[arg-type]
                 output_path,
                 runtime.generator,
                 runtime.device,
@@ -457,21 +504,22 @@ def _run_one_image(
             )
             output = None
         else:
-            image = open_rgb(input_path)
+            images = {name: open_rgb(input_path) for name, input_path in input_images.items()}
             if resolved_mode == "resize":
                 output = _run_resized_prediction(
-                    image, runtime.generator, runtime.device, runtime.image_size
+                    images, runtime.generator, runtime.device, runtime.image_size
                 )
             else:
                 output = _run_tiled_prediction(
-                    image,
+                    images,
                     runtime.generator,
                     runtime.device,
                     runtime.image_size,
                     tile_overlap,
                 )
     finally:
-        reader.close()
+        for reader in readers.values():
+            reader.close()
 
     if output is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -479,12 +527,12 @@ def _run_one_image(
 
     logger.info(
         "Single-image inference complete: %s -> %s (mode=%s)",
-        input_path,
+        input_images,
         output_path,
         resolved_mode,
     )
     return SingleInferenceResult(
-        input_path=input_path,
+        input_paths=dict(input_images),
         output_path=output_path,
         checkpoint_path=runtime.checkpoint_path,
         image_size=runtime.image_size,
@@ -510,7 +558,7 @@ def collect_input_images(input_dir: Path, *, recursive: bool = False) -> tuple[P
 
 def run_single_image_inference(
     config: RunConfig,
-    input_image: Path,
+    input_images: dict[str, Path],
     output_image: Path | None = None,
     *,
     mode: SingleInferenceMode = "auto",
@@ -520,7 +568,7 @@ def run_single_image_inference(
     """Load a checkpoint, run the generator on one image, and save the generated output."""
     return _run_image_file_inference(
         config,
-        input_image,
+        input_images,
         output_image,
         mode=mode,
         tile_overlap=tile_overlap,
@@ -531,7 +579,7 @@ def run_single_image_inference(
 
 def _run_image_file_inference(
     config: RunConfig,
-    input_image: Path,
+    input_images: dict[str, Path],
     output_image: Path | None = None,
     *,
     mode: SingleInferenceMode = "auto",
@@ -541,20 +589,26 @@ def _run_image_file_inference(
 ) -> SingleInferenceResult:
     if config.inference is None:
         raise ValueError("RunConfig.inference is required to run image inference.")
+    input_names = tuple(config.model.inputs)
+    if set(input_images) != set(input_names):
+        raise ValueError(
+            f"Input modalities must match configured names {input_names}, got {tuple(input_images)}"
+        )
 
-    input_path = Path(input_image)
+    input_paths = {name: Path(input_images[name]) for name in input_names}
+    first_input_path = input_paths[input_names[0]]
     runtime = _build_runtime(config)
     output_path = _resolve_output_path(
         config,
         runtime.paths,
-        input_path,
+        first_input_path,
         output_image,
         output_format=output_format,
         default_dirname=default_dirname,
     )
     return _run_one_image(
         runtime,
-        input_path,
+        input_paths,
         output_path=output_path,
         mode=mode,
         tile_overlap=tile_overlap,
@@ -563,7 +617,7 @@ def _run_image_file_inference(
 
 def run_image_directory_inference(
     config: RunConfig,
-    input_dir: Path,
+    input_dirs: dict[str, Path],
     output_dir: Path | None = None,
     *,
     recursive: bool = False,
@@ -571,18 +625,38 @@ def run_image_directory_inference(
     tile_overlap: int = DEFAULT_TILE_OVERLAP,
     output_format: str = "same",
 ) -> DirectoryInferenceResult:
-    """Run image inference for all supported image files in a directory."""
+    """Run image inference for all supported image files in named directories."""
     if config.inference is None:
         raise ValueError("RunConfig.inference is required to run image inference.")
+    input_names = tuple(config.model.inputs)
+    if set(input_dirs) != set(input_names):
+        raise ValueError(
+            f"Input modalities must match configured names {input_names}, got {tuple(input_dirs)}"
+        )
 
-    input_path = Path(input_dir)
-    input_images = collect_input_images(input_path, recursive=recursive)
-    if not input_images:
+    roots = {name: Path(input_dirs[name]) for name in input_names}
+    first_name = input_names[0]
+    first_root = roots[first_name]
+    images_by_name = {
+        name: collect_input_images(root, recursive=recursive) for name, root in roots.items()
+    }
+    if not images_by_name[first_name]:
         raise FileNotFoundError(
-            f"No supported images found in {input_path}. "
+            f"No supported images found in {first_root}. "
             f"Supported extensions: {sorted(VALID_IMAGE_EXTENSIONS)}"
         )
 
+    first_relative = {path.relative_to(first_root) for path in images_by_name[first_name]}
+    for name, root in roots.items():
+        if name == first_name:
+            continue
+        relative = {path.relative_to(root) for path in images_by_name[name]}
+        missing = sorted(first_relative - relative)
+        extra = sorted(relative - first_relative)
+        if missing or extra:
+            raise ValueError(
+                f"Input modality {name} relative paths differ: missing={missing}, extra={extra}"
+            )
     runtime = _build_runtime(config)
     if output_dir is not None and output_dir.suffix:
         raise NotADirectoryError(
@@ -597,20 +671,21 @@ def run_image_directory_inference(
         raise NotADirectoryError(
             f"Output path for directory inference must be a directory: {resolved_output_dir}"
         )
-
+    ordered_names = _generator_input_names(runtime.generator)
     results: list[SingleInferenceResult] = []
-    for source_path in input_images:
-        relative_parent = source_path.relative_to(input_path).parent if recursive else Path()
-        output_suffix = _output_suffix_for_input(source_path, output_format)
+    for relative_path in sorted(first_relative):
+        source_paths = {name: roots[name] / relative_path for name in ordered_names}
+        relative_parent = relative_path.parent if recursive else Path()
+        output_suffix = _output_suffix_for_input(source_paths[ordered_names[0]], output_format)
         output_path = (
             resolved_output_dir
             / relative_parent
-            / _generated_filename_for_input(source_path, output_suffix)
+            / _generated_filename_for_input(source_paths[ordered_names[0]], output_suffix)
         )
         results.append(
             _run_one_image(
                 runtime,
-                source_path,
+                source_paths,
                 output_path=output_path,
                 mode=mode,
                 tile_overlap=tile_overlap,
@@ -618,7 +693,7 @@ def run_image_directory_inference(
         )
 
     return DirectoryInferenceResult(
-        input_dir=input_path,
+        input_dirs={name: roots[name] for name in ordered_names},
         output_dir=resolved_output_dir,
         checkpoint_path=runtime.checkpoint_path,
         image_size=runtime.image_size,
@@ -629,7 +704,7 @@ def run_image_directory_inference(
 
 def run_image_path_inference(
     config: RunConfig,
-    input_path: Path,
+    input_paths: dict[str, Path],
     output_path: Path | None = None,
     *,
     recursive: bool = False,
@@ -637,24 +712,37 @@ def run_image_path_inference(
     tile_overlap: int = DEFAULT_TILE_OVERLAP,
     output_format: str = "same",
 ) -> SingleInferenceResult | DirectoryInferenceResult:
-    """Run image inference on either a single file or all images in a directory."""
-    path = Path(input_path)
-    if path.is_dir():
+    """Run image inference on named files or named directories."""
+    paths = {name: Path(path) for name, path in input_paths.items()}
+    if not paths:
+        raise ValueError("At least one input path is required.")
+    kinds: set[str] = set()
+    for name, path in paths.items():
+        if not path.exists():
+            raise FileNotFoundError(f"Input path {name} not found: {path}")
+        if path.is_file():
+            kinds.add("file")
+        elif path.is_dir():
+            kinds.add("directory")
+        else:
+            raise ValueError(f"Input path {name} is neither a file nor a directory: {path}")
+    if len(kinds) != 1:
+        raise ValueError("All input paths must be files or all input paths must be directories.")
+    if "directory" in kinds:
         return run_image_directory_inference(
             config,
-            path,
+            paths,
             output_path,
             recursive=recursive,
             mode=mode,
             tile_overlap=tile_overlap,
             output_format=output_format,
         )
-    return _run_image_file_inference(
+    return run_single_image_inference(
         config,
-        path,
+        paths,
         output_path,
         mode=mode,
         tile_overlap=tile_overlap,
         output_format=output_format,
-        default_dirname="output_images",
     )

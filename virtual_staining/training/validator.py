@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import cast
 
 import torch
 import torch.nn as nn
 from torch.amp import autocast
 
+from virtual_staining.models.generator import concat_inputs
 from virtual_staining.training.helpers import (
     LossComponentAccumulator,
     configured_loss_names,
@@ -43,20 +45,21 @@ def validate_epoch(
         total_loss_G = 0.0
         total_loss_D = 0.0
         component_totals = LossComponentAccumulator(configured_loss_names(losses))
+        needs_discriminator = _needs_discriminator_logits(losses)
         image_metric_totals = ValidationImageMetricAccumulator()
         count = 0
-        needs_discriminator = _needs_discriminator_logits(losses)
-
         with torch.no_grad():
+            input_names = cast(tuple[str, ...], generator.input_names)
             for batch_index, batch in enumerate(val_loader):
-                source, target, masks = unpack_batch(batch, device)
+                inputs, target, masks = unpack_batch(batch, device, input_names)
+                condition = concat_inputs(inputs, input_names)
                 with autocast(device_type=device.type, enabled=amp_enabled):
-                    generated = generator(source)
+                    generated = generator(inputs)
                     context = LossEvaluationContext(epoch=epoch, masks=masks)
                     discriminator_fake: torch.Tensor | None = None
                     if needs_discriminator:
-                        discriminator_real = discriminator(source, target)
-                        discriminator_fake_logits = discriminator(source, generated)
+                        discriminator_real = discriminator(condition, target)
+                        discriminator_fake_logits = discriminator(condition, generated)
                         discriminator_fake = discriminator_fake_logits
                         discriminator_loss = loss_evaluator.discriminator_total(
                             discriminator_real=discriminator_real,
@@ -88,12 +91,11 @@ def validate_epoch(
                     discriminator_loss.total.item() if discriminator_loss is not None else 0.0
                 )
                 total_loss_G += generator_loss.total.item()
-                image_metric_totals.add_batch(generated, target)
                 count += 1
                 if batch_index < 5:
                     save_images(
                         output_dir,
-                        source[0],
+                        inputs[next(iter(inputs))][0],
                         generated[0],
                         target[0],
                         epoch,

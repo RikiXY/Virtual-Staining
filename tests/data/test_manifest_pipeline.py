@@ -17,6 +17,7 @@ def test_manifest_training_views_load_only_train_and_val(manifest_dataset) -> No
     manifest = DatasetManifest.from_csv(
         manifest_dataset.manifest_path,
         dataset_root=manifest_dataset.root,
+        metadata=manifest_dataset.manifest.metadata,
     )
     train_dataset = PairedManifestDataset(manifest.filter_split("train"))
     val_dataset = PairedManifestDataset(manifest.filter_split("val"))
@@ -33,6 +34,7 @@ def test_manifest_inference_view_loads_only_test(manifest_dataset) -> None:
     manifest = DatasetManifest.from_csv(
         manifest_dataset.manifest_path,
         dataset_root=manifest_dataset.root,
+        metadata=manifest_dataset.manifest.metadata,
     )
     test_dataset = PairedManifestDataset(manifest.filter_split("test"))
 
@@ -43,6 +45,7 @@ def test_manifest_evaluation_view_uses_only_test_records(manifest_dataset) -> No
     manifest = DatasetManifest.from_csv(
         manifest_dataset.manifest_path,
         dataset_root=manifest_dataset.root,
+        metadata=manifest_dataset.manifest.metadata,
     )
     test_records = manifest.filter_split("test").records
 
@@ -61,6 +64,7 @@ def test_extra_files_in_directory_are_not_in_manifest(manifest_dataset) -> None:
     manifest = DatasetManifest.from_csv(
         manifest_dataset.manifest_path,
         dataset_root=manifest_dataset.root,
+        metadata=manifest_dataset.manifest.metadata,
     )
     dataset = PairedManifestDataset(manifest.filter_split("test"))
 
@@ -72,10 +76,12 @@ def test_manifest_sample_ids_are_stable_across_reload(manifest_dataset) -> None:
     manifest_1 = DatasetManifest.from_csv(
         manifest_dataset.manifest_path,
         dataset_root=manifest_dataset.root,
+        metadata=manifest_dataset.manifest.metadata,
     )
     manifest_2 = DatasetManifest.from_csv(
         manifest_dataset.manifest_path,
         dataset_root=manifest_dataset.root,
+        metadata=manifest_dataset.manifest.metadata,
     )
 
     assert [record.sample_id for record in manifest_1.records] == [

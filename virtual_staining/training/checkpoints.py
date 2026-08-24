@@ -11,21 +11,30 @@ from torch.amp import GradScaler
 
 logger = logging.getLogger(__name__)
 
-CHECKPOINT_FORMAT_VERSION: int = 2
+CHECKPOINT_FORMAT_VERSION: int = 3
 GENERATOR_OUTPUT_ACTIVATION = "tanh"
 NORMALIZATION_CONTRACT = {"input_range": "[-1, 1]", "output_range": "[-1, 1]"}
 
 
-def _make_arch_metadata(generator: nn.Module, discriminator: nn.Module) -> dict[str, Any]:
+def _make_arch_metadata(
+    generator: nn.Module,
+    discriminator: nn.Module,
+    *,
+    target_modality: str | None = None,
+) -> dict[str, Any]:
+    input_names = tuple(getattr(generator, "input_names", ()))
     return {
         "generator": {
             "class": type(generator).__name__,
-            "in_channels": getattr(generator, "in_channels", None),
-            "out_channels": getattr(generator, "out_channels", None),
-            "base_channels": getattr(generator, "base_channels", None),
-            "norm": getattr(generator, "norm", None),
-            "dropout": getattr(generator, "dropout", None),
-            "bilinear": getattr(generator, "bilinear", None),
+            "architecture": "concat_unet",
+            "input_names": list(input_names),
+            "target_modality": target_modality,
+            "in_channels": getattr(getattr(generator, "unet", generator), "in_channels", None),
+            "out_channels": getattr(getattr(generator, "unet", generator), "out_channels", 3),
+            "base_channels": getattr(getattr(generator, "unet", generator), "base_channels", None),
+            "norm": getattr(getattr(generator, "unet", generator), "norm", None),
+            "dropout": getattr(getattr(generator, "unet", generator), "dropout", None),
+            "bilinear": getattr(getattr(generator, "unet", generator), "bilinear", None),
             "output_activation": GENERATOR_OUTPUT_ACTIVATION,
         },
         "discriminator": {
@@ -39,35 +48,33 @@ def _make_arch_metadata(generator: nn.Module, discriminator: nn.Module) -> dict[
 
 
 def _validate_checkpoint_metadata(checkpoint: dict[str, Any], path: Path) -> dict[str, Any]:
-    ckpt_version = checkpoint.get("format_version")
-    if ckpt_version != CHECKPOINT_FORMAT_VERSION:
+    if checkpoint.get("format_version") != CHECKPOINT_FORMAT_VERSION:
         raise ValueError(
-            f"Checkpoint format version {ckpt_version!r} does not match current version "
-            f"{CHECKPOINT_FORMAT_VERSION}. Re-train from scratch with the current code."
+            f"Checkpoint format version {checkpoint.get('format_version')!r} does not "
+            f"match current version {CHECKPOINT_FORMAT_VERSION}. Re-train from scratch "
+            "with the current code."
         )
     arch = checkpoint.get("architecture")
-    if arch is None:
+    if not isinstance(arch, dict):
         raise ValueError(
             f"Checkpoint '{path}' has no architecture metadata. "
-            "Only checkpoints saved with the current version are supported."
+            "Only current checkpoints are supported."
         )
-    if not isinstance(arch, dict):
-        raise ValueError("Checkpoint architecture metadata must be a mapping.")
-    generator_arch = arch.get("generator", {})
+    generator_arch = arch.get("generator")
     if not isinstance(generator_arch, dict):
         raise ValueError("Checkpoint generator architecture metadata must be a mapping.")
-    ckpt_activation = generator_arch.get("output_activation")
-    if ckpt_activation != GENERATOR_OUTPUT_ACTIVATION:
+    if (
+        generator_arch.get("architecture") != "concat_unet"
+        or not isinstance(generator_arch.get("input_names"), list)
+        or not generator_arch.get("target_modality")
+    ):
         raise ValueError(
-            f"Checkpoint has output_activation={ckpt_activation!r}; current code requires "
-            f"{GENERATOR_OUTPUT_ACTIVATION!r}."
+            "Checkpoint is missing current named-generator metadata; retrain from scratch."
         )
-    normalization_contract = checkpoint.get("normalization_contract")
-    if normalization_contract != NORMALIZATION_CONTRACT:
-        raise ValueError(
-            "Checkpoint normalization_contract "
-            f"{normalization_contract!r} does not match current code."
-        )
+    if generator_arch.get("output_activation") != GENERATOR_OUTPUT_ACTIVATION:
+        raise ValueError("Checkpoint output activation does not match current code.")
+    if checkpoint.get("normalization_contract") != NORMALIZATION_CONTRACT:
+        raise ValueError("Checkpoint normalization contract does not match current code.")
     return arch
 
 
@@ -75,45 +82,87 @@ def _check_arch_match(
     checkpoint_arch: dict[str, Any],
     generator: nn.Module,
     discriminator: nn.Module,
+    *,
+    target_modality: str | None = None,
 ) -> None:
     gen_arch = checkpoint_arch.get("generator", {})
-    for key in ("in_channels", "out_channels", "base_channels", "norm", "dropout", "bilinear"):
+    if target_modality is not None and gen_arch.get("target_modality") != target_modality:
+        raise ValueError("Checkpoint target modality does not match current model.")
+    current = getattr(generator, "unet", generator)
+    for key in (
+        "class",
+        "architecture",
+        "input_names",
+        "in_channels",
+        "out_channels",
+        "base_channels",
+        "norm",
+        "dropout",
+        "bilinear",
+    ):
         ckpt_val = gen_arch.get(key)
-        curr_val = getattr(generator, key, None)
+        if key == "class":
+            curr_val = type(generator).__name__
+        elif key == "architecture":
+            curr_val = "concat_unet"
+        elif key == "input_names":
+            curr_val = list(getattr(generator, "input_names", ()))
+        else:
+            curr_val = getattr(current, key, 3 if key == "out_channels" else None)
         if ckpt_val != curr_val:
             raise ValueError(
-                f"Architecture mismatch for generator.{key}: "
-                f"checkpoint has {ckpt_val!r}, current model has {curr_val!r}. "
-                "Instantiate the model with the same parameters used during training."
+                f"Architecture mismatch for generator.{key}: checkpoint has "
+                f"{ckpt_val!r}, current model has {curr_val!r}."
             )
     disc_arch = checkpoint_arch.get("discriminator", {})
-    for key in ("in_channels", "ndf", "norm", "use_sigmoid"):
+    for key in ("class", "in_channels", "ndf", "norm", "use_sigmoid"):
         ckpt_val = disc_arch.get(key)
-        curr_val = getattr(discriminator, key, None)
+        curr_val = (
+            type(discriminator).__name__ if key == "class" else getattr(discriminator, key, None)
+        )
         if ckpt_val != curr_val:
             raise ValueError(
-                f"Architecture mismatch for discriminator.{key}: "
-                f"checkpoint has {ckpt_val!r}, current model has {curr_val!r}. "
-                "Instantiate the model with the same parameters used during training."
+                f"Architecture mismatch for discriminator.{key}: checkpoint has "
+                f"{ckpt_val!r}, current model has {curr_val!r}."
             )
 
 
-def _check_generator_arch(checkpoint_arch: dict[str, Any], generator: nn.Module) -> None:
+def _check_generator_arch(
+    checkpoint_arch: dict[str, Any],
+    generator: nn.Module,
+    *,
+    target_modality: str | None = None,
+) -> None:
+    if (
+        target_modality is not None
+        and checkpoint_arch.get("generator", {}).get("target_modality") != target_modality
+    ):
+        raise ValueError("Checkpoint target modality does not match current model.")
+    current = getattr(generator, "unet", generator)
     gen_arch = checkpoint_arch.get("generator", {})
-    ckpt_activation = gen_arch.get("output_activation")
-    if ckpt_activation != GENERATOR_OUTPUT_ACTIVATION:
-        raise ValueError(
-            f"Checkpoint has output_activation={ckpt_activation!r}; current code requires "
-            f"{GENERATOR_OUTPUT_ACTIVATION!r}."
-        )
-    for key in ("in_channels", "out_channels", "base_channels", "norm", "dropout", "bilinear"):
-        ckpt_val = gen_arch.get(key)
-        curr_val = getattr(generator, key, None)
-        if ckpt_val != curr_val:
+    for key in (
+        "class",
+        "architecture",
+        "input_names",
+        "in_channels",
+        "out_channels",
+        "base_channels",
+        "norm",
+        "dropout",
+        "bilinear",
+    ):
+        if key == "class":
+            curr_val = type(generator).__name__
+        elif key == "architecture":
+            curr_val = "concat_unet"
+        elif key == "input_names":
+            curr_val = list(getattr(generator, "input_names", ()))
+        else:
+            curr_val = getattr(current, key, 3 if key == "out_channels" else None)
+        if gen_arch.get(key) != curr_val:
             raise ValueError(
-                f"Architecture mismatch for generator.{key}: "
-                f"checkpoint has {ckpt_val!r}, inference model has {curr_val!r}. "
-                "Instantiate the generator with the same parameters used during training."
+                f"Architecture mismatch for generator.{key}: checkpoint has "
+                f"{gen_arch.get(key)!r}, inference model has {curr_val!r}."
             )
 
 
@@ -132,6 +181,7 @@ class CheckpointManager:
         image_size: tuple[int, int],
         device: torch.device,
         *,
+        target_modality: str | None = None,
         scheduler_G: optim.lr_scheduler.LRScheduler
         | optim.lr_scheduler.ReduceLROnPlateau
         | None = None,
@@ -146,24 +196,16 @@ class CheckpointManager:
         num_workers: int | None = None,
         dataset_root: str | None = None,
     ) -> None:
-        self.checkpoints_dir = checkpoints_dir
-        self.generator = generator
-        self.discriminator = discriminator
-        self.opt_G = opt_G
-        self.opt_D = opt_D
-        self.scaler_G = scaler_G
-        self.scaler_D = scaler_D
-        self.scheduler_G = scheduler_G
-        self.scheduler_D = scheduler_D
-        self.image_size = image_size
-        self.device = device
-        self.lr_g = lr_g
-        self.lr_d = lr_d
-        self.beta1 = beta1
-        self.beta2 = beta2
-        self.batch_size = batch_size
-        self.num_workers = num_workers
-        self.dataset_root = dataset_root
+        self.checkpoints_dir, self.generator, self.discriminator = (
+            checkpoints_dir,
+            generator,
+            discriminator,
+        )
+        self.opt_G, self.opt_D, self.scaler_G, self.scaler_D = opt_G, opt_D, scaler_G, scaler_D
+        self.scheduler_G, self.scheduler_D = scheduler_G, scheduler_D
+        self.image_size, self.device, self.target_modality = image_size, device, target_modality
+        self.lr_g, self.lr_d, self.beta1, self.beta2 = lr_g, lr_d, beta1, beta2
+        self.batch_size, self.num_workers, self.dataset_root = batch_size, num_workers, dataset_root
 
     def save(self, epoch: int) -> Path:
         self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
@@ -171,7 +213,9 @@ class CheckpointManager:
         checkpoint = {
             "format_version": CHECKPOINT_FORMAT_VERSION,
             "epoch": epoch,
-            "architecture": _make_arch_metadata(self.generator, self.discriminator),
+            "architecture": _make_arch_metadata(
+                self.generator, self.discriminator, target_modality=self.target_modality
+            ),
             "normalization_contract": NORMALIZATION_CONTRACT,
             "generator_state_dict": self.generator.state_dict(),
             "discriminator_state_dict": self.discriminator.state_dict(),
@@ -208,7 +252,9 @@ class CheckpointManager:
                 f"current image_size={tuple(self.image_size)}."
             )
         arch = _validate_checkpoint_metadata(checkpoint, path)
-        _check_arch_match(arch, self.generator, self.discriminator)
+        _check_arch_match(
+            arch, self.generator, self.discriminator, target_modality=self.target_modality
+        )
         self.generator.load_state_dict(checkpoint["generator_state_dict"])
         self.discriminator.load_state_dict(checkpoint["discriminator_state_dict"])
         self.opt_G.load_state_dict(checkpoint["optimizerG_state_dict"])

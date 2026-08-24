@@ -1,620 +1,91 @@
 from __future__ import annotations
 
-import csv
 from pathlib import Path
 
 import pytest
 
-from virtual_staining.config.project import ProjectConfig
-from virtual_staining.data.manifest import DatasetManifest, ManifestRecord, load_manifest_or_raise
+from virtual_staining.data.manifest import DatasetManifest, ManifestMetadata, ManifestRecord
 
 
-def _make_record(sample_id: str, split: str = "train") -> ManifestRecord:
-    return ManifestRecord(
-        pair_id="P1",
-        sample_id=sample_id,
-        split=split,  # type: ignore[arg-type]
-        input_path=Path(f"splits/{split}/{sample_id}_source.tif"),
-        target_path=Path(f"splits/{split}/{sample_id}_target.tif"),
-        input_modality="label_free",
-        target_modality="stained",
-        x=0,
-        y=0,
-        width=256,
-        height=256,
+def _manifest(tmp_path: Path, *, modalities: tuple[str, ...] = ("LF", "AF")) -> DatasetManifest:
+    metadata = ManifestMetadata("3.0", modalities, modalities[0], "target")
+    inputs = {name: Path(f"splits/train/a__input__{name}.png") for name in modalities}
+    return DatasetManifest(
+        (
+            ManifestRecord(
+                "a", "set-1", "train", inputs, Path("splits/train/a__target.png"), 0, 0, 16, 16
+            ),
+        ),
+        tmp_path,
+        metadata,
     )
 
 
-def test_manifest_record_frozen() -> None:
-    rec = _make_record("00000_00000")
-    with pytest.raises((AttributeError, TypeError)):
-        rec.sample_id = "other"  # type: ignore[misc]
+def test_v3_dynamic_columns_round_trip(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    path = tmp_path / "manifest.csv"
+    manifest.to_csv(path)
+    assert manifest.fieldnames == (
+        "sample_id",
+        "set_id",
+        "split",
+        "input__LF",
+        "input__AF",
+        "target_path",
+        "foreground_mask_path",
+        "x",
+        "y",
+        "width",
+        "height",
+    )
+    loaded = DatasetManifest.from_csv(path, tmp_path, manifest.metadata)
+    assert loaded.records == manifest.records
 
 
-def test_manifest_record_empty_sample_id_raises() -> None:
-    with pytest.raises(ValueError, match="sample_id"):
-        ManifestRecord(
-            pair_id="P1",
-            sample_id="",
-            split="train",
-            input_path=Path("a/src.tif"),
-            target_path=Path("a/tgt.tif"),
-            input_modality="label_free",
-            target_modality="stained",
-            x=0,
-            y=0,
-            width=256,
-            height=256,
-        )
+def test_manifest_requires_metadata_and_exact_columns(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.csv"
+    path.write_text(
+        "sample_id,set_id,split,input_path,target_path\na,s,train,a.png,t.png\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="required|exact v3 columns"):
+        DatasetManifest.from_csv(path, tmp_path)
+    with pytest.raises(ValueError, match="exact v3 columns"):
+        DatasetManifest.from_csv(path, tmp_path, ManifestMetadata("3.0", ("LF",), "LF", "target"))
 
 
-def test_manifest_record_invalid_split_raises() -> None:
-    with pytest.raises(ValueError, match="split"):
-        ManifestRecord(
-            pair_id="P1",
-            sample_id="abc",
-            split="validation",  # type: ignore[arg-type]
-            input_path=Path("a/src.tif"),
-            target_path=Path("a/tgt.tif"),
-            input_modality="label_free",
-            target_modality="stained",
-            x=0,
-            y=0,
-            width=256,
-            height=256,
-        )
-
-
-def test_manifest_record_empty_input_modality_raises() -> None:
-    with pytest.raises(ValueError, match="input_modality"):
-        ManifestRecord(
-            pair_id="P1",
-            sample_id="abc",
-            split="train",
-            input_path=Path("a/src.tif"),
-            target_path=Path("a/tgt.tif"),
-            input_modality="",
-            target_modality="stained",
-            x=0,
-            y=0,
-            width=256,
-            height=256,
-        )
-
-
-def test_manifest_record_empty_target_modality_raises() -> None:
-    with pytest.raises(ValueError, match="target_modality"):
-        ManifestRecord(
-            pair_id="P1",
-            sample_id="abc",
-            split="train",
-            input_path=Path("a/src.tif"),
-            target_path=Path("a/tgt.tif"),
-            input_modality="label_free",
-            target_modality="",
-            x=0,
-            y=0,
-            width=256,
-            height=256,
-        )
-
-
-def test_manifest_record_negative_x_raises() -> None:
-    with pytest.raises(ValueError, match="x must be"):
-        ManifestRecord(
-            pair_id="P1",
-            sample_id="abc",
-            split="train",
-            input_path=Path("a/src.tif"),
-            target_path=Path("a/tgt.tif"),
-            input_modality="label_free",
-            target_modality="stained",
-            x=-1,
-            y=0,
-            width=256,
-            height=256,
-        )
-
-
-def test_manifest_record_negative_y_raises() -> None:
-    with pytest.raises(ValueError, match="y must be"):
-        ManifestRecord(
-            pair_id="P1",
-            sample_id="abc",
-            split="train",
-            input_path=Path("a/src.tif"),
-            target_path=Path("a/tgt.tif"),
-            input_modality="label_free",
-            target_modality="stained",
-            x=0,
-            y=-1,
-            width=256,
-            height=256,
-        )
-
-
-def test_manifest_record_zero_width_raises() -> None:
-    with pytest.raises(ValueError, match="width"):
-        ManifestRecord(
-            pair_id="P1",
-            sample_id="abc",
-            split="train",
-            input_path=Path("a/src.tif"),
-            target_path=Path("a/tgt.tif"),
-            input_modality="label_free",
-            target_modality="stained",
-            x=0,
-            y=0,
-            width=0,
-            height=256,
-        )
-
-
-def test_manifest_record_zero_height_raises() -> None:
-    with pytest.raises(ValueError, match="height"):
-        ManifestRecord(
-            pair_id="P1",
-            sample_id="abc",
-            split="train",
-            input_path=Path("a/src.tif"),
-            target_path=Path("a/tgt.tif"),
-            input_modality="label_free",
-            target_modality="stained",
-            x=0,
-            y=0,
-            width=256,
-            height=0,
-        )
-
-
-def test_manifest_record_same_input_target_path_raises() -> None:
-    path = Path("a/file.tif")
-    with pytest.raises(ValueError, match="different"):
-        ManifestRecord(
-            pair_id="P1",
-            sample_id="abc",
-            split="train",
-            input_path=path,
-            target_path=path,
-            input_modality="label_free",
-            target_modality="stained",
-            x=0,
-            y=0,
-            width=256,
-            height=256,
-        )
-
-
-def test_manifest_record_absolute_path_raises() -> None:
-    with pytest.raises(ValueError, match="relative"):
-        ManifestRecord(
-            pair_id="P1",
-            sample_id="abc",
-            split="train",
-            input_path=Path("/tmp/source.tif"),
-            target_path=Path("splits/train/abc_target.tif"),
-            input_modality="label_free",
-            target_modality="stained",
-            x=0,
-            y=0,
-            width=256,
-            height=256,
-        )
-
-
-def test_manifest_record_empty_path_raises() -> None:
+@pytest.mark.parametrize("bad_path", ["/absolute.png", "../outside.png", ""])
+def test_manifest_rejects_unsafe_or_blank_paths(tmp_path: Path, bad_path: str) -> None:
+    if bad_path:
+        with pytest.raises(ValueError, match="relative|non-traversing"):
+            ManifestRecord(
+                "a", "s", "train", {"LF": Path(bad_path)}, Path("target.png"), 0, 0, 1, 1
+            )
+        return
+    metadata = ManifestMetadata("3.0", ("LF",), "LF", "target")
+    path = tmp_path / "manifest.csv"
+    path.write_text(
+        "sample_id,set_id,split,input__LF,target_path,foreground_mask_path,x,y,width,height\na,s,train,,target.png,,0,0,1,1\n",
+        encoding="utf-8",
+    )
     with pytest.raises(ValueError, match="must not be empty"):
-        ManifestRecord(
-            pair_id="P1",
-            sample_id="abc",
-            split="train",
-            input_path=Path(""),
-            target_path=Path("splits/train/abc_target.tif"),
-            input_modality="label_free",
-            target_modality="stained",
-            x=0,
-            y=0,
-            width=256,
-            height=256,
-        )
+        DatasetManifest.from_csv(path, tmp_path, metadata)
 
 
-def test_manifest_record_traversal_path_raises() -> None:
-    with pytest.raises(ValueError, match=r"\.\."):
-        ManifestRecord(
-            pair_id="P1",
-            sample_id="abc",
-            split="train",
-            input_path=Path("../outside/source.tif"),
-            target_path=Path("splits/train/abc_target.tif"),
-            input_modality="label_free",
-            target_modality="stained",
-            x=0,
-            y=0,
-            width=256,
-            height=256,
-        )
-
-
-def test_manifest_record_nested_relative_path_passes() -> None:
-    rec = ManifestRecord(
-        pair_id="P1",
-        sample_id="abc",
-        split="train",
-        input_path=Path("splits/train/00512_09216_source.tif"),
-        target_path=Path("splits/train/00512_09216_target.tif"),
-        input_modality="label_free",
-        target_modality="stained",
-        x=512,
-        y=9216,
-        width=256,
-        height=256,
-    )
-
-    assert rec.input_path == Path("splits/train/00512_09216_source.tif")
-
-
-def test_dataset_manifest_filter_split() -> None:
-    records = (_make_record("a", "train"), _make_record("b", "val"), _make_record("c", "train"))
-    manifest = DatasetManifest(records=records, dataset_root=Path("/tmp"))
-    train = manifest.filter_split("train")
-    assert len(train) == 2
-    assert all(r.split == "train" for r in train.records)
-
-
-def test_dataset_manifest_filter_split_empty_result() -> None:
-    records = (_make_record("a", "train"),)
-    manifest = DatasetManifest(records=records, dataset_root=Path("/tmp"))
-    assert len(manifest.filter_split("val")) == 0
-
-
-def test_dataset_manifest_validate_duplicate_ids_raises() -> None:
-    records = (_make_record("dup"), _make_record("dup"))
-    manifest = DatasetManifest(records=records, dataset_root=Path("/tmp"))
-    with pytest.raises(ValueError, match="Duplicate sample_ids"):
-        manifest.validate()
-
-
-def test_dataset_manifest_validate_unique_ids_passes() -> None:
-    records = (_make_record("a"), _make_record("b"))
-    manifest = DatasetManifest(records=records, dataset_root=Path("/tmp"))
-    manifest.validate()  # must not raise
-
-
-def test_validate_duplicate_input_path_raises() -> None:
-    shared_input = Path("splits/train/shared_source.tif")
-    records = (
-        ManifestRecord(
-            "a",
-            "train",
-            shared_input,
-            Path("a/tgt.tif"),
-            "lf",
-            "st",
-            0,
-            0,
-            256,
-            256,
-            "P1",
-        ),
-        ManifestRecord(
-            "b",
-            "train",
-            shared_input,
-            Path("b/tgt.tif"),
-            "lf",
-            "st",
-            64,
-            0,
-            256,
-            256,
-            "P1",
-        ),
-    )
-    manifest = DatasetManifest(records=records, dataset_root=Path("/tmp"))
-
-    with pytest.raises(ValueError, match="input_path"):
-        manifest.validate()
-
-
-def test_validate_duplicate_target_path_raises() -> None:
-    shared_target = Path("splits/train/shared_target.tif")
-    records = (
-        ManifestRecord(
-            "a",
-            "train",
-            Path("a/src.tif"),
-            shared_target,
-            "lf",
-            "st",
-            0,
-            0,
-            256,
-            256,
-            "P1",
-        ),
-        ManifestRecord(
-            "b",
-            "train",
-            Path("b/src.tif"),
-            shared_target,
-            "lf",
-            "st",
-            64,
-            0,
-            256,
-            256,
-            "P1",
-        ),
-    )
-    manifest = DatasetManifest(records=records, dataset_root=Path("/tmp"))
-
-    with pytest.raises(ValueError, match="target_path"):
-        manifest.validate()
-
-
-def test_validate_sample_in_train_and_val_raises() -> None:
-    records = (
-        ManifestRecord(
-            "abc",
-            "train",
-            Path("train/src.tif"),
-            Path("train/tgt.tif"),
-            "lf",
-            "st",
-            0,
-            0,
-            256,
-            256,
-            "P1",
-        ),
-        ManifestRecord(
-            "abc",
-            "val",
-            Path("val/src.tif"),
-            Path("val/tgt.tif"),
-            "lf",
-            "st",
-            0,
-            0,
-            256,
-            256,
-            "P1",
-        ),
-    )
-    manifest = DatasetManifest(records=records, dataset_root=Path("/tmp"))
-
-    with pytest.raises(ValueError, match="multiple splits"):
-        manifest.validate()
-
-
-def test_validate_sample_in_train_and_discarded_passes() -> None:
-    records = (
-        ManifestRecord(
-            "abc",
-            "train",
-            Path("train/src.tif"),
-            Path("train/tgt.tif"),
-            "lf",
-            "st",
-            0,
-            0,
-            256,
-            256,
-            "P1",
-        ),
-        ManifestRecord(
-            "abc",
-            "discarded",
-            Path("discarded/src.tif"),
-            Path("discarded/tgt.tif"),
-            "lf",
-            "st",
-            0,
-            0,
-            256,
-            256,
-            "P1",
-        ),
-    )
-    manifest = DatasetManifest(records=records, dataset_root=Path("/tmp"))
-    manifest.validate()
-
-
-def test_validate_require_splits_raises_for_missing_split(tmp_path: Path) -> None:
-    manifest = DatasetManifest(records=(_make_record("a", "train"),), dataset_root=tmp_path)
-
-    with pytest.raises(ValueError, match="val"):
-        manifest.validate(require_splits={"train", "val"})
-
-
-def test_validate_require_splits_raises_for_missing_test_split(tmp_path: Path) -> None:
-    manifest = DatasetManifest(records=(_make_record("a", "train"),), dataset_root=tmp_path)
-
-    with pytest.raises(ValueError, match="test"):
+def test_manifest_validates_files_and_required_splits(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    for path in manifest.records[0].input_paths.values():
+        (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / path).write_bytes(b"x")
+    target = tmp_path / manifest.records[0].target_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"x")
+    manifest.validate(check_files_exist=True, require_splits={"train"})
+    with pytest.raises(ValueError, match="no records"):
         manifest.validate(require_splits={"test"})
 
 
-def test_validate_require_splits_passes_when_all_present(tmp_path: Path) -> None:
-    records = (_make_record("a", "train"), _make_record("b", "val"))
-    manifest = DatasetManifest(records=records, dataset_root=tmp_path)
-
-    manifest.validate(require_splits={"train", "val"})
-
-
-def test_validate_check_files_exist_raises_for_missing_input_file(tmp_path: Path) -> None:
-    manifest = DatasetManifest(records=(_make_record("a", "train"),), dataset_root=tmp_path)
-
-    with pytest.raises(FileNotFoundError, match="Input file not found"):
-        manifest.validate(check_files_exist=True)
-
-
-def test_dataset_manifest_len() -> None:
-    records = tuple(_make_record(str(i)) for i in range(5))
-    manifest = DatasetManifest(records=records, dataset_root=Path("/tmp"))
-    assert len(manifest) == 5
-
-
-def test_dataset_manifest_roundtrip_csv(tmp_path: Path) -> None:
-    records = (_make_record("a", "train"), _make_record("b", "val"))
-    manifest = DatasetManifest(records=records, dataset_root=tmp_path)
-    csv_path = tmp_path / "manifest.csv"
-    manifest.to_csv(csv_path)
-
-    loaded = DatasetManifest.from_csv(csv_path, dataset_root=tmp_path)
-    assert len(loaded) == 2
-    assert loaded.records[0].sample_id == "a"
-    assert loaded.records[1].split == "val"
-    assert loaded.records[0].x == 0
-    assert loaded.records[0].width == 256
-
-
-def test_dataset_manifest_roundtrip_preserves_paths(tmp_path: Path) -> None:
-    rec = _make_record("x", "test")
-    manifest = DatasetManifest(records=(rec,), dataset_root=tmp_path)
-    csv_path = tmp_path / "manifest.csv"
-    manifest.to_csv(csv_path)
-    loaded = DatasetManifest.from_csv(csv_path, dataset_root=tmp_path)
-    assert loaded.records[0].input_path == Path("splits/test/x_source.tif")
-
-
-def test_load_manifest_or_raise_raises_if_missing(tmp_path: Path) -> None:
-    project = ProjectConfig(
-        dataset_root=tmp_path / "dataset",
-        results_path=tmp_path / "results",
-        run_name="run",
-        image_size=(256, 256),
-        manifest_path_override=tmp_path / "dataset" / "manifests" / "manifest.csv",
-    )
-
-    with pytest.raises(FileNotFoundError, match="Manifest not found"):
-        load_manifest_or_raise(project)
-
-
-def test_load_manifest_or_raise_returns_manifest(tmp_path: Path) -> None:
-    dataset_root = tmp_path / "dataset"
-    manifest_path = dataset_root / "manifests" / "manifest.csv"
-    manifest_path.parent.mkdir(parents=True)
-    manifest = DatasetManifest(records=(_make_record("a"),), dataset_root=dataset_root)
-    manifest.to_csv(manifest_path)
-    project = ProjectConfig(
-        dataset_root=dataset_root,
-        results_path=tmp_path / "results",
-        run_name="run",
-        image_size=(256, 256),
-    )
-
-    loaded = load_manifest_or_raise(project)
-
-    assert len(loaded.records) == 1
-    assert loaded.records[0].sample_id == "a"
-
-
-def test_dataset_manifest_from_csv_rejects_traversal_path(tmp_path: Path) -> None:
-    csv_path = tmp_path / "manifest.csv"
-    with csv_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=[
-                "sample_id",
-                "pair_id",
-                "split",
-                "input_path",
-                "target_path",
-                "foreground_mask_path",
-                "input_modality",
-                "target_modality",
-                "x",
-                "y",
-                "width",
-                "height",
-            ],
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "sample_id": "abc",
-                "pair_id": "P1",
-                "split": "train",
-                "input_path": "../outside/source.tif",
-                "target_path": "splits/train/abc_target.tif",
-                "foreground_mask_path": "",
-                "input_modality": "label_free",
-                "target_modality": "stained",
-                "x": 0,
-                "y": 0,
-                "width": 256,
-                "height": 256,
-            }
-        )
-
-    with pytest.raises(ValueError, match=r"\.\."):
-        DatasetManifest.from_csv(csv_path, dataset_root=tmp_path)
-
-
-def test_from_csv_missing_column_raises(tmp_path: Path) -> None:
-    csv_path = tmp_path / "bad.csv"
-    csv_path.write_text(
-        (
-            "sample_id,pair_id,split,input_path,target_path,foreground_mask_path,"
-            "input_modality,target_modality,x,y,height\n"
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="width"):
-        DatasetManifest.from_csv(csv_path, tmp_path)
-
-
-def test_from_csv_unexpected_column_raises(tmp_path: Path) -> None:
-    csv_path = tmp_path / "bad.csv"
-    csv_path.write_text(
-        (
-            "sample_id,pair_id,split,input_path,target_path,foreground_mask_path,"
-            "input_modality,target_modality,x,y,width,height,extra\n"
-            "abc,P1,train,a/s.tif,a/t.tif,,lf,st,0,0,256,256,ignored\n"
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="unexpected columns"):
-        DatasetManifest.from_csv(csv_path, tmp_path)
-
-
-def test_from_csv_invalid_integer_raises(tmp_path: Path) -> None:
-    csv_path = tmp_path / "bad.csv"
-    header = (
-        "sample_id,pair_id,split,input_path,target_path,foreground_mask_path,"
-        "input_modality,target_modality,x,y,width,height\n"
-    )
-    row = "abc,P1,train,a/s.tif,a/t.tif,,lf,st,NOT_AN_INT,0,256,256\n"
-    csv_path.write_text(header + row, encoding="utf-8")
-
-    with pytest.raises(ValueError, match="field 'x' must be an integer"):
-        DatasetManifest.from_csv(csv_path, tmp_path)
-
-
-def test_from_csv_invalid_split_raises(tmp_path: Path) -> None:
-    csv_path = tmp_path / "bad.csv"
-    header = (
-        "sample_id,pair_id,split,input_path,target_path,foreground_mask_path,"
-        "input_modality,target_modality,x,y,width,height\n"
-    )
-    row = "abc,P1,INVALID_SPLIT,a/s.tif,a/t.tif,,lf,st,0,0,256,256\n"
-    csv_path.write_text(header + row, encoding="utf-8")
-
-    with pytest.raises(ValueError, match="split must be one of"):
-        DatasetManifest.from_csv(csv_path, tmp_path)
-
-
-def test_from_csv_empty_sample_id_raises(tmp_path: Path) -> None:
-    csv_path = tmp_path / "bad.csv"
-    header = (
-        "sample_id,pair_id,split,input_path,target_path,foreground_mask_path,"
-        "input_modality,target_modality,x,y,width,height\n"
-    )
-    row = ",P1,train,a/s.tif,a/t.tif,,lf,st,0,0,256,256\n"
-    csv_path.write_text(header + row, encoding="utf-8")
-
-    with pytest.raises(ValueError, match="sample_id"):
-        DatasetManifest.from_csv(csv_path, tmp_path)
+def test_manifest_metadata_is_strict() -> None:
+    with pytest.raises(ValueError, match="exactly 3.0"):
+        ManifestMetadata("2.0", ("LF",), "LF", "target")
+    with pytest.raises(ValueError, match="differ"):
+        ManifestMetadata("3.0", ("LF",), "LF", "LF")

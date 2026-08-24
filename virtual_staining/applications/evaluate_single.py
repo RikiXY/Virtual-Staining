@@ -120,7 +120,7 @@ def _run_single(request: _EvaluateRequest) -> SingleEvalResult:
         generated_path,
         shape,
         metrics,
-        pair_id=request.sample_id,
+        set_id=request.sample_id,
     )
     single_case_csv = individual_cases_dir / f"{request.sample_id}_evaluation.csv"
     write_single_case_csv(row, single_case_csv)

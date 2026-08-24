@@ -6,6 +6,7 @@ import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import torch
 import torch.nn as nn
@@ -98,6 +99,7 @@ class Trainer:
         train_dir: Path,
         val_dir: Path,
         losses: LossConfig | None = None,
+        target_modality: str | None = None,
     ) -> None:
         self.config = config
         self._run_paths = run_paths
@@ -106,10 +108,11 @@ class Trainer:
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
-        self._image_size = image_size
         self._train_dir = train_dir
         self._val_dir = val_dir
         self.losses = losses
+        self._target_modality = target_modality
+        self._input_names = cast(tuple[str, ...], generator.input_names)
 
         self._amp_enabled = is_amp_enabled(device)
 
@@ -170,6 +173,7 @@ class Trainer:
             beta2=config.beta2,
             batch_size=config.batch_size,
             num_workers=config.num_workers,
+            target_modality=target_modality,
         )
 
     # ------------------------------------------------------------------
@@ -740,10 +744,10 @@ class Trainer:
         num_batches = 0
 
         for i, batch in enumerate(self.train_loader):
-            x, y, masks = unpack_batch(batch, self.device)
+            inputs, target, masks = unpack_batch(batch, self.device, self._input_names)
             step_losses = self._step.step(
-                x,
-                y,
+                inputs,
+                target,
                 epoch=epoch,
                 global_step=epoch * len(self.train_loader) + i,
                 masks=masks,

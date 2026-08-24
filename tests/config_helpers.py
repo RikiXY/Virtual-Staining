@@ -36,6 +36,8 @@ def write_run_config(
     if section:
         content += f"{section}\n"
     data = yaml.safe_load(content)
+    if "model" not in data:
+        data["model"] = {"inputs": ["label_free"], "target": "stained"}
     training = data.get("training")
     if isinstance(training, dict):
         training["augmentation"] = data.pop("augmentation", training.get("augmentation", {}))

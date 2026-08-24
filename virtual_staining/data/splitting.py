@@ -6,17 +6,17 @@ import math
 from pathlib import Path
 
 from virtual_staining.data.manifest import Split
-from virtual_staining.data.pairs import SlidePair
+from virtual_staining.data.slide_sets import SlideSet
 
 SPLITS: tuple[Split, Split, Split] = ("train", "val", "test")
 
 
-def group_id_for_pair(pair: SlidePair, unit: str) -> str:
-    if unit == "pair":
-        return pair.pair_id
-    value = getattr(pair, f"{unit}_id", None)
+def group_id_for_set(slide_set: SlideSet, unit: str) -> str:
+    if unit == "set":
+        return slide_set.set_id
+    value = getattr(slide_set, f"{unit}_id", None)
     if not value:
-        raise ValueError(f"split.unit={unit!r} requires {unit}_id for pair {pair.pair_id!r}")
+        raise ValueError(f"split.unit={unit!r} requires {unit}_id for set {slide_set.set_id!r}")
     return str(value)
 
 
@@ -30,15 +30,9 @@ def _group_counts(count: int, ratios: tuple[float, float, float]) -> tuple[int, 
     remaining = count - len(positive)
     if remaining == 0:
         return tuple(counts)  # type: ignore[return-value]
-
-    residual_weights = [
-        max(count * ratio - counts[index], 0.0) for index, ratio in enumerate(ratios)
-    ]
-    total = sum(residual_weights)
-    if total == 0:
-        residual_weights = list(ratios)
-        total = sum(residual_weights)
-    quotas = [remaining * weight / total for weight in residual_weights]
+    weights = [max(count * ratio - counts[index], 0.0) for index, ratio in enumerate(ratios)]
+    total = sum(weights) or sum(ratios)
+    quotas = [remaining * weight / total for weight in weights]
     additions = [math.floor(quota) for quota in quotas]
     for index in sorted(range(3), key=lambda item: (-(quotas[item] - additions[item]), item))[
         : remaining - sum(additions)
@@ -47,12 +41,7 @@ def _group_counts(count: int, ratios: tuple[float, float, float]) -> tuple[int, 
     return tuple(counts[index] + additions[index] for index in range(3))  # type: ignore[return-value]
 
 
-def _load_frozen_assignment(
-    path: Path,
-    *,
-    unit: str,
-    groups: set[str],
-) -> dict[str, Split]:
+def _load_frozen_assignment(path: Path, *, unit: str, groups: set[str]) -> dict[str, Split]:
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         expected = ["group_id", "unit", "split"]
@@ -72,16 +61,17 @@ def _load_frozen_assignment(
                 raise ValueError(f"Frozen split assignment row {row_number} has invalid split")
             assignments[group_id] = row["split"]  # type: ignore[assignment]
     if set(assignments) != groups:
+        missing = sorted(groups - set(assignments))
+        unknown = sorted(set(assignments) - groups)
         raise ValueError(
             "Frozen split assignment group set does not match inventory: "
-            f"missing={sorted(groups - set(assignments))}, "
-            f"unknown={sorted(set(assignments) - groups)}"
+            f"missing={missing}, unknown={unknown}"
         )
     return assignments
 
 
 def assign_group_splits(
-    pairs: tuple[SlidePair, ...],
+    slide_sets: tuple[SlideSet, ...],
     *,
     unit: str,
     ratios: tuple[float, float, float],
@@ -89,40 +79,33 @@ def assign_group_splits(
     assignment_file: Path | None = None,
     dataset_root: Path | None = None,
 ) -> dict[str, Split]:
-    """Return pair_id -> split for a deterministic independent-group partition."""
     if unit == "patch":
         if assignment_file is not None:
             raise ValueError("split.assignment_file is not supported for split.unit='patch'")
         return {}
-    groups_by_pair = {pair.pair_id: group_id_for_pair(pair, unit) for pair in pairs}
-    groups = set(groups_by_pair.values())
+    groups_by_set = {item.set_id: group_id_for_set(item, unit) for item in slide_sets}
+    groups = set(groups_by_set.values())
     if assignment_file is not None:
-        path = assignment_file
-        if not path.is_absolute():
-            if dataset_root is None:
-                raise ValueError("dataset_root is required for a relative assignment_file")
-            path = dataset_root / path
+        path = (
+            assignment_file
+            if assignment_file.is_absolute()
+            else (dataset_root or Path()) / assignment_file
+        )
         group_assignments = _load_frozen_assignment(path, unit=unit, groups=groups)
     else:
         ordered = sorted(
-            groups,
-            key=lambda group: (hashlib.sha256(f"{seed}:{group}".encode()).digest(), group),
+            groups, key=lambda group: (hashlib.sha256(f"{seed}:{group}".encode()).digest(), group)
         )
         counts = _group_counts(len(ordered), ratios)
-        group_assignments = {}
+        group_assignments: dict[str, Split] = {}
         offset = 0
         for split, count in zip(SPLITS, counts, strict=True):
             group_assignments.update({group: split for group in ordered[offset : offset + count]})
             offset += count
-    return {pair_id: group_assignments[group] for pair_id, group in groups_by_pair.items()}
+    return {set_id: group_assignments[group] for set_id, group in groups_by_set.items()}
 
 
-def write_split_assignment(
-    path: Path,
-    *,
-    unit: str,
-    assignments: dict[str, Split],
-) -> None:
+def write_split_assignment(path: Path, *, unit: str, assignments: dict[str, Split]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=["group_id", "unit", "split"])

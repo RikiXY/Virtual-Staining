@@ -167,32 +167,26 @@ def read_per_image_metrics_csv(path: str | Path) -> list[dict[str, str]]:
 
 def write_grouped_summaries(
     rows: list[dict[str, object]],
-    pair_rows: dict[str, dict[str, str]],
+    set_rows: dict[str, dict[str, str]],
     output_dir: Path,
     *,
     bootstrap_iterations: int,
     bootstrap_seed: int,
 ) -> list[Path]:
-    """Write unit means and deterministic CIs for every complete biological level."""
     written: list[Path] = []
-    for unit, field in (
-        ("pair", "pair_id"),
-        ("specimen", "specimen_id"),
-        ("patient", "patient_id"),
-    ):
+    for unit, field in (("set", "set_id"), ("specimen", "specimen_id"), ("patient", "patient_id")):
         groups: dict[str, list[dict[str, object]]] = {}
         incomplete = False
         for row in rows:
-            pair_id = str(row["pair_id"])
-            pair = pair_rows.get(pair_id)
-            group_id = pair_id if unit == "pair" else (pair or {}).get(field, "")
+            set_id = str(row["set_id"])
+            metadata = set_rows.get(set_id)
+            group_id = set_id if unit == "set" else (metadata or {}).get(field, "")
             if not group_id:
                 incomplete = True
                 break
             groups.setdefault(group_id, []).append(row)
         if incomplete or not groups:
             continue
-
         unit_rows: list[dict[str, Any]] = []
         for group_id, group_rows in sorted(groups.items()):
             unit_rows.append(
@@ -209,19 +203,16 @@ def write_grouped_summaries(
         metrics_path = output_dir / f"{unit}_metrics.csv"
         with metrics_path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(
-                handle,
-                fieldnames=["unit", "group_id", "patch_count", *SUMMARY_METRIC_NAMES],
+                handle, fieldnames=["unit", "group_id", "patch_count", *SUMMARY_METRIC_NAMES]
             )
             writer.writeheader()
             writer.writerows(unit_rows)
         written.append(metrics_path)
-
         rng = random.Random(bootstrap_seed)
         summary_path = output_dir / f"summary_{unit}.csv"
         with summary_path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(
-                handle,
-                fieldnames=["unit", "metric", "count", "mean", "ci95_low", "ci95_high"],
+                handle, fieldnames=["unit", "metric", "count", "mean", "ci95_low", "ci95_high"]
             )
             writer.writeheader()
             for metric in SUMMARY_METRIC_NAMES:
@@ -230,11 +221,8 @@ def write_grouped_summaries(
                     statistics.mean(rng.choice(values) for _ in values)
                     for _ in range(bootstrap_iterations)
                 )
-                if bootstrap:
-                    low = bootstrap[int(0.025 * (len(bootstrap) - 1))]
-                    high = bootstrap[int(0.975 * (len(bootstrap) - 1))]
-                else:
-                    low = high = float("nan")
+                low = bootstrap[int(0.025 * (len(bootstrap) - 1))] if bootstrap else float("nan")
+                high = bootstrap[int(0.975 * (len(bootstrap) - 1))] if bootstrap else float("nan")
                 writer.writerow(
                     {
                         "unit": unit,

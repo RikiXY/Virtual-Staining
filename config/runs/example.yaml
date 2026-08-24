@@ -1,7 +1,7 @@
 # Copy this file for a new experiment, then edit the values in one place.
 # Run with: make <target> CONFIG=config/runs/local/my_run.yaml
 
-# Dataset folder containing the paired full-size input images named below.
+# Dataset folder containing the configured full-size slide-set assets.
 dataset_root: local_workspace/datasets/your_sample
 # Optional: override the default manifest path
 # (defaults to dataset_root/manifests/manifest.csv).
@@ -16,38 +16,34 @@ run_name: example_run
 image_size: [256, 256]
 
 model:
+  inputs: [autofluorescence, label_free]
+  target: H&E
   generator:
-    in_channels: 3
-    out_channels: 3
+    architecture: concat_unet
     base_channels: 64
     norm: batch
     dropout: false
     bilinear: false
   discriminator:
-    in_channels: 6
     ndf: 64
     norm: instance
-    # Must stay false when using adversarial_bce loss terms.
-    # BCE-with-logits applies sigmoid internally.
     use_sigmoid: false
 
 preprocessing:
   inputs:
-    inventory: inputs/pairs.csv
-    source_modality: autofluorescence
+    inventory: inputs/slide_sets.csv
+    modalities: [autofluorescence, label_free]
+    reference: label_free
     target_modality: H&E
-    hash_verification: cached  # use always for publication verification
+    hash_verification: cached
   patching:
     patch_size: [256, 256]
     grid_movement: [256, 256]
     margin: 200
     save_discarded_patches: false
   masks:
-    provided_layout: auto
     generation: if_missing
     strategy: connected_components
-    source_strategy: connected_components
-    target_strategy: hsv
     scale: 0.25
     lowres_filtering: true
     save_resolved_masks: false
@@ -60,10 +56,9 @@ preprocessing:
   filtering:
     foreground:
       enabled: true
-      policy: both
+      policy: reference
       min_ratio: 0.25
     max_white_ratio: 0.70
-    white_threshold: 250
     max_largest_white_component_ratio: 0.20
   split:
     unit: patient

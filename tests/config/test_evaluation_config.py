@@ -9,10 +9,9 @@ import pytest
 
 from tests.config_helpers import write_run_config, yaml_section
 from tests.image_helpers import write_rgb_image, write_rgb_pair
-from tests.manifest_helpers import make_manifest_record, write_manifest_csv
+from tests.manifest_helpers import make_manifest_record, manifest_metadata, write_manifest_csv
 from virtual_staining.applications.evaluate import evaluate
 from virtual_staining.config.run import RunConfig
-from virtual_staining.data.pairs import PAIR_MANIFEST_FIELDS
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.inference.outputs import (
     generated_filename_for_sample,
@@ -22,24 +21,51 @@ from virtual_staining.metrics import METRIC_SPECS
 
 
 def _write_test_manifest(dataset_root: Path, sample_ids: list[str]) -> None:
-    records = tuple(make_manifest_record(sample_id, "test", ext=".png") for sample_id in sample_ids)
+    records = tuple(
+        make_manifest_record(
+            sample_id,
+            "test",
+            input_paths={"label_free": Path(f"splits/test/{sample_id}_source.png")},
+            ext=".png",
+            target_path=Path(f"splits/test/{sample_id}_target.png"),
+        )
+        for sample_id in sample_ids
+    )
     write_manifest_csv(dataset_root, records)
-    with (dataset_root / "manifests" / "pairs.csv").open(
+    with (dataset_root / "manifests" / "slide_sets.csv").open(
         "w", newline="", encoding="utf-8"
     ) as handle:
-        writer = csv.DictWriter(handle, fieldnames=PAIR_MANIFEST_FIELDS)
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "set_id",
+                "split",
+                "patient_id",
+                "specimen_id",
+                "status",
+                "label_free__alignment_method",
+                "target__alignment_method",
+                "label_free__alignment_metadata",
+                "target__alignment_metadata",
+            ],
+        )
         writer.writeheader()
         writer.writerow(
             {
-                "pair_id": "P1",
+                "set_id": "P1",
                 "split": "test",
-                "source_path": "raw/source.png",
-                "target_path": "raw/target.png",
+                "patient_id": "patient-1",
+                "specimen_id": "specimen-1",
                 "status": "processed",
-                "alignment_method": "identity",
-                "alignment_metadata_path": "metadata/pairs/P1.json",
+                "label_free__alignment_method": "identity",
+                "target__alignment_method": "identity",
+                "label_free__alignment_metadata": "{}",
+                "target__alignment_metadata": "{}",
             }
         )
+    (dataset_root / "manifests" / "manifest_metadata.json").write_text(
+        json.dumps(manifest_metadata().to_dict()), encoding="utf-8"
+    )
 
 
 def _write_evaluate_config(
@@ -51,7 +77,8 @@ def _write_evaluate_config(
 ) -> Path:
     return write_run_config(
         tmp_path,
-        yaml_section("evaluation", section_yaml),
+        "model:\n  inputs: [label_free]\n  target: stained\n"
+        + yaml_section("evaluation", section_yaml),
         filename=filename,
         dataset_root=dataset_root,
         results_path=tmp_path / "results",
@@ -59,10 +86,16 @@ def _write_evaluate_config(
     )
 
 
+def _write_manifest_metadata(dataset_root: Path) -> None:
+    (dataset_root / "manifests" / "manifest_metadata.json").write_text(
+        json.dumps(manifest_metadata().to_dict()), encoding="utf-8"
+    )
+
+
 def test_evaluation_config_defaults_to_run_dirs(tmp_path: Path) -> None:
     yaml_file = write_run_config(
         tmp_path,
-        "evaluation:\n  save_graphs: false",
+        "model:\n  inputs: [label_free]\n  target: stained\nevaluation:\n  save_graphs: false",
         dataset_root=tmp_path / "data",
         results_path=tmp_path / "results",
         run_name="section_run",
@@ -88,6 +121,9 @@ def test_evaluation_config_accepts_explicit_dirs(tmp_path: Path) -> None:
     yaml_file = write_run_config(
         tmp_path,
         """\
+        model:
+          inputs: [label_free]
+          target: stained
         evaluation:
           generated_dir: /custom/generated
           output_dir: /custom/evaluation
@@ -107,6 +143,7 @@ def test_evaluation_config_accepts_explicit_dirs(tmp_path: Path) -> None:
 def test_evaluation_from_yaml_unknown_section_key_raises(tmp_path: Path) -> None:
     yaml_file = write_run_config(
         tmp_path,
+        "model:\n  inputs: [label_free]\n  target: stained\n"
         "evaluation:\n  target_dir: /custom/targets",
         filename="typo.yaml",
         dataset_root=tmp_path / "data",
@@ -121,6 +158,9 @@ def test_evaluation_from_yaml_unknown_top_level_key_raises(tmp_path: Path) -> No
     yaml_file = write_run_config(
         tmp_path,
         """
+        model:
+          inputs: [label_free]
+          target: stained
         typo_field: oops
         evaluation:
           save_graphs: false
@@ -137,7 +177,7 @@ def test_evaluation_from_yaml_unknown_top_level_key_raises(tmp_path: Path) -> No
 def test_evaluation_from_yaml_string_bool_save_graphs_raises(tmp_path: Path) -> None:
     yaml_file = write_run_config(
         tmp_path,
-        'evaluation:\n  save_graphs: "false"',
+        'model:\n  inputs: [label_free]\n  target: stained\nevaluation:\n  save_graphs: "false"',
         filename="str_bool.yaml",
         dataset_root=tmp_path / "data",
         results_path=tmp_path / "results",
@@ -150,6 +190,7 @@ def test_evaluation_from_yaml_string_bool_save_graphs_raises(tmp_path: Path) -> 
 def test_evaluation_from_yaml_string_bool_hide_graphs_path_raises(tmp_path: Path) -> None:
     yaml_file = write_run_config(
         tmp_path,
+        "model:\n  inputs: [label_free]\n  target: stained\n"
         'evaluation:\n  hide_graphs_path: "false"',
         filename="str_bool2.yaml",
         dataset_root=tmp_path / "data",
@@ -265,11 +306,12 @@ def test_evaluate_raises_if_required_test_split_missing(tmp_path: Path) -> None:
                 "00000_00000",
                 "val",
                 ext=".png",
-                input_path=Path("splits/test/00000_00000_source.png"),
+                input_paths={"label_free": Path("splits/test/00000_00000_source.png")},
                 target_path=Path("splits/test/00000_00000_target.png"),
             ),
         ),
     )
+    _write_manifest_metadata(dataset_root)
 
     yaml_file = _write_evaluate_config(
         tmp_path,
@@ -286,7 +328,7 @@ def test_evaluate_raises_if_required_test_split_missing(tmp_path: Path) -> None:
         evaluate(run_config, yaml_file)
 
 
-def test_evaluate_pairs_from_manifest_test_split(tmp_path: Path) -> None:
+def test_evaluate_records_from_manifest_test_split(tmp_path: Path) -> None:
     dataset_root = tmp_path / "data"
     target_dir = dataset_root / "splits" / "test"
     generated_dir = tmp_path / "generated"

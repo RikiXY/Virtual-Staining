@@ -11,6 +11,7 @@ from virtual_staining.data.preprocessing import ALLOWED_MASK_STRATEGIES
 from virtual_staining.utils.dimensions import parse_wh_size
 
 _SECTION_KEYS = frozenset({"inputs", "patching", "masks", "alignment", "filtering", "split", "io"})
+_MODality_NAME = __import__("re").compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
 
 
 def _mapping(value: object, name: str) -> dict[str, Any]:
@@ -46,13 +47,27 @@ def _optional_strategy(value: object, field_name: str) -> str | None:
 @dataclass(frozen=True)
 class InputConfig:
     inventory: Path
-    source_modality: str
+    modalities: tuple[str, ...]
+    reference: str
     target_modality: str
     hash_verification: str = "cached"
 
     def __post_init__(self) -> None:
-        if not self.source_modality.strip() or not self.target_modality.strip():
-            raise ValueError("inputs source_modality and target_modality must not be empty")
+        modalities = tuple(self.modalities)
+        object.__setattr__(self, "modalities", modalities)
+        if not modalities:
+            raise ValueError("inputs.modalities must contain at least one modality")
+        if len(set(modalities)) != len(modalities):
+            raise ValueError("inputs.modalities must contain unique names")
+        invalid = [name for name in modalities if not _MODality_NAME.fullmatch(name)]
+        if invalid:
+            raise ValueError(f"inputs.modalities contains invalid names: {invalid}")
+        if self.reference not in modalities:
+            raise ValueError("inputs.reference must name one of inputs.modalities")
+        if not self.target_modality.strip():
+            raise ValueError("inputs.target_modality must not be blank")
+        if self.target_modality in modalities:
+            raise ValueError("inputs.target_modality must differ from every input modality")
         if self.hash_verification not in {"cached", "always"}:
             raise ValueError("inputs.hash_verification must be 'cached' or 'always'")
 
@@ -67,11 +82,8 @@ class PatchingConfig:
 
 @dataclass(frozen=True)
 class MaskConfig:
-    provided_layout: str = "auto"
     generation: str = "if_missing"
     strategy: str = "connected_components"
-    source_strategy: str | None = None
-    target_strategy: str | None = None
     scale: float = 1.0
     lowres_filtering: bool = False
     save_resolved_masks: bool = False
@@ -89,7 +101,7 @@ class AlignmentConfig:
 @dataclass(frozen=True)
 class ForegroundFilterConfig:
     enabled: bool = True
-    policy: str = "both"
+    policy: str = "reference"
     min_ratio: float = 0.25
 
 
@@ -133,96 +145,78 @@ class PreprocessingConfig:
         self.validate()
 
     def validate(self) -> None:
-        patching = self.patching
         for field_name, value in (
-            ("patching.patch_size", patching.patch_size),
-            ("patching.grid_movement", patching.grid_movement),
+            ("patching.patch_size", self.patching.patch_size),
+            ("patching.grid_movement", self.patching.grid_movement),
         ):
             if len(value) != 2 or any(dimension <= 0 for dimension in value):
                 raise ValueError(f"{field_name} must contain two positive integers")
-        if patching.margin < 0:
+        if self.patching.margin < 0:
             raise ValueError("patching.margin must be greater than or equal to 0")
-
-        io = self.io
-        if io.max_memory_gb is not None and io.max_memory_gb <= 0:
+        if self.io.max_memory_gb is not None and self.io.max_memory_gb <= 0:
             raise ValueError("io.max_memory_gb must be greater than 0 when provided")
-        if io.backend not in {"auto", "pillow", "openslide"}:
+        if self.io.backend not in {"auto", "pillow", "openslide"}:
             raise ValueError("io.backend must be auto, pillow, or openslide")
-
-        masks = self.masks
-        if masks.provided_layout not in {"auto", "none", "shared", "separate"}:
-            raise ValueError("masks.provided_layout must be auto, none, shared, or separate")
-        if masks.generation not in {"never", "if_missing", "always"}:
+        if self.masks.generation not in {"never", "if_missing", "always"}:
             raise ValueError("masks.generation must be never, if_missing, or always")
-        if not (0.0 < masks.scale <= 1.0):
+        if not (0.0 < self.masks.scale <= 1.0):
             raise ValueError("masks.scale must be in (0.0, 1.0]")
-        _optional_strategy(masks.strategy, "masks.strategy")
-        _optional_strategy(masks.source_strategy, "masks.source_strategy")
-        _optional_strategy(masks.target_strategy, "masks.target_strategy")
-
-        alignment = self.alignment
-        if alignment.mode not in {"auto", "always", "never"}:
+        _optional_strategy(self.masks.strategy, "masks.strategy")
+        if self.alignment.mode not in {"auto", "always", "never"}:
             raise ValueError("alignment.mode must be auto, always, or never")
-        if alignment.method != "affine_sift":
+        if self.alignment.method != "affine_sift":
             raise ValueError("alignment.method must be affine_sift")
-        if alignment.on_failure not in {"error", "skip_pair"}:
-            raise ValueError("alignment.on_failure must be error or skip_pair")
-
-        split = self.split
-        if split.unit not in {"patch", "pair", "specimen", "patient"}:
-            raise ValueError("split.unit must be patch, pair, specimen, or patient")
-        ratios = (split.train, split.val, split.test)
-        if any(value < 0 or value > 1 for value in ratios):
-            raise ValueError("split ratios must be between 0 and 1")
-        if not isclose(sum(ratios), 1.0):
-            raise ValueError("split ratios must sum to 1")
-
-        filtering = self.filtering
-        if filtering.foreground.policy not in {
-            "both",
-            "source",
+        if self.alignment.on_failure not in {"error", "skip_set"}:
+            raise ValueError("alignment.on_failure must be error or skip_set")
+        if self.split.unit not in {"patch", "set", "specimen", "patient"}:
+            raise ValueError("split.unit must be patch, set, specimen, or patient")
+        ratios = (self.split.train, self.split.val, self.split.test)
+        if any(value < 0 or value > 1 for value in ratios) or not isclose(sum(ratios), 1.0):
+            raise ValueError("split ratios must be between 0 and 1 and sum to 1")
+        if self.filtering.foreground.policy not in {
+            "reference",
             "target",
+            "all",
             "intersection",
             "union",
         }:
             raise ValueError("filtering.foreground.policy is invalid")
         for field_name, value in (
-            ("filtering.foreground.min_ratio", filtering.foreground.min_ratio),
-            ("filtering.max_white_ratio", filtering.max_white_ratio),
+            ("filtering.foreground.min_ratio", self.filtering.foreground.min_ratio),
+            ("filtering.max_white_ratio", self.filtering.max_white_ratio),
             (
                 "filtering.max_largest_white_component_ratio",
-                filtering.max_largest_white_component_ratio,
+                self.filtering.max_largest_white_component_ratio,
             ),
         ):
             if value < 0 or value > 1:
                 raise ValueError(f"{field_name} must be between 0 and 1")
-        if not 0 <= filtering.white_threshold <= 255:
+        if not 0 <= self.filtering.white_threshold <= 255:
             raise ValueError("filtering.white_threshold must be between 0 and 255")
 
     @classmethod
     def from_mapping(
-        cls,
-        data: dict[str, Any],
-        *,
-        dataset_root: Path,
-        default_image_size: tuple[int, int],
+        cls, data: dict[str, Any], *, dataset_root: Path, default_image_size: tuple[int, int]
     ) -> PreprocessingConfig:
         reject_unknown_keys(data, _SECTION_KEYS, "preprocessing")
         if "inputs" not in data:
             raise ValueError("preprocessing requires inputs")
         if "split" not in data:
             raise ValueError("preprocessing requires split")
-
         inputs_data = _mapping(data["inputs"], "inputs")
         reject_unknown_keys(
             inputs_data,
-            frozenset({"inventory", "source_modality", "target_modality", "hash_verification"}),
+            frozenset(
+                {"inventory", "modalities", "reference", "target_modality", "hash_verification"}
+            ),
             "preprocessing.inputs",
         )
-        for required in ("inventory", "source_modality", "target_modality"):
+        for required in ("inventory", "modalities", "reference", "target_modality"):
             if required not in inputs_data:
                 raise ValueError(f"preprocessing.inputs requires {required}")
-
+        raw_modalities = inputs_data["modalities"]
+        if isinstance(raw_modalities, str) or not isinstance(raw_modalities, Sequence):
+            raise TypeError("preprocessing.inputs.modalities must be a sequence")
         patching = _mapping(data.get("patching"), "patching")
         reject_unknown_keys(
             patching,
@@ -234,11 +228,8 @@ class PreprocessingConfig:
             masks_data,
             frozenset(
                 {
-                    "provided_layout",
                     "generation",
                     "strategy",
-                    "source_strategy",
-                    "target_strategy",
                     "scale",
                     "lowres_filtering",
                     "save_resolved_masks",
@@ -286,12 +277,12 @@ class PreprocessingConfig:
             io_data, frozenset({"tiled", "backend", "max_memory_gb"}), "preprocessing.io"
         )
         max_memory = io_data.get("max_memory_gb")
-
         return cls(
             dataset_root=dataset_root,
             inputs=InputConfig(
                 inventory=Path(inputs_data["inventory"]),
-                source_modality=str(inputs_data["source_modality"]),
+                modalities=tuple(str(value) for value in raw_modalities),
+                reference=str(inputs_data["reference"]),
                 target_modality=str(inputs_data["target_modality"]),
                 hash_verification=str(inputs_data.get("hash_verification", "cached")),
             ),
@@ -305,18 +296,11 @@ class PreprocessingConfig:
                 ),
             ),
             masks=MaskConfig(
-                provided_layout=str(masks_data.get("provided_layout", "auto")),
                 generation=str(masks_data.get("generation", "if_missing")),
                 strategy=_optional_strategy(
                     masks_data.get("strategy", "connected_components"), "masks.strategy"
                 )
                 or "connected_components",
-                source_strategy=_optional_strategy(
-                    masks_data.get("source_strategy"), "masks.source_strategy"
-                ),
-                target_strategy=_optional_strategy(
-                    masks_data.get("target_strategy"), "masks.target_strategy"
-                ),
                 scale=float(masks_data.get("scale", 1.0)),
                 lowres_filtering=parse_bool_strict(
                     masks_data.get("lowres_filtering", False), "masks.lowres_filtering"
@@ -341,7 +325,7 @@ class PreprocessingConfig:
                     enabled=parse_bool_strict(
                         foreground.get("enabled", True), "filtering.foreground.enabled"
                     ),
-                    policy=str(foreground.get("policy", "both")),
+                    policy=str(foreground.get("policy", "reference")),
                     min_ratio=float(foreground.get("min_ratio", 0.25)),
                 ),
                 max_white_ratio=float(filtering.get("max_white_ratio", 0.7)),
@@ -356,11 +340,9 @@ class PreprocessingConfig:
                 val=float(split_data["val"]),
                 test=float(split_data["test"]),
                 seed=int(split_data.get("seed", 0)),
-                assignment_file=(
-                    Path(split_data["assignment_file"])
-                    if split_data.get("assignment_file")
-                    else None
-                ),
+                assignment_file=Path(split_data["assignment_file"])
+                if split_data.get("assignment_file")
+                else None,
             ),
             io=IOConfig(
                 tiled=parse_bool_strict(io_data.get("tiled", True), "io.tiled"),
@@ -373,6 +355,7 @@ class PreprocessingConfig:
         result = asdict(self)
         result.pop("dataset_root")
         result["inputs"]["inventory"] = str(self.inputs.inventory)
+        result["inputs"]["modalities"] = list(self.inputs.modalities)
         result["patching"]["patch_size"] = list(self.patching.patch_size)
         result["patching"]["grid_movement"] = list(self.patching.grid_movement)
         if self.split.assignment_file is not None:

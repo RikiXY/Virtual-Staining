@@ -61,15 +61,15 @@ def evaluate_pair(
     }, target.shape
 
 
-def evaluate_pairs(
-    pairs: Sequence[tuple[Path, Path, str, str]],
+def evaluate_sets(
+    sets: Sequence[tuple[Path, Path, str, str]],
     output_dir: Path,
 ) -> EvaluationResult:
     """Computes image quality metrics for a list of target/generated pairs."""
     output_dir.mkdir(parents=True, exist_ok=True)
     result = EvaluationResult(output_dir=output_dir)
 
-    for target_path, generated_path, sample_id, pair_id in pairs:
+    for target_path, generated_path, sample_id, set_id in sets:
         if not generated_path.exists():
             logger.warning("Generated image not found, skipping: %s", generated_path)
             result.num_skipped += 1
@@ -99,7 +99,7 @@ def evaluate_pairs(
             continue
 
         row = build_metric_row(
-            sample_id, target_path, generated_path, shape, metrics, pair_id=pair_id
+            sample_id, target_path, generated_path, shape, metrics, set_id=set_id
         )
         result.rows.append(row)
         result.num_evaluated += 1

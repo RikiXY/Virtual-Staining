@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import cast
 
-import torch
 from torchvision.utils import save_image
 
 from virtual_staining.config.run import RunConfig
@@ -54,6 +52,10 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
 
     output_dir = config.inference.output_dir or paths.output_test_dir
     manifest = load_manifest_or_raise(config.project)
+    if not set(config.model.inputs).issubset(manifest.metadata.input_modalities):
+        raise ValueError("model.inputs must be a subset of manifest input modalities")
+    if config.model.target != manifest.metadata.target_modality:
+        raise ValueError("model.target must equal manifest target modality")
     manifest.validate(check_files_exist=True, require_splits={"test"})
     manifest_path = config.project.manifest_path
     manifest_hash = compute_manifest_hash(manifest_path)
@@ -67,7 +69,9 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
         device=str(device),
     )
     test_manifest = manifest.filter_split("test")
-    dataset = PairedManifestDataset(test_manifest, transform=transform)
+    dataset = PairedManifestDataset(
+        test_manifest, input_names=config.model.inputs, transform=transform
+    )
     logger.info("Loaded manifest: %s test samples", len(dataset))
     infer_details: dict[str, object] = {
         "checkpoint_path": str(checkpoint_path),
@@ -87,12 +91,12 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
             return result
 
         for idx in range(len(dataset)):
-            source_tensor, _ = dataset[idx]
-            source_tensor = cast(torch.Tensor, source_tensor)
+            sample = dataset[idx]
+            inputs = {name: tensor.unsqueeze(0) for name, tensor in sample["inputs"].items()}
             record = test_manifest.records[idx]
-            output = predict_batch(generator, source_tensor.unsqueeze(0), device)[0]
+            output = predict_batch(generator, inputs, device)[0]
             out_path = output_dir / generated_filename_for_sample(
-                record.sample_id, record.input_path.suffix
+                record.sample_id, record.target_path.suffix
             )
             save_image(output, out_path)
             result.generated_paths.append(out_path)

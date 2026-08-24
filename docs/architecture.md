@@ -19,11 +19,11 @@ upper layers may import from lower layers, never the reverse.
 | `utils/` | Shared primitives: image dimensions and image I/O helpers |
 | `config/` | YAML loading and validation, typed config dataclasses, per-section accessors |
 | `experiment/` | Run concept: `RunPaths` (directory layout), `RunMetadata` (run-level provenance), `RunProvenance` (stage lifecycle), environment snapshots |
-| `models/` | `UNetGenerator`, `PatchGANDiscriminator`, model config dataclass |
-| `data/` | `DatasetManifest`, `ManifestRecord`, `DatasetBuilder` (preprocessing pipeline), `PatchDataset` |
+| `models/` | `ConcatUNetGenerator` (ordered early RGB concatenation), internal `UNetGenerator`, `PatchGANDiscriminator`, and model config |
+| `data/` | `SlideAsset`, `SlideSet`, v3 `DatasetManifest`, `ManifestRecord`, and `DatasetBuilder` |
 | `training/` | Training mechanics: `Trainer`, validation, metric history, losses, per-step logic, checkpoint state and selection |
-| `inference/` | Reusable checkpoint loading, device selection, transforms, prediction, single-image workflows, and output naming |
-| `evaluation/` | Pair evaluation, diagnostic plots, representative selection, comparison panels, summary statistics, ranking utilities |
+| `inference/` | Reusable checkpoint loading, device selection, named-input prediction, single-image workflows, and output naming |
+| `evaluation/` | Set evaluation, diagnostic plots, representative selection, comparison panels, summary statistics, ranking utilities |
 | `applications/` | User-visible stage lifecycle owners (`prepare.py`, `train.py`, `infer.py`, `evaluate.py`) and other use cases - no `argparse` |
 | `cli/` | The `argparse` entrypoint and helpers for `vs <command>` - thin adapters over `applications/` |
 

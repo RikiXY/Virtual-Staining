@@ -5,7 +5,7 @@ from pathlib import Path
 
 METRIC_FIELDNAMES = [
     "sample_id",
-    "pair_id",
+    "set_id",
     "target_path",
     "generated_path",
     "width",
@@ -30,13 +30,13 @@ def build_metric_row(
     generated_path: str | Path,
     shape: tuple[int, int, int],
     metrics: dict[str, float],
-    pair_id: str,
+    set_id: str,
 ) -> dict[str, object]:
     """Builds a standard row for per_image_metrics.csv."""
     height, width, channels = shape
     return {
         "sample_id": sample_id,
-        "pair_id": pair_id,
+        "set_id": set_id,
         "target_path": str(target_path),
         "generated_path": str(generated_path),
         "width": width,

@@ -1,3 +1,6 @@
+from collections.abc import Mapping
+from typing import Any
+
 import torch
 import torch.nn as nn
 
@@ -168,3 +171,33 @@ class UNetGenerator(nn.Module):
         x = self.up3(x, x2)
         x = self.up4(x, x1)
         return torch.tanh(self.outc(x))
+
+
+def concat_inputs(inputs: Mapping[str, torch.Tensor], input_names: tuple[str, ...]) -> torch.Tensor:
+    if tuple(inputs) != input_names:
+        raise ValueError(
+            f"Generator inputs must have exact ordered names {input_names}, got {tuple(inputs)}"
+        )
+    return torch.cat([inputs[name] for name in input_names], dim=1)
+
+
+class ConcatUNetGenerator(nn.Module):
+    def __init__(
+        self,
+        input_names: tuple[str, ...],
+        channels_per_input: int = 3,
+        **unet_kwargs: Any,
+    ) -> None:
+        super().__init__()
+        if not input_names or len(set(input_names)) != len(input_names):
+            raise ValueError("input_names must be non-empty and unique")
+        self.input_names = input_names
+        self.channels_per_input = channels_per_input
+        self.unet = UNetGenerator(
+            in_channels=len(input_names) * channels_per_input,
+            out_channels=3,
+            **unet_kwargs,
+        )
+
+    def forward(self, inputs: Mapping[str, torch.Tensor]) -> torch.Tensor:
+        return self.unet(concat_inputs(inputs, self.input_names))

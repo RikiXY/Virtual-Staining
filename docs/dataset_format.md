@@ -1,109 +1,76 @@
-# Dataset Format
+# Dataset format
 
-## Pair inventory
+## Wide slide-set inventory
 
-New datasets provide `inputs/pairs.csv`. Required columns are `pair_id`,
-`source_path`, and `target_path`; optional columns are `already_aligned`, mask
-paths, patient/specimen IDs, and source/target slide IDs. Paths are relative to
-`dataset_root`. Pair IDs must match `[A-Za-z0-9][A-Za-z0-9._-]*`.
+`inputs/slide_sets.csv` is a wide inventory. Paths are relative to `dataset_root`.
+Configured input names must match `[A-Za-z][A-Za-z0-9_-]*`.
 
-```csv
-pair_id,source_path,target_path,already_aligned,patient_id,specimen_id
-P001,raw/source/S001.svs,raw/target/T001.svs,false,PT001,SP001
-P002,raw/source/S002.svs,raw/target/T002.svs,true,PT002,SP002
+For modalities `LF,AF`, required columns are:
+
+```text
+set_id,input__LF_path,input__LF_aligned,input__AF_path,input__AF_aligned,target_path,target_aligned
+S001,raw/lf/S001.svs,true,raw/af/S001.svs,false,raw/he/S001.svs,false
 ```
 
-The pair inventory is required; single-pair datasets use the same format with
-one row.
+Optional columns are `input__<modality>_mask`, `input__<modality>_slide_id`,
+`target_mask`, `target_slide_id`, `patient_id`, and `specimen_id`.
+The configured reference input must be marked aligned. Missing or legacy columns
+are rejected.
 
 ## Prepared layout
 
 ```text
 dataset_root/
-├── inputs/pairs.csv
-├── splits/{train,val,test}/<pair_id>/
+├── inputs/slide_sets.csv
+├── splits/{train,val,test}/<set_id>/
 ├── manifests/
 │   ├── manifest.csv
 │   ├── discarded_manifest.csv
-│   └── pairs.csv
+│   ├── manifest_metadata.json
+│   └── slide_sets.csv
 ├── metadata/
-│   ├── pairs/<pair_id>.json
 │   ├── split_assignment.csv
-│   ├── excluded_pairs.csv
+│   ├── excluded_sets.csv
 │   ├── dataset_build.json
-│   ├── dataset_fingerprint.json
-│   └── input_hashes.json
-├── discarded_patches/<pair_id>/
-└── resolved_masks/<pair_id>/
+│   └── dataset_fingerprint.json
+└── discarded_patches/<set_id>/
 ```
 
-Dataset-global output directories are initialized once. Pair processing never
-deletes another pair's files.
+Every non-reference input and the target is aligned directly to the reference
+coordinate frame. No full aligned whole-slide image is created.
 
-## Patch manifest v2
+## Patch manifest v3
 
-`manifests/manifest.csv` is the authoritative training, inference, and
-evaluation contract. Its exact columns are:
+`manifests/manifest.csv` is the only prepared-record contract. Its columns are
+ordered by manifest metadata:
 
 ```text
-sample_id,pair_id,split,input_path,target_path,foreground_mask_path,
-input_modality,target_modality,x,y,width,height
+sample_id,set_id,split,input__LF,input__AF,target_path,foreground_mask_path,x,y,width,height
 ```
 
-- `sample_id` is globally unique and opaque, currently
-  `<pair_id>__x<8 digits>_y<8 digits>`.
-- `x` and `y` are level-0 coordinates in the original source image, including
-  any configured margin offset.
-- `foreground_mask_path` is authoritative and may be blank. Version 2 never
-  guesses mask filenames.
-- Output ordering is `pair_id`, `y`, then `x`.
+`sample_id` is `<set_id>__x<8 digits>_y<8 digits>`. Each record contains one
+relative path per named input, one target path, and optionally the target
+foreground mask. `manifest_metadata.json` contains exactly the v3 identity:
 
-The loader accepts this exact v2 column set only. Older manifests must be
-rebuilt with `vs prepare`.
+```json
+{
+  "schema_version": "3.0",
+  "input_modalities": ["LF", "AF"],
+  "reference_modality": "LF",
+  "target_modality": "H&E"
+}
+```
 
-`manifests/pairs.csv` is the normalized cohort contract. It contains one row
-per input pair, its assigned split, biological IDs, mask inputs, processing
-status, alignment method, and pair metadata path.
+The loader rejects v1/v2 columns, absolute or traversing paths, missing names,
+input/target collisions, duplicate paths, and missing files when requested.
 
-## Leakage-safe splitting
+## Named runtime samples
 
-Inventory configurations explicitly choose `patch`, `pair`, `specimen`, or
-`patient`. Pair/specimen/patient groups are assigned before patch extraction by
-a stable hash of the seed and group ID. Every nonzero split receives at least
-one independent group or preparation fails. `metadata/split_assignment.csv`
-freezes the result; an optional assignment file must exactly match the cohort.
+Datasets return:
 
-Patch mode supports leakage ablations. Training pools and shuffles all training
-patches each epoch; validation and test remain unshuffled.
+```python
+{"inputs": {"LF": lf_tensor, "AF": af_tensor}, "target": target_tensor, "masks": {}}
+```
 
-## Masks and alignment
-
-Mask layout (`none`, `shared`, `separate`, or `auto`) and generation (`never`,
-`if_missing`, or `always`) are independent policies. Partial or mixed supplied
-layouts are rejected. Shared masks require declared identity alignment and
-compatible geometry. Maskless operation requires foreground filtering to be
-disabled and alignment to resolve to identity.
-
-Every processed pair has either an identity or `affine_sift` alignment result.
-Registration failure aborts or creates an explicit excluded-pair record,
-according to `alignment.on_failure`; it never silently falls back to identity.
-Target patches and target masks continue to be warped on demand.
-
-## WSI readers and provenance
-
-`io.backend` accepts `auto`, `pillow`, or `openslide`. OpenSlide is optional;
-install the `wsi` extra plus the native OpenSlide library. Reader metadata
-records pyramid levels, downsampling, MPP when available, and vendor.
-
-The dataset fingerprint includes canonical preprocessing policy, normalized
-pair inventory, pair/group metadata, and every source, target, and supplied
-mask hash. Inventory row order does not affect semantic identity. Normal builds
-may reuse cached content hashes when path, size, and nanosecond mtime match;
-`inputs.hash_verification: always` rereads every input for publication builds.
-
-## Evaluation
-
-Evaluation preserves patch-level outputs and writes pair summaries plus
-specimen/patient summaries when those IDs are complete. Metrics
-are averaged within each independent unit before aggregate statistics and
-deterministic percentile bootstrap confidence intervals are computed.
+Model configuration selects an ordered subset with `model.inputs` and a target
+with `model.target`.

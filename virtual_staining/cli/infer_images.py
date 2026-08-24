@@ -28,8 +28,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--input",
         "--input-image",
         dest="input_path",
+        action="append",
         required=True,
-        help="Path to an image file or a directory containing images.",
+        help=(
+            "Input image or directory. Use --input PATH for one-input models, "
+            "or repeat --input MODALITY=PATH for named multi-input models."
+        ),
     )
     parser.add_argument(
         "--output",
@@ -72,14 +76,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _print_file_result(result: SingleInferenceResult) -> None:
-    print_info("Input", str(result.input_path))
+    for name, path in result.input_paths.items():
+        print_info(f"Input {name}", str(path))
     print_info("Checkpoint", str(result.checkpoint_path))
     print_info("Mode", result.mode)
     print_info("Generated", style(str(result.output_path), "bold", "magenta"))
 
 
 def _print_directory_result(result: DirectoryInferenceResult) -> None:
-    print_info("Input dir", str(result.input_dir))
+    for name, path in result.input_dirs.items():
+        print_info(f"Input dir {name}", str(path))
     print_info("Checkpoint", str(result.checkpoint_path))
     print_info("Images", str(len(result.results)))
     print_info("Output dir", style(str(result.output_dir), "bold", "magenta"))
@@ -95,7 +101,7 @@ def main(argv: list[str] | None = None) -> None:
     output_path = Path(args.output_path) if args.output_path is not None else None
     result = infer_images(
         config_path,
-        Path(args.input_path),
+        tuple(args.input_path),
         output_path,
         recursive=args.recursive,
         mode=args.mode,

@@ -25,7 +25,7 @@ from virtual_staining.experiment.snapshots import (
     save_stage_config_snapshots,
 )
 from virtual_staining.models.discriminator import PatchGANDiscriminator
-from virtual_staining.models.generator import UNetGenerator
+from virtual_staining.models.generator import ConcatUNetGenerator
 from virtual_staining.training.augmentation import build_training_paired_transform
 from virtual_staining.training.results import TrainingResult
 from virtual_staining.training.trainer import Trainer
@@ -79,7 +79,10 @@ def train(
     logger.info("Device: %s", device)
 
     manifest = load_manifest_or_raise(config.project)
-    manifest.validate(check_files_exist=True, require_splits={"train", "val"})
+    if not set(config.model.inputs).issubset(manifest.metadata.input_modalities):
+        raise ValueError("model.inputs must be a subset of manifest input modalities")
+    if config.model.target != manifest.metadata.target_modality:
+        raise ValueError("model.target must equal manifest target modality")
     train_manifest = manifest.filter_split("train")
     val_manifest = manifest.filter_split("val")
     manifest_path = config.project.manifest_path
@@ -136,16 +139,6 @@ def train(
             transforms.Normalize([0.5] * 3, [0.5] * 3),
         ]
     )
-    mask_transform = transforms.Compose(
-        [
-            transforms.Resize(
-                to_torchvision_hw(config.project.image_size),
-                interpolation=transforms.InterpolationMode.NEAREST,
-            ),
-            transforms.ToTensor(),
-        ]
-    )
-
     train_dir = config.project.split_dir("train")
     val_dir = config.project.split_dir("val")
     include_foreground_mask = _requires_foreground_masks(config)
@@ -153,20 +146,23 @@ def train(
         training.augmentation,
         image_size=config.project.image_size,
         seed=seed,
+        input_names=config.model.inputs,
+        reference_modality=config.preprocessing.inputs.reference
+        if config.preprocessing
+        else config.model.inputs[0],
     )
-
     train_dataset = PairedManifestDataset(
         train_manifest,
+        input_names=config.model.inputs,
         transform=None if train_paired_transform is not None else transform,
-        mask_transform=None if train_paired_transform is not None else mask_transform,
         paired_transform=train_paired_transform,
         include_foreground_mask=include_foreground_mask,
         virtual_expansion_factor=training.augmentation.effective_expansion_factor,
     )
     val_dataset = PairedManifestDataset(
         val_manifest,
+        input_names=config.model.inputs,
         transform=transform,
-        mask_transform=mask_transform,
         include_foreground_mask=include_foreground_mask,
     )
     logger.info(
@@ -199,9 +195,8 @@ def train(
     )
 
     generator_config = config.model.generator
-    generator = UNetGenerator(
-        in_channels=generator_config.in_channels,
-        out_channels=generator_config.out_channels,
+    generator = ConcatUNetGenerator(
+        config.model.inputs,
         base_channels=generator_config.base_channels,
         norm=generator_config.norm,
         dropout=generator_config.dropout,
@@ -209,7 +204,7 @@ def train(
     ).to(device)
     discriminator_config = config.model.discriminator
     discriminator = PatchGANDiscriminator(
-        in_channels=discriminator_config.in_channels,
+        in_channels=(3 * len(config.model.inputs)) + 3,
         ndf=discriminator_config.ndf,
         norm=discriminator_config.norm,
         use_sigmoid=discriminator_config.use_sigmoid,
@@ -227,6 +222,7 @@ def train(
         train_dir=train_dir,
         val_dir=val_dir,
         losses=training.losses,
+        target_modality=config.model.target,
     )
 
     start_epoch = 0

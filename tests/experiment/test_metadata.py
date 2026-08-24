@@ -172,8 +172,9 @@ def test_prepare_writes_stage_metadata_and_events(tmp_path: Path) -> None:
     cv2.imwrite(str(dataset_root / "source.png"), image)
     cv2.imwrite(str(dataset_root / "target.png"), image + 8)
     (dataset_root / "inputs").mkdir()
-    (dataset_root / "inputs" / "pairs.csv").write_text(
-        "pair_id,source_path,target_path\nP1,source.png,target.png\n",
+    (dataset_root / "inputs" / "slide_sets.csv").write_text(
+        "set_id,input__source_path,input__source_aligned,target_path,target_aligned\n"
+        "P1,source.png,true,target.png,true\n",
         encoding="utf-8",
     )
 
@@ -181,10 +182,14 @@ def test_prepare_writes_stage_metadata_and_events(tmp_path: Path) -> None:
         tmp_path,
         """\
             image_size: [64, 64]
+            model:
+              inputs: [source]
+              target: target
             preprocessing:
               inputs:
-                inventory: inputs/pairs.csv
-                source_modality: source
+                inventory: inputs/slide_sets.csv
+                modalities: [source]
+                reference: source
                 target_modality: target
               patching:
                 patch_size: [64, 64]

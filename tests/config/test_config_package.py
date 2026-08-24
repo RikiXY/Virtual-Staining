@@ -18,15 +18,18 @@ results_path: /tmp/results
 run_name: test_run
 image_size: [256, 256]
 model:
+  inputs: [source]
+  target: target
   generator:
     dropout: true
 preprocessing:
   inputs:
-    inventory: inputs/pairs.csv
-    source_modality: source
+    inventory: inputs/slides.csv
+    modalities: [source]
+    reference: source
     target_modality: target
   split:
-    unit: patch
+    unit: set
     train: 0.8
     val: 0.05
     test: 0.15
@@ -106,6 +109,8 @@ dataset_root: /tmp/ds
 results_path: /tmp/results
 run_name: test
 model:
+  inputs: [source]
+  target: target
   discriminator:
     use_sigmoid: true
 """,

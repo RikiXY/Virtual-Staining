@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import cast
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.amp import GradScaler, autocast
 
+from virtual_staining.models.generator import concat_inputs
 from virtual_staining.training.loss_config import LossTermConfig
 from virtual_staining.training.losses import (
     ConfiguredLossEvaluator,
@@ -46,19 +50,19 @@ class Pix2PixTrainingStep:
 
     def step(
         self,
-        x: torch.Tensor,
-        y: torch.Tensor,
+        inputs: Mapping[str, torch.Tensor],
+        target: torch.Tensor,
         *,
         epoch: int = 0,
         global_step: int | None = None,
         masks: dict[str, torch.Tensor] | None = None,
     ) -> StepLosses:
-        """Run one discriminator step and one generator step. Returns scalar losses."""
+        input_names = cast(tuple[str, ...], self.generator.input_names)
+        condition = concat_inputs(inputs, input_names)
         with autocast(device_type=self.device.type, enabled=self.amp_enabled):
-            # .detach() prevents gradients flowing back into G during D's update.
-            fake = self.generator(x).detach()
-            D_real = self.discriminator(x, y)
-            D_fake = self.discriminator(x, fake)
+            fake = self.generator(inputs).detach()
+            D_real = self.discriminator(condition, target)
+            D_fake = self.discriminator(condition, fake)
             context = LossEvaluationContext(epoch=epoch, global_step=global_step)
             discriminator_loss = self.loss_evaluator.discriminator_total(
                 discriminator_real=D_real,
@@ -76,12 +80,12 @@ class Pix2PixTrainingStep:
         self.scaler_D.update()
 
         with autocast(device_type=self.device.type, enabled=self.amp_enabled):
-            fake = self.generator(x)
-            D_fake = self.discriminator(x, fake)
+            fake = self.generator(inputs)
+            D_fake = self.discriminator(condition, fake)
             context = LossEvaluationContext(epoch=epoch, global_step=global_step, masks=masks)
             generator_loss = self.loss_evaluator.generator_total(
                 prediction=fake,
-                target=y,
+                target=target,
                 discriminator_fake=D_fake,
                 context=context,
             )

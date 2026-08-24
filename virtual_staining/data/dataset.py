@@ -10,26 +10,25 @@ from virtual_staining.data.manifest import DatasetManifest
 
 
 class PairedManifestDataset(Dataset):
-    """A paired image dataset driven by a DatasetManifest."""
-
     def __init__(
         self,
         manifest: DatasetManifest,
-        transform: Callable[..., Any] | None = None,
-        mask_transform: Callable[..., Any] | None = None,
-        paired_transform: Callable[
-            [Image.Image, Image.Image, Image.Image | None],
-            tuple[Any, Any, Any | None],
-        ]
-        | None = None,
+        input_names: tuple[str, ...] | None = None,
+        transform: Callable[[Any], Any] | None = None,
+        paired_transform: Callable[..., tuple[dict[str, Any], Any, dict[str, Any]]] | None = None,
         include_foreground_mask: bool = False,
         virtual_expansion_factor: int = 1,
     ) -> None:
         if virtual_expansion_factor < 1:
             raise ValueError("virtual_expansion_factor must be greater than or equal to 1")
+        names = manifest.metadata.input_modalities if input_names is None else tuple(input_names)
+        if not names or len(set(names)) != len(names):
+            raise ValueError("input_names must be non-empty and unique")
+        if any(name not in manifest.metadata.input_modalities for name in names):
+            raise ValueError(f"Unknown input names: {names}")
         self.manifest = manifest
+        self.input_names = names
         self.transform = transform
-        self.mask_transform = mask_transform
         self.paired_transform = paired_transform
         self.include_foreground_mask = include_foreground_mask
         self.virtual_expansion_factor = virtual_expansion_factor
@@ -42,41 +41,27 @@ class PairedManifestDataset(Dataset):
             raise IndexError(idx)
         if not self.manifest.records:
             raise IndexError("Cannot index an empty PairedManifestDataset")
-
         record = self.manifest.records[idx % len(self.manifest.records)]
-        input_path = self.manifest.dataset_root / record.input_path
-        target_path = self.manifest.dataset_root / record.target_path
-
-        input_image = Image.open(input_path).convert("RGB")
-        target_image = Image.open(target_path).convert("RGB")
-
-        mask_image: Image.Image | None = None
+        inputs = {
+            name: Image.open(self.manifest.dataset_root / record.input_paths[name]).convert("RGB")
+            for name in self.input_names
+        }
+        target = Image.open(self.manifest.dataset_root / record.target_path).convert("RGB")
+        masks: dict[str, Image.Image] = {}
         if self.include_foreground_mask:
             if record.foreground_mask_path is None:
                 raise FileNotFoundError(f"Foreground mask path is missing for {record.sample_id!r}")
-            mask_path = self.manifest.dataset_root / record.foreground_mask_path
-            mask_image = Image.open(mask_path).convert("L")
-
+            masks["foreground_mask"] = Image.open(
+                self.manifest.dataset_root / record.foreground_mask_path
+            ).convert("L")
         if self.paired_transform is not None:
-            input_image, target_image, mask_image = self.paired_transform(
-                input_image,
-                target_image,
-                mask_image,
-            )
-        else:
-            if self.transform is not None:
-                input_image = self.transform(input_image)
-                target_image = self.transform(target_image)
-            if mask_image is not None and self.mask_transform is not None:
-                mask_image = self.mask_transform(mask_image)
-
-        if self.include_foreground_mask:
-            assert mask_image is not None
-            return input_image, target_image, {"foreground_mask": mask_image}
-
-        return input_image, target_image
+            inputs, target, masks = self.paired_transform(inputs, target, masks)
+        elif self.transform is not None:
+            inputs = {name: self.transform(image) for name, image in inputs.items()}
+            target = self.transform(target)
+            masks = {name: self.transform(mask) for name, mask in masks.items()}
+        return {"inputs": inputs, "target": target, "masks": masks}
 
     @property
     def sample_ids(self) -> list[str]:
-        """Return ordered list of sample IDs from the manifest."""
         return [record.sample_id for record in self.manifest.records]

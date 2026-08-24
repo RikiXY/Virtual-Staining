@@ -11,7 +11,7 @@ from typing import Any, Literal
 import yaml
 
 from virtual_staining.config.run import RunConfig
-from virtual_staining.data.pairs import SlidePair
+from virtual_staining.data.slide_sets import SlideAsset, SlideSet
 from virtual_staining.experiment.environment import collect_environment
 from virtual_staining.experiment.run_paths import RunPaths
 
@@ -161,22 +161,27 @@ def _cached_file_provenance(
     return value
 
 
-def canonical_pair_payload(pairs: tuple[SlidePair, ...]) -> list[dict[str, Any]]:
+def _asset_payload(asset: SlideAsset) -> dict[str, Any]:
+    return {
+        "modality": asset.modality,
+        "path": asset.path.as_posix(),
+        "already_aligned": asset.already_aligned,
+        "mask_path": asset.mask_path.as_posix() if asset.mask_path else None,
+        "slide_id": asset.slide_id,
+    }
+
+
+def canonical_set_payload(slide_sets: tuple[SlideSet, ...]) -> list[dict[str, Any]]:
     return [
         {
-            "pair_id": pair.pair_id,
-            "source_path": pair.source_path.as_posix(),
-            "target_path": pair.target_path.as_posix(),
-            "already_aligned": pair.already_aligned,
-            "shared_mask_path": pair.shared_mask_path.as_posix() if pair.shared_mask_path else None,
-            "source_mask_path": pair.source_mask_path.as_posix() if pair.source_mask_path else None,
-            "target_mask_path": pair.target_mask_path.as_posix() if pair.target_mask_path else None,
-            "patient_id": pair.patient_id,
-            "specimen_id": pair.specimen_id,
-            "source_slide_id": pair.source_slide_id,
-            "target_slide_id": pair.target_slide_id,
+            "set_id": item.set_id,
+            "reference_modality": item.reference_modality,
+            "inputs": [_asset_payload(asset) for asset in item.inputs],
+            "target": _asset_payload(item.target),
+            "patient_id": item.patient_id,
+            "specimen_id": item.specimen_id,
         }
-        for pair in sorted(pairs, key=lambda item: item.pair_id)
+        for item in sorted(slide_sets, key=lambda value: value.set_id)
     ]
 
 
@@ -184,13 +189,12 @@ def build_dataset_fingerprint_metadata(
     *,
     dataset_root: Path,
     preprocessing_config: dict[str, Any],
-    pairs: tuple[SlidePair, ...],
+    slide_sets: tuple[SlideSet, ...],
     inventory_path: Path | None = None,
     hash_cache_path: Path | None = None,
     force_hash_verification: bool = False,
     prepared_at: str | None = None,
 ) -> dict[str, Any]:
-    """Build machine-readable dataset fingerprint metadata for prepare reuse checks."""
     cache: dict[str, Any] = {}
     if hash_cache_path is not None and hash_cache_path.exists():
         try:
@@ -198,31 +202,25 @@ def build_dataset_fingerprint_metadata(
         except json.JSONDecodeError:
             cache = {}
     files: list[dict[str, Any]] = []
-    for pair in sorted(pairs, key=lambda item: item.pair_id):
-        for role, relative in (
-            ("source", pair.source_path),
-            ("target", pair.target_path),
-            ("shared_mask", pair.shared_mask_path),
-            ("source_mask", pair.source_mask_path),
-            ("target_mask", pair.target_mask_path),
-        ):
-            if relative is not None:
+    for item in sorted(slide_sets, key=lambda value: value.set_id):
+        for asset in (*item.inputs, item.target):
+            assets = (("mask", asset.mask_path),) if asset.mask_path is not None else ()
+            for role, relative in ((asset.modality, asset.path), *assets):
                 files.append(
                     {
-                        "pair_id": pair.pair_id,
+                        "set_id": item.set_id,
+                        "modality": asset.modality,
                         "role": role,
                         **_cached_file_provenance(
-                            dataset_root / relative,
-                            cache=cache,
-                            force=force_hash_verification,
+                            dataset_root / relative, cache=cache, force=force_hash_verification
                         ),
                     }
                 )
     if hash_cache_path is not None:
         hash_cache_path.parent.mkdir(parents=True, exist_ok=True)
         hash_cache_path.write_text(json.dumps(cache, indent=2), encoding="utf-8")
-    canonical_pairs = canonical_pair_payload(pairs)
-    canonical_inventory_hash = compute_payload_hash(canonical_pairs)
+    canonical_sets = canonical_set_payload(slide_sets)
+    canonical_inventory_hash = compute_payload_hash(canonical_sets)
     raw_inventory_sha256 = (
         compute_file_sha256(inventory_path) if inventory_path is not None else None
     )
@@ -234,25 +232,21 @@ def build_dataset_fingerprint_metadata(
     fingerprint_payload = {
         "dataset_root": dataset_root_resolved,
         "preprocessing": semantic_config,
-        "canonical_inventory": canonical_pairs,
+        "canonical_inventory": canonical_sets,
         "files": files,
     }
     result = {
-        "schema_version": "2.0",
+        "schema_version": "3.0",
         "fingerprint": compute_payload_hash(fingerprint_payload),
         "prepared_at": prepared_at or datetime.now(UTC).isoformat(),
         "dataset_root": dataset_root_resolved,
         "preprocessing": semantic_config,
         "preprocessing_hash": preprocessing_hash,
+        "canonical_inventory": canonical_sets,
+        "canonical_inventory_sha256": canonical_inventory_hash,
+        "raw_inventory_sha256": raw_inventory_sha256,
+        "files": files,
     }
-    result.update(
-        {
-            "canonical_inventory": canonical_pairs,
-            "canonical_inventory_sha256": canonical_inventory_hash,
-            "raw_inventory_sha256": raw_inventory_sha256,
-            "files": files,
-        }
-    )
     return result
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -10,20 +11,26 @@ from virtual_staining.training.config import AugmentationConfig, AugmentationInt
 
 
 class PairedAlbumentationsTransform:
-    """Apply aligned source/target geometry and source-only photometric augmentation."""
-
     def __init__(
         self,
         *,
         image_size: tuple[int, int],
         intensity: AugmentationIntensity,
         seed: int | None,
+        input_names: tuple[str, ...],
+        reference_modality: str,
     ) -> None:
         A, cv2 = _import_albumentations()
+        if not input_names or len(set(input_names)) != len(input_names):
+            raise ValueError("input_names must be non-empty and unique")
+        self.input_names = input_names
+        self.reference_modality = reference_modality
         width, height = image_size
+        additional_targets = {"target": "image", "mask__foreground_mask": "mask"}
+        additional_targets.update({f"input__{name}": "image" for name in input_names[1:]})
         self._geometry = A.Compose(
             _geometry_transforms(A, cv2, width=width, height=height, intensity=intensity),
-            additional_targets={"target": "image"},
+            additional_targets=additional_targets,
             seed=seed,
         )
         photometric = _photometric_transforms(A, intensity)
@@ -33,29 +40,32 @@ class PairedAlbumentationsTransform:
 
     def __call__(
         self,
-        source: Image.Image,
+        inputs: Mapping[str, Image.Image],
         target: Image.Image,
-        mask: Image.Image | None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        masks: Mapping[str, Image.Image],
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor, dict[str, torch.Tensor]]:
+        if tuple(inputs) != self.input_names:
+            raise ValueError(f"Inputs must have exact configured order {self.input_names}")
         data: dict[str, np.ndarray] = {
-            "image": _pil_rgb_to_array(source),
+            "image": _pil_rgb_to_array(inputs[self.input_names[0]]),
             "target": _pil_rgb_to_array(target),
         }
-        if mask is not None:
-            data["mask"] = np.asarray(mask.convert("L"), dtype=np.uint8)
-
+        data.update(
+            {f"input__{name}": _pil_rgb_to_array(inputs[name]) for name in self.input_names[1:]}
+        )
+        for name, mask in masks.items():
+            data[f"mask__{name}"] = np.asarray(mask.convert("L"), dtype=np.uint8)
         transformed = self._geometry(**data)
-        source_array = transformed["image"]
-        target_array = transformed["target"]
-        mask_array = transformed.get("mask")
-
-        if self._photometric is not None:
-            source_array = self._photometric(image=source_array)["image"]
-
+        arrays = {self.input_names[0]: transformed["image"]}
+        arrays.update({name: transformed[f"input__{name}"] for name in self.input_names[1:]})
+        if self._photometric is not None and self.reference_modality in arrays:
+            arrays[self.reference_modality] = self._photometric(
+                image=arrays[self.reference_modality]
+            )["image"]
         return (
-            _rgb_array_to_normalized_tensor(source_array),
-            _rgb_array_to_normalized_tensor(target_array),
-            _mask_array_to_tensor(mask_array) if mask_array is not None else None,
+            {name: _rgb_array_to_normalized_tensor(arrays[name]) for name in self.input_names},
+            _rgb_array_to_normalized_tensor(transformed["target"]),
+            {name: _mask_array_to_tensor(transformed[f"mask__{name}"]) for name in masks},
         )
 
 
@@ -64,6 +74,8 @@ def build_training_paired_transform(
     *,
     image_size: tuple[int, int],
     seed: int | None,
+    input_names: tuple[str, ...],
+    reference_modality: str,
 ) -> PairedAlbumentationsTransform | None:
     if not config.enabled:
         return None
@@ -71,6 +83,8 @@ def build_training_paired_transform(
         image_size=image_size,
         intensity=config.intensity,
         seed=seed,
+        input_names=input_names,
+        reference_modality=reference_modality,
     )
 
 
@@ -80,19 +94,13 @@ def _import_albumentations() -> tuple[Any, Any]:
         import cv2
     except ImportError as exc:
         raise RuntimeError(
-            "augmentation.enabled=true requires the 'albumentations' dependency. "
-            "Install project dependencies before training with augmentation enabled."
+            "augmentation.enabled=true requires the 'albumentations' dependency."
         ) from exc
     return A, cv2
 
 
 def _geometry_transforms(
-    A: Any,
-    cv2: Any,
-    *,
-    width: int,
-    height: int,
-    intensity: AugmentationIntensity,
+    A: Any, cv2: Any, *, width: int, height: int, intensity: AugmentationIntensity
 ) -> list[Any]:
     affine_by_intensity = {
         "light": {"scale": (0.98, 1.02), "translate": 0.01, "rotate": 3, "p": 0.25},
@@ -100,8 +108,7 @@ def _geometry_transforms(
         "strong": {"scale": (0.90, 1.10), "translate": 0.06, "rotate": 12, "p": 0.65},
     }
     affine = affine_by_intensity[intensity]
-    translate = float(affine["translate"])
-    rotate = float(affine["rotate"])
+    translate, rotate = float(affine["translate"]), float(affine["rotate"])
     return [
         A.Resize(
             height=height,
@@ -133,35 +140,24 @@ def _geometry_transforms(
 def _photometric_transforms(A: Any, intensity: AugmentationIntensity) -> list[Any]:
     if intensity == "light":
         return []
-    if intensity == "medium":
-        return [
-            A.RandomBrightnessContrast(
-                brightness_limit=(-0.08, 0.08),
-                contrast_limit=(-0.08, 0.08),
-                p=0.35,
-            ),
-            A.RandomGamma(gamma_limit=(90, 110), p=0.25),
-            A.OneOf(
-                [
-                    A.GaussianBlur(sigma_limit=(0.1, 0.6), blur_limit=0, p=1.0),
-                    A.GaussNoise(std_range=(0.005, 0.02), mean_range=(0.0, 0.0), p=1.0),
-                ],
-                p=0.25,
-            ),
-        ]
+    limits = {
+        "medium": (0.08, 0.25, (90, 110), (0.1, 0.6), (0.005, 0.02)),
+        "strong": (0.15, 0.35, (85, 115), (0.2, 1.0), (0.01, 0.04)),
+    }
+    brightness, probability, gamma, blur, noise = limits[intensity]
     return [
         A.RandomBrightnessContrast(
-            brightness_limit=(-0.15, 0.15),
-            contrast_limit=(-0.15, 0.15),
-            p=0.50,
+            brightness_limit=(-brightness, brightness),
+            contrast_limit=(-brightness, brightness),
+            p=probability,
         ),
-        A.RandomGamma(gamma_limit=(85, 115), p=0.35),
+        A.RandomGamma(gamma_limit=gamma, p=probability),
         A.OneOf(
             [
-                A.GaussianBlur(sigma_limit=(0.2, 1.0), blur_limit=0, p=1.0),
-                A.GaussNoise(std_range=(0.01, 0.04), mean_range=(0.0, 0.0), p=1.0),
+                A.GaussianBlur(sigma_limit=blur, blur_limit=0, p=1.0),
+                A.GaussNoise(std_range=noise, mean_range=(0.0, 0.0), p=1.0),
             ],
-            p=0.45,
+            p=probability,
         ),
     ]
 
@@ -171,12 +167,11 @@ def _pil_rgb_to_array(image: Image.Image) -> np.ndarray:
 
 
 def _rgb_array_to_normalized_tensor(array: np.ndarray) -> torch.Tensor:
-    array = np.ascontiguousarray(array.transpose(2, 0, 1))
-    tensor = torch.from_numpy(array).float().div(255.0)
+    tensor = torch.from_numpy(np.ascontiguousarray(array.transpose(2, 0, 1))).float().div(255.0)
     return tensor.sub(0.5).div(0.5)
 
 
 def _mask_array_to_tensor(array: np.ndarray) -> torch.Tensor:
-    array = np.ascontiguousarray(array)
+    array = np.ascontiguousarray(array).copy()
     array = array[None, :, :] if array.ndim == 2 else array.transpose(2, 0, 1)
     return torch.from_numpy(array).float().div(255.0)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,315 +11,306 @@ if TYPE_CHECKING:
     from virtual_staining.config.project import ProjectConfig
 
 Split = Literal["train", "val", "test", "discarded"]
-
 _VALID_SPLITS: frozenset[str] = frozenset({"train", "val", "test", "discarded"})
-MANIFEST_SCHEMA_VERSION = "2.0"
-MANIFEST_FIELDNAMES = (
-    "sample_id",
-    "pair_id",
-    "split",
-    "input_path",
-    "target_path",
-    "foreground_mask_path",
-    "input_modality",
-    "target_modality",
-    "x",
-    "y",
-    "width",
-    "height",
-)
-
-
-def _parse_split(value: str) -> Split:
-    if value not in _VALID_SPLITS:
-        raise ValueError(f"Invalid split {value!r}; expected one of {sorted(_VALID_SPLITS)}")
-    return cast(Split, value)
+MANIFEST_SCHEMA_VERSION = "3.0"
 
 
 def _validate_manifest_path(path: Path, field_name: str) -> None:
-    """Raise ValueError if a manifest path is empty, absolute, or contains traversal."""
-    if not path.parts:
-        raise ValueError(f"ManifestRecord.{field_name} must not be empty")
-    if path.is_absolute():
-        raise ValueError(
-            f"ManifestRecord.{field_name} must be a relative path, got absolute path: {path!r}"
-        )
-    if ".." in path.parts:
-        raise ValueError(
-            f"ManifestRecord.{field_name} must not contain '..' components, got: {path!r}"
-        )
+    if not path.parts or path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"{field_name} must be a relative, non-traversing path: {path!r}")
 
 
-def _parse_int_field(value: str, field: str, row_num: int, csv_path: Path) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        raise ValueError(
-            f"Manifest CSV {csv_path}, row {row_num}: "
-            f"field '{field}' must be an integer, got {value!r}"
-        ) from None
+def _parse_split(value: str, *, row: int | None = None, path: Path | None = None) -> Split:
+    if value not in _VALID_SPLITS:
+        location = f" in {path}, row {row}" if row is not None and path is not None else ""
+        raise ValueError(f"Invalid split{location}: {value!r}")
+    return cast(Split, value)
 
 
-def _parse_split_field(value: str, row_num: int, csv_path: Path) -> Split:
-    try:
-        return _parse_split(value)
-    except ValueError:
-        raise ValueError(
-            f"Manifest CSV {csv_path}, row {row_num}: "
-            f"split must be one of {sorted(_VALID_SPLITS)}, got {value!r}"
-        ) from None
-
-
-def _require_nonempty(value: str, field: str, row_num: int, csv_path: Path) -> str:
+def _nonempty(value: str, field: str, row: int, path: Path) -> str:
     if not value.strip():
-        raise ValueError(
-            f"Manifest CSV {csv_path}, row {row_num}: field '{field}' must not be empty"
-        )
+        raise ValueError(f"Manifest CSV {path}, row {row}: {field} must not be empty")
     return value
 
 
-def _parse_path_field(value: str, field: str, row_num: int, csv_path: Path) -> Path:
-    path = Path(value)
+def _parse_path(value: str, field: str, row: int, path: Path) -> Path:
+    if not value.strip():
+        raise ValueError(f"Manifest CSV {path}, row {row}: {field} must not be empty")
+    result = Path(value)
     try:
-        _validate_manifest_path(path, field)
+        _validate_manifest_path(result, field)
     except ValueError as exc:
-        raise ValueError(f"Manifest CSV {csv_path}, row {row_num}: {exc}") from None
-    return path
+        raise ValueError(f"Manifest CSV {path}, row {row}: {exc}") from None
+    return result
 
 
-def load_manifest_or_raise(project: ProjectConfig) -> DatasetManifest:
-    """Load the project manifest, raising a clear error when it is missing."""
-    manifest_path = project.manifest_path
-    if not manifest_path.exists():
-        raise FileNotFoundError(
-            f"Manifest not found at {manifest_path}. "
-            "Run 'vs prepare' or set 'manifest_path' in your run config."
+def _parse_int(value: str, field: str, row: int, path: Path) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"Manifest CSV {path}, row {row}: {field} must be an integer") from None
+
+
+@dataclass(frozen=True)
+class ManifestMetadata:
+    schema_version: str
+    input_modalities: tuple[str, ...]
+    reference_modality: str
+    target_modality: str
+
+    def __post_init__(self) -> None:
+        if self.schema_version != MANIFEST_SCHEMA_VERSION:
+            raise ValueError(f"Manifest schema must be exactly {MANIFEST_SCHEMA_VERSION}")
+        if not self.input_modalities or len(set(self.input_modalities)) != len(
+            self.input_modalities
+        ):
+            raise ValueError("Manifest input_modalities must be non-empty and unique")
+        if self.reference_modality not in self.input_modalities:
+            raise ValueError("Manifest reference_modality must be one of input_modalities")
+        if not self.target_modality.strip() or self.target_modality in self.input_modalities:
+            raise ValueError("Manifest target_modality must differ from all input modalities")
+
+    @classmethod
+    def from_mapping(cls, value: dict[str, Any]) -> ManifestMetadata:
+        required = {"schema_version", "input_modalities", "reference_modality", "target_modality"}
+        missing = required - value.keys()
+        if missing:
+            raise ValueError(f"Manifest metadata missing required fields: {sorted(missing)}")
+        modalities = value["input_modalities"]
+        if isinstance(modalities, str) or not isinstance(modalities, list | tuple):
+            raise ValueError("Manifest metadata input_modalities must be a list")
+        return cls(
+            str(value["schema_version"]),
+            tuple(str(item) for item in modalities),
+            str(value["reference_modality"]),
+            str(value["target_modality"]),
         )
-    return DatasetManifest.from_csv(manifest_path, dataset_root=project.dataset_root)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "input_modalities": list(self.input_modalities),
+            "reference_modality": self.reference_modality,
+            "target_modality": self.target_modality,
+        }
 
 
 @dataclass(frozen=True)
 class ManifestRecord:
     sample_id: str
+    set_id: str
     split: Split
-    input_path: Path
+    input_paths: dict[str, Path]
     target_path: Path
-    input_modality: str
-    target_modality: str
     x: int
     y: int
     width: int
     height: int
-    pair_id: str
     foreground_mask_path: Path | None = None
 
     def __post_init__(self) -> None:
-        if not self.sample_id.strip():
-            raise ValueError("ManifestRecord.sample_id must be a non-empty string")
-        if not self.pair_id.strip():
-            raise ValueError("ManifestRecord.pair_id must be a non-empty string")
+        if not self.sample_id.strip() or not self.set_id.strip():
+            raise ValueError("ManifestRecord sample_id and set_id must be non-empty")
         if self.split not in _VALID_SPLITS:
+            raise ValueError(f"ManifestRecord.split must be one of {sorted(_VALID_SPLITS)}")
+        if self.x < 0 or self.y < 0 or self.width <= 0 or self.height <= 0:
             raise ValueError(
-                f"ManifestRecord.split must be one of {sorted(_VALID_SPLITS)}, got {self.split!r}"
+                "ManifestRecord coordinates must be nonnegative and dimensions positive"
             )
-        if not self.input_modality.strip():
-            raise ValueError("ManifestRecord.input_modality must be a non-empty string")
-        if not self.target_modality.strip():
-            raise ValueError("ManifestRecord.target_modality must be a non-empty string")
-        if self.x < 0:
-            raise ValueError(f"ManifestRecord.x must be >= 0, got {self.x}")
-        if self.y < 0:
-            raise ValueError(f"ManifestRecord.y must be >= 0, got {self.y}")
-        if self.width <= 0:
-            raise ValueError(f"ManifestRecord.width must be > 0, got {self.width}")
-        if self.height <= 0:
-            raise ValueError(f"ManifestRecord.height must be > 0, got {self.height}")
-        if self.input_path == self.target_path:
-            raise ValueError(
-                "ManifestRecord.input_path and target_path must be different, "
-                f"got {self.input_path!r}"
-            )
-        _validate_manifest_path(self.input_path, "input_path")
+        if not self.input_paths:
+            raise ValueError("ManifestRecord.input_paths must not be empty")
+        for modality, input_path in self.input_paths.items():
+            if not modality.strip():
+                raise ValueError("ManifestRecord input modality names must be non-empty")
+            _validate_manifest_path(input_path, f"input_paths[{modality!r}]")
         _validate_manifest_path(self.target_path, "target_path")
+        if self.target_path in self.input_paths.values():
+            raise ValueError("ManifestRecord.target_path must differ from every input path")
         if self.foreground_mask_path is not None:
             _validate_manifest_path(self.foreground_mask_path, "foreground_mask_path")
 
 
 @dataclass(frozen=True)
 class DatasetManifest:
-    SCHEMA_VERSION = MANIFEST_SCHEMA_VERSION
     records: tuple[ManifestRecord, ...]
     dataset_root: Path
-    _FIELDNAMES = MANIFEST_FIELDNAMES
+    metadata: ManifestMetadata
+
+    SCHEMA_VERSION = MANIFEST_SCHEMA_VERSION
+
+    @property
+    def fieldnames(self) -> tuple[str, ...]:
+        return (
+            "sample_id",
+            "set_id",
+            "split",
+            *(f"input__{name}" for name in self.metadata.input_modalities),
+            "target_path",
+            "foreground_mask_path",
+            "x",
+            "y",
+            "width",
+            "height",
+        )
 
     def filter_split(self, split: Split) -> DatasetManifest:
-        """Return a new manifest containing only records with the given split."""
         return DatasetManifest(
-            records=tuple(record for record in self.records if record.split == split),
-            dataset_root=self.dataset_root,
+            tuple(record for record in self.records if record.split == split),
+            self.dataset_root,
+            self.metadata,
         )
 
     def validate(
-        self,
-        check_files_exist: bool = False,
-        require_splits: set[str] | None = None,
+        self, check_files_exist: bool = False, require_splits: set[str] | None = None
     ) -> None:
-        """
-        Raise if the manifest is inconsistent.
-
-        Checks:
-        - sample_ids are unique
-        - no sample_id appears in more than one non-discarded split
-        - no duplicate (split, input_path) pairs
-        - no duplicate input_path values
-        - no duplicate target_path values
-        - if check_files_exist=True, every resolved path must exist on disk
-        - if require_splits is provided, each listed split must have at least one record
-        """
-        splits_by_sample: dict[str, list[Split]] = defaultdict(list)
+        allowed = set(self.metadata.input_modalities)
         for record in self.records:
-            splits_by_sample[record.sample_id].append(record.split)
-
-        multi_split = {
-            sample_id: sorted({split for split in splits if split != "discarded"})
-            for sample_id, splits in splits_by_sample.items()
-            if len({split for split in splits if split != "discarded"}) > 1
-        }
-        if multi_split:
-            raise ValueError(f"Some sample_ids appear in multiple splits: {multi_split}")
-
-        duplicate_ids = {
-            sample_id
-            for sample_id, splits in splits_by_sample.items()
-            if len(splits) > 1 and not (len(splits) == 2 and "discarded" in splits)
-        }
-        if duplicate_ids:
-            raise ValueError(f"Duplicate sample_ids in manifest: {duplicate_ids}")
-
-        split_input_pairs = [(record.split, record.input_path) for record in self.records]
-        if len(split_input_pairs) != len(set(split_input_pairs)):
-            duplicate_pairs = {
-                pair for pair in split_input_pairs if split_input_pairs.count(pair) > 1
-            }
-            raise ValueError(f"Duplicate (split, input_path) pairs in manifest: {duplicate_pairs}")
-
-        input_paths = [record.input_path for record in self.records]
+            if tuple(record.input_paths) != self.metadata.input_modalities:
+                raise ValueError("Manifest input keys must exactly match metadata order")
+            if set(record.input_paths) != allowed:
+                raise ValueError("Manifest input keys must exactly match metadata")
+            for path in record.input_paths.values():
+                _validate_manifest_path(path, "input_path")
+            _validate_manifest_path(record.target_path, "target_path")
+        samples: dict[str, list[Split]] = defaultdict(list)
+        for record in self.records:
+            samples[record.sample_id].append(record.split)
+        if any(
+            len({split for split in splits if split != "discarded"}) > 1
+            for splits in samples.values()
+        ):
+            raise ValueError("Some sample_ids appear in multiple splits")
+        if any(
+            len(splits) > 1 and not (len(splits) == 2 and "discarded" in splits)
+            for splits in samples.values()
+        ):
+            raise ValueError("Duplicate sample_ids in manifest")
+        input_paths = [path for record in self.records for path in record.input_paths.values()]
         if len(input_paths) != len(set(input_paths)):
-            duplicate_input_paths = {
-                input_path for input_path in input_paths if input_paths.count(input_path) > 1
-            }
-            raise ValueError(f"Duplicate input_path values in manifest: {duplicate_input_paths}")
-
+            raise ValueError("Duplicate input paths in manifest")
         target_paths = [record.target_path for record in self.records]
         if len(target_paths) != len(set(target_paths)):
-            duplicate_target_paths = {
-                target_path for target_path in target_paths if target_paths.count(target_path) > 1
-            }
-            raise ValueError(f"Duplicate target_path values in manifest: {duplicate_target_paths}")
-
+            raise ValueError("Duplicate target paths in manifest")
         if check_files_exist:
             for record in self.records:
-                input_path = self.dataset_root / record.input_path
-                target_path = self.dataset_root / record.target_path
-                if not input_path.exists():
-                    raise FileNotFoundError(f"Input file not found: {input_path}")
-                if not target_path.exists():
-                    raise FileNotFoundError(f"Target file not found: {target_path}")
-                if record.foreground_mask_path is not None:
-                    mask_path = self.dataset_root / record.foreground_mask_path
-                    if not mask_path.exists():
-                        raise FileNotFoundError(f"Foreground mask not found: {mask_path}")
-
+                for path in (
+                    *record.input_paths.values(),
+                    record.target_path,
+                    *((record.foreground_mask_path,) if record.foreground_mask_path else ()),
+                ):
+                    if not (self.dataset_root / path).exists():
+                        raise FileNotFoundError(
+                            f"Manifest file not found: {self.dataset_root / path}"
+                        )
         if require_splits:
-            present_splits = sorted({record.split for record in self.records})
-            for split in sorted(require_splits):
+            for split in require_splits:
                 if split not in _VALID_SPLITS:
-                    raise ValueError(
-                        f"Invalid required split {split!r}; expected one of {sorted(_VALID_SPLITS)}"
-                    )
-                if len(self.filter_split(cast(Split, split)).records) == 0:
-                    raise ValueError(
-                        f"Manifest has no records for required split '{split}'. "
-                        f"Present splits: {present_splits}. "
-                        "Check that 'vs prepare' completed successfully and that "
-                        "the correct manifest is being used."
-                    )
+                    raise ValueError(f"Invalid required split {split!r}")
+                if not any(record.split == split for record in self.records):
+                    raise ValueError(f"Manifest has no records for required split {split!r}")
 
     def to_csv(self, path: Path) -> None:
+        self.validate()
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=MANIFEST_FIELDNAMES)
+            writer = csv.DictWriter(handle, fieldnames=self.fieldnames)
             writer.writeheader()
             for record in self.records:
-                row: dict[str, object] = {
+                row: dict[str, Any] = {
                     "sample_id": record.sample_id,
+                    "set_id": record.set_id,
                     "split": record.split,
-                    "input_path": record.input_path.as_posix(),
-                    "target_path": record.target_path.as_posix(),
-                    "input_modality": record.input_modality,
-                    "target_modality": record.target_modality,
-                    "x": record.x,
-                    "y": record.y,
-                    "width": record.width,
-                    "height": record.height,
                 }
-                row["pair_id"] = record.pair_id
-                row["foreground_mask_path"] = (
-                    record.foreground_mask_path.as_posix()
-                    if record.foreground_mask_path is not None
-                    else ""
+                row.update(
+                    {
+                        f"input__{name}": record.input_paths[name].as_posix()
+                        for name in self.metadata.input_modalities
+                    }
                 )
-                writer.writerow(cast(Any, row))
+                row.update(
+                    {
+                        "target_path": record.target_path.as_posix(),
+                        "foreground_mask_path": record.foreground_mask_path.as_posix()
+                        if record.foreground_mask_path
+                        else "",
+                        "x": record.x,
+                        "y": record.y,
+                        "width": record.width,
+                        "height": record.height,
+                    }
+                )
+                writer.writerow(row)
 
     @classmethod
-    def from_csv(cls, path: Path, dataset_root: Path) -> DatasetManifest:
+    def from_csv(
+        cls, path: Path, dataset_root: Path, metadata: ManifestMetadata | None = None
+    ) -> DatasetManifest:
+        if metadata is None:
+            raise ValueError("ManifestMetadata is required to parse a v3 manifest")
+        expected = (
+            "sample_id",
+            "set_id",
+            "split",
+            *(f"input__{name}" for name in metadata.input_modalities),
+            "target_path",
+            "foreground_mask_path",
+            "x",
+            "y",
+            "width",
+            "height",
+        )
         with path.open(newline="", encoding="utf-8") as handle:
             reader = csv.DictReader(handle)
-            fieldnames = tuple(reader.fieldnames or ())
-            if fieldnames != MANIFEST_FIELDNAMES:
-                missing = [field for field in MANIFEST_FIELDNAMES if field not in fieldnames]
-                unexpected = [field for field in fieldnames if field not in MANIFEST_FIELDNAMES]
+            if tuple(reader.fieldnames or ()) != expected:
                 raise ValueError(
-                    f"Manifest CSV at {path} must match the exact v2 columns: "
-                    f"missing={missing}, unexpected columns={unexpected}; got {list(fieldnames)}"
+                    f"Manifest CSV at {path} must match exact v3 columns: {list(expected)}"
                 )
-            records_list: list[ManifestRecord] = []
+            records: list[ManifestRecord] = []
             for row_num, row in enumerate(reader, start=2):
-                records_list.append(
+                records.append(
                     ManifestRecord(
-                        sample_id=_require_nonempty(row["sample_id"], "sample_id", row_num, path),
-                        split=_parse_split_field(row["split"], row_num, path),
-                        input_path=_parse_path_field(
-                            row["input_path"], "input_path", row_num, path
-                        ),
-                        target_path=_parse_path_field(
-                            row["target_path"], "target_path", row_num, path
-                        ),
-                        input_modality=_require_nonempty(
-                            row["input_modality"], "input_modality", row_num, path
-                        ),
-                        target_modality=_require_nonempty(
-                            row["target_modality"], "target_modality", row_num, path
-                        ),
-                        x=_parse_int_field(row["x"], "x", row_num, path),
-                        y=_parse_int_field(row["y"], "y", row_num, path),
-                        width=_parse_int_field(row["width"], "width", row_num, path),
-                        height=_parse_int_field(row["height"], "height", row_num, path),
-                        pair_id=_require_nonempty(row["pair_id"], "pair_id", row_num, path),
-                        foreground_mask_path=(
-                            _parse_path_field(
-                                row["foreground_mask_path"],
-                                "foreground_mask_path",
-                                row_num,
-                                path,
+                        sample_id=_nonempty(row["sample_id"], "sample_id", row_num, path),
+                        set_id=_nonempty(row["set_id"], "set_id", row_num, path),
+                        split=_parse_split(row["split"], row=row_num, path=path),
+                        input_paths={
+                            name: _parse_path(
+                                row[f"input__{name}"], f"input__{name}", row_num, path
                             )
-                            if row["foreground_mask_path"].strip()
-                            else None
-                        ),
+                            for name in metadata.input_modalities
+                        },
+                        target_path=_parse_path(row["target_path"], "target_path", row_num, path),
+                        foreground_mask_path=_parse_path(
+                            row["foreground_mask_path"], "foreground_mask_path", row_num, path
+                        )
+                        if row["foreground_mask_path"].strip()
+                        else None,
+                        x=_parse_int(row["x"], "x", row_num, path),
+                        y=_parse_int(row["y"], "y", row_num, path),
+                        width=_parse_int(row["width"], "width", row_num, path),
+                        height=_parse_int(row["height"], "height", row_num, path),
                     )
                 )
-            records = tuple(records_list)
-        return cls(records=records, dataset_root=dataset_root)
+        result = cls(tuple(records), dataset_root, metadata)
+        result.validate()
+        return result
 
     def __len__(self) -> int:
         return len(self.records)
+
+
+def load_manifest_or_raise(project: ProjectConfig) -> DatasetManifest:
+    manifest_path = project.manifest_path
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"Manifest not found at {manifest_path}. Run 'vs prepare'.")
+    metadata_path = manifest_path.parent / "manifest_metadata.json"
+    if not metadata_path.is_file():
+        raise FileNotFoundError(f"Manifest metadata not found at {metadata_path}")
+    try:
+        metadata = ManifestMetadata.from_mapping(
+            json.loads(metadata_path.read_text(encoding="utf-8"))
+        )
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid manifest metadata at {metadata_path}: {exc}") from exc
+    return DatasetManifest.from_csv(
+        manifest_path, dataset_root=project.dataset_root, metadata=metadata
+    )

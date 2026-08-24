@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import csv
 import logging
 from pathlib import Path
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.manifest import load_manifest_or_raise
-from virtual_staining.data.pairs import load_pair_manifest
-from virtual_staining.evaluation.evaluator import evaluate_pairs
+from virtual_staining.evaluation.evaluator import evaluate_sets
 from virtual_staining.evaluation.plotting import save_dataset_plots
 from virtual_staining.evaluation.reports import write_skipped_csv
 from virtual_staining.evaluation.summaries import write_grouped_summaries, write_summary_csv
@@ -81,13 +81,13 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
     }
     run = RunProvenance(paths.metadata_dir, project.run_name, config_hash)
     with run.stage("evaluate", details=evaluation_details) as stage:
-        pairs: list[tuple[Path, Path, str, str]] = []
+        sets: list[tuple[Path, Path, str, str]] = []
         pairing_skipped: list[dict[str, str]] = []
         for record in test_records:
             target_path = project.dataset_root / record.target_path
             generated_path = generated_path_for_record(record, generated_dir)
             if target_path.exists() and generated_path.exists():
-                pairs.append((target_path, generated_path, record.sample_id, record.pair_id))
+                sets.append((target_path, generated_path, record.sample_id, record.set_id))
                 continue
 
             reason = "missing_target" if not target_path.exists() else "missing_generated"
@@ -100,19 +100,20 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
                 }
             )
 
-        result = evaluate_pairs(pairs, output_dir)
+        result = evaluate_sets(sets, output_dir)
         all_skipped = pairing_skipped + result.skipped_rows
         if all_skipped:
             skipped_path = write_skipped_csv(all_skipped, output_dir / "skipped.csv")
             logger.info("Skipped samples written to %s", skipped_path)
-
         if result.rows:
             result.summary_csv = write_summary_csv(result.rows, output_dir)
-            pair_manifest_path = project.dataset_root / "manifests" / "pairs.csv"
-            pair_rows = load_pair_manifest(pair_manifest_path)
+            with (project.dataset_root / "manifests" / "slide_sets.csv").open(
+                newline="", encoding="utf-8"
+            ) as handle:
+                set_rows = {row["set_id"]: row for row in csv.DictReader(handle)}
             grouped_paths = write_grouped_summaries(
                 result.rows,
-                pair_rows,
+                set_rows,
                 output_dir,
                 bootstrap_iterations=(eval_cfg.bootstrap_iterations if eval_cfg else 10_000),
                 bootstrap_seed=eval_cfg.bootstrap_seed if eval_cfg else 0,

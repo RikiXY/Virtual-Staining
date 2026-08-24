@@ -36,24 +36,33 @@ def dataset_len(loader: torch.utils.data.DataLoader) -> int:
 def unpack_batch(
     batch: object,
     device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor] | None]:
-    if not isinstance(batch, (tuple, list)) or len(batch) not in {2, 3}:
-        raise TypeError("training batches must contain (source, target) or (source, target, masks)")
-    x = batch[0]
-    y = batch[1]
-    if not isinstance(x, torch.Tensor) or not isinstance(y, torch.Tensor):
-        raise TypeError("training batch source and target must be tensors")
-    masks = None
-    if len(batch) == 3:
-        raw_masks = batch[2]
-        if not isinstance(raw_masks, dict):
-            raise TypeError("training batch masks must be a mapping")
-        masks = {}
-        for name, value in raw_masks.items():
-            if not isinstance(value, torch.Tensor):
-                raise TypeError(f"training batch mask {name!r} must be a tensor")
-            masks[str(name)] = value.to(device)
-    return x.to(device), y.to(device), masks
+    input_names: tuple[str, ...],
+) -> tuple[dict[str, torch.Tensor], torch.Tensor, dict[str, torch.Tensor]]:
+    if not isinstance(batch, dict) or set(batch) != {"inputs", "target", "masks"}:
+        raise TypeError("training batches must contain exactly inputs, target, and masks")
+    raw_inputs, raw_target, raw_masks = batch["inputs"], batch["target"], batch["masks"]
+    if not isinstance(raw_inputs, dict) or tuple(raw_inputs) != input_names:
+        raise TypeError(f"training batch inputs must match configured names {input_names}")
+    if not isinstance(raw_target, torch.Tensor) or raw_target.ndim != 4 or raw_target.shape[1] != 3:
+        raise TypeError("training batch target must be an RGB NCHW tensor")
+    inputs: dict[str, torch.Tensor] = {}
+    for name in input_names:
+        value = raw_inputs[name]
+        if not isinstance(value, torch.Tensor) or value.ndim != 4 or value.shape[1] != 3:
+            raise TypeError(f"training batch input {name!r} must be an RGB NCHW tensor")
+        if value.shape[0] != raw_target.shape[0] or value.shape[2:] != raw_target.shape[2:]:
+            raise ValueError(
+                "training batch inputs and target must have matching batch/spatial shapes"
+            )
+        inputs[name] = value.to(device)
+    if not isinstance(raw_masks, dict):
+        raise TypeError("training batch masks must be a mapping")
+    masks: dict[str, torch.Tensor] = {}
+    for name, value in raw_masks.items():
+        if not isinstance(value, torch.Tensor):
+            raise TypeError(f"training batch mask {name!r} must be a tensor")
+        masks[str(name)] = value.to(device)
+    return inputs, raw_target.to(device), masks
 
 
 def configured_loss_names(losses: LossConfig | None) -> list[str]:
