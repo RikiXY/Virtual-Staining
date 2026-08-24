@@ -23,17 +23,16 @@ def test_v2_round_trip_uses_explicit_pair_and_mask_path(tmp_path: Path) -> None:
         height=16,
     )
     path = tmp_path / "manifest.csv"
-    DatasetManifest((record,), tmp_path, schema_version="2.0").to_csv(path)
+    DatasetManifest((record,), tmp_path).to_csv(path)
     loaded = DatasetManifest.from_csv(path, tmp_path)
-    assert loaded.schema_version == "2.0"
     assert loaded.records == (record,)
 
 
-def test_mixed_manifest_schema_is_rejected(tmp_path: Path) -> None:
+def test_v1_manifest_is_rejected(tmp_path: Path) -> None:
     path = tmp_path / "manifest.csv"
     path.write_text(
-        "sample_id,pair_id,split,input_path,target_path,input_modality,target_modality,x,y,width,height\n",
+        "sample_id,split,input_path,target_path,input_modality,target_modality,x,y,width,height\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="unexpected columns"):
+    with pytest.raises(ValueError, match="pair_id"):
         DatasetManifest.from_csv(path, tmp_path)

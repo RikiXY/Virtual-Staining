@@ -12,9 +12,9 @@ import yaml
 from tests.config_helpers import write_run_config
 from tests.image_helpers import write_rgb_pair
 from tests.manifest_helpers import make_manifest_record, write_manifest_csv
+from virtual_staining.applications.train import train
 from virtual_staining.config.run import RunConfig
 from virtual_staining.training.results import TrainingResult
-from virtual_staining.training.runner import run_training
 
 
 def _write_train_config(tmp_path: Path, dataset_root: Path) -> Path:
@@ -76,7 +76,7 @@ def test_run_training_raises_if_manifest_missing(tmp_path: Path) -> None:
     config = RunConfig.from_yaml(config_path)
 
     with pytest.raises(FileNotFoundError, match="Manifest not found"):
-        run_training(config, config_path)
+        train(config, config_path)
 
 
 def test_run_training_raises_if_required_train_split_missing(tmp_path: Path) -> None:
@@ -90,7 +90,7 @@ def test_run_training_raises_if_required_train_split_missing(tmp_path: Path) -> 
     config = RunConfig.from_yaml(config_path)
 
     with pytest.raises(ValueError, match="train"):
-        run_training(config, config_path)
+        train(config, config_path)
 
 
 def test_run_training_raises_if_manifest_input_file_missing(tmp_path: Path) -> None:
@@ -106,7 +106,7 @@ def test_run_training_raises_if_manifest_input_file_missing(tmp_path: Path) -> N
     config = RunConfig.from_yaml(config_path)
 
     with pytest.raises(FileNotFoundError, match="Input file not found"):
-        run_training(config, config_path)
+        train(config, config_path)
 
 
 def test_run_training_resume_latest_raises_when_no_checkpoints_exist(tmp_path: Path) -> None:
@@ -144,7 +144,7 @@ def test_run_training_resume_latest_raises_when_no_checkpoints_exist(tmp_path: P
     config = RunConfig.from_yaml(config_path)
 
     with pytest.raises(FileNotFoundError, match="resume='latest'.*no checkpoints found"):
-        run_training(config, config_path)
+        train(config, config_path)
 
 
 def test_run_training_writes_resolved_config_and_hash(tmp_path: Path, monkeypatch) -> None:
@@ -165,7 +165,7 @@ def test_run_training_writes_resolved_config_and_hash(tmp_path: Path, monkeypatc
 
     monkeypatch.setattr("virtual_staining.training.trainer.Trainer.train", _fake_train)
 
-    run_training(config, config_path)
+    train(config, config_path)
 
     run_root = tmp_path / "results" / "smoke_run"
     input_path = run_root / "config" / "input.yaml"
@@ -242,7 +242,7 @@ def test_run_training_writes_early_stopping_result_metadata(
 
     monkeypatch.setattr("virtual_staining.training.trainer.Trainer.train", _fake_train)
 
-    run_training(config, config_path)
+    train(config, config_path)
 
     run_root = tmp_path / "results" / "smoke_run"
     stage_metadata = json.loads(
@@ -313,10 +313,10 @@ def test_run_training_uses_separate_seeded_loader_generators(
     def _fake_train(self, seed: int, start_epoch: int = 0) -> TrainingResult:
         return TrainingResult(final_epoch=start_epoch, best_checkpoint_path=None)
 
-    monkeypatch.setattr("virtual_staining.training.runner.DataLoader", _FakeDataLoader)
+    monkeypatch.setattr("virtual_staining.applications.train.DataLoader", _FakeDataLoader)
     monkeypatch.setattr("virtual_staining.training.trainer.Trainer.train", _fake_train)
 
-    run_training(config, config_path)
+    train(config, config_path)
 
     assert len(loader_kwargs) == 2
     train_generator = loader_kwargs[0]["generator"]
@@ -384,14 +384,14 @@ def test_run_training_wires_augmentation_virtual_expansion(
     def _paired_transform(source, target, mask):
         return source, target, mask
 
-    monkeypatch.setattr("virtual_staining.training.runner.DataLoader", _FakeDataLoader)
+    monkeypatch.setattr("virtual_staining.applications.train.DataLoader", _FakeDataLoader)
     monkeypatch.setattr(
-        "virtual_staining.training.runner.build_training_paired_transform",
+        "virtual_staining.applications.train.build_training_paired_transform",
         lambda *_args, **_kwargs: _paired_transform,
     )
     monkeypatch.setattr("virtual_staining.training.trainer.Trainer.train", _fake_train)
 
-    run_training(config, config_path)
+    train(config, config_path)
 
     assert len(loader_datasets) == 2
     assert len(loader_datasets[0]) == 3
@@ -429,7 +429,7 @@ def test_run_training_writes_failed_stage_metadata_and_events(tmp_path: Path, mo
     monkeypatch.setattr("virtual_staining.training.trainer.Trainer.train", _fail_train)
 
     with pytest.raises(RuntimeError, match="boom"):
-        run_training(config, config_path)
+        train(config, config_path)
 
     run_root = tmp_path / "results" / "smoke_run"
     stage_metadata = json.loads(

@@ -12,16 +12,34 @@ from tests.image_helpers import write_rgb_image, write_rgb_pair
 from tests.manifest_helpers import make_manifest_record, write_manifest_csv
 from virtual_staining.applications.evaluate import evaluate
 from virtual_staining.config.run import RunConfig
+from virtual_staining.data.pairs import PAIR_MANIFEST_FIELDS
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.inference.outputs import (
     generated_filename_for_sample,
     generated_path_for_record,
 )
+from virtual_staining.metrics import METRIC_SPECS
 
 
 def _write_test_manifest(dataset_root: Path, sample_ids: list[str]) -> None:
     records = tuple(make_manifest_record(sample_id, "test", ext=".png") for sample_id in sample_ids)
     write_manifest_csv(dataset_root, records)
+    with (dataset_root / "manifests" / "pairs.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as handle:
+        writer = csv.DictWriter(handle, fieldnames=PAIR_MANIFEST_FIELDS)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "pair_id": "P1",
+                "split": "test",
+                "source_path": "raw/source.png",
+                "target_path": "raw/target.png",
+                "status": "processed",
+                "alignment_method": "identity",
+                "alignment_metadata_path": "metadata/pairs/P1.json",
+            }
+        )
 
 
 def _write_evaluate_config(
@@ -62,7 +80,6 @@ def test_evaluation_config_defaults_to_run_dirs(tmp_path: Path) -> None:
         tmp_path / "results" / "section_run" / "evaluation"
     )
     assert run_config.evaluation.save_graphs is False
-    assert run_config.evaluation.target_dir is None
     assert run_config.evaluation.generated_dir is None
     assert run_config.evaluation.output_dir is None
 
@@ -72,7 +89,6 @@ def test_evaluation_config_accepts_explicit_dirs(tmp_path: Path) -> None:
         tmp_path,
         """\
         evaluation:
-          target_dir: /custom/targets
           generated_dir: /custom/generated
           output_dir: /custom/evaluation
         """,
@@ -84,7 +100,6 @@ def test_evaluation_config_accepts_explicit_dirs(tmp_path: Path) -> None:
     run_config = RunConfig.from_yaml(yaml_file)
     assert run_config.evaluation is not None
 
-    assert run_config.evaluation.target_dir == Path("/custom/targets")
     assert run_config.evaluation.generated_dir == Path("/custom/generated")
     assert run_config.evaluation.output_dir == Path("/custom/evaluation")
 
@@ -92,13 +107,13 @@ def test_evaluation_config_accepts_explicit_dirs(tmp_path: Path) -> None:
 def test_evaluation_from_yaml_unknown_section_key_raises(tmp_path: Path) -> None:
     yaml_file = write_run_config(
         tmp_path,
-        "evaluation:\n  save_graph: false",
+        "evaluation:\n  target_dir: /custom/targets",
         filename="typo.yaml",
         dataset_root=tmp_path / "data",
         results_path=tmp_path / "results",
         run_name="section_run",
     )
-    with pytest.raises(ValueError, match="save_graph"):
+    with pytest.raises(ValueError, match="target_dir"):
         RunConfig.from_yaml(yaml_file)
 
 
@@ -160,7 +175,6 @@ def test_evaluate_writes_stage_scoped_snapshot_files(tmp_path: Path) -> None:
         tmp_path,
         dataset_root,
         f"""\
-          target_dir: {target_dir}
           generated_dir: {generated_dir}
           output_dir: {tmp_path / "results" / "eval_run" / "evaluation"}
         """,
@@ -194,7 +208,6 @@ def test_evaluate_preserves_existing_training_snapshot_files(tmp_path: Path) -> 
         tmp_path,
         dataset_root,
         f"""\
-          target_dir: {target_dir}
           generated_dir: {generated_dir}
           output_dir: {tmp_path / "results" / "eval_run" / "evaluation"}
         """,
@@ -227,7 +240,6 @@ def test_evaluate_raises_if_manifest_missing(tmp_path: Path) -> None:
         tmp_path,
         dataset_root,
         f"""\
-          target_dir: {target_dir}
           generated_dir: {generated_dir}
           output_dir: {tmp_path / "results" / "eval_run" / "evaluation"}
         """,
@@ -263,7 +275,6 @@ def test_evaluate_raises_if_required_test_split_missing(tmp_path: Path) -> None:
         tmp_path,
         dataset_root,
         f"""\
-          target_dir: {target_dir}
           generated_dir: {generated_dir}
           output_dir: {tmp_path / "results" / "eval_run" / "evaluation"}
         """,
@@ -348,7 +359,7 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
     assert metadata["skipped_count"] == 0
     assert metadata["metrics_csv_path"] == str(output_dir / "per_image_metrics.csv")
     assert metadata["summary_csv_path"] == str(output_dir / "summary.csv")
-    assert metadata["metric_config"]["ssim"] is True
+    assert metadata["metric_config"] == {name: True for name in METRIC_SPECS}
 
     events = [
         json.loads(line)

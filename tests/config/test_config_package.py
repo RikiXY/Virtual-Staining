@@ -21,8 +21,15 @@ model:
   generator:
     dropout: true
 preprocessing:
-  source_name: source.tif
-  target_name: target.tif
+  inputs:
+    inventory: inputs/pairs.csv
+    source_modality: source
+    target_modality: target
+  split:
+    unit: patch
+    train: 0.8
+    val: 0.05
+    test: 0.15
 training:
   epochs: 10
   augmentation:

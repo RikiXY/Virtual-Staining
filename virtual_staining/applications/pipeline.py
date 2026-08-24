@@ -5,10 +5,10 @@ from pathlib import Path
 from typing import Literal, TypeAlias, cast
 
 from virtual_staining.applications.evaluate import evaluate
+from virtual_staining.applications.infer import infer
 from virtual_staining.applications.prepare import prepare
+from virtual_staining.applications.train import train
 from virtual_staining.config.run import RunConfig
-from virtual_staining.inference.runner import run_inference
-from virtual_staining.training.runner import run_training
 
 StageName = Literal["prepare", "train", "infer", "evaluate"]
 VALID_STAGES: tuple[StageName, ...] = ("prepare", "train", "infer", "evaluate")
@@ -36,8 +36,8 @@ def run_stages(
     config = RunConfig.from_yaml(path)
     handlers: dict[StageName, StageHandler] = {
         "prepare": prepare,
-        "train": run_training,
-        "infer": run_inference,
+        "train": train,
+        "infer": infer,
         "evaluate": evaluate,
     }
     return {

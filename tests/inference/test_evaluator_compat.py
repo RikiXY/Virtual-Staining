@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +18,7 @@ from torchvision import transforms
 from tests.config_helpers import write_run_config, yaml_section
 from tests.image_helpers import make_rgb_image, write_rgb_image, write_rgb_pair
 from tests.manifest_helpers import make_manifest_record, write_manifest_csv
+from virtual_staining.applications.infer import infer as _run_inference_impl
 from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.evaluator import evaluate_pair
 from virtual_staining.evaluation.io import collect_image_files, extract_single_sample_id
@@ -24,9 +27,6 @@ from virtual_staining.inference import InferenceResult
 from virtual_staining.inference import single as single_module
 from virtual_staining.inference.runner import (
     InferenceResult as RunnerInferenceResult,
-)
-from virtual_staining.inference.runner import (
-    run_inference as _run_inference_impl,
 )
 from virtual_staining.inference.single import (
     SingleInferenceResult,
@@ -38,6 +38,7 @@ from virtual_staining.inference.single import (
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import UNetGenerator
 from virtual_staining.utils.dimensions import to_torchvision_hw
+from virtual_staining.utils.image_io import ImageMetadata
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -265,6 +266,151 @@ def test_region_tiled_inference_matches_source_with_overlap(tmp_path: Path) -> N
 
     actual = np.fromfile(output_path, dtype=np.uint8).reshape(source.shape)
     np.testing.assert_array_equal(actual, source)
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected_resolution"),
+    [
+        (ImageMetadata(3, 3, mpp_x=0.25, mpp_y=0.5), {"xres": 4000.0, "yres": 2000.0}),
+        (ImageMetadata(3, 3), {}),
+    ],
+)
+def test_save_pyramidal_tiff_uses_pyvips_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    metadata: ImageMetadata,
+    expected_resolution: dict[str, float],
+) -> None:
+    source = np.arange(27, dtype=np.uint8).reshape(3, 3, 3)
+    raw_path = tmp_path / "generated.rgb"
+    output_path = tmp_path / "generated.tif"
+    source.tofile(raw_path)
+    calls: dict[str, object] = {}
+
+    class FakeVipsError(Exception):
+        pass
+
+    class FakeImage:
+        def __init__(self, path: str) -> None:
+            self.path = Path(path)
+
+        def tiffsave(self, path: str, **options: object) -> None:
+            calls["tiffsave"] = (path, options)
+            Path(path).write_bytes(self.path.read_bytes())
+
+    class FakeImageApi:
+        @staticmethod
+        def rawload(*args: object, **kwargs: object) -> FakeImage:
+            calls["rawload"] = (args, kwargs)
+            return FakeImage(str(args[0]))
+
+    monkeypatch.setitem(
+        sys.modules,
+        "pyvips",
+        types.SimpleNamespace(Image=FakeImageApi, Error=FakeVipsError),
+    )
+
+    class Reader:
+        instances: list[Reader] = []
+
+        def __init__(self, path: Path) -> None:
+            self.closed = False
+            self.reads: list[tuple[int, int, int, int]] = []
+            self._source = np.fromfile(path, dtype=np.uint8).reshape(3, 3, 3)
+            save_options = calls["tiffsave"][1]  # type: ignore[index]
+            self._metadata = ImageMetadata(
+                3,
+                3,
+                level_dimensions=((3, 3),),
+                level_downsamples=(1.0,),
+                mpp_x=(
+                    1000.0 / save_options["xres"]  # type: ignore[index]
+                    if "xres" in save_options  # type: ignore[operator]
+                    else None
+                ),
+                mpp_y=(
+                    1000.0 / save_options["yres"]  # type: ignore[index]
+                    if "yres" in save_options  # type: ignore[operator]
+                    else None
+                ),
+            )
+            self.instances.append(self)
+
+        @property
+        def size(self) -> tuple[int, int]:
+            return (3, 3)
+
+        @property
+        def metadata(self) -> ImageMetadata:
+            return self._metadata
+
+        def read_region(self, x: int, y: int, width: int, height: int) -> np.ndarray:
+            self.reads.append((x, y, width, height))
+            return self._source[y : y + height, x : x + width, ::-1].copy()
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(single_module, "OpenSlideRegionImageReader", Reader)
+
+    single_module._save_pyramidal_tiff(raw_path, output_path, metadata)
+
+    assert output_path.exists()
+    assert calls["rawload"] == (
+        (str(raw_path), 3, 3, 3),
+        {"format": "uchar", "interpretation": "srgb"},
+    )
+    assert calls["tiffsave"] == (
+        str(raw_path.with_suffix(".tif")),
+        {
+            "tile": True,
+            "tile_width": 256,
+            "tile_height": 256,
+            "pyramid": True,
+            "bigtiff": True,
+            "compression": "lzw",
+            **expected_resolution,
+        },
+    )
+    assert Reader.instances[0].closed is True
+    assert {read[:2] for read in Reader.instances[0].reads} == {(0, 0), (1, 1), (2, 2)}
+
+
+def test_wsi_prediction_passes_source_metadata_to_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_metadata = ImageMetadata(7, 5, mpp_x=0.25)
+    writer_metadata: list[ImageMetadata] = []
+
+    class Reader:
+        size = (101, 103)
+        metadata = source_metadata
+
+    def write_tiled(
+        _reader: object,
+        raw_path: Path,
+        *_args: object,
+    ) -> None:
+        raw_path.write_bytes(b"raw")
+
+    def save_tiff(_raw_path: Path, output_path: Path, received: ImageMetadata) -> None:
+        writer_metadata.append(received)
+        output_path.touch()
+
+    monkeypatch.setattr(single_module, "_write_tiled_rgb", write_tiled)
+    monkeypatch.setattr(single_module, "_save_pyramidal_tiff", save_tiff)
+
+    single_module._run_wsi_prediction(
+        Reader(),  # type: ignore[arg-type]
+        tmp_path / "generated.tif",
+        torch.nn.Identity(),
+        torch.device("cpu"),
+        (32, 32),
+        0,
+    )
+
+    assert writer_metadata == [source_metadata]
+    assert writer_metadata[0] is source_metadata
 
 
 def test_single_image_inference_routes_wsi_without_pillow(

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import re
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -181,33 +180,8 @@ def load_pair_inventory(path: Path, dataset_root: Path) -> tuple[SlidePair, ...]
 
 
 def resolve_slide_pairs(config: PreprocessingConfig) -> tuple[SlidePair, ...]:
-    """Resolve inventory or deprecated single-pair fields from PreprocessingConfig."""
-    dataset_root = config.dataset_root
-    inputs = config.inputs
-    if inputs is not None and inputs.inventory is not None:
-        return load_pair_inventory(inputs.inventory, dataset_root)
-
-    warnings.warn(
-        "preprocessing.source_name/target_name are deprecated; use inputs.inventory",
-        FutureWarning,
-        stacklevel=2,
-    )
-    source = _resolve_relative_path(
-        config.source_name,
-        field="source_name",
-        row=1,
-        dataset_root=dataset_root,
-        required=True,
-    )
-    target = _resolve_relative_path(
-        config.target_name,
-        field="target_name",
-        row=1,
-        dataset_root=dataset_root,
-        required=True,
-    )
-    assert source is not None and target is not None
-    return (SlidePair("pair_0000", source, target),)
+    """Resolve the configured source/target pair inventory."""
+    return load_pair_inventory(config.inputs.inventory, config.dataset_root)
 
 
 def load_pair_manifest(path: Path) -> dict[str, dict[str, str]]:

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import csv
-import json
-import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,19 +13,7 @@ Split = Literal["train", "val", "test", "discarded"]
 
 _VALID_SPLITS: frozenset[str] = frozenset({"train", "val", "test", "discarded"})
 MANIFEST_SCHEMA_VERSION = "2.0"
-V1_FIELDNAMES = (
-    "sample_id",
-    "split",
-    "input_path",
-    "target_path",
-    "input_modality",
-    "target_modality",
-    "x",
-    "y",
-    "width",
-    "height",
-)
-V2_FIELDNAMES = (
+MANIFEST_FIELDNAMES = (
     "sample_id",
     "pair_id",
     "split",
@@ -41,8 +27,6 @@ V2_FIELDNAMES = (
     "width",
     "height",
 )
-
-logger = logging.getLogger(__name__)
 
 
 def _parse_split(value: str) -> Split:
@@ -113,22 +97,6 @@ def load_manifest_or_raise(project: ProjectConfig) -> DatasetManifest:
     return DatasetManifest.from_csv(manifest_path, dataset_root=project.dataset_root)
 
 
-def _warn_on_schema_version_mismatch(manifest_path: Path, expected_version: str) -> None:
-    metadata_path = manifest_path.parent / "manifest_metadata.json"
-    if not metadata_path.exists():
-        return
-
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    on_disk_version = metadata.get("schema_version", "unknown")
-    if on_disk_version != expected_version:
-        logger.warning(
-            "Manifest schema version mismatch: file has '%s', code expects '%s'. "
-            "Re-run 'vs prepare' if you see unexpected errors.",
-            on_disk_version,
-            expected_version,
-        )
-
-
 @dataclass(frozen=True)
 class ManifestRecord:
     sample_id: str
@@ -141,7 +109,7 @@ class ManifestRecord:
     y: int
     width: int
     height: int
-    pair_id: str = "pair_0000"
+    pair_id: str
     foreground_mask_path: Path | None = None
 
     def __post_init__(self) -> None:
@@ -181,16 +149,13 @@ class DatasetManifest:
     SCHEMA_VERSION = MANIFEST_SCHEMA_VERSION
     records: tuple[ManifestRecord, ...]
     dataset_root: Path
-    schema_version: str = "1.0"
-
-    _FIELDNAMES = V2_FIELDNAMES
+    _FIELDNAMES = MANIFEST_FIELDNAMES
 
     def filter_split(self, split: Split) -> DatasetManifest:
         """Return a new manifest containing only records with the given split."""
         return DatasetManifest(
             records=tuple(record for record in self.records if record.split == split),
             dataset_root=self.dataset_root,
-            schema_version=self.schema_version,
         )
 
     def validate(
@@ -282,8 +247,7 @@ class DatasetManifest:
     def to_csv(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", newline="", encoding="utf-8") as handle:
-            fieldnames = V2_FIELDNAMES if self.schema_version == "2.0" else V1_FIELDNAMES
-            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer = csv.DictWriter(handle, fieldnames=MANIFEST_FIELDNAMES)
             writer.writeheader()
             for record in self.records:
                 row: dict[str, object] = {
@@ -298,13 +262,12 @@ class DatasetManifest:
                     "width": record.width,
                     "height": record.height,
                 }
-                if self.schema_version == "2.0":
-                    row["pair_id"] = record.pair_id
-                    row["foreground_mask_path"] = (
-                        record.foreground_mask_path.as_posix()
-                        if record.foreground_mask_path is not None
-                        else ""
-                    )
+                row["pair_id"] = record.pair_id
+                row["foreground_mask_path"] = (
+                    record.foreground_mask_path.as_posix()
+                    if record.foreground_mask_path is not None
+                    else ""
+                )
                 writer.writerow(cast(Any, row))
 
     @classmethod
@@ -312,24 +275,12 @@ class DatasetManifest:
         with path.open(newline="", encoding="utf-8") as handle:
             reader = csv.DictReader(handle)
             fieldnames = tuple(reader.fieldnames or ())
-            if fieldnames == V1_FIELDNAMES:
-                schema_version = "1.0"
-            elif fieldnames == V2_FIELDNAMES:
-                schema_version = "2.0"
-            else:
-                missing_v1 = [field for field in V1_FIELDNAMES if field not in fieldnames]
-                unexpected_v1 = [field for field in fieldnames if field not in V1_FIELDNAMES]
-                if missing_v1 and not unexpected_v1:
-                    raise ValueError(
-                        f"Manifest CSV at {path} is missing required columns: {missing_v1}"
-                    )
-                if unexpected_v1 and not missing_v1:
-                    raise ValueError(
-                        f"Manifest CSV at {path} has unexpected columns: {unexpected_v1}"
-                    )
+            if fieldnames != MANIFEST_FIELDNAMES:
+                missing = [field for field in MANIFEST_FIELDNAMES if field not in fieldnames]
+                unexpected = [field for field in fieldnames if field not in MANIFEST_FIELDNAMES]
                 raise ValueError(
-                    f"Manifest CSV at {path} must match the exact v1 or v2 columns; "
-                    f"got {list(fieldnames)}"
+                    f"Manifest CSV at {path} must match the exact v2 columns: "
+                    f"missing={missing}, unexpected columns={unexpected}; got {list(fieldnames)}"
                 )
             records_list: list[ManifestRecord] = []
             for row_num, row in enumerate(reader, start=2):
@@ -353,11 +304,7 @@ class DatasetManifest:
                         y=_parse_int_field(row["y"], "y", row_num, path),
                         width=_parse_int_field(row["width"], "width", row_num, path),
                         height=_parse_int_field(row["height"], "height", row_num, path),
-                        pair_id=(
-                            _require_nonempty(row["pair_id"], "pair_id", row_num, path)
-                            if schema_version == "2.0"
-                            else "pair_0000"
-                        ),
+                        pair_id=_require_nonempty(row["pair_id"], "pair_id", row_num, path),
                         foreground_mask_path=(
                             _parse_path_field(
                                 row["foreground_mask_path"],
@@ -365,14 +312,13 @@ class DatasetManifest:
                                 row_num,
                                 path,
                             )
-                            if schema_version == "2.0" and row["foreground_mask_path"].strip()
+                            if row["foreground_mask_path"].strip()
                             else None
                         ),
                     )
                 )
             records = tuple(records_list)
-        _warn_on_schema_version_mismatch(path, schema_version)
-        return cls(records=records, dataset_root=dataset_root, schema_version=schema_version)
+        return cls(records=records, dataset_root=dataset_root)
 
     def __len__(self) -> int:
         return len(self.records)

@@ -21,10 +21,10 @@ upper layers may import from lower layers, never the reverse.
 | `experiment/` | Run concept: `RunPaths` (directory layout), `RunMetadata` (run-level provenance), `RunProvenance` (stage lifecycle), environment snapshots |
 | `models/` | `UNetGenerator`, `PatchGANDiscriminator`, model config dataclass |
 | `data/` | `DatasetManifest`, `ManifestRecord`, `DatasetBuilder` (preprocessing pipeline), `PatchDataset` |
-| `training/` | `Trainer` lifecycle, validation, metric history, loss configuration, per-step logic, checkpoint state and checkpoint selection |
-| `inference/` | Inference runner, single-image workflows, canonical output naming |
+| `training/` | Training mechanics: `Trainer`, validation, metric history, losses, per-step logic, checkpoint state and selection |
+| `inference/` | Reusable checkpoint loading, device selection, transforms, prediction, single-image workflows, and output naming |
 | `evaluation/` | Pair evaluation, diagnostic plots, representative selection, comparison panels, summary statistics, ranking utilities |
-| `applications/` | Use-case orchestrators (`train.py`, `infer.py`, `evaluate.py`, ...) - no `argparse` |
+| `applications/` | User-visible stage lifecycle owners (`prepare.py`, `train.py`, `infer.py`, `evaluate.py`) and other use cases - no `argparse` |
 | `cli/` | The `argparse` entrypoint and helpers for `vs <command>` - thin adapters over `applications/` |
 
 ## Purity and I/O Boundaries
@@ -43,7 +43,7 @@ Typical examples:
 | Mostly pure indexing/data model | `data/dataset.py` | Dataset indexing and manifest-backed lookup |
 | Side-effecting preprocessing service | `data/builder.py` | Builds datasets, writes patches/manifests/metadata |
 | Side-effecting training service | `training/trainer.py` | Training loop, checkpoint/log/metric writes |
-| Side-effecting inference service | `inference/runner.py`, `inference/single.py` | Model execution plus output writing at runner boundary |
+| Side-effecting inference service | `inference/runner.py`, `inference/single.py` | Reusable model loading and prediction plus single-image output writing |
 | Side-effecting evaluation service | `evaluation/` runners/report writers | Metrics computation plus report/CSV output |
 
 The architectural boundary is not “no I/O in library code.” The actual rule is:
@@ -51,6 +51,11 @@ The architectural boundary is not “no I/O in library code.” The actual rule 
 - reusable package code should keep I/O explicit and testable
 - orchestration belongs in `applications/`
 - CLI translation belongs in `cli/`
+
+The four experiment stage lifecycles are owned by
+`applications/{prepare,train,infer,evaluate}.py`. Training model construction and dataset
+wiring terminate in the reusable `Trainer`; test-set inference delegates checkpoint loading,
+device selection, transforms, and batch prediction to `inference/`.
 
 Within training, `trainer.py` owns epoch orchestration, `validator.py` owns validation
 inference, `history.py` owns metric CSV persistence, `checkpoints.py` owns model/training

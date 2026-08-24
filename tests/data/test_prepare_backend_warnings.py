@@ -15,8 +15,7 @@ def _config(root: Path, backend: str = "auto", *, tiled: bool = True) -> Any:
     return SimpleNamespace(
         preprocessing=SimpleNamespace(
             dataset_root=root,
-            tiled_io=tiled,
-            io_backend=backend,
+            io=SimpleNamespace(tiled=tiled, backend=backend),
         )
     )
 

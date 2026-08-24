@@ -5,7 +5,6 @@ import dataclasses
 import datetime
 import json
 import logging
-import random
 import sys
 from pathlib import Path
 from typing import Any, cast
@@ -156,13 +155,11 @@ class PairProcessor:
     def __init__(
         self,
         config: PreprocessingConfig,
-        pair: SlidePair | None = None,
+        pair: SlidePair,
         assigned_split: Split | None = None,
     ) -> None:
         self.config = config
-        self.pair = pair or SlidePair(
-            "pair_0000", Path(config.source_name or ""), Path(config.target_name or "")
-        )
+        self.pair = pair
         self.assigned_split = assigned_split
         self._source_file = validate_image_filename(str(self.pair.source_path), "Source")
         self._target_file = validate_image_filename(str(self.pair.target_path), "Target")
@@ -186,11 +183,11 @@ class PairProcessor:
         self._maskless = False
 
     def _uses_lowres_mask_filtering(self) -> bool:
-        masks = self.config.effective_masks
+        masks = self.config.masks
         return masks.lowres_filtering and masks.scale < 1.0
 
     def _uses_mask_space_filtering(self) -> bool:
-        return self._uses_lowres_mask_filtering() or self.config.tiled_io
+        return self._uses_lowres_mask_filtering() or self.config.io.tiled
 
     @staticmethod
     def _mask_in_image_space(mask: np.ndarray, image: np.ndarray) -> np.ndarray:
@@ -200,11 +197,11 @@ class PairProcessor:
         return cv2.resize(mask, (image_w, image_h), interpolation=cv2.INTER_NEAREST)
 
     def _source_mask_strategy(self) -> str:
-        masks = self.config.effective_masks
+        masks = self.config.masks
         return masks.source_strategy or masks.strategy
 
     def _target_mask_strategy(self) -> str:
-        masks = self.config.effective_masks
+        masks = self.config.masks
         return masks.target_strategy or masks.strategy
 
     @staticmethod
@@ -226,7 +223,7 @@ class PairProcessor:
         return fullres_matrix
 
     def _supplied_mask_paths(self) -> tuple[Path, Path] | None:
-        masks = self.config.effective_masks
+        masks = self.config.masks
         shared = self.pair.shared_mask_path
         source = self.pair.source_mask_path
         target = self.pair.target_mask_path
@@ -257,11 +254,11 @@ class PairProcessor:
 
     def _load_supplied_masks(self) -> bool:
         paths = self._supplied_mask_paths()
-        masks = self.config.effective_masks
+        masks = self.config.masks
         if paths is None:
             if masks.generation != "never":
                 return False
-            if self.config.foreground_enabled:
+            if self.config.filtering.foreground.enabled:
                 raise ValueError(
                     f"Pair {self.pair.pair_id}: maskless processing requires "
                     "foreground.enabled=false"
@@ -276,13 +273,13 @@ class PairProcessor:
 
         def load(path: Path, expected_size: tuple[int, int]) -> np.ndarray:
             full_path = self.config.dataset_root / path
-            if not self.config.tiled_io:
+            if not self.config.io.tiled:
                 mask = cv2.imread(str(full_path), cv2.IMREAD_GRAYSCALE)
                 if mask is None:
                     raise ValueError(f"Pair {self.pair.pair_id}: could not read {path}")
                 return mask
 
-            reader = open_image_reader(full_path, backend=self.config.io_backend)
+            reader = open_image_reader(full_path, backend=self.config.io.backend)
             try:
                 image = (
                     reader.read_preview(masks.scale)
@@ -302,7 +299,7 @@ class PairProcessor:
             target_size = (self._target_shape[1], self._target_shape[0])
         source_mask = load(paths[0], source_size)
         target_mask = source_mask if paths[0] == paths[1] else load(paths[1], target_size)
-        if self.config.tiled_io:
+        if self.config.io.tiled:
             source_mask = cv2.resize(
                 source_mask,
                 (self._source_image.shape[1], self._source_image.shape[0]),
@@ -369,9 +366,9 @@ class PairProcessor:
 
         source_path = root / self._source_file
         target_path = root / self._target_file
-        if self.config.tiled_io:
-            self._source_reader = open_image_reader(source_path, backend=self.config.io_backend)
-            self._target_reader = open_image_reader(target_path, backend=self.config.io_backend)
+        if self.config.io.tiled:
+            self._source_reader = open_image_reader(source_path, backend=self.config.io.backend)
+            self._target_reader = open_image_reader(target_path, backend=self.config.io.backend)
             source_w, source_h = self._source_reader.size
             target_w, target_h = self._target_reader.size
             self._source_shape = (source_h, source_w)
@@ -382,28 +379,28 @@ class PairProcessor:
         estimated_gb = _estimate_memory_gb(
             source_h,
             source_w,
-            mask_scale=self.config.effective_masks.scale,
+            mask_scale=self.config.masks.scale,
             lowres_mask_filtering=self._uses_mask_space_filtering(),
-            tiled_io=self.config.tiled_io,
+            tiled_io=self.config.io.tiled,
         )
-        if self.config.max_memory_gb is not None and estimated_gb > self.config.max_memory_gb:
+        if self.config.io.max_memory_gb is not None and estimated_gb > self.config.io.max_memory_gb:
             raise MemoryError(
                 f"Estimated working-set size {estimated_gb:.1f} GB exceeds configured "
-                f"max_memory_gb={self.config.max_memory_gb}. Consider using 'mask_scale: 0.25' "
+                f"max_memory_gb={self.config.io.max_memory_gb}. Consider using 'masks.scale: 0.25' "
                 "in your preprocessing config, splitting large images, or increasing "
                 "max_memory_gb."
             )
-        if self.config.max_memory_gb is None and estimated_gb > _MEMORY_WARNING_THRESHOLD_GB:
+        if self.config.io.max_memory_gb is None and estimated_gb > _MEMORY_WARNING_THRESHOLD_GB:
             logger.warning(
                 "Estimated working-set size %.1f GB is large. If the process is killed, "
-                "use 'mask_scale: 0.25' to reduce memory usage.",
+                "use 'masks.scale: 0.25' to reduce memory usage.",
                 estimated_gb,
             )
 
-        if self.config.tiled_io:
+        if self.config.io.tiled:
             assert self._source_reader is not None
             assert self._target_reader is not None
-            preview_scale = self.config.effective_masks.scale
+            preview_scale = self.config.masks.scale
             self._alignment_preview_scale = preview_scale
             self._source_image = self._source_reader.read_preview(preview_scale)
             self._target_image = self._target_reader.read_preview(preview_scale)
@@ -423,8 +420,8 @@ class PairProcessor:
             return
 
         logger.info("Calculating masks...")
-        scale = self.config.effective_masks.scale
-        if self.config.tiled_io:
+        scale = self.config.masks.scale
+        if self.config.io.tiled:
             source_mask = self._calculate_mask(
                 self._source_image,
                 strategy=self._source_mask_strategy(),
@@ -481,7 +478,7 @@ class PairProcessor:
         _log_memory("compute_masks")
 
     def _save_resolved_masks(self) -> None:
-        if not self.config.effective_masks.save_resolved_masks:
+        if not self.config.masks.save_resolved_masks:
             return
         assert self._source_mask is not None and self._target_mask is not None
         assert self._source_image is not None and self._target_image is not None
@@ -506,7 +503,7 @@ class PairProcessor:
         ):
             raise RuntimeError("compute_masks() must be called before align()")
 
-        policy = self.config.effective_alignment
+        policy = self.config.alignment
         if policy.mode == "never" and self.pair.already_aligned is False:
             raise ValueError(
                 f"Pair {self.pair.pair_id}: alignment.mode=never contradicts already_aligned=false"
@@ -565,7 +562,7 @@ class PairProcessor:
             mask_2=target_alignment_mask,
             scale=0.5,
         )
-        if self.config.tiled_io:
+        if self.config.io.tiled:
             warp_matrix = self._fullres_warp_from_preview(
                 warp_matrix,
                 self._alignment_preview_scale,
@@ -582,12 +579,6 @@ class PairProcessor:
             warp_matrix=warp_matrix,
             metadata=self._alignment_metadata,
         )
-        if self.config.inputs is None:
-            with open(
-                self.config.dataset_root / "alignment_metadata.json", "w", encoding="utf-8"
-            ) as f:
-                json.dump(self._alignment_metadata, f, indent=2)
-
         _log_memory("align")
 
     def _stream_patches_to_disk(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -598,9 +589,9 @@ class PairProcessor:
         patch arrays on the builder.
         """
         if (
-            (self._source_image is None and not self.config.tiled_io)
+            (self._source_image is None and not self.config.io.tiled)
             or self._source_mask is None
-            or (self._target_image is None and not self.config.tiled_io)
+            or (self._target_image is None and not self.config.io.tiled)
             or self._target_mask is None
             or self._warp_matrix is None
             or self._source_shape is None
@@ -620,18 +611,18 @@ class PairProcessor:
         for split_name, path in split_dirs.items():
             if self.assigned_split is None or split_name == self.assigned_split:
                 path.mkdir(parents=True, exist_ok=True)
-        if self.config.save_discarded_patches:
+        if self.config.patching.save_discarded_patches:
             for path in [discarded_src_dir, discarded_tgt_dir]:
                 path.mkdir(parents=True, exist_ok=True)
 
-        m = self.config.margin
+        m = self.config.patching.margin
 
         def _crop(img: np.ndarray) -> np.ndarray:
             # img[0:-0] returns an empty array, so treat margin=0 as no crop.
             return img[m:-m, m:-m] if m > 0 else img
 
         use_mask_space_filtering = self._uses_mask_space_filtering()
-        if self.config.tiled_io:
+        if self.config.io.tiled:
             source_h, source_w = self._source_shape
             cropped_w = max(0, source_w - 2 * m)
             cropped_h = max(0, source_h - 2 * m)
@@ -639,8 +630,8 @@ class PairProcessor:
             def _source_iter() -> Any:
                 if self._source_reader is None:
                     raise RuntimeError("Tiled source reader is not available")
-                patch_w, patch_h = self.config.patch_size
-                step_x, step_y = self.config.grid_movement
+                patch_w, patch_h = self.config.patching.patch_size
+                step_x, step_y = self.config.patching.grid_movement
                 for x in range(0, cropped_w, step_x):
                     for y in range(0, cropped_h, step_y):
                         if y + patch_h > cropped_h or x + patch_w > cropped_w:
@@ -660,7 +651,8 @@ class PairProcessor:
         else:
             assert self._source_image is not None
             cropped_source = _crop(self._source_image)
-            source_prefilter = self.config.foreground_enabled and self.config.foreground_policy in {
+            foreground = self.config.filtering.foreground
+            source_prefilter = foreground.enabled and foreground.policy in {
                 "source",
                 "both",
                 "intersection",
@@ -672,21 +664,21 @@ class PairProcessor:
             )
             source_iter = iter_image_with_grid(
                 cropped_source,
-                self.config.patch_size,
-                self.config.grid_movement,
+                self.config.patching.patch_size,
+                self.config.patching.grid_movement,
                 cropped_source_mask,
-                max_mask_percentage=self.config.min_foreground_ratio,
+                max_mask_percentage=foreground.min_ratio,
             )
 
         extracted_pairs = 0
         _log_memory("extract_patches")
         valid_rows: list[dict[str, Any]] = []
         discarded_rows: list[dict[str, Any]] = []
-        patch_w, patch_h = self.config.patch_size
-        split_seed = self._effective_seed if self._effective_seed is not None else self.config.seed
-        if split_seed is None:
-            split_seed = 0
-        split_ratios = (self.config.train_ratio, self.config.val_ratio, self.config.test_ratio)
+        patch_w, patch_h = self.config.patching.patch_size
+        split_seed = (
+            self._effective_seed if self._effective_seed is not None else self.config.split.seed
+        )
+        split_ratios = (self.config.split.train, self.config.split.val, self.config.split.test)
         for (x, y), src, src_mask in source_iter:
             target_x = x + m
             target_y = y + m
@@ -700,9 +692,10 @@ class PairProcessor:
                     height=patch_h,
                 )
                 if (
-                    self.config.foreground_enabled
-                    and self.config.foreground_policy in {"source", "both", "intersection"}
-                    and source_foreground_ratio < self.config.min_foreground_ratio
+                    self.config.filtering.foreground.enabled
+                    and self.config.filtering.foreground.policy
+                    in {"source", "both", "intersection"}
+                    and source_foreground_ratio < self.config.filtering.foreground.min_ratio
                 ):
                     continue
                 source_mask_window = mask_window_for_patch(
@@ -723,7 +716,7 @@ class PairProcessor:
                     target_y : target_y + patch_h,
                     target_x : target_x + patch_w,
                 ]
-            if self.config.tiled_io:
+            if self.config.io.tiled:
                 if self._target_reader is None:
                     raise RuntimeError("Tiled target reader is not available")
                 tgt = self._warp_target_region_patch(
@@ -786,11 +779,13 @@ class PairProcessor:
                 source_mask=src_mask,
                 target_mask=tgt_mask,
                 min_foreground_ratio=0.0,
-                max_white_ratio=self.config.max_white_ratio,
-                white_threshold=self.config.white_threshold,
-                max_largest_white_component_ratio=self.config.max_largest_white_component_ratio,
+                max_white_ratio=self.config.filtering.max_white_ratio,
+                white_threshold=self.config.filtering.white_threshold,
+                max_largest_white_component_ratio=(
+                    self.config.filtering.max_largest_white_component_ratio
+                ),
             )
-            if self.config.foreground_enabled:
+            if self.config.filtering.foreground.enabled:
                 source_ratio = float(cv2.countNonZero(src_mask) / src_mask.size)
                 target_ratio = float(cv2.countNonZero(tgt_mask) / tgt_mask.size)
                 intersection_ratio = float(
@@ -806,27 +801,19 @@ class PairProcessor:
                     "intersection": intersection_ratio,
                     "union": union_ratio,
                 }
-                if ratios[self.config.foreground_policy] < self.config.min_foreground_ratio:
+                foreground = self.config.filtering.foreground
+                if ratios[foreground.policy] < foreground.min_ratio:
                     is_valid = False
-                    cast(list[str], debug_info["reasons"]).append(
-                        f"foreground_{self.config.foreground_policy}"
-                    )
+                    cast(list[str], debug_info["reasons"]).append(f"foreground_{foreground.policy}")
             if is_valid:
-                split_sample_id = (
-                    f"{canonical_x:05}_{canonical_y:05}"
-                    if self.config.inputs is None
-                    else sample_id
-                )
                 split_name = self.assigned_split or cast(
                     Split,
-                    assign_split_by_hash(
-                        seed=split_seed, sample_id=split_sample_id, ratios=split_ratios
-                    ),
+                    assign_split_by_hash(seed=split_seed, sample_id=sample_id, ratios=split_ratios),
                 )
                 split_dir = split_dirs[cast(Split, split_name)]
                 cv2.imwrite(str(split_dir / patch_source_name), src)
                 cv2.imwrite(str(split_dir / patch_target_name), tgt)
-                if self.config.effective_masks.save_patch_masks and not self._maskless:
+                if self.config.masks.save_patch_masks and not self._maskless:
                     cv2.imwrite(str(split_dir / patch_mask_name), tgt_mask)
                 valid_rows.append(
                     {
@@ -839,13 +826,13 @@ class PairProcessor:
                         "target": patch_target_name,
                         "foreground_mask": (
                             patch_mask_name
-                            if self.config.effective_masks.save_patch_masks and not self._maskless
+                            if self.config.masks.save_patch_masks and not self._maskless
                             else None
                         ),
                     }
                 )
             else:
-                if self.config.save_discarded_patches:
+                if self.config.patching.save_discarded_patches:
                     cv2.imwrite(str(discarded_src_dir / patch_source_name), src)
                     cv2.imwrite(str(discarded_tgt_dir / patch_target_name), tgt)
                 discarded_rows.append(
@@ -874,193 +861,6 @@ class PairProcessor:
         _log_memory("filter_patches")
         return valid_rows, discarded_rows
 
-    def _assign_splits_and_finalize(
-        self,
-        valid_rows: list[dict[str, Any]],
-        discarded_rows: list[dict[str, Any]],
-    ) -> DatasetBuildResult:
-        """Write manifests and metadata for patches already streamed to disk."""
-        root = self.config.dataset_root
-        discarded_root = root / "discarded_patches"
-        manifests_dir = root / "manifests"
-        metadata_dir = root / "metadata"
-
-        for path in [
-            manifests_dir,
-        ]:
-            ensure_clean_directory(path)
-        metadata_dir.mkdir(parents=True, exist_ok=True)
-        discarded_root.mkdir(parents=True, exist_ok=True)
-
-        input_modality = self.config.source_modality
-        target_modality = self.config.target_modality
-
-        manifest_records: list[ManifestRecord] = []
-        for row in valid_rows:
-            src_name = cast(str, row["source"])
-            tgt_name = cast(str, row["target"])
-            x = cast(int, row["x"])
-            y = cast(int, row["y"])
-            split_name = cast(Split, row["split"])
-            sample_id = cast(str, row["sample_id"])
-
-            manifest_records.append(
-                ManifestRecord(
-                    sample_id=sample_id,
-                    split=split_name,
-                    input_path=Path(f"splits/{split_name}/{src_name}"),
-                    target_path=Path(f"splits/{split_name}/{tgt_name}"),
-                    input_modality=input_modality,
-                    target_modality=target_modality,
-                    x=x,
-                    y=y,
-                    width=self.config.patch_size[0],
-                    height=self.config.patch_size[1],
-                    pair_id=self.pair.pair_id,
-                    foreground_mask_path=(
-                        Path(
-                            f"splits/{split_name}/{self.pair.pair_id}/"
-                            f"{cast(str, row['foreground_mask'])}"
-                        )
-                        if row.get("foreground_mask")
-                        else None
-                    ),
-                )
-            )
-
-        discarded_manifest_records: list[ManifestRecord] = []
-        for row in discarded_rows:
-            src_name = cast(str, row["source_name"])
-            tgt_name = cast(str, row["target_name"])
-            sample_id = cast(str, row["sample_id"])
-            x = cast(int, row["x"])
-            y = cast(int, row["y"])
-            discarded_manifest_records.append(
-                ManifestRecord(
-                    sample_id=sample_id,
-                    split="discarded",
-                    input_path=Path(f"discarded_patches/source/{src_name}"),
-                    target_path=Path(f"discarded_patches/target/{tgt_name}"),
-                    input_modality=input_modality,
-                    target_modality=target_modality,
-                    x=x,
-                    y=y,
-                    width=self.config.patch_size[0],
-                    height=self.config.patch_size[1],
-                    pair_id=self.pair.pair_id,
-                )
-            )
-
-        # Paths written by PairProcessor live one directory below each split.
-        manifest_records = [
-            dataclasses.replace(
-                record,
-                input_path=Path(
-                    f"splits/{record.split}/{self.pair.pair_id}/{record.input_path.name}"
-                ),
-                target_path=Path(
-                    f"splits/{record.split}/{self.pair.pair_id}/{record.target_path.name}"
-                ),
-            )
-            for record in manifest_records
-        ]
-        manifest = DatasetManifest(
-            records=tuple(manifest_records), dataset_root=root, schema_version="2.0"
-        )
-        manifest.validate()
-        manifest.to_csv(manifests_dir / "manifest.csv")
-        (manifests_dir / "manifest_metadata.json").write_text(
-            json.dumps(_build_manifest_metadata(manifest_records), indent=2),
-            encoding="utf-8",
-        )
-
-        discarded_manifest = DatasetManifest(
-            records=tuple(discarded_manifest_records),
-            dataset_root=root,
-            schema_version="2.0",
-        )
-        discarded_manifest.validate()
-        discarded_manifest.to_csv(manifests_dir / "discarded_manifest.csv")
-
-        with open(discarded_root / "discarded_log.csv", "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=[
-                    "sample_id",
-                    "pair_id",
-                    "x",
-                    "y",
-                    "source_name",
-                    "target_name",
-                    "source_foreground_ratio",
-                    "target_foreground_ratio",
-                    "source_white_ratio",
-                    "target_white_ratio",
-                    "reasons",
-                    "source_largest_white_component_ratio",
-                    "target_largest_white_component_ratio",
-                ],
-            )
-            writer.writeheader()
-            writer.writerows(discarded_rows)
-
-        build_metadata = {
-            "dataset_name": root.name,
-            "status": "completed",
-            "started_at": self._started_at,
-            "completed_at": datetime.datetime.now(datetime.UTC).isoformat(),
-            "num_patches_total": len(manifest_records) + len(discarded_manifest_records),
-            "num_patches_valid": len(manifest_records),
-            "num_patches_discarded": len(discarded_manifest_records),
-            "num_train": sum(1 for record in manifest_records if record.split == "train"),
-            "num_val": sum(1 for record in manifest_records if record.split == "val"),
-            "num_test": sum(1 for record in manifest_records if record.split == "test"),
-            "seed": self._effective_seed,
-        }
-        with open(metadata_dir / "dataset_build.json", "w", encoding="utf-8") as f:
-            json.dump(build_metadata, f, indent=2, default=str)
-
-        fingerprint_metadata = build_dataset_fingerprint_metadata(
-            dataset_root=root,
-            preprocessing_config=self.config.to_dict(),
-            source_path=root / self._source_file,
-            target_path=root / self._target_file,
-            prepared_at=build_metadata["completed_at"],
-        )
-        save_dataset_fingerprint(fingerprint_metadata, metadata_dir / "dataset_fingerprint.json")
-
-        logger.info(
-            "Saved: train=%s, val=%s, test=%s, discarded=%s",
-            build_metadata["num_train"],
-            build_metadata["num_val"],
-            build_metadata["num_test"],
-            len(discarded_rows),
-        )
-        _log_memory("split_and_save")
-        return DatasetBuildResult(
-            train_count=cast(int, build_metadata["num_train"]),
-            val_count=cast(int, build_metadata["num_val"]),
-            test_count=cast(int, build_metadata["num_test"]),
-            skipped_count=len(discarded_rows),
-            output_root=root,
-            reused=False,
-        )
-
-    def run_all(self) -> DatasetBuildResult:
-        """Run all pipeline stages in sequence and return the build result."""
-        self._started_at = datetime.datetime.now(datetime.UTC).isoformat()
-        seed = self.config.seed if self.config.seed is not None else random.randint(0, 2**32 - 1)
-        self._effective_seed = seed
-        random.seed(seed)
-        logger.info("Seed set to %s", seed)
-
-        self.compute_masks()
-        self.align()
-        valid_rows, discarded_rows = self._stream_patches_to_disk()
-        result = self._assign_splits_and_finalize(valid_rows, discarded_rows)
-
-        return result
-
 
 class DatasetBuilder:
     """Own one complete dataset build; PairProcessor owns each source/target pair."""
@@ -1068,19 +868,14 @@ class DatasetBuilder:
     def __init__(
         self,
         config: PreprocessingConfig,
-        pairs: tuple[SlidePair, ...] | None = None,
+        pairs: tuple[SlidePair, ...],
         fingerprint_metadata: dict[str, Any] | None = None,
     ) -> None:
         self.config = config
-        self.pairs: tuple[SlidePair, ...] = (
-            pairs
-            if pairs is not None
-            else (SlidePair("pair_0000", Path(config.source_name), Path(config.target_name)),)
-        )
+        self.pairs = pairs
         if not self.pairs:
             raise ValueError("DatasetBuilder requires at least one slide pair")
         self.fingerprint_metadata = fingerprint_metadata
-        self._single = PairProcessor(config, self.pairs[0]) if len(self.pairs) == 1 else None
 
     def _initialize_output_tree_once(self) -> None:
         root = self.config.dataset_root
@@ -1135,12 +930,12 @@ class DatasetBuilder:
                     input_path=input_path,
                     target_path=target_path,
                     foreground_mask_path=foreground_mask_path,
-                    input_modality=self.config.source_modality,
-                    target_modality=self.config.target_modality,
+                    input_modality=self.config.inputs.source_modality,
+                    target_modality=self.config.inputs.target_modality,
                     x=cast(int, row["x"]),
                     y=cast(int, row["y"]),
-                    width=self.config.patch_size[0],
-                    height=self.config.patch_size[1],
+                    width=self.config.patching.patch_size[0],
+                    height=self.config.patching.patch_size[1],
                 )
             )
         return tuple(sorted(records, key=lambda record: (record.pair_id, record.y, record.x)))
@@ -1148,7 +943,7 @@ class DatasetBuilder:
     def run_all(self) -> DatasetBuildResult:
         root = self.config.dataset_root
         started_at = datetime.datetime.now(datetime.UTC).isoformat()
-        split = self.config.effective_split
+        split = self.config.split
         logger.info("Seed set to %s", split.seed)
         ratios = (split.train, split.val, split.test)
         pair_assignments = assign_group_splits(
@@ -1168,11 +963,7 @@ class DatasetBuilder:
         pair_results: list[PairBuildResult] = []
         for pair in sorted(self.pairs, key=lambda item: item.pair_id):
             assigned = pair_assignments.get(pair.pair_id)
-            processor = (
-                self._single
-                if self._single is not None and pair.pair_id == self._single.pair.pair_id
-                else PairProcessor(self.config, pair, assigned)
-            )
+            processor = PairProcessor(self.config, pair, assigned)
             processor.assigned_split = assigned
             processor._started_at = started_at
             processor._effective_seed = split.seed
@@ -1194,7 +985,7 @@ class DatasetBuilder:
                 try:
                     processor.align()
                 except Exception as exc:
-                    if self.config.effective_alignment.on_failure != "skip_pair":
+                    if self.config.alignment.on_failure != "skip_pair":
                         raise
                     error = exc
                     excluded_rows.append(
@@ -1303,20 +1094,15 @@ class DatasetBuilder:
                 key=lambda record: (record.pair_id, record.y, record.x),
             )
         )
-        manifest = DatasetManifest(records, root, schema_version="2.0")
+        manifest = DatasetManifest(records, root)
         manifest.validate()
-        if self.config.inputs is not None:
-            required = {
-                name
-                for name, ratio in zip(("train", "val", "test"), ratios, strict=True)
-                if ratio > 0
-            }
-            manifest.validate(require_splits=required)
+        required = {
+            name for name, ratio in zip(("train", "val", "test"), ratios, strict=True) if ratio > 0
+        }
+        manifest.validate(require_splits=required)
         manifests = root / "manifests"
         manifest.to_csv(manifests / "manifest.csv")
-        DatasetManifest(discarded_records, root, schema_version="2.0").to_csv(
-            manifests / "discarded_manifest.csv"
-        )
+        DatasetManifest(discarded_records, root).to_csv(manifests / "discarded_manifest.csv")
         (manifests / "manifest_metadata.json").write_text(
             json.dumps(_build_manifest_metadata(list(records)), indent=2), encoding="utf-8"
         )
@@ -1443,20 +1229,11 @@ class DatasetBuilder:
         if self.fingerprint_metadata is not None:
             fingerprint = dict(self.fingerprint_metadata)
             fingerprint["prepared_at"] = build_metadata["completed_at"]
-        elif self.config.inputs is not None or len(self.pairs) > 1:
+        else:
             fingerprint = build_dataset_fingerprint_metadata(
                 dataset_root=root,
                 preprocessing_config=self.config.to_dict(),
                 pairs=self.pairs,
-                prepared_at=build_metadata["completed_at"],
-            )
-        else:
-            pair = next(iter(self.pairs))
-            fingerprint = build_dataset_fingerprint_metadata(
-                dataset_root=root,
-                preprocessing_config=self.config.to_dict(),
-                source_path=root / pair.source_path,
-                target_path=root / pair.target_path,
                 prepared_at=build_metadata["completed_at"],
             )
         save_dataset_fingerprint(fingerprint, metadata_dir / "dataset_fingerprint.json")

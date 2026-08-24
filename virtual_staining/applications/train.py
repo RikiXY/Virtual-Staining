@@ -50,13 +50,13 @@ def _requires_foreground_masks(config: RunConfig) -> bool:
     return any(term.requires_mask for term in config.training.losses.generator)
 
 
-def run_training(
+def train(
     config: RunConfig,
     config_path: Path,
 ) -> TrainingResult:
     """Build all training components, persist provenance, and execute training."""
     if config.training is None:
-        raise ValueError("RunConfig.training must be present for run_training().")
+        raise ValueError("RunConfig.training must be present for train().")
     training = config.training
 
     seed = training.seed if training.seed is not None else random.randint(0, 2**32 - 1)

@@ -7,20 +7,23 @@ from pathlib import Path
 import pytest
 
 from virtual_staining.applications.prepare import _log_prepare_summary
-from virtual_staining.data.config import AlignmentConfig, MaskConfig, PreprocessingConfig
+from virtual_staining.data.config import (
+    AlignmentConfig,
+    InputConfig,
+    IOConfig,
+    MaskConfig,
+    PatchingConfig,
+    PreprocessingConfig,
+)
 from virtual_staining.data.pairs import SlidePair
 
 
 def _config(root: Path, **changes: object) -> PreprocessingConfig:
     config = PreprocessingConfig(
         dataset_root=root,
-        source_name="source.tif",
-        target_name="target.tif",
-        patch_size=(256, 128),
-        grid_movement=(128, 64),
-        margin=12,
-        tiled_io=True,
-        io_backend="openslide",
+        inputs=InputConfig(Path("inputs/pairs.csv"), "source", "target"),
+        patching=PatchingConfig(patch_size=(256, 128), grid_movement=(128, 64), margin=12),
+        io=IOConfig(tiled=True, backend="openslide"),
         masks=MaskConfig(generation="if_missing", strategy="connected_components", scale=0.25),
         alignment=AlignmentConfig(mode="auto"),
     )

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from PIL import Image
@@ -53,19 +52,9 @@ class PairedManifestDataset(Dataset):
 
         mask_image: Image.Image | None = None
         if self.include_foreground_mask:
-            if self.manifest.schema_version == "2.0":
-                if record.foreground_mask_path is None:
-                    raise FileNotFoundError(
-                        f"Manifest v2 has no foreground_mask_path for {record.sample_id!r}"
-                    )
-                mask_path = self.manifest.dataset_root / record.foreground_mask_path
-            else:
-                mask_path = _find_foreground_mask_path(
-                    self.manifest.dataset_root,
-                    record.sample_id,
-                    record.input_path,
-                    record.target_path,
-                )
+            if record.foreground_mask_path is None:
+                raise FileNotFoundError(f"Foreground mask path is missing for {record.sample_id!r}")
+            mask_path = self.manifest.dataset_root / record.foreground_mask_path
             mask_image = Image.open(mask_path).convert("L")
 
         if self.paired_transform is not None:
@@ -91,30 +80,3 @@ class PairedManifestDataset(Dataset):
     def sample_ids(self) -> list[str]:
         """Return ordered list of sample IDs from the manifest."""
         return [record.sample_id for record in self.manifest.records]
-
-
-def _find_foreground_mask_path(
-    dataset_root: Path,
-    sample_id: str,
-    input_path: Path,
-    target_path: Path,
-) -> Path:
-    input_path = dataset_root / input_path
-    target_path = dataset_root / target_path
-    candidates = [
-        target_path.with_name(f"{sample_id}_foreground_mask{target_path.suffix}"),
-        input_path.with_name(f"{sample_id}_foreground_mask{input_path.suffix}"),
-    ]
-    target_mask_name = target_path.name.replace("_target", "_foreground_mask")
-    if target_mask_name != target_path.name:
-        candidates.append(target_path.with_name(target_mask_name))
-    input_mask_name = input_path.name.replace("_source", "_foreground_mask")
-    if input_mask_name != input_path.name:
-        candidates.append(input_path.with_name(input_mask_name))
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    raise FileNotFoundError(
-        "Foreground mask not found for sample "
-        f"{sample_id!r}. Expected one of: {', '.join(str(path) for path in candidates)}"
-    )

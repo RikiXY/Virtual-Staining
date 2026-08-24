@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-wsi = ["openslide-python>=1.4"]
+wsi = ["openslide-python>=1.4", "pyvips>=3.1"]
 
 [project.scripts]
 vs = "virtual_staining.cli:main"
