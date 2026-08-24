@@ -22,21 +22,9 @@ from virtual_staining.experiment.snapshots import (
     save_stage_config_snapshots,
 )
 from virtual_staining.inference.outputs import generated_path_for_record
+from virtual_staining.metrics import METRIC_SPECS
 
 logger = logging.getLogger(__name__)
-
-_METRIC_CONFIG: dict[str, bool] = {
-    "mae": True,
-    "mse": True,
-    "rmse": True,
-    "psnr": True,
-    "ssim": True,
-    "pcc_gray": True,
-    "pcc_r": True,
-    "pcc_g": True,
-    "pcc_b": True,
-    "pcc_rgb_mean": True,
-}
 
 
 def evaluate(config: RunConfig, config_path: Path) -> None:
@@ -89,7 +77,7 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
         "manifest_sha256": manifest_hash,
         "generated_dir": str(generated_dir),
         "output_dir": str(output_dir),
-        "metric_config": _METRIC_CONFIG,
+        "metric_config": {name: True for name in METRIC_SPECS},
     }
     run = RunProvenance(paths.metadata_dir, project.run_name, config_hash)
     with run.stage("evaluate", details=evaluation_details) as stage:
