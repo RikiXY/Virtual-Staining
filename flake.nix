@@ -26,6 +26,7 @@
             pkgs.stdenv.cc.cc.lib
             pkgs.zlib
             pkgs.openslide
+            pkgs.vips
           ];
         in {
           default = pkgs.mkShell ({
