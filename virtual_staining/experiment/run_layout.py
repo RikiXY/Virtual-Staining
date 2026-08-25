@@ -15,6 +15,15 @@ class StageLayout:
 
 
 @dataclass(frozen=True)
+class ResultsLayout:
+    root: Path
+
+    @property
+    def comparisons_dir(self) -> Path:
+        return self.root / "comparisons"
+
+
+@dataclass(frozen=True)
 class RunLayout:
     root: Path
 

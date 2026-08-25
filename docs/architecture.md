@@ -20,7 +20,7 @@ upper layers may import from lower layers, never the reverse.
 | `checkpoint_selection.py` | Neutral `best.json` ranking, policy, and metric-direction selection |
 | `utils/` | Shared primitives: artifact naming, image dimensions, and image I/O helpers |
 | `config/` | Sole owner of YAML-facing dataclasses and strict parsers for every config section |
-| `experiment/` | Canonical `RunLayout`, stage snapshots, run metadata, manifest/config hashing, and environment snapshots |
+| `experiment/` | Canonical `RunLayout` for one run, `ResultsLayout` for shared comparisons, stage snapshots, run metadata, manifest/config hashing, and environment snapshots |
 | `models/` | Model factory, model-I/O normalization contract, and generator/discriminator implementations |
 | `data/` | Canonical `DatasetLayout`, slide sets, manifests, dataset building, and dataset-owned provenance/fingerprints |
 | `training/` | Training mechanics, validation, history, losses, resume state, and callback-driven progress events |
@@ -53,9 +53,13 @@ The architectural boundary is not “no I/O in library code.” The actual rule 
 - reusable package code should keep I/O explicit and testable
 - orchestration belongs in `applications/`
 The `ExperimentSession` owns each train/infer/evaluate lifecycle: stage snapshots,
-strict local metadata writes, and best-effort reporter callbacks. Preparation is
-dataset-owned and writes only dataset provenance. Dataset provenance lives in
-`data/provenance.py`; run provenance lives in `experiment/snapshots.py`.
+strict local metadata writes, and best-effort reporter callbacks. `RunLayout` owns
+one run's paths; `ResultsLayout` owns shared cross-run comparisons under
+`results/comparisons`. `applications.prepare` orchestrates dataset-local config and
+environment snapshots through the generic experiment snapshot helpers. Preparation
+is dataset-owned, writes dataset fingerprints and source hashes, and emits no
+experiment run events. Dataset provenance lives in `data/provenance.py`; run
+provenance lives in `experiment/snapshots.py`.
 Training model construction and dataset wiring terminate in the reusable `Trainer`;
 its `ProgressUpdate` callback is silent unless an adapter supplies a reporter.
 The CLI supplies terminal rendering, while application/library callers remain

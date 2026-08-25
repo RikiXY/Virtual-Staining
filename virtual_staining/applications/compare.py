@@ -32,7 +32,7 @@ from virtual_staining.evaluation.statistics import (
     load_metric_values,
     resolve_input_csv,
 )
-from virtual_staining.experiment.run_layout import RunLayout
+from virtual_staining.experiment.run_layout import ResultsLayout, RunLayout
 from virtual_staining.metrics import get_metric_thresholds, is_higher_better_metric
 
 
@@ -156,17 +156,14 @@ def _infer_label(run_path: Path | None, csv_path: str | Path | None, fallback: s
     if csv_path is None:
         return fallback
     path = Path(csv_path).resolve()
-    if path.name == "per_image_metrics.csv" and path.parent.name in {"metrics", "evaluation"}:
+    if path.name == "per_image_metrics.csv" and path.parent.name == "evaluation":
         return path.parent.parent.name
     return path.stem
 
 
 def _run_root_for_csv(path: Path) -> Path | None:
     resolved = path.resolve()
-    if resolved.name == "per_image_metrics.csv" and resolved.parent.name in {
-        "metrics",
-        "evaluation",
-    }:
+    if resolved.name == "per_image_metrics.csv" and resolved.parent.name == "evaluation":
         return resolved.parent.parent
     return None
 
@@ -175,14 +172,14 @@ def _default_output_dir(request: CompareRequest, csv_a: Path, label_a: str, labe
     for run_path in (request.run_a, request.run_b):
         if run_path is not None:
             return (
-                RunLayout(run_path.resolve().parent).comparisons_dir
+                ResultsLayout(run_path.resolve().parent).comparisons_dir
                 / f"{label_a}_vs_{label_b}"
                 / f"{request.mode}_{request.column}"
             )
     run_root = _run_root_for_csv(csv_a)
     if run_root is not None:
         return (
-            RunLayout(run_root).comparisons_dir
+            ResultsLayout(run_root.parent).comparisons_dir
             / f"{label_a}_vs_{label_b}"
             / f"{request.mode}_{request.column}"
         )

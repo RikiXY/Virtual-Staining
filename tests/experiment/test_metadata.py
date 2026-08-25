@@ -128,3 +128,39 @@ def test_reporters_run_after_local_writes_and_fail_independently(tmp_path: Path)
     ]
     stage = json.loads((tmp_path / "run" / "metadata" / "stages" / "train.json").read_text())
     assert stage["status"] == "completed"
+
+
+def test_session_records_missing_manifest_bootstrap_failure(tmp_path: Path) -> None:
+    config, config_path = _config(tmp_path)
+    manifest = config.project.dataset_root / "manifests" / "manifest.csv"
+    manifest.unlink()
+    events: list[tuple[str, object]] = []
+
+    with (
+        pytest.raises(FileNotFoundError, match="Manifest not found at"),
+        ExperimentSession.open(
+            config=config,
+            config_path=config_path,
+            stage="infer",
+            reporters=cast(Any, (Reporter(events),)),
+        ),
+    ):
+        raise AssertionError("bootstrap should fail before entering the body")
+
+    paths = RunLayout.from_project(config.project)
+    stage = json.loads((paths.metadata_dir / "stages" / "infer.json").read_text())
+    assert stage["status"] == "failed"
+    assert stage["error_type"] == "FileNotFoundError"
+    assert "Manifest not found at" in stage["error"]
+    assert [event["event_type"] for event in _events(paths)] == [
+        "stage_started",
+        "stage_failed",
+    ]
+    assert "FileNotFoundError" in paths.run_log.read_text(encoding="utf-8")
+    start_view = events[0][1]
+    assert isinstance(start_view, dict)
+    assert start_view["config_hash"] == ""
+    assert start_view["manifest_sha256"] == ""
+    assert start_view["dataset_fingerprint"] is None
+    assert [name for name, _ in events] == ["start", "finish"]
+    assert events[-1] == ("finish", "failed")

@@ -1,31 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
-
-
-def _hash_bytes(payload: bytes) -> str:
-    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
-
-
-def _canonical_json_bytes(payload: Any) -> bytes:
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
-        "utf-8"
-    )
-
-
-def compute_file_sha256(path: Path) -> str:
-    """Return sha256:<hex> for a file's content."""
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
+from virtual_staining.utils.hashing import sha256_file, sha256_json
 
 
 def build_file_provenance(path: Path) -> dict[str, Any]:
@@ -36,7 +17,7 @@ def build_file_provenance(path: Path) -> dict[str, Any]:
         "path": str(resolved),
         "size": stat.st_size,
         "mtime_ns": stat.st_mtime_ns,
-        "sha256": compute_file_sha256(resolved),
+        "sha256": sha256_file(resolved),
     }
 
 
@@ -58,7 +39,7 @@ def _cached_file_provenance(
     ):
         digest = cached["sha256"]
     else:
-        digest = compute_file_sha256(resolved)
+        digest = sha256_file(resolved)
     value = {
         "path": key,
         "size": stat.st_size,
@@ -128,13 +109,11 @@ def build_dataset_fingerprint_metadata(
         hash_cache_path.parent.mkdir(parents=True, exist_ok=True)
         hash_cache_path.write_text(json.dumps(cache, indent=2), encoding="utf-8")
     canonical_sets = canonical_set_payload(slide_sets)
-    canonical_inventory_hash = _hash_bytes(_canonical_json_bytes(canonical_sets))
-    raw_inventory_sha256 = (
-        compute_file_sha256(inventory_path) if inventory_path is not None else None
-    )
+    canonical_inventory_hash = sha256_json(canonical_sets)
+    raw_inventory_sha256 = sha256_file(inventory_path) if inventory_path is not None else None
     dataset_root_resolved = str(dataset_root.resolve())
     semantic_config = json.loads(json.dumps(preprocessing_config))
-    preprocessing_hash = _hash_bytes(_canonical_json_bytes(semantic_config))
+    preprocessing_hash = sha256_json(semantic_config)
     fingerprint_payload = {
         "dataset_root": dataset_root_resolved,
         "preprocessing": semantic_config,
@@ -144,7 +123,7 @@ def build_dataset_fingerprint_metadata(
     }
     return {
         "schema_version": "3.0",
-        "fingerprint": _hash_bytes(_canonical_json_bytes(fingerprint_payload)),
+        "fingerprint": sha256_json(fingerprint_payload),
         "prepared_at": prepared_at or datetime.now(UTC).isoformat(),
         "dataset_root": dataset_root_resolved,
         "preprocessing": semantic_config,

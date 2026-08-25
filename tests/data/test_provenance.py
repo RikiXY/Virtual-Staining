@@ -5,14 +5,15 @@ from pathlib import Path
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.provenance import build_dataset_fingerprint_metadata
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
-from virtual_staining.experiment.snapshots import compute_config_hash, save_resolved_config
+from virtual_staining.experiment.snapshots import save_resolved_config
+from virtual_staining.utils.hashing import sha256_file
 
 
 def test_prepare_snapshot_paths_and_config_hash(tmp_path: Path) -> None:
     layout = DatasetLayout(tmp_path)
     save_resolved_config({"b": 2, "a": 1}, layout.resolved_config_path)
     assert layout.resolved_config_path.exists()
-    assert compute_config_hash(layout.resolved_config_path).startswith("sha256:")
+    assert sha256_file(layout.resolved_config_path).startswith("sha256:")
 
 
 def _sets(root: Path) -> tuple[SlideSet, ...]:

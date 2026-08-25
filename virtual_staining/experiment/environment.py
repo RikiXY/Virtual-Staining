@@ -67,10 +67,6 @@ def _git_state() -> tuple[str | None, bool | None]:
         return None, None
 
 
-def _git_commit() -> str | None:
-    return _git_state()[0]
-
-
 def _pkg_version(name: str) -> str | None:
     try:
         return getattr(importlib.import_module(name), "__version__", None)
@@ -89,16 +85,3 @@ def _cuda_state() -> tuple[bool, str | None, tuple[str, ...]]:
         return available, torch.version.cuda, names
     except Exception:
         return False, None, ()
-
-
-def _torch_cuda_version() -> str | None:
-    return _cuda_state()[1]
-
-
-def _cuda_available() -> bool:
-    return _cuda_state()[0]
-
-
-def _gpu_name() -> str | None:
-    names = _cuda_state()[2]
-    return names[0] if names else None

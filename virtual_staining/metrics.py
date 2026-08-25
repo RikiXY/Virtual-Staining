@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
 
@@ -13,27 +14,58 @@ except ImportError as exc:
     ) from exc
 
 
+MetricEvaluator = Callable[[np.ndarray, np.ndarray], dict[str, float]]
+
+
 @dataclass(frozen=True)
 class MetricSpec:
     higher_is_better: bool
     thresholds: tuple[float, ...]
     default: bool = False
     validation_name: str | None = None
+    evaluator_group: MetricEvaluator | None = None
+    report_order: int | None = None
+
+
+def _evaluate_image_quality(target: np.ndarray, generated: np.ndarray) -> dict[str, float]:
+    return {"ssim": compute_ssim(target, generated)}
+
+
+def _evaluate_shared_error(target: np.ndarray, generated: np.ndarray) -> dict[str, float]:
+    mse = compute_mse(target, generated)
+    return {
+        "mae": compute_mae(target, generated),
+        "mse": mse,
+        "rmse": float(np.sqrt(mse)),
+        "psnr": float("inf") if mse == 0.0 else float(20.0 * np.log10(1.0 / np.sqrt(mse))),
+    }
+
+
+def _evaluate_pcc(target: np.ndarray, generated: np.ndarray) -> dict[str, float]:
+    pcc_r, pcc_g, pcc_b, pcc_rgb_mean = compute_pcc_rgb(target, generated)
+    return {
+        "pcc_gray": compute_pcc_gray(target, generated),
+        "pcc_r": pcc_r,
+        "pcc_g": pcc_g,
+        "pcc_b": pcc_b,
+        "pcc_rgb_mean": pcc_rgb_mean,
+    }
 
 
 METRIC_SPECS: dict[str, MetricSpec] = {
-    "ssim": MetricSpec(True, (0.85, 0.75, 0.65), True, "val_ssim"),
-    "psnr": MetricSpec(True, (25.0, 20.0, 15.0), True, "val_psnr"),
-    "mae": MetricSpec(False, (0.06, 0.10, 0.16), True, "val_mae"),
-    "rmse": MetricSpec(False, (0.08, 0.12, 0.20), True, "val_rmse"),
-    "mse": MetricSpec(False, (0.0036, 0.0100, 0.0256), True),
-    "pcc_rgb_mean": MetricSpec(True, (0.95, 0.90, 0.80), True, "val_pcc_rgb_mean"),
-    "pcc_gray": MetricSpec(True, (0.95, 0.90, 0.80), True, "val_pcc_gray"),
-    "pcc_r": MetricSpec(True, (0.95, 0.90, 0.80)),
-    "pcc_g": MetricSpec(True, (0.95, 0.90, 0.80)),
-    "pcc_b": MetricSpec(True, (0.95, 0.90, 0.80)),
+    "ssim": MetricSpec(True, (0.85, 0.75, 0.65), True, "val_ssim", _evaluate_image_quality, 4),
+    "psnr": MetricSpec(True, (25.0, 20.0, 15.0), True, "val_psnr", _evaluate_shared_error, 3),
+    "mae": MetricSpec(False, (0.06, 0.10, 0.16), True, "val_mae", _evaluate_shared_error, 0),
+    "rmse": MetricSpec(False, (0.08, 0.12, 0.20), True, "val_rmse", _evaluate_shared_error, 2),
+    "mse": MetricSpec(False, (0.0036, 0.0100, 0.0256), True, None, _evaluate_shared_error, 1),
+    "pcc_rgb_mean": MetricSpec(
+        True, (0.95, 0.90, 0.80), True, "val_pcc_rgb_mean", _evaluate_pcc, 9
+    ),
+    "pcc_gray": MetricSpec(True, (0.95, 0.90, 0.80), True, "val_pcc_gray", _evaluate_pcc, 5),
+    "pcc_r": MetricSpec(True, (0.95, 0.90, 0.80), False, None, _evaluate_pcc, 6),
+    "pcc_g": MetricSpec(True, (0.95, 0.90, 0.80), False, None, _evaluate_pcc, 7),
+    "pcc_b": MetricSpec(True, (0.95, 0.90, 0.80), False, None, _evaluate_pcc, 8),
 }
-
 METRIC_NAMES = tuple(METRIC_SPECS)
 DEFAULT_METRICS = tuple(name for name, spec in METRIC_SPECS.items() if spec.default)
 VALIDATION_IMAGE_METRIC_NAMES = tuple(
@@ -44,6 +76,9 @@ VALIDATION_METRIC_TO_BASE = {
     for name, spec in METRIC_SPECS.items()
     if spec.validation_name is not None
 }
+REPORT_METRIC_NAMES = tuple(
+    sorted(METRIC_SPECS, key=lambda name: METRIC_SPECS[name].report_order or 0)
+)
 
 
 def _metric_spec(metric_name: str) -> MetricSpec:
@@ -135,17 +170,25 @@ def compute_pcc_rgb(target: np.ndarray, generated: np.ndarray) -> tuple[float, f
 
 
 def compute_standard_metrics(target: np.ndarray, generated: np.ndarray) -> dict[str, float]:
-    mse = compute_mse(target, generated)
-    pcc_r, pcc_g, pcc_b, pcc_rgb_mean = compute_pcc_rgb(target, generated)
-    return {
-        "ssim": compute_ssim(target, generated),
-        "psnr": compute_psnr(target, generated),
-        "mae": compute_mae(target, generated),
-        "rmse": float(mse**0.5),
-        "mse": mse,
-        "pcc_rgb_mean": pcc_rgb_mean,
-        "pcc_gray": compute_pcc_gray(target, generated),
-        "pcc_r": pcc_r,
-        "pcc_g": pcc_g,
-        "pcc_b": pcc_b,
-    }
+    evaluators: list[MetricEvaluator] = []
+    for spec in METRIC_SPECS.values():
+        if spec.evaluator_group is None:
+            raise ValueError("Metric spec is missing an evaluator group")
+        if spec.evaluator_group not in evaluators:
+            evaluators.append(spec.evaluator_group)
+
+    computed: dict[str, float] = {}
+    for evaluator in evaluators:
+        output = evaluator(target, generated)
+        overlap = computed.keys() & output.keys()
+        if overlap:
+            raise ValueError(f"Metric evaluator keys overlap: {sorted(overlap)}")
+        computed.update(output)
+
+    expected = set(METRIC_SPECS)
+    if set(computed) != expected:
+        raise ValueError(
+            "Metric evaluator output keys do not match registry: "
+            f"expected {sorted(expected)}, got {sorted(computed)}"
+        )
+    return {name: computed[name] for name in METRIC_SPECS}

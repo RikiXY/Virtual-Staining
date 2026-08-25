@@ -8,7 +8,8 @@ import yaml
 from tests.config_helpers import write_yaml
 from virtual_staining.config import load_yaml_mapping, parse_bool_strict, reject_unknown_keys
 from virtual_staining.config.run import RunConfig
-from virtual_staining.experiment.snapshots import compute_config_hash, save_resolved_config
+from virtual_staining.experiment.snapshots import save_resolved_config
+from virtual_staining.utils.hashing import sha256_file
 
 
 def _canonical_yaml() -> str:
@@ -125,4 +126,4 @@ def test_resolved_hash_is_stable_for_equivalent_mappings(tmp_path: Path) -> None
     save_resolved_config({"training": {"epochs": 10}, "run_name": "x"}, left)
     save_resolved_config({"run_name": "x", "training": {"epochs": 10}}, right)
     assert yaml.safe_load(left.read_text()) == yaml.safe_load(right.read_text())
-    assert compute_config_hash(left) == compute_config_hash(right)
+    assert sha256_file(left) == sha256_file(right)

@@ -13,11 +13,11 @@ from virtual_staining.config.run import RunConfig
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.experiment.snapshots import (
-    compute_manifest_hash,
     save_environment_snapshot,
     save_stage_config_snapshots,
 )
 from virtual_staining.experiment.stages import RunStageName
+from virtual_staining.utils.hashing import sha256_file
 
 logger = logging.getLogger(__name__)
 _PACKAGE_LOGGER = logging.getLogger("virtual_staining")
@@ -162,6 +162,7 @@ class ExperimentSession:
         self._stage = _StageResult()
         self._started_at = ""
         self._file_handler: logging.FileHandler | None = None
+        self._stage_started = False
 
     @classmethod
     def open(
@@ -179,46 +180,22 @@ class ExperimentSession:
             ensure_run_directories(self.paths)
             stage_layout = self.paths.stage(self.stage)
             dataset_layout = DatasetLayout.from_project(self.config.project)
-            self.config_hash = save_stage_config_snapshots(
-                self.config,
-                self.config_path,
-                input_dest=stage_layout.input_config,
-                resolved_dest=stage_layout.resolved_config,
-            )
-            save_environment_snapshot(stage_layout.environment)
 
-            manifest_path = dataset_layout.manifest_path
-            if not manifest_path.is_file():
-                raise FileNotFoundError(f"Manifest not found at {manifest_path}. Run 'vs prepare'.")
-            manifest_hash = compute_manifest_hash(manifest_path)
-            self.manifest_hash = manifest_hash
-            fingerprint = _load_dataset_fingerprint(dataset_layout.dataset_fingerprint_path)
-            self.dataset_fingerprint = fingerprint
             self._store = LocalRunStore(
                 self.paths,
                 run_name=self.config.project.run_name,
-                dataset_fingerprint=fingerprint,
+                dataset_fingerprint=None,
             )
             self._run = self._store.ensure_run()
             self._attach_file_handler()
             self._started_at = datetime.now(UTC).isoformat()
-            config_view = {
-                "input_path": str(stage_layout.input_config),
-                "resolved_path": str(stage_layout.resolved_config),
-                "sha256": self.config_hash,
-            }
-            dataset_view = {
-                "fingerprint": fingerprint,
-                "manifest_path": str(manifest_path),
-                "manifest_sha256": manifest_hash,
-            }
             stage_record = self._stage_record(
                 status="running",
                 started_at=self._started_at,
                 completed_at=None,
-                config=config_view,
+                config=self._config_view(),
                 environment_path=str(stage_layout.environment),
-                dataset=dataset_view,
+                dataset=self._dataset_view(),
                 details={},
             )
             self._store.record_stage(
@@ -227,20 +204,21 @@ class ExperimentSession:
                     timestamp=self._started_at,
                     event_type="stage_started",
                     status="running",
-                    config=config_view,
+                    config=self._config_view(),
                     environment_path=str(stage_layout.environment),
-                    dataset=dataset_view,
+                    dataset=self._dataset_view(),
                     details={},
                 ),
             )
+            self._stage_started = True
             logger.info("Stage attempt started: %s", self.stage)
             run_view = {
                 "run_id": self._run["run_id"],
                 "run_name": self.config.project.run_name,
                 "stage": self.stage,
                 "config_hash": self.config_hash,
-                "dataset_fingerprint": fingerprint,
-                "manifest_sha256": manifest_hash,
+                "dataset_fingerprint": self.dataset_fingerprint,
+                "manifest_sha256": self.manifest_hash,
                 "run_root": str(self.paths.root),
             }
             for reporter in self.reporters:
@@ -248,9 +226,33 @@ class ExperimentSession:
                     reporter.start(run_view)
                 except Exception as exc:
                     logger.warning("Reporter start failed: %s", exc)
+
+            self.config_hash = save_stage_config_snapshots(
+                self.config,
+                self.config_path,
+                input_dest=stage_layout.input_config,
+                resolved_dest=stage_layout.resolved_config,
+            )
+            save_environment_snapshot(stage_layout.environment)
+            manifest_path = dataset_layout.manifest_path
+            if not manifest_path.is_file():
+                raise FileNotFoundError(f"Manifest not found at {manifest_path}. Run 'vs prepare'.")
+            self.manifest_hash = sha256_file(manifest_path)
+            self.dataset_fingerprint = _load_dataset_fingerprint(
+                dataset_layout.dataset_fingerprint_path
+            )
+            self._store = LocalRunStore(
+                self.paths,
+                run_name=self.config.project.run_name,
+                dataset_fingerprint=self.dataset_fingerprint,
+            )
+            self._run = self._store.ensure_run()
             return self
-        except Exception:
-            self._close_file_handler()
+        except Exception as error:
+            if self._stage_started:
+                self._complete(error)
+            else:
+                self._close_file_handler()
             raise
 
     def __exit__(
@@ -260,8 +262,18 @@ class ExperimentSession:
         traceback: TracebackType | None,
     ) -> None:
         del exc_type, traceback
+        self._complete(exc)
+
+    def _complete(self, exc: BaseException | None) -> None:
         status = "failed" if exc is not None else "completed"
         completed_at = datetime.now(UTC).isoformat()
+        if exc is not None:
+            logger.error(
+                "Stage %s failed: %s: %s",
+                self.stage,
+                type(exc).__name__,
+                exc,
+            )
         persistence_error: Exception | None = None
         try:
             assert self._store is not None
@@ -276,28 +288,28 @@ class ExperimentSession:
                 error_type=type(exc).__name__ if exc is not None else None,
                 error=str(exc) if exc is not None else None,
             )
-            event = self._event(
-                timestamp=completed_at,
-                event_type=f"stage_{status}",
-                status=status,
-                config=self._config_view(),
-                environment_path=self._environment_path(),
-                dataset=self._dataset_view(),
-                details=self._stage.details,
-                error_type=type(exc).__name__ if exc is not None else None,
-                error=str(exc) if exc is not None else None,
+            self._store.record_stage(
+                stage_record=stage_record,
+                event=self._event(
+                    timestamp=completed_at,
+                    event_type=f"stage_{status}",
+                    status=status,
+                    config=self._config_view(),
+                    environment_path=self._environment_path(),
+                    dataset=self._dataset_view(),
+                    details=self._stage.details,
+                    error_type=type(exc).__name__ if exc is not None else None,
+                    error=str(exc) if exc is not None else None,
+                ),
             )
-            self._store.record_stage(stage_record=stage_record, event=event)
         except Exception as error:
             persistence_error = error
-        else:
-            for reporter in self.reporters:
-                try:
-                    reporter.finish(status)
-                except Exception as error:
-                    logger.warning("Reporter finish failed: %s", error)
-        finally:
-            self._close_file_handler()
+        for reporter in self.reporters:
+            try:
+                reporter.finish(status)
+            except Exception as error:
+                logger.warning("Reporter finish failed: %s", error)
+        self._close_file_handler()
 
         if persistence_error is not None:
             if exc is not None:

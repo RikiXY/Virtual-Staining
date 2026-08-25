@@ -26,15 +26,15 @@ the software environment.
 
 Each run stage writes `config/<stage>/input.yaml`,
 `config/<stage>/resolved.yaml`, and `metadata/environments/<stage>.json`.
-The resolved YAML hash is stored in the stage record and event rather than in
-a standalone hash file. Preparation keeps its dataset-local
+The resolved YAML hash is stored in the stage record and event rather than in a
+standalone hash file. `applications.prepare` orchestrates its dataset-local
 `config/input.yaml`, `config/resolved.yaml`, `metadata/config_hash.txt`, and
-`metadata/environment.json` snapshots; dataset fingerprint construction and
-source-file hashing belong to `data/provenance.py`, while run snapshot writers
-belong to `experiment/snapshots.py`.
-`DatasetLayout` owns dataset-local provenance paths and `RunLayout` owns
-run-local stage paths. The shared `RuntimeInfo` collector supplies the same
-runtime facts to environment snapshots and status diagnostics.
+`metadata/environment.json` snapshots through the generic experiment snapshot
+helpers. Dataset fingerprint construction and source-file hashing belong to
+`data/provenance.py`; `DatasetLayout` owns dataset-local provenance paths,
+`RunLayout` owns run-local stage paths, and `ResultsLayout` owns shared comparison
+paths. The shared `RuntimeInfo` collector supplies the same runtime facts to
+environment snapshots and status diagnostics.
 
 See [Run Output Format](run_format.md) and [Dataset Format](dataset_format.md)
 for artifact locations and schemas.

@@ -40,7 +40,7 @@ ALLOWED_EDGES = {
     "checkpoint_contract": {"models"},
     "metrics": set(),
     "data": {"config", "data", "utils"},
-    "experiment": {"config", "data", "experiment"},
+    "experiment": {"config", "data", "experiment", "utils"},
     "models": {"config", "models"},
     "training": {
         "checkpoint_contract",

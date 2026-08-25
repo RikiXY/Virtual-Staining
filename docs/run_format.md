@@ -69,9 +69,11 @@ Queue state is flattened under `local_workspace/queues/` by queue name. The
 state file records queue-level status plus per-job fields such as
 `status`, `started_at`, `completed_at`, and `error`.
 
-`RunLayout` in `virtual_staining.experiment.run_layout` is the single owner of
-run paths. `ExperimentSession` is the only run-stage bootstrap and creates the
-directories; layout instances themselves are pure path contracts.
+`RunLayout` in `virtual_staining.experiment.run_layout` owns one run's paths.
+`ResultsLayout` owns shared cross-run comparison paths under
+`local_workspace/results/comparisons/`. `ExperimentSession` is the only run-stage
+bootstrap and creates the directories; layout instances themselves are pure path
+contracts.
 
 ## Directory Layout
 
@@ -118,9 +120,13 @@ local_workspace/results/<run_name>/
     └── skipped.csv
 ```
 
-`prepare` is dataset-owned: `data/provenance.py` writes dataset
-config/environment snapshots, fingerprint, manifest, split, input-hash, and
-`dataset_build.json` files under the dataset root. It does not write experiment
+Cross-run comparisons are written separately under
+`local_workspace/results/comparisons/<A>_vs_<B>/<mode>_<metric>/`; `ResultsLayout`
+owns this shared results root rather than either individual `RunLayout`.
+
+`applications.prepare` orchestrates dataset-local config and environment snapshots
+through the generic experiment snapshot helpers. `data/provenance.py` owns dataset
+fingerprints and source-file hashing. Preparation does not write experiment
 `run.json`, `events.jsonl`, or `metadata/stages/prepare.json`.
 
 Run checkpoint metadata uses the neutral `checkpoint_contract.py` and

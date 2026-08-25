@@ -15,7 +15,7 @@ from virtual_staining.applications.train import ProgressReporter
 from virtual_staining.config.loader import load_yaml_mapping
 from virtual_staining.config.run import RunConfig
 from virtual_staining.config.validation import parse_bool_strict, reject_unknown_keys
-from virtual_staining.experiment.snapshots import compute_payload_hash
+from virtual_staining.utils.hashing import sha256_json
 
 _QUEUE_KEYS: frozenset[str] = frozenset({"name", "continue_on_failure", "jobs", "ablation"})
 _QUEUE_JOB_KEYS: frozenset[str] = frozenset({"config_path", "label", "notes", "stages"})
@@ -295,7 +295,7 @@ def _build_ablation_summary(
                 "notes": job.notes,
                 "config_path": str(job.config_path),
                 "run_name": config.project.run_name,
-                "config_hash": compute_payload_hash(resolved_config),
+                "config_hash": sha256_json(resolved_config),
                 "variable_values": {
                     field: _get_dot_path(resolved_config, field)
                     for field in queue.ablation.variable_fields

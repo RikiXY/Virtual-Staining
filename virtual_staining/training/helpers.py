@@ -8,7 +8,6 @@ from torchvision.utils import save_image
 
 from virtual_staining.config.losses import LossConfig
 from virtual_staining.models.io_contract import denormalize_model_output
-from virtual_staining.training.results import EpochMetrics
 
 
 def is_amp_enabled(device: torch.device) -> bool:
@@ -113,24 +112,6 @@ def metrics_fieldnames(loss_names: list[str], *, stage: str | None = None) -> li
                 ]
             )
     return fields
-
-
-def component_metric_row(stage: str, metrics: EpochMetrics | None) -> dict[str, str]:
-    if metrics is None:
-        return {}
-    if not metrics.raw and not metrics.weighted and not metrics.current_weight:
-        return {}
-    row = {
-        f"loss_{stage}_total_generator": f"{metrics.loss_G:.6f}",
-        f"loss_{stage}_total_discriminator": f"{metrics.loss_D:.6f}",
-    }
-    for term_name in sorted(metrics.raw):
-        row[f"loss_{stage}_raw_{term_name}"] = f"{metrics.raw[term_name]:.6f}"
-    for term_name in sorted(metrics.weighted):
-        row[f"loss_{stage}_weighted_{term_name}"] = f"{metrics.weighted[term_name]:.6f}"
-    for term_name in sorted(metrics.current_weight):
-        row[f"loss_{stage}_current_weight_{term_name}"] = f"{metrics.current_weight[term_name]:.6f}"
-    return row
 
 
 def average_components(

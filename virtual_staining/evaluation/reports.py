@@ -3,20 +3,8 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from virtual_staining.metrics import METRIC_SPECS
+from virtual_staining.metrics import REPORT_METRIC_NAMES
 
-_CSV_METRIC_ORDER = (
-    "mae",
-    "mse",
-    "rmse",
-    "psnr",
-    "ssim",
-    "pcc_gray",
-    "pcc_r",
-    "pcc_g",
-    "pcc_b",
-    "pcc_rgb_mean",
-)
 METRIC_FIELDNAMES = [
     "sample_id",
     "set_id",
@@ -25,7 +13,7 @@ METRIC_FIELDNAMES = [
     "width",
     "height",
     "channels",
-    *[name for name in _CSV_METRIC_ORDER if name in METRIC_SPECS],
+    *REPORT_METRIC_NAMES,
 ]
 
 

@@ -63,6 +63,7 @@ def train(
             raise ValueError("model.inputs must be a subset of manifest input modalities")
         if config.model.target != manifest.metadata.target_modality:
             raise ValueError("model.target must equal manifest target modality")
+        manifest.validate(check_files_exist=True, require_splits={"train", "val"})
         train_manifest = manifest.filter_split("train")
         val_manifest = manifest.filter_split("val")
 

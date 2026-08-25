@@ -34,6 +34,36 @@ def test_compare_resolves_run_inputs_and_defaults(tmp_path: Path) -> None:
     assert (resolved.min_value, resolved.max_value) == (0.0, 1.0)
 
 
+def test_compare_resolves_explicit_canonical_csv_inputs_to_shared_results(
+    tmp_path: Path,
+) -> None:
+    csv_a = _metrics_csv(tmp_path / "results" / "a")
+    csv_b = _metrics_csv(tmp_path / "results" / "b")
+
+    resolved = compare_app._resolve_request(
+        compare_app.CompareRequest(mode="paired", csv_a=csv_a, csv_b=csv_b)
+    )
+
+    assert resolved.output_dir == tmp_path / "results" / "comparisons" / "a_vs_b" / "paired_ssim"
+
+
+def test_compare_run_input_does_not_probe_historical_metrics_path(tmp_path: Path) -> None:
+    run_a = tmp_path / "results" / "a"
+    run_b = tmp_path / "results" / "b"
+    historical = run_a / "metrics" / "per_image_metrics.csv"
+    historical.parent.mkdir(parents=True)
+    historical.write_text("sample_id,ssim\na,0.9\n", encoding="utf-8")
+    _metrics_csv(run_b)
+
+    with pytest.raises(
+        FileNotFoundError,
+        match=f"Expected: {run_a / 'evaluation' / 'per_image_metrics.csv'}",
+    ):
+        compare_app._resolve_request(
+            compare_app.CompareRequest(mode="paired", run_a=run_a, run_b=run_b)
+        )
+
+
 def test_metric_colors_follow_domain_thresholds() -> None:
     assert color_for_metric("ssim", 0.9) == "green"
     assert color_for_metric("ssim", 0.8) == "yellow"
