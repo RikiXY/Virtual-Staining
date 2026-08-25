@@ -12,12 +12,11 @@ from tests.image_helpers import write_rgb_image, write_rgb_pair
 from tests.manifest_helpers import make_manifest_record, manifest_metadata, write_manifest_csv
 from virtual_staining.applications.evaluate import evaluate
 from virtual_staining.config.run import RunConfig
-from virtual_staining.experiment.run_paths import RunPaths
-from virtual_staining.inference.outputs import (
-    generated_filename_for_sample,
-    generated_path_for_record,
-)
+from virtual_staining.data.layout import DatasetLayout
+from virtual_staining.experiment.run_layout import RunLayout
+from virtual_staining.inference.outputs import generated_path_for_record
 from virtual_staining.metrics import METRIC_SPECS
+from virtual_staining.utils.artifacts import generated_filename
 
 
 def _write_test_manifest(dataset_root: Path, sample_ids: list[str]) -> None:
@@ -103,15 +102,14 @@ def test_evaluation_config_defaults_to_run_dirs(tmp_path: Path) -> None:
 
     run_config = RunConfig.from_yaml(yaml_file)
     assert run_config.evaluation is not None
-    paths = RunPaths(run_config.project.run_root)
+    dataset_layout = DatasetLayout.from_project(run_config.project)
+    run_layout = RunLayout.from_project(run_config.project)
 
-    assert run_config.project.split_dir("test") == tmp_path / "data" / "splits" / "test"
-    assert paths.output_test_dir == (
+    assert dataset_layout.split_dir("test") == tmp_path / "data" / "splits" / "test"
+    assert run_layout.output_test_dir == (
         tmp_path / "results" / "section_run" / "artifacts" / "output_test"
     )
-    assert run_config.project.run_root / "evaluation" == (
-        tmp_path / "results" / "section_run" / "evaluation"
-    )
+    assert run_layout.evaluation_dir == tmp_path / "results" / "section_run" / "evaluation"
     assert run_config.evaluation.save_graphs is False
     assert run_config.evaluation.generated_dir is None
     assert run_config.evaluation.output_dir is None
@@ -335,7 +333,7 @@ def test_evaluate_records_from_manifest_test_split(tmp_path: Path) -> None:
 
     for sample_id in ["00000_00000", "00256_00000"]:
         write_rgb_pair(target_dir, sample_id)
-        write_rgb_image(generated_dir / generated_filename_for_sample(sample_id, ".PNG"))
+        write_rgb_image(generated_dir / generated_filename(sample_id, ".PNG"))
     write_rgb_image(generated_dir / "99999_99999_target_generated.png")
 
     output_dir = tmp_path / "results" / "eval_run" / "evaluation"
@@ -385,7 +383,7 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
     assert metadata_path.exists()
 
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    manifest_path = run_config.project.manifest_path
+    manifest_path = DatasetLayout.from_project(run_config.project).manifest_path
     expected_manifest_hash = f"sha256:{hashlib.sha256(manifest_path.read_bytes()).hexdigest()}"
 
     assert metadata["stage"] == "evaluate"
@@ -464,11 +462,9 @@ def test_evaluate_skipped_csv_has_correct_columns(tmp_path: Path) -> None:
         assert reader.fieldnames == ["sample_id", "reason", "target_path", "generated_path"]
 
 
-def test_generated_filename_for_sample() -> None:
-    assert (
-        generated_filename_for_sample("00512_09216", ".tif") == "00512_09216_target_generated.tif"
-    )
-    assert generated_filename_for_sample("patch_001", ".PNG") == "patch_001_target_generated.png"
+def test_generated_filename() -> None:
+    assert generated_filename("00512_09216", ".tif") == "00512_09216_target_generated.tif"
+    assert generated_filename("patch_001", ".PNG") == "patch_001_target_generated.png"
 
 
 def test_generated_path_for_record_uses_sample_id(tmp_path: Path) -> None:

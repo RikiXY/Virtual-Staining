@@ -21,14 +21,6 @@ SELECTION_SUMMARY_FIELDNAMES = [
 ]
 
 
-def extract_generated_sample_id(path: str | Path) -> str:
-    stem = Path(path).stem
-    suffix = "_target_generated"
-    if not stem.endswith(suffix):
-        raise ValueError(f"Generated file does not end with '{suffix}': {path}")
-    return stem[: -len(suffix)]
-
-
 def find_existing_image(base_dir: str | Path, sample_id: str, suffix: str) -> Path:
     directory = Path(base_dir)
     for ext in sorted(VALID_IMAGE_EXTENSIONS):

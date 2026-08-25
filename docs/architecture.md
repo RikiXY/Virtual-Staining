@@ -16,13 +16,13 @@ upper layers may import from lower layers, never the reverse.
 | Package | Responsibility |
 |---|---|
 | `metrics.py` | Image metric computations, directions, quality thresholds, and validation image metric names |
-| `checkpoint_contract.py` | Neutral v3 checkpoint format and generator metadata validation |
+| `checkpoint_contract.py` | Neutral v3 checkpoint format, model-I/O normalization, and generator/discriminator metadata validation |
 | `checkpoint_selection.py` | Neutral `best.json` ranking, policy, and metric-direction selection |
-| `utils/` | Shared primitives: image dimensions and image I/O helpers |
+| `utils/` | Shared primitives: artifact naming, image dimensions, and image I/O helpers |
 | `config/` | Sole owner of YAML-facing dataclasses and strict parsers for every config section |
-| `experiment/` | Run paths, stage snapshots, run metadata, manifest/config hashing, and environment snapshots |
-| `models/` | `ConcatUNetGenerator`, internal `UNetGenerator`, and `PatchGANDiscriminator` |
-| `data/` | Slide sets, manifests, dataset building, and dataset-owned provenance/fingerprints |
+| `experiment/` | Canonical `RunLayout`, stage snapshots, run metadata, manifest/config hashing, and environment snapshots |
+| `models/` | Model factory, model-I/O normalization contract, and generator/discriminator implementations |
+| `data/` | Canonical `DatasetLayout`, slide sets, manifests, dataset building, and dataset-owned provenance/fingerprints |
 | `training/` | Training mechanics, validation, history, losses, resume state, and callback-driven progress events |
 | `inference/` | Reusable checkpoint loading and runtime inference; application code owns runtime composition |
 | `evaluation/` | Set evaluation, diagnostic plots, representative selection, comparison panels, and summaries |
@@ -87,10 +87,10 @@ cli -> applications, cli, metrics
 applications -> checkpoint_contract, checkpoint_selection, config, data, evaluation,
                 experiment, inference, metrics, models, training, utils
 config -> config, checkpoint_selection, metrics, utils
-checkpoint_selection -> metrics
+checkpoint_contract -> models
 data -> config, data, utils
-models -> models
-experiment -> config, experiment
+models -> config, models
+experiment -> config, data, experiment
 training -> checkpoint_contract, checkpoint_selection, config, experiment, metrics,
             models, training, utils
 inference -> checkpoint_contract, checkpoint_selection, config, data, experiment,

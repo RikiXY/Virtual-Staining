@@ -5,9 +5,9 @@ from typing import Any
 
 import torch.nn as nn
 
+from virtual_staining.models.io_contract import GENERATOR_OUTPUT_ACTIVATION, NORMALIZATION_CONTRACT
+
 CHECKPOINT_FORMAT_VERSION: int = 3
-GENERATOR_OUTPUT_ACTIVATION = "tanh"
-NORMALIZATION_CONTRACT = {"input_range": "[-1, 1]", "output_range": "[-1, 1]"}
 
 
 def make_arch_metadata(
@@ -108,4 +108,17 @@ def check_generator_arch(
             raise ValueError(
                 f"Architecture mismatch for generator.{key}: checkpoint has "
                 f"{gen_arch.get(key)!r}, inference model has {curr_val!r}."
+            )
+
+
+def check_discriminator_arch(checkpoint_arch: dict[str, Any], discriminator: nn.Module) -> None:
+    disc_arch = checkpoint_arch.get("discriminator", {})
+    for key in ("class", "in_channels", "ndf", "norm", "use_sigmoid"):
+        current = (
+            type(discriminator).__name__ if key == "class" else getattr(discriminator, key, None)
+        )
+        if disc_arch.get(key) != current:
+            raise ValueError(
+                f"Architecture mismatch for discriminator.{key}: checkpoint has "
+                f"{disc_arch.get(key)!r}, current model has {current!r}."
             )

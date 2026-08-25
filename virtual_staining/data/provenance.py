@@ -2,28 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
-
-
-@dataclass(frozen=True)
-class DatasetSnapshotPaths:
-    input_config: Path
-    resolved_config: Path
-    environment: Path
-
-
-def resolve_prepare_snapshot_paths(dataset_root: Path) -> DatasetSnapshotPaths:
-    """Return canonical snapshot destinations for prepare-stage artifacts."""
-    return DatasetSnapshotPaths(
-        input_config=dataset_root / "config" / "input.yaml",
-        resolved_config=dataset_root / "config" / "resolved.yaml",
-        environment=dataset_root / "metadata" / "environment.json",
-    )
 
 
 def _hash_bytes(payload: bytes) -> str:

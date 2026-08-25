@@ -21,7 +21,7 @@ from virtual_staining.checkpoint_selection import (
 )
 from virtual_staining.config.losses import LossConfig
 from virtual_staining.config.training import TrainingConfig
-from virtual_staining.experiment.run_paths import RunPaths
+from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.training.checkpoints import CheckpointManager
 from virtual_staining.training.helpers import (
@@ -86,7 +86,7 @@ class Trainer:
     def __init__(
         self,
         config: TrainingConfig,
-        run_paths: RunPaths,
+        run_paths: RunLayout,
         generator: nn.Module,
         discriminator: nn.Module,
         train_loader: torch.utils.data.DataLoader,

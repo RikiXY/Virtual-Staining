@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from virtual_staining.evaluation.ranking import organize_by_metrics
+from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.metrics import DEFAULT_METRICS
 
 
@@ -56,14 +57,12 @@ def organize(request: OrganizeRequest) -> OrganizeResult:
 
 
 def _resolve_paths(request: OrganizeRequest) -> tuple[Path, Path]:
-    run_path = request.run_path.resolve() if request.run_path is not None else None
-    if run_path is not None and not run_path.is_dir():
-        raise NotADirectoryError(f"Run directory not found: {run_path}")
+    layout = RunLayout(request.run_path.resolve()) if request.run_path is not None else None
     metrics_csv = (
         request.metrics_csv.resolve()
         if request.metrics_csv is not None
-        else run_path / "evaluation" / "per_image_metrics.csv"
-        if run_path is not None
+        else layout.per_image_metrics
+        if layout is not None
         else None
     )
     if metrics_csv is None:
@@ -72,15 +71,11 @@ def _resolve_paths(request: OrganizeRequest) -> tuple[Path, Path]:
         raise FileNotFoundError(f"Could not find per_image_metrics.csv. Expected: {metrics_csv}")
     if request.output_dir is not None:
         return metrics_csv, request.output_dir.resolve()
-    inferred_run = (
-        run_path
-        if run_path is not None
-        else metrics_csv.parent.parent
-        if metrics_csv.name == "per_image_metrics.csv" and metrics_csv.parent.name == "evaluation"
-        else None
-    )
-    if inferred_run is None:
-        raise ValueError(
-            "Could not infer output directory. Please provide --output-dir explicitly."
-        )
-    return metrics_csv, inferred_run / "evaluation" / "sorted_by_metrics"
+    if layout is None:
+        try:
+            layout = RunLayout.from_evaluation_path(metrics_csv)
+        except ValueError:
+            raise ValueError(
+                "Could not infer output directory. Please provide --output-dir explicitly."
+            ) from None
+    return metrics_csv, layout.evaluation_dir / "sorted_by_metrics"

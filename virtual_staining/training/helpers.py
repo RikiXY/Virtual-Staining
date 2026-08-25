@@ -7,6 +7,7 @@ import torch
 from torchvision.utils import save_image
 
 from virtual_staining.config.losses import LossConfig
+from virtual_staining.models.io_contract import denormalize_model_output
 from virtual_staining.training.results import EpochMetrics
 
 
@@ -22,10 +23,15 @@ def save_images(
     epoch: int,
     batch_index: int,
 ) -> None:
-    # Images are normalised to [-1, 1]; bring back to [0, 1] before saving.
-    save_image((source_tensor * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_input.tif")
-    save_image((output * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_output.tif")
-    save_image((target * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_target.tif")
+    save_image(
+        denormalize_model_output(source_tensor), path / f"epoch{epoch}_batch{batch_index}_input.tif"
+    )
+    save_image(
+        denormalize_model_output(output), path / f"epoch{epoch}_batch{batch_index}_output.tif"
+    )
+    save_image(
+        denormalize_model_output(target), path / f"epoch{epoch}_batch{batch_index}_target.tif"
+    )
 
 
 def dataset_len(loader: torch.utils.data.DataLoader) -> int:

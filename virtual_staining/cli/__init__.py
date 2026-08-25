@@ -8,6 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
+from virtual_staining.applications.pipeline import VALID_STAGES
 from virtual_staining.applications.train import ProgressReporter
 from virtual_staining.cli._common import (
     add_config_argument,
@@ -16,7 +17,6 @@ from virtual_staining.cli._common import (
 )
 from virtual_staining.cli._progress import render_training_progress
 
-VALID_STAGES = ("prepare", "train", "infer", "evaluate")
 Command = Callable[[list[str] | None], None]
 
 

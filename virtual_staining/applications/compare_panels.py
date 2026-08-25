@@ -13,11 +13,12 @@ from virtual_staining.evaluation.panels import (
 )
 from virtual_staining.evaluation.selection import (
     METRIC_SELECTION_ORDER,
-    extract_generated_sample_id,
     select_representative_rows,
     write_metric_selection_summary,
 )
 from virtual_staining.evaluation.summaries import read_per_image_metrics_csv, read_summary_csv
+from virtual_staining.experiment.run_layout import RunLayout
+from virtual_staining.utils.artifacts import generated_sample_id
 
 
 @dataclass(frozen=True)
@@ -57,40 +58,19 @@ def compare_panels(request: ComparePanelsRequest) -> SinglePanelResult | FromMet
 
 
 def _infer_run_dir_from_generated_path(generated_path: str | Path) -> Path:
-    path = Path(generated_path).resolve()
-    base = path.parent if path.is_file() else path
-    parts = base.parts
-
-    if "results" not in parts:
+    try:
+        return RunLayout.from_artifact_path(Path(generated_path)).root
+    except ValueError as exc:
         raise ValueError(
-            "Could not infer run directory from generated path. Expected a path like "
-            ".../results/NAME_RUN/artifacts/output_test/..."
-        )
-
-    results_index = parts.index("results")
-
-    if results_index + 1 >= len(parts):
-        raise ValueError(
-            "Could not infer NAME_RUN from generated path. Expected a path like "
-            ".../results/NAME_RUN/artifacts/output_test/..."
-        )
-
-    run_dir = Path(*parts[: results_index + 2])
-
-    if run_dir.parent.name != "results":
-        raise ValueError(
-            "Could not infer a valid run directory inside results/. "
-            "Please provide --save-path explicitly."
-        )
-
-    return run_dir
+            f"{exc} Generated paths must be inside a run's artifacts subtree."
+        ) from None
 
 
 def _infer_default_save_path(generated_image: str | Path) -> Path:
     generated_path = Path(generated_image)
-    sample_id = extract_generated_sample_id(generated_path)
-    run_dir = _infer_run_dir_from_generated_path(generated_path)
-    return run_dir / "comparisons" / f"{sample_id}_comparison.png"
+    sample_id = generated_sample_id(generated_path)
+    layout = RunLayout.from_artifact_path(generated_path)
+    return layout.comparisons_dir / f"{sample_id}_comparison.png"
 
 
 def _infer_diagnostics_dir(save_path: str | Path) -> Path:
@@ -99,7 +79,7 @@ def _infer_diagnostics_dir(save_path: str | Path) -> Path:
 
 def _infer_case_diagnostics_dir(save_path: str | Path, generated_image: str | Path) -> Path:
     diagnostics_dir = _infer_diagnostics_dir(save_path)
-    sample_id = extract_generated_sample_id(generated_image)
+    sample_id = generated_sample_id(generated_image)
     return diagnostics_dir / sample_id
 
 
@@ -136,13 +116,13 @@ def _run_single(request: ComparePanelsRequest) -> SinglePanelResult:
 
 def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
     assert request.run_path is not None
-    run_path = request.run_path.resolve()
-    evaluation_dir = run_path / "evaluation"
-    summary_csv = evaluation_dir / "summary.csv"
-    per_image_csv = evaluation_dir / "per_image_metrics.csv"
+    layout = RunLayout(request.run_path.resolve())
+    run_path = layout.root
+    summary_csv = layout.summary_csv
+    per_image_csv = layout.per_image_metrics
     summary_rows = read_summary_csv(summary_csv)
     per_image_rows = read_per_image_metrics_csv(per_image_csv)
-    metrics_dir = run_path / "comparisons" / "metrics"
+    metrics_dir = layout.comparisons_dir / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
     selection_summary_rows: list[dict[str, object]] = []
     saved_aggregated_paths: list[Path] = []

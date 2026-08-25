@@ -12,11 +12,14 @@ from virtual_staining.checkpoint_contract import (
     check_generator_arch,
     validate_checkpoint_metadata,
 )
-from virtual_staining.checkpoint_selection import resolve_best_checkpoint_path
+from virtual_staining.checkpoint_selection import resolve_checkpoint_path
 from virtual_staining.config.run import RunConfig
-from virtual_staining.experiment.run_paths import RunPaths
-from virtual_staining.models.generator import ConcatUNetGenerator
-from virtual_staining.utils.dimensions import to_torchvision_hw
+from virtual_staining.experiment.run_layout import RunLayout
+from virtual_staining.models.factory import build_generator
+from virtual_staining.models.io_contract import (
+    build_model_input_transform,
+    denormalize_model_output,
+)
 
 
 @dataclass
@@ -34,7 +37,7 @@ def predict_batch(
 ) -> torch.Tensor:
     with autocast(device_type=device.type, enabled=device.type == "cuda"):
         output = generator({name: value.to(device) for name, value in inputs.items()})
-    return (output * 0.5 + 0.5).clamp(0, 1)
+    return denormalize_model_output(output)
 
 
 def resolve_inference_device() -> torch.device:
@@ -44,16 +47,10 @@ def resolve_inference_device() -> torch.device:
 
 def build_inference_transform(image_size: tuple[int, int]) -> transforms.Compose:
     """Build the image transform expected by the generator."""
-    return transforms.Compose(
-        [
-            transforms.Resize(to_torchvision_hw(image_size)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5] * 3, [0.5] * 3),
-        ]
-    )
+    return build_model_input_transform(image_size)
 
 
-def _resolve_checkpoint(config: RunConfig, paths: RunPaths) -> Path:
+def _resolve_checkpoint(config: RunConfig, paths: RunLayout) -> Path:
     """Resolve the inference checkpoint path from RunConfig."""
     if config.inference is None:
         raise ValueError("RunConfig.inference is required to run inference.")
@@ -63,31 +60,21 @@ def _resolve_checkpoint(config: RunConfig, paths: RunPaths) -> Path:
         if not checkpoint_path.is_absolute():
             checkpoint_path = paths.root / checkpoint_path
         return checkpoint_path
-
-    if config.inference.checkpoint_policy == "latest":
-        candidates = sorted(paths.checkpoints_dir.glob("ep*.pth"))
-        if not candidates:
-            raise FileNotFoundError(
-                f"checkpoint_policy='latest' but no checkpoints found in {paths.checkpoints_dir}"
-            )
-        return candidates[-1]
-
-    if config.inference.checkpoint_policy in {"best", "top_k"}:
-        return resolve_best_checkpoint_path(
-            paths.checkpoints_dir,
-            policy=config.inference.checkpoint_policy,
-            metric=config.inference.checkpoint_metric,
-            rank=config.inference.checkpoint_rank or 1,
+    if config.inference.checkpoint_policy is None:
+        raise ValueError(
+            "inference.checkpoint_path or inference.checkpoint_policy must be set in the config."
         )
-
-    raise ValueError(
-        "inference.checkpoint_path or inference.checkpoint_policy must be set in the config."
+    return resolve_checkpoint_path(
+        paths.checkpoints_dir,
+        policy=config.inference.checkpoint_policy,
+        metric=config.inference.checkpoint_metric,
+        rank=config.inference.checkpoint_rank or 1,
     )
 
 
 def load_inference_generator(
     config: RunConfig,
-    paths: RunPaths,
+    paths: RunLayout,
     device: torch.device,
 ) -> tuple[nn.Module, Path]:
     """Load and validate the configured generator checkpoint."""
@@ -104,14 +91,7 @@ def load_inference_generator(
 
     checkpoint_arch = validate_checkpoint_metadata(checkpoint, checkpoint_path)
 
-    generator_config = config.model.generator
-    generator = ConcatUNetGenerator(
-        config.model.inputs,
-        base_channels=generator_config.base_channels,
-        norm=generator_config.norm,
-        dropout=generator_config.dropout,
-        bilinear=generator_config.bilinear,
-    ).to(device)
+    generator = build_generator(config.model).to(device)
     check_generator_arch(checkpoint_arch, generator, target_modality=config.model.target)
     generator.load_state_dict(checkpoint["generator_state_dict"])
     generator.eval()

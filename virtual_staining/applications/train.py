@@ -7,19 +7,18 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-from torchvision import transforms
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.dataset import PairedManifestDataset
+from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.manifest import load_manifest_or_raise
 from virtual_staining.experiment.session import ExperimentSession
-from virtual_staining.models.discriminator import PatchGANDiscriminator
-from virtual_staining.models.generator import ConcatUNetGenerator
+from virtual_staining.models.factory import build_discriminator, build_generator
+from virtual_staining.models.io_contract import build_model_input_transform
 from virtual_staining.training.augmentation import build_training_paired_transform
 from virtual_staining.training.progress import ProgressReporter, ProgressUpdate, format_progress_log
 from virtual_staining.training.results import TrainingResult
 from virtual_staining.training.trainer import Trainer
-from virtual_staining.utils.dimensions import to_torchvision_hw
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +57,7 @@ def train(
         set_seed(seed)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info("Device: %s", device)
-
+        dataset_layout = DatasetLayout.from_project(config.project)
         manifest = load_manifest_or_raise(config.project)
         if not set(config.model.inputs).issubset(manifest.metadata.input_modalities):
             raise ValueError("model.inputs must be a subset of manifest input modalities")
@@ -84,13 +83,7 @@ def train(
         }
         session.result(**train_details)
 
-        transform = transforms.Compose(
-            [
-                transforms.Resize(to_torchvision_hw(config.project.image_size)),
-                transforms.ToTensor(),
-                transforms.Normalize([0.5] * 3, [0.5] * 3),
-            ]
-        )
+        transform = build_model_input_transform(config.project.image_size)
         train_paired_transform = build_training_paired_transform(
             training.augmentation,
             image_size=config.project.image_size,
@@ -142,21 +135,8 @@ def train(
             generator=val_loader_generator,
         )
 
-        generator_config = config.model.generator
-        generator = ConcatUNetGenerator(
-            config.model.inputs,
-            base_channels=generator_config.base_channels,
-            norm=generator_config.norm,
-            dropout=generator_config.dropout,
-            bilinear=generator_config.bilinear,
-        ).to(device)
-        discriminator_config = config.model.discriminator
-        discriminator = PatchGANDiscriminator(
-            in_channels=(3 * len(config.model.inputs)) + 3,
-            ndf=discriminator_config.ndf,
-            norm=discriminator_config.norm,
-            use_sigmoid=discriminator_config.use_sigmoid,
-        ).to(device)
+        generator = build_generator(config.model).to(device)
+        discriminator = build_discriminator(config.model).to(device)
 
         trainer = Trainer(
             config=training,
@@ -167,9 +147,9 @@ def train(
             val_loader=val_loader,
             device=device,
             image_size=config.project.image_size,
-            train_dir=config.project.split_dir("train"),
+            train_dir=dataset_layout.split_dir("train"),
             progress_reporter=progress_reporter,
-            val_dir=config.project.split_dir("val"),
+            val_dir=dataset_layout.split_dir("val"),
             losses=training.losses,
             target_modality=config.model.target,
             experiment_session=session,

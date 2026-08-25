@@ -14,11 +14,12 @@ from PIL import Image
 from torchvision import transforms
 from torchvision.utils import save_image
 
-from virtual_staining.inference.outputs import generated_filename_for_sample
 from virtual_staining.inference.runner import (
     build_inference_transform,
     predict_batch,
 )
+from virtual_staining.models.io_contract import build_model_input_transform
+from virtual_staining.utils.artifacts import generated_filename
 from virtual_staining.utils.image_io import (
     VALID_IMAGE_EXTENSIONS,
     ImageMetadata,
@@ -32,7 +33,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_TILE_OVERLAP = 16
 SingleInferenceMode = Literal["auto", "resize", "tile"]
 SUPPORTED_OUTPUT_FORMATS: frozenset[str] = frozenset(
-    {"same", "bmp", "jpeg", "jpg", "png", "tif", "tiff"}
+    {"same", *(extension.removeprefix(".") for extension in VALID_IMAGE_EXTENSIONS)}
 )
 
 
@@ -84,7 +85,7 @@ def _sample_id_from_input_path(input_path: Path) -> str:
 
 
 def _generated_filename_for_input(input_path: Path, output_suffix: str) -> str:
-    return generated_filename_for_sample(_sample_id_from_input_path(input_path), output_suffix)
+    return generated_filename(_sample_id_from_input_path(input_path), output_suffix)
 
 
 def _validate_supported_image_path(path: Path, *, label: str) -> None:
@@ -156,12 +157,7 @@ def _pad_tile(tile: Image.Image, tile_size: tuple[int, int]) -> Image.Image:
 
 
 def _build_no_resize_transform() -> transforms.Compose:
-    return transforms.Compose(
-        [
-            transforms.ToTensor(),
-            transforms.Normalize([0.5] * 3, [0.5] * 3),
-        ]
-    )
+    return build_model_input_transform(None)
 
 
 def _predict_images(

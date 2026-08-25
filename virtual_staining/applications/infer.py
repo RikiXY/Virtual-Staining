@@ -7,9 +7,9 @@ from torchvision.utils import save_image
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.dataset import PairedManifestDataset
+from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.manifest import load_manifest_or_raise
 from virtual_staining.experiment.session import ExperimentSession
-from virtual_staining.inference.outputs import generated_filename_for_sample
 from virtual_staining.inference.runner import (
     InferenceResult,
     build_inference_transform,
@@ -17,6 +17,7 @@ from virtual_staining.inference.runner import (
     predict_batch,
     resolve_inference_device,
 )
+from virtual_staining.utils.artifacts import generated_filename
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,10 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
         output_dir.mkdir(parents=True, exist_ok=True)
         result = InferenceResult(output_dir=output_dir)
         if len(dataset) == 0:
-            logger.warning("No test pairs found in manifest: %s", config.project.manifest_path)
+            logger.warning(
+                "No test pairs found in manifest: %s",
+                DatasetLayout.from_project(config.project).manifest_path,
+            )
             return result
 
         for idx in range(len(dataset)):
@@ -63,9 +67,7 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
             inputs = {name: tensor.unsqueeze(0) for name, tensor in sample["inputs"].items()}
             record = test_manifest.records[idx]
             output = predict_batch(generator, inputs, device)[0]
-            out_path = output_dir / generated_filename_for_sample(
-                record.sample_id, record.target_path.suffix
-            )
+            out_path = output_dir / generated_filename(record.sample_id, record.target_path.suffix)
             save_image(output, out_path)
             result.generated_paths.append(out_path)
             result.num_samples += 1

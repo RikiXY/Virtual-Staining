@@ -91,6 +91,7 @@ def validate_epoch(
                     discriminator_loss.total.item() if discriminator_loss is not None else 0.0
                 )
                 total_loss_G += generator_loss.total.item()
+                image_metric_totals.add_batch(generated, target)
                 count += 1
                 if batch_index < 5:
                     save_images(

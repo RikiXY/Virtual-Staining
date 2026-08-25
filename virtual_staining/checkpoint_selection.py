@@ -10,15 +10,7 @@ from virtual_staining.metrics import VALIDATION_IMAGE_METRIC_NAMES, is_higher_be
 
 logger = logging.getLogger(__name__)
 
-CheckpointMetric = Literal[
-    "loss_G_val",
-    "val_ssim",
-    "val_mae",
-    "val_rmse",
-    "val_psnr",
-    "val_pcc_gray",
-    "val_pcc_rgb_mean",
-]
+CheckpointMetric = str
 CheckpointMode = Literal["min", "max"]
 SUPPORTED_CHECKPOINT_METRICS = frozenset(("loss_G_val", *VALIDATION_IMAGE_METRIC_NAMES))
 
@@ -165,6 +157,32 @@ def resolve_best_checkpoint_path(
         metric=metric,
         rank=rank,
     ).checkpoint_path
+
+
+def latest_checkpoint_path(checkpoints_dir: Path) -> Path | None:
+    candidates = sorted(checkpoints_dir.glob("ep*.pth"))
+    return candidates[-1] if candidates else None
+
+
+def resolve_checkpoint_path(
+    checkpoints_dir: Path,
+    *,
+    policy: str,
+    metric: str | None = None,
+    rank: int = 1,
+) -> Path:
+    if policy == "latest":
+        path = latest_checkpoint_path(checkpoints_dir)
+        if path is None:
+            raise FileNotFoundError(
+                f"checkpoint_policy='latest' but no checkpoints found in {checkpoints_dir}"
+            )
+        return path
+    if policy in {"best", "top_k"}:
+        return resolve_best_checkpoint_path(
+            checkpoints_dir, policy=policy, metric=metric, rank=rank
+        )
+    raise ValueError(f"Unsupported checkpoint policy: {policy!r}")
 
 
 def _load_selection_payload(best_path: Path) -> dict[str, Any]:

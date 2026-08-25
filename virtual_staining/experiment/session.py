@@ -7,21 +7,24 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
-from typing import Literal, Protocol
+from typing import Protocol
 
 from virtual_staining.config.run import RunConfig
-from virtual_staining.experiment.run_paths import RunPaths
+from virtual_staining.data.layout import DatasetLayout
+from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.experiment.snapshots import (
     compute_manifest_hash,
-    resolve_run_snapshot_paths,
     save_environment_snapshot,
     save_stage_config_snapshots,
 )
+from virtual_staining.experiment.stages import RunStageName
 
 logger = logging.getLogger(__name__)
 _PACKAGE_LOGGER = logging.getLogger("virtual_staining")
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s - %(message)s"
-Stage = Literal["train", "infer", "evaluate"]
+
+
+Stage = RunStageName
 
 
 class Reporter(Protocol):
@@ -35,7 +38,7 @@ class Reporter(Protocol):
 class LocalRunStore:
     def __init__(
         self,
-        paths: RunPaths,
+        paths: RunLayout,
         *,
         run_name: str,
         dataset_fingerprint: str | None,
@@ -150,7 +153,7 @@ class ExperimentSession:
         self.config_path = config_path
         self.stage: Stage = stage
         self.reporters = tuple(reporters)
-        self.paths = RunPaths(config.project.run_root)
+        self.paths = RunLayout.from_project(config.project)
         self.config_hash = ""
         self.manifest_hash = ""
         self.dataset_fingerprint: str | None = None
@@ -173,25 +176,23 @@ class ExperimentSession:
 
     def __enter__(self) -> ExperimentSession:
         try:
-            self.paths.create_directories()
-            snapshot_paths = resolve_run_snapshot_paths(stage=self.stage, run_paths=self.paths)
+            ensure_run_directories(self.paths)
+            stage_layout = self.paths.stage(self.stage)
+            dataset_layout = DatasetLayout.from_project(self.config.project)
             self.config_hash = save_stage_config_snapshots(
                 self.config,
                 self.config_path,
-                input_dest=snapshot_paths.input_config,
-                resolved_dest=snapshot_paths.resolved_config,
+                input_dest=stage_layout.input_config,
+                resolved_dest=stage_layout.resolved_config,
             )
-            save_environment_snapshot(snapshot_paths.environment)
+            save_environment_snapshot(stage_layout.environment)
 
-            manifest_path = self.config.project.manifest_path
+            manifest_path = dataset_layout.manifest_path
             if not manifest_path.is_file():
                 raise FileNotFoundError(f"Manifest not found at {manifest_path}. Run 'vs prepare'.")
             manifest_hash = compute_manifest_hash(manifest_path)
             self.manifest_hash = manifest_hash
-            fingerprint_path = (
-                self.config.project.dataset_root / "metadata" / "dataset_fingerprint.json"
-            )
-            fingerprint = _load_dataset_fingerprint(fingerprint_path)
+            fingerprint = _load_dataset_fingerprint(dataset_layout.dataset_fingerprint_path)
             self.dataset_fingerprint = fingerprint
             self._store = LocalRunStore(
                 self.paths,
@@ -202,8 +203,8 @@ class ExperimentSession:
             self._attach_file_handler()
             self._started_at = datetime.now(UTC).isoformat()
             config_view = {
-                "input_path": str(snapshot_paths.input_config),
-                "resolved_path": str(snapshot_paths.resolved_config),
+                "input_path": str(stage_layout.input_config),
+                "resolved_path": str(stage_layout.resolved_config),
                 "sha256": self.config_hash,
             }
             dataset_view = {
@@ -216,7 +217,7 @@ class ExperimentSession:
                 started_at=self._started_at,
                 completed_at=None,
                 config=config_view,
-                environment_path=str(snapshot_paths.environment),
+                environment_path=str(stage_layout.environment),
                 dataset=dataset_view,
                 details={},
             )
@@ -227,7 +228,7 @@ class ExperimentSession:
                     event_type="stage_started",
                     status="running",
                     config=config_view,
-                    environment_path=str(snapshot_paths.environment),
+                    environment_path=str(stage_layout.environment),
                     dataset=dataset_view,
                     details={},
                 ),
@@ -383,19 +384,21 @@ class ExperimentSession:
         return event
 
     def _config_view(self) -> dict[str, object]:
+        stage_layout = self.paths.stage(self.stage)
         return {
-            "input_path": str(self.paths.stage_config_dir(self.stage) / "input.yaml"),
-            "resolved_path": str(self.paths.stage_config_dir(self.stage) / "resolved.yaml"),
+            "input_path": str(stage_layout.input_config),
+            "resolved_path": str(stage_layout.resolved_config),
             "sha256": self.config_hash,
         }
 
     def _environment_path(self) -> str:
-        return str(self.paths.stage_environment(self.stage))
+        return str(self.paths.stage(self.stage).environment)
 
     def _dataset_view(self) -> dict[str, object]:
+        layout = DatasetLayout.from_project(self.config.project)
         return {
             "fingerprint": self.dataset_fingerprint,
-            "manifest_path": str(self.config.project.manifest_path),
+            "manifest_path": str(layout.manifest_path),
             "manifest_sha256": self.manifest_hash,
         }
 

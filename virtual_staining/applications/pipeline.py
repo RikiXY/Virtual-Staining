@@ -2,16 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal, cast
+from typing import cast
 
 from virtual_staining.applications.evaluate import evaluate
 from virtual_staining.applications.infer import infer
 from virtual_staining.applications.prepare import prepare
 from virtual_staining.applications.train import ProgressReporter, train
 from virtual_staining.config.run import RunConfig
+from virtual_staining.experiment.stages import VALID_STAGES, StageName
 
-StageName = Literal["prepare", "train", "infer", "evaluate"]
-VALID_STAGES: tuple[StageName, ...] = ("prepare", "train", "infer", "evaluate")
 DEFAULT_FULL_RUN_STAGES = VALID_STAGES
 
 

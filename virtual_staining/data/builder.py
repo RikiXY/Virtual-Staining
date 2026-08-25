@@ -14,6 +14,7 @@ import numpy as np
 from PIL import Image
 
 from virtual_staining.config.data import PreprocessingConfig
+from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.manifest import DatasetManifest, ManifestMetadata, ManifestRecord, Split
 from virtual_staining.data.preprocessing import (
     MASK_PARAMETER_GRID,
@@ -50,6 +51,50 @@ class DatasetBuildResult:
     skipped_count: int
     output_root: Path
     reused: bool = False
+
+    def save(self, path: Path, *, num_sets: int, num_sets_excluded: int) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "3.0",
+                    "num_sets": num_sets,
+                    "num_sets_excluded": num_sets_excluded,
+                    "patches": {
+                        "train": self.train_count,
+                        "val": self.val_count,
+                        "test": self.test_count,
+                        "discarded": self.skipped_count,
+                    },
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    @classmethod
+    def load(cls, path: Path, *, output_root: Path, reused: bool = False) -> DatasetBuildResult:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Invalid dataset build metadata at {path}") from exc
+        if not isinstance(data, dict) or data.get("schema_version") != "3.0":
+            raise ValueError(f"Invalid dataset build metadata at {path}")
+        patches = data.get("patches")
+        if not isinstance(patches, dict):
+            raise ValueError(f"Invalid dataset build metadata at {path}")
+        try:
+            counts = tuple(int(patches[name]) for name in ("train", "val", "test", "discarded"))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid dataset build metadata at {path}") from exc
+        return cls(
+            counts[0],
+            counts[1],
+            counts[2],
+            counts[3],
+            output_root,
+            reused,
+        )
 
 
 @dataclass(frozen=True)
@@ -319,14 +364,15 @@ class SlideSetProcessor:
         step_x, step_y = self.config.patching.grid_movement
         margin = self.config.patching.margin
         ref_h, ref_w = self.reference.shape
+        layout = DatasetLayout(self.config.dataset_root)
         split_dirs = {
-            name: self.config.dataset_root / "splits" / name / self.slide_set.set_id
+            name: layout.split_dir(name) / self.slide_set.set_id
             for name in ("train", "val", "test")
         }
         for path in split_dirs.values():
             path.mkdir(parents=True, exist_ok=True)
         discarded_dirs = {
-            name: self.config.dataset_root / "discarded_patches" / self.slide_set.set_id / name
+            name: layout.discarded_patches_dir / self.slide_set.set_id / name
             for name in (*self.inputs, "target")
         }
         if self.config.patching.save_discarded_patches:
@@ -477,11 +523,12 @@ class DatasetBuilder:
         return tuple(records)
 
     def run_all(self) -> DatasetBuildResult:
-        root = self.config.dataset_root
-        for path in (root / "splits" / name for name in ("train", "val", "test")):
+        layout = DatasetLayout(self.config.dataset_root)
+        root = layout.root
+        for path in (layout.split_dir(name) for name in ("train", "val", "test")):
             ensure_clean_directory(path)
-        (root / "manifests").mkdir(parents=True, exist_ok=True)
-        (root / "metadata").mkdir(parents=True, exist_ok=True)
+        layout.manifests_dir.mkdir(parents=True, exist_ok=True)
+        layout.metadata_dir.mkdir(parents=True, exist_ok=True)
         assignments = assign_group_splits(
             self.slide_sets,
             unit=self.config.split.unit,
@@ -552,9 +599,9 @@ class DatasetBuilder:
         )
         manifest = DatasetManifest(tuple(valid_records), root, metadata)
         manifest.validate()
-        manifest.to_csv(root / "manifests" / "manifest.csv")
+        manifest.to_csv(layout.manifest_path)
         DatasetManifest(tuple(discarded_records), root, metadata).to_csv(
-            root / "manifests" / "discarded_manifest.csv"
+            layout.discarded_manifest_path
         )
         manifest_meta = {
             **metadata.to_dict(),
@@ -565,7 +612,7 @@ class DatasetBuilder:
                 for name in ("train", "val", "test")
             },
         }
-        (root / "manifests" / "manifest_metadata.json").write_text(
+        layout.manifest_metadata_path.write_text(
             json.dumps(manifest_meta, indent=2), encoding="utf-8"
         )
         fields = ["set_id", "split", "patient_id", "specimen_id", "status"]
@@ -575,13 +622,11 @@ class DatasetBuilder:
         fields.extend(
             f"{name}__alignment_metadata" for name in (*self.config.inputs.modalities, "target")
         )
-        with (root / "manifests" / "slide_sets.csv").open(
-            "w", newline="", encoding="utf-8"
-        ) as handle:
+        with layout.slide_sets_path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=fields)
             writer.writeheader()
             writer.writerows(set_rows)
-        with (root / "metadata" / "excluded_sets.csv").open(
+        with (layout.metadata_dir / "excluded_sets.csv").open(
             "w", newline="", encoding="utf-8"
         ) as handle:
             writer = csv.DictWriter(handle, fieldnames=["set_id", "split", "error"])
@@ -599,7 +644,7 @@ class DatasetBuilder:
             ),
         )
         write_split_assignment(
-            root / "metadata" / "split_assignment.csv",
+            layout.split_assignment_path,
             unit=self.config.split.unit,
             assignments=assignments_out,
         )
@@ -608,24 +653,17 @@ class DatasetBuilder:
             preprocessing_config=self.config.to_dict(),
             slide_sets=self.slide_sets,
         )
-        save_dataset_fingerprint(fingerprint, root / "metadata" / "dataset_fingerprint.json")
+        save_dataset_fingerprint(fingerprint, layout.dataset_fingerprint_path)
         counts = {
             name: sum(record.split == name for record in valid_records)
             for name in ("train", "val", "test")
         }
-        (root / "metadata").mkdir(parents=True, exist_ok=True)
-        (root / "metadata" / "dataset_build.json").write_text(
-            json.dumps(
-                {
-                    "schema_version": "3.0",
-                    "num_sets": len(self.slide_sets),
-                    "num_sets_excluded": len(excluded),
-                    "patches": {**counts, "discarded": len(discarded_records)},
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        return DatasetBuildResult(
+        result = DatasetBuildResult(
             counts["train"], counts["val"], counts["test"], len(discarded_records), root
         )
+        result.save(
+            layout.dataset_build_path,
+            num_sets=len(self.slide_sets),
+            num_sets_excluded=len(excluded),
+        )
+        return result

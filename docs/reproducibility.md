@@ -32,6 +32,9 @@ a standalone hash file. Preparation keeps its dataset-local
 `metadata/environment.json` snapshots; dataset fingerprint construction and
 source-file hashing belong to `data/provenance.py`, while run snapshot writers
 belong to `experiment/snapshots.py`.
+`DatasetLayout` owns dataset-local provenance paths and `RunLayout` owns
+run-local stage paths. The shared `RuntimeInfo` collector supplies the same
+runtime facts to environment snapshots and status diagnostics.
 
 See [Run Output Format](run_format.md) and [Dataset Format](dataset_format.md)
 for artifact locations and schemas.

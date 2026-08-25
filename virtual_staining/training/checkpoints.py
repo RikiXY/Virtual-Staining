@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
 
 import torch
 import torch.nn as nn
@@ -12,60 +11,14 @@ from torch.amp import GradScaler
 from virtual_staining.checkpoint_contract import (
     CHECKPOINT_FORMAT_VERSION,
     NORMALIZATION_CONTRACT,
+    check_discriminator_arch,
+    check_generator_arch,
     make_arch_metadata,
     validate_checkpoint_metadata,
 )
+from virtual_staining.checkpoint_selection import latest_checkpoint_path
 
 logger = logging.getLogger(__name__)
-
-
-def _check_arch_match(
-    checkpoint_arch: dict[str, Any],
-    generator: nn.Module,
-    discriminator: nn.Module,
-    *,
-    target_modality: str | None = None,
-) -> None:
-    gen_arch = checkpoint_arch.get("generator", {})
-    if target_modality is not None and gen_arch.get("target_modality") != target_modality:
-        raise ValueError("Checkpoint target modality does not match current model.")
-    current = getattr(generator, "unet", generator)
-    for key in (
-        "class",
-        "architecture",
-        "input_names",
-        "in_channels",
-        "out_channels",
-        "base_channels",
-        "norm",
-        "dropout",
-        "bilinear",
-    ):
-        ckpt_val = gen_arch.get(key)
-        if key == "class":
-            curr_val = type(generator).__name__
-        elif key == "architecture":
-            curr_val = "concat_unet"
-        elif key == "input_names":
-            curr_val = list(getattr(generator, "input_names", ()))
-        else:
-            curr_val = getattr(current, key, 3 if key == "out_channels" else None)
-        if ckpt_val != curr_val:
-            raise ValueError(
-                f"Architecture mismatch for generator.{key}: checkpoint has "
-                f"{ckpt_val!r}, current model has {curr_val!r}."
-            )
-    disc_arch = checkpoint_arch.get("discriminator", {})
-    for key in ("class", "in_channels", "ndf", "norm", "use_sigmoid"):
-        ckpt_val = disc_arch.get(key)
-        curr_val = (
-            type(discriminator).__name__ if key == "class" else getattr(discriminator, key, None)
-        )
-        if ckpt_val != curr_val:
-            raise ValueError(
-                f"Architecture mismatch for discriminator.{key}: checkpoint has "
-                f"{ckpt_val!r}, current model has {curr_val!r}."
-            )
 
 
 class CheckpointManager:
@@ -154,9 +107,8 @@ class CheckpointManager:
                 f"current image_size={tuple(self.image_size)}."
             )
         arch = validate_checkpoint_metadata(checkpoint, path)
-        _check_arch_match(
-            arch, self.generator, self.discriminator, target_modality=self.target_modality
-        )
+        check_generator_arch(arch, self.generator, target_modality=self.target_modality)
+        check_discriminator_arch(arch, self.discriminator)
         self.generator.load_state_dict(checkpoint["generator_state_dict"])
         self.discriminator.load_state_dict(checkpoint["discriminator_state_dict"])
         self.opt_G.load_state_dict(checkpoint["optimizerG_state_dict"])
@@ -172,5 +124,4 @@ class CheckpointManager:
         return start_epoch
 
     def latest(self) -> Path | None:
-        candidates = sorted(self.checkpoints_dir.glob("ep*.pth"))
-        return candidates[-1] if candidates else None
+        return latest_checkpoint_path(self.checkpoints_dir)

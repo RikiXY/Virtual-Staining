@@ -69,6 +69,10 @@ Queue state is flattened under `local_workspace/queues/` by queue name. The
 state file records queue-level status plus per-job fields such as
 `status`, `started_at`, `completed_at`, and `error`.
 
+`RunLayout` in `virtual_staining.experiment.run_layout` is the single owner of
+run paths. `ExperimentSession` is the only run-stage bootstrap and creates the
+directories; layout instances themselves are pure path contracts.
+
 ## Directory Layout
 
 All outputs for an experiment run are written under:

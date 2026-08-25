@@ -17,39 +17,33 @@ except ImportError as exc:
 class MetricSpec:
     higher_is_better: bool
     thresholds: tuple[float, ...]
+    default: bool = False
+    validation_name: str | None = None
 
 
 METRIC_SPECS: dict[str, MetricSpec] = {
-    "ssim": MetricSpec(True, (0.85, 0.75, 0.65)),
-    "psnr": MetricSpec(True, (25.0, 20.0, 15.0)),
-    "mae": MetricSpec(False, (0.06, 0.10, 0.16)),
-    "rmse": MetricSpec(False, (0.08, 0.12, 0.20)),
-    "mse": MetricSpec(False, (0.0036, 0.0100, 0.0256)),
-    "pcc_gray": MetricSpec(True, (0.95, 0.90, 0.80)),
-    "pcc_rgb_mean": MetricSpec(True, (0.95, 0.90, 0.80)),
+    "ssim": MetricSpec(True, (0.85, 0.75, 0.65), True, "val_ssim"),
+    "psnr": MetricSpec(True, (25.0, 20.0, 15.0), True, "val_psnr"),
+    "mae": MetricSpec(False, (0.06, 0.10, 0.16), True, "val_mae"),
+    "rmse": MetricSpec(False, (0.08, 0.12, 0.20), True, "val_rmse"),
+    "mse": MetricSpec(False, (0.0036, 0.0100, 0.0256), True),
+    "pcc_rgb_mean": MetricSpec(True, (0.95, 0.90, 0.80), True, "val_pcc_rgb_mean"),
+    "pcc_gray": MetricSpec(True, (0.95, 0.90, 0.80), True, "val_pcc_gray"),
     "pcc_r": MetricSpec(True, (0.95, 0.90, 0.80)),
     "pcc_g": MetricSpec(True, (0.95, 0.90, 0.80)),
     "pcc_b": MetricSpec(True, (0.95, 0.90, 0.80)),
 }
 
-VALIDATION_IMAGE_METRIC_NAMES = (
-    "val_ssim",
-    "val_mae",
-    "val_rmse",
-    "val_psnr",
-    "val_pcc_gray",
-    "val_pcc_rgb_mean",
+METRIC_NAMES = tuple(METRIC_SPECS)
+DEFAULT_METRICS = tuple(name for name, spec in METRIC_SPECS.items() if spec.default)
+VALIDATION_IMAGE_METRIC_NAMES = tuple(
+    spec.validation_name for spec in METRIC_SPECS.values() if spec.validation_name is not None
 )
-
-DEFAULT_METRICS = (
-    "ssim",
-    "psnr",
-    "mae",
-    "rmse",
-    "mse",
-    "pcc_rgb_mean",
-    "pcc_gray",
-)
+VALIDATION_METRIC_TO_BASE = {
+    spec.validation_name: name
+    for name, spec in METRIC_SPECS.items()
+    if spec.validation_name is not None
+}
 
 
 def _metric_spec(metric_name: str) -> MetricSpec:
@@ -138,3 +132,20 @@ def compute_pcc_rgb(target: np.ndarray, generated: np.ndarray) -> tuple[float, f
     pcc_values = np.array([pcc_r, pcc_g, pcc_b], dtype=np.float64)
     pcc_rgb_mean = float("nan") if np.isnan(pcc_values).all() else float(np.nanmean(pcc_values))
     return pcc_r, pcc_g, pcc_b, pcc_rgb_mean
+
+
+def compute_standard_metrics(target: np.ndarray, generated: np.ndarray) -> dict[str, float]:
+    mse = compute_mse(target, generated)
+    pcc_r, pcc_g, pcc_b, pcc_rgb_mean = compute_pcc_rgb(target, generated)
+    return {
+        "ssim": compute_ssim(target, generated),
+        "psnr": compute_psnr(target, generated),
+        "mae": compute_mae(target, generated),
+        "rmse": float(mse**0.5),
+        "mse": mse,
+        "pcc_rgb_mean": pcc_rgb_mean,
+        "pcc_gray": compute_pcc_gray(target, generated),
+        "pcc_r": pcc_r,
+        "pcc_g": pcc_g,
+        "pcc_b": pcc_b,
+    }

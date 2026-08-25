@@ -12,6 +12,7 @@ from virtual_staining.evaluation.reports import (
     write_single_case_csv,
 )
 from virtual_staining.evaluation.summaries import metric_value
+from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.metrics import DEFAULT_METRICS
 
 __all__ = [
@@ -56,40 +57,13 @@ def evaluate_pair(
 
 
 def _infer_default_output_dir(generated_path: str | Path) -> Path:
-    path = Path(generated_path).resolve()
-    base = path.parent if path.is_file() else path
-    parts = base.parts
-
-    if "results" not in parts:
+    try:
+        return RunLayout.from_artifact_path(Path(generated_path)).evaluation_dir
+    except ValueError:
         raise ValueError(
-            "Could not infer output directory from generated path. Expected the generated "
-            "data to be inside a path like .../results/NAME_RUN/... Please provide "
-            "--output-dir explicitly."
-        )
-
-    results_index = parts.index("results")
-
-    if results_index + 1 >= len(parts):
-        raise ValueError(
-            "Could not infer NAME_RUN from generated path. Expected a path like "
-            ".../results/NAME_RUN/... Please provide --output-dir explicitly."
-        )
-
-    run_dir = Path(*parts[: results_index + 2])
-
-    if run_dir.name == "results":
-        raise ValueError(
-            "Could not infer NAME_RUN from generated path. Expected a path like "
-            ".../results/NAME_RUN/... Please provide --output-dir explicitly."
-        )
-
-    if run_dir.parent.name != "results":
-        raise ValueError(
-            "Could not infer a valid run directory inside results/. Please provide "
-            "--output-dir explicitly."
-        )
-
-    return run_dir / "evaluation"
+            "Could not infer output directory from generated path. "
+            "Please provide --output-dir explicitly."
+        ) from None
 
 
 def _run_single(request: _EvaluateRequest) -> SingleEvalResult:

@@ -7,7 +7,8 @@ from typing import Any, cast
 
 import pytest
 
-from virtual_staining.experiment.run_paths import RunPaths
+from virtual_staining.config.project import ProjectConfig
+from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.experiment.session import ExperimentSession, LocalRunStore
 
 
@@ -46,22 +47,22 @@ def _config(tmp_path: Path) -> tuple[Any, Path]:
     manifest.write_text("sample_id\n", encoding="utf-8")
     config_path = tmp_path / "config.yaml"
     config_path.write_text("project: test\n", encoding="utf-8")
-    project = SimpleNamespace(
-        run_root=tmp_path / "run",
-        run_name="demo",
-        manifest_path=manifest,
+    project = ProjectConfig(
         dataset_root=dataset_root,
+        results_path=tmp_path,
+        run_name="run",
+        image_size=(256, 256),
     )
     config = SimpleNamespace(project=project, to_dict=lambda: {"project": "test"})
     return config, config_path
 
 
-def _events(paths: RunPaths) -> list[dict[str, object]]:
+def _events(paths: RunLayout) -> list[dict[str, object]]:
     return [json.loads(line) for line in paths.events.read_text(encoding="utf-8").splitlines()]
 
 
 def test_run_identity_is_stable_and_fingerprint_conflicts_fail(tmp_path: Path) -> None:
-    paths = RunPaths(tmp_path / "run")
+    paths = RunLayout(tmp_path / "run")
     first = LocalRunStore(paths, run_name="demo", dataset_fingerprint="sha256:a").ensure_run()
     second = LocalRunStore(paths, run_name="demo", dataset_fingerprint="sha256:a").ensure_run()
     assert first["run_id"] == second["run_id"]
@@ -78,7 +79,7 @@ def test_session_overwrites_current_stage_and_appends_events(tmp_path: Path) -> 
     with ExperimentSession.open(config=config, config_path=config_path, stage="infer") as run:
         run.result(attempt=2, inferred_count=2)
 
-    paths = RunPaths(tmp_path / "run")
+    paths = RunLayout.from_project(config.project)
     stage = json.loads((paths.metadata_dir / "stages" / "infer.json").read_text())
     assert stage["status"] == "completed"
     assert stage["details"] == {"attempt": 2, "inferred_count": 2}
@@ -98,7 +99,7 @@ def test_session_records_failure_and_reraises(tmp_path: Path) -> None:
     ):
         run.result(inferred_count=1)
         raise RuntimeError("boom")
-    paths = RunPaths(tmp_path / "run")
+    paths = RunLayout.from_project(config.project)
     stage = json.loads((paths.metadata_dir / "stages" / "infer.json").read_text())
     assert stage["status"] == "failed"
     assert stage["error_type"] == "RuntimeError"

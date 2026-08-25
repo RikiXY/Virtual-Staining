@@ -3,38 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import yaml
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.environment import collect_environment
-from virtual_staining.experiment.run_paths import RunPaths
-
-
-@dataclass(frozen=True)
-class SnapshotPaths:
-    input_config: Path
-    resolved_config: Path
-    environment: Path
-
-
-def resolve_run_snapshot_paths(
-    *,
-    stage: Literal["train", "infer", "evaluate"],
-    run_paths: RunPaths,
-) -> SnapshotPaths:
-    """Return canonical snapshot destinations for a run-scoped stage."""
-    if stage not in {"train", "infer", "evaluate"}:
-        raise ValueError(f"Unsupported run snapshot stage: {stage}")
-    config_dir = run_paths.stage_config_dir(stage)
-    return SnapshotPaths(
-        input_config=config_dir / "input.yaml",
-        resolved_config=config_dir / "resolved.yaml",
-        environment=run_paths.stage_environment(stage),
-    )
 
 
 def save_input_config(src_yaml: Path, dest: Path) -> None:

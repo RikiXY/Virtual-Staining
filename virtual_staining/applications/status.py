@@ -16,6 +16,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from virtual_staining.experiment.environment import RuntimeInfo
+
 REQUIRED_PACKAGES = (
     ("Albumentations", "albumentations", "albumentations"),
     ("Matplotlib", "matplotlib", "matplotlib.pyplot"),
@@ -165,21 +167,6 @@ def _memory_status() -> dict[str, int | float] | None:
     }
 
 
-def _git_status() -> dict[str, str | bool | None]:
-    try:
-        commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5
-        )
-        dirty = subprocess.run(
-            ["git", "status", "--porcelain"], capture_output=True, text=True, timeout=5
-        )
-        if commit.returncode != 0 or dirty.returncode != 0:
-            return {"commit": None, "dirty": None}
-        return {"commit": commit.stdout.strip(), "dirty": bool(dirty.stdout.strip())}
-    except (OSError, subprocess.SubprocessError):
-        return {"commit": None, "dirty": None}
-
-
 def _openslide_status() -> dict[str, Any]:
     result: dict[str, Any] = {
         "version": _distribution_version("openslide-python"),
@@ -265,25 +252,39 @@ def _cuda_status(torch: Any | None, import_error: str | None) -> dict[str, Any]:
 
 def collect_status() -> dict[str, Any]:
     """Collect a complete, non-mutating health report for the active runtime."""
+    runtime = RuntimeInfo.collect(("torch", "numpy", "cv2", "albumentations"))
     packages, modules = _required_packages()
+    package_modules = {
+        "torch": "torch",
+        "numpy": "numpy",
+        "opencv-python-headless": "cv2",
+        "albumentations": "albumentations",
+    }
+    for item in packages:
+        module_name = package_modules.get(item["distribution"])
+        if module_name is not None and module_name in runtime.packages:
+            item["version"] = runtime.packages[module_name]
     torch_error = next(item["error"] for item in packages if item["distribution"] == "torch")
     try:
         package_version = metadata.version("virtual-staining")
     except metadata.PackageNotFoundError:
         from virtual_staining import __version__ as package_version
 
+    cuda = _cuda_status(modules.get("torch"), torch_error)
+    cuda["build_version"] = runtime.cuda_version
+    cuda["available"] = runtime.cuda_available
     return {
         "healthy": all(item["error"] is None for item in packages),
         "virtual_staining": package_version,
-        "python": sys.version.split()[0],
+        "python": runtime.python,
         "python_executable": sys.executable,
         "os": _os_status(),
         "memory": _memory_status(),
-        "git": _git_status(),
+        "git": {"commit": runtime.git_commit, "dirty": runtime.git_dirty},
         "packages": packages,
         "openslide": _openslide_status(),
         "nvidia": _nvidia_status(),
-        "cuda": _cuda_status(modules.get("torch"), torch_error),
+        "cuda": cuda,
     }
 
 

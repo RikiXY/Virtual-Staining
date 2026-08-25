@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 
 from virtual_staining.config.project import ProjectConfig
 from virtual_staining.config.training import TrainingConfig
-from virtual_staining.experiment.run_paths import RunPaths
+from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import ConcatUNetGenerator
@@ -40,8 +40,8 @@ def test_trainer_requires_named_generator_and_keeps_validation_dir(tmp_path: Pat
         run_name="run",
         image_size=(8, 8),
     )
-    paths = RunPaths(project.run_root)
-    paths.create_directories()
+    paths = RunLayout.from_project(project)
+    ensure_run_directories(paths)
     generator = ConcatUNetGenerator(("LF", "AF"), base_channels=4)
     discriminator = PatchGANDiscriminator(in_channels=9, ndf=4)
     sample = {

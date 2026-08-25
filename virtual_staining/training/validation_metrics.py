@@ -9,13 +9,10 @@ from virtual_staining.metrics import (
     VALIDATION_IMAGE_METRIC_NAMES as _VALIDATION_IMAGE_METRIC_NAMES,
 )
 from virtual_staining.metrics import (
-    compute_mae,
-    compute_pcc_gray,
-    compute_pcc_rgb,
-    compute_psnr,
-    compute_rmse,
-    compute_ssim,
+    VALIDATION_METRIC_TO_BASE,
+    compute_standard_metrics,
 )
+from virtual_staining.models.io_contract import denormalize_model_output
 
 VALIDATION_IMAGE_METRIC_NAMES = list(_VALIDATION_IMAGE_METRIC_NAMES)
 
@@ -32,14 +29,9 @@ class ValidationImageMetricAccumulator:
             normalized_tensor_batch_to_images(target),
             strict=True,
         ):
-            pcc_rgb = compute_pcc_rgb(target_image, generated_image)
+            metrics = compute_standard_metrics(target_image, generated_image)
             values = {
-                "val_ssim": compute_ssim(target_image, generated_image),
-                "val_mae": compute_mae(target_image, generated_image),
-                "val_rmse": compute_rmse(target_image, generated_image),
-                "val_psnr": compute_psnr(target_image, generated_image),
-                "val_pcc_gray": compute_pcc_gray(target_image, generated_image),
-                "val_pcc_rgb_mean": pcc_rgb[3],
+                name: metrics[base_name] for name, base_name in VALIDATION_METRIC_TO_BASE.items()
             }
             for name, value in values.items():
                 self._values[name].append(value)
@@ -52,7 +44,7 @@ def normalized_tensor_batch_to_images(tensor: torch.Tensor) -> list[np.ndarray]:
     """Converts normalized NCHW tensors from [-1, 1] to NHWC arrays in [0, 1]."""
     if tensor.ndim != 4:
         raise ValueError("validation image metric tensors must be NCHW batches")
-    images = (tensor.detach().to(device="cpu", dtype=torch.float32) * 0.5 + 0.5).clamp(0.0, 1.0)
+    images = denormalize_model_output(tensor.detach().to(device="cpu", dtype=torch.float32))
     images = images.permute(0, 2, 3, 1).contiguous().numpy()
     return [np.asarray(image, dtype=np.float32) for image in images]
 

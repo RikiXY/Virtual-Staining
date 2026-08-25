@@ -8,10 +8,8 @@ from typing import Any
 from virtual_staining.config.data import PreprocessingConfig
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.builder import DatasetBuilder, DatasetBuildResult
-from virtual_staining.data.provenance import (
-    build_dataset_fingerprint_metadata,
-    resolve_prepare_snapshot_paths,
-)
+from virtual_staining.data.layout import DatasetLayout
+from virtual_staining.data.provenance import build_dataset_fingerprint_metadata
 from virtual_staining.data.slide_sets import SlideSet, resolve_slide_sets
 from virtual_staining.experiment.snapshots import (
     save_config_hash,
@@ -36,43 +34,36 @@ def _build_current_fingerprint(
     config: RunConfig, slide_sets: tuple[SlideSet, ...]
 ) -> dict[str, Any]:
     assert config.preprocessing is not None
-    root = config.preprocessing.dataset_root
+    layout = DatasetLayout(config.preprocessing.dataset_root)
     return build_dataset_fingerprint_metadata(
-        dataset_root=root,
+        dataset_root=layout.root,
         preprocessing_config=config.preprocessing.to_dict(),
         slide_sets=slide_sets,
-        inventory_path=root / config.preprocessing.inputs.inventory,
-        hash_cache_path=root / "metadata" / "input_hashes.json",
+        inventory_path=layout.root / config.preprocessing.inputs.inventory,
+        hash_cache_path=layout.input_hashes_path,
         force_hash_verification=config.preprocessing.inputs.hash_verification == "always",
     )
 
 
 def _dataset_outputs_are_complete(dataset_root: Path) -> bool:
+    layout = DatasetLayout(dataset_root)
     required = (
-        dataset_root / "manifests" / "manifest.csv",
-        dataset_root / "manifests" / "discarded_manifest.csv",
-        dataset_root / "manifests" / "slide_sets.csv",
-        dataset_root / "manifests" / "manifest_metadata.json",
-        dataset_root / "metadata" / "dataset_build.json",
-        dataset_root / "metadata" / "dataset_fingerprint.json",
-        dataset_root / "metadata" / "split_assignment.csv",
+        layout.manifest_path,
+        layout.discarded_manifest_path,
+        layout.slide_sets_path,
+        layout.manifest_metadata_path,
+        layout.dataset_build_path,
+        layout.dataset_fingerprint_path,
+        layout.split_assignment_path,
     )
     return all(path.is_file() for path in required) and all(
-        (dataset_root / "splits" / name).is_dir() for name in ("train", "val", "test")
+        layout.split_dir(name).is_dir() for name in ("train", "val", "test")
     )
 
 
 def _build_reused_result(dataset_root: Path) -> DatasetBuildResult:
-    data = _load_json(dataset_root / "metadata" / "dataset_build.json") or {}
-    patches = data.get("patches", {})
-    return DatasetBuildResult(
-        int(patches.get("train", 0)),
-        int(patches.get("val", 0)),
-        int(patches.get("test", 0)),
-        int(patches.get("discarded", 0)),
-        dataset_root,
-        reused=True,
-    )
+    layout = DatasetLayout(dataset_root)
+    return DatasetBuildResult.load(layout.dataset_build_path, output_root=layout.root, reused=True)
 
 
 def _log_prepare_summary(
@@ -132,29 +123,26 @@ def prepare(config: RunConfig, config_path: Path) -> DatasetBuildResult:
     if config.preprocessing is None:
         raise ValueError("RunConfig.preprocessing must be present for prepare().")
     root = config.preprocessing.dataset_root
-    if not root.exists():
-        raise FileNotFoundError(f"Dataset root not found: {root}")
-    snapshot_paths = resolve_prepare_snapshot_paths(root)
-    metadata_dir = root / "metadata"
+    layout = DatasetLayout(root)
     slide_sets = resolve_slide_sets(config.preprocessing)
     config_hash = save_stage_config_snapshots(
         config,
         config_path,
-        input_dest=snapshot_paths.input_config,
-        resolved_dest=snapshot_paths.resolved_config,
+        input_dest=layout.input_config_path,
+        resolved_dest=layout.resolved_config_path,
     )
-    save_config_hash(config_hash, metadata_dir / "config_hash.txt")
-    save_environment_snapshot(snapshot_paths.environment)
+    save_config_hash(config_hash, layout.config_hash_path)
+    save_environment_snapshot(layout.environment_path)
 
     fingerprint = _build_current_fingerprint(config, slide_sets)
-    stored = _load_json(root / "metadata" / "dataset_fingerprint.json")
+    stored = _load_json(layout.dataset_fingerprint_path)
     result = None
     if (
         stored
         and stored.get("fingerprint") == fingerprint.get("fingerprint")
-        and _dataset_outputs_are_complete(root)
+        and _dataset_outputs_are_complete(layout.root)
     ):
-        result = _build_reused_result(root)
+        result = _build_reused_result(layout.root)
     _log_prepare_summary(config.preprocessing, slide_sets, reused=result is not None)
     if result is None:
         _warn_image_backend(config, slide_sets)

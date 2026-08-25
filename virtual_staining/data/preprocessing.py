@@ -29,7 +29,7 @@ MIN_STD_DEV = 15
 MASK_PARAMETER_GRID = [(2, 3), (4, 6), (6, 9), (8, 15)]
 
 
-ALLOWED_EXTENSIONS = {".tif", ".tiff", ".png"}
+PREPARATION_INPUT_EXTENSIONS = {".tif", ".tiff", ".png"}
 T = TypeVar("T")
 
 MIN_INLIERS = 12
@@ -836,10 +836,10 @@ def validate_image_filename(filename: str, role: str) -> Path:
 
     if not file_path.name:
         raise ValueError(f"{role} filename is empty.")
-    if suffix not in ALLOWED_EXTENSIONS:
+    if suffix not in PREPARATION_INPUT_EXTENSIONS:
         raise ValueError(
-            f"{role} must use one of these extensions: {', '.join(sorted(ALLOWED_EXTENSIONS))}. "
-            f"Received: {filename}"
+            f"{role} must use one of these extensions: "
+            f"{', '.join(sorted(PREPARATION_INPUT_EXTENSIONS))}. Received: {filename}"
         )
     return file_path
 

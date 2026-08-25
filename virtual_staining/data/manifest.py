@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from virtual_staining.data.layout import DatasetLayout
+
 if TYPE_CHECKING:
     from virtual_staining.config.project import ProjectConfig
 
@@ -299,18 +301,17 @@ class DatasetManifest:
 
 
 def load_manifest_or_raise(project: ProjectConfig) -> DatasetManifest:
-    manifest_path = project.manifest_path
+    layout = DatasetLayout.from_project(project)
+    manifest_path = layout.manifest_path
     if not manifest_path.exists():
         raise FileNotFoundError(f"Manifest not found at {manifest_path}. Run 'vs prepare'.")
-    metadata_path = manifest_path.parent / "manifest_metadata.json"
-    if not metadata_path.is_file():
-        raise FileNotFoundError(f"Manifest metadata not found at {metadata_path}")
+    metadata_path = layout.manifest_metadata_path
     try:
         metadata = ManifestMetadata.from_mapping(
             json.loads(metadata_path.read_text(encoding="utf-8"))
         )
-    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
-        raise ValueError(f"Invalid manifest metadata at {metadata_path}: {exc}") from exc
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid manifest metadata at {metadata_path}") from exc
     return DatasetManifest.from_csv(
         manifest_path, dataset_root=project.dataset_root, metadata=metadata
     )

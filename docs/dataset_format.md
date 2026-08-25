@@ -17,6 +17,10 @@ Optional columns are `input__<modality>_mask`, `input__<modality>_slide_id`,
 The configured reference input must be marked aligned. Missing or legacy columns
 are rejected.
 
+`DatasetLayout` in `virtual_staining.data.layout` is the single owner of these
+dataset paths. `ProjectConfig` supplies YAML values only; it does not construct
+persistent dataset paths.
+
 ## Prepared layout
 
 ```text
