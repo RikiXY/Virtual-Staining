@@ -5,8 +5,8 @@ import pytest
 import torch
 from PIL import Image
 
+from virtual_staining.config.training import AugmentationIntensity
 from virtual_staining.training.augmentation import PairedAlbumentationsTransform
-from virtual_staining.training.config import AugmentationIntensity
 
 pytest.importorskip("albumentations")
 

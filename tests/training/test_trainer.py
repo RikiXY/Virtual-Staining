@@ -8,11 +8,11 @@ import torch
 from torch.utils.data import DataLoader
 
 from virtual_staining.config.project import ProjectConfig
+from virtual_staining.config.training import TrainingConfig
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import ConcatUNetGenerator
-from virtual_staining.training.config import TrainingConfig
 from virtual_staining.training.helpers import unpack_batch
 from virtual_staining.training.trainer import Trainer
 

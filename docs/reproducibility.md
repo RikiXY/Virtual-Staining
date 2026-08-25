@@ -6,11 +6,10 @@ canonical form:
 ```text
 input YAML
     -> RunConfig.from_yaml()
-    -> typed domain configs
+    -> config/ typed section dataclasses and strict parsers
     -> RunConfig.to_dict()
     -> YAML with sorted keys
     -> SHA-256
-```
 
 The input snapshot is an exact copy of the YAML passed to the command. The
 resolved snapshot contains parsed values and defaults from every configured
@@ -26,16 +25,13 @@ identifies the resolved configuration bytes; it does not include source data or
 the software environment.
 
 Each run stage writes `config/<stage>/input.yaml`,
-`config/<stage>/resolved.yaml`, and
-`metadata/environments/<stage>.json`. The resolved YAML hash is stored in the
-stage record and event rather than in a standalone hash file. Preparation keeps
-its dataset-local `config/input.yaml`, `config/resolved.yaml`,
-`metadata/config_hash.txt`, and `metadata/environment.json` snapshots.
-
-Configuration hashes are only one part of the provenance record. Dataset
-manifests and source files have separate SHA-256 values, while environment JSON
-records the Python, dependency, platform, and accelerator context needed to
-interpret or reproduce a run.
+`config/<stage>/resolved.yaml`, and `metadata/environments/<stage>.json`.
+The resolved YAML hash is stored in the stage record and event rather than in
+a standalone hash file. Preparation keeps its dataset-local
+`config/input.yaml`, `config/resolved.yaml`, `metadata/config_hash.txt`, and
+`metadata/environment.json` snapshots; dataset fingerprint construction and
+source-file hashing belong to `data/provenance.py`, while run snapshot writers
+belong to `experiment/snapshots.py`.
 
 See [Run Output Format](run_format.md) and [Dataset Format](dataset_format.md)
 for artifact locations and schemas.

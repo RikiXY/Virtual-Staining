@@ -5,18 +5,19 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from virtual_staining.config.data import PreprocessingConfig
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.builder import DatasetBuilder, DatasetBuildResult
-from virtual_staining.data.config import PreprocessingConfig
-from virtual_staining.data.slide_sets import SlideSet, resolve_slide_sets
-from virtual_staining.experiment.snapshots import (
+from virtual_staining.data.provenance import (
     build_dataset_fingerprint_metadata,
     resolve_prepare_snapshot_paths,
+)
+from virtual_staining.data.slide_sets import SlideSet, resolve_slide_sets
+from virtual_staining.experiment.snapshots import (
     save_config_hash,
     save_environment_snapshot,
     save_stage_config_snapshots,
 )
-from virtual_staining.utils.console import style
 from virtual_staining.utils.image_io import detect_openslide_format
 
 logger = logging.getLogger(__name__)
@@ -118,15 +119,12 @@ def _warn_image_backend(config: RunConfig, slide_sets: tuple[SlideSet, ...]) -> 
             if preprocessing.io.backend == "openslide"
             else "Tiled preparation is using Pillow because OpenSlide is unavailable."
         )
-        logger.warning(style(message, "yellow"))
+        logger.warning(message)
         return
     if incompatible and preprocessing.io.backend == "openslide":
         logger.warning(
-            style(
-                "Configured slides are not OpenSlide-compatible; tiled preparation "
-                "cannot use the requested backend.",
-                "yellow",
-            )
+            "Configured slides are not OpenSlide-compatible; tiled preparation "
+            "cannot use the requested backend."
         )
 
 

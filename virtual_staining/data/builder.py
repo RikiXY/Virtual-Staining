@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from virtual_staining.data.config import PreprocessingConfig
+from virtual_staining.config.data import PreprocessingConfig
 from virtual_staining.data.manifest import DatasetManifest, ManifestMetadata, ManifestRecord, Split
 from virtual_staining.data.preprocessing import (
     MASK_PARAMETER_GRID,
@@ -27,15 +27,15 @@ from virtual_staining.data.preprocessing import (
     warp_aligned_mask_patch_from_mask_space,
     warp_aligned_patch,
 )
+from virtual_staining.data.provenance import (
+    build_dataset_fingerprint_metadata,
+    save_dataset_fingerprint,
+)
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
 from virtual_staining.data.splitting import (
     assign_group_splits,
     group_id_for_set,
     write_split_assignment,
-)
-from virtual_staining.experiment.snapshots import (
-    build_dataset_fingerprint_metadata,
-    save_dataset_fingerprint,
 )
 from virtual_staining.utils.image_io import RegionImageReader, open_image_reader
 

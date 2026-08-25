@@ -4,14 +4,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from virtual_staining.config.data import PreprocessingConfig
+from virtual_staining.config.evaluation import EvaluationConfig
+from virtual_staining.config.inference import InferenceConfig
 from virtual_staining.config.loader import load_yaml_mapping
+from virtual_staining.config.model import ModelConfig
 from virtual_staining.config.project import ProjectConfig
+from virtual_staining.config.training import TrainingConfig
 from virtual_staining.config.validation import _TOP_LEVEL_KEYS, reject_unknown_keys
-from virtual_staining.data.config import PreprocessingConfig
-from virtual_staining.evaluation.config import EvaluationConfig
-from virtual_staining.inference.config import InferenceConfig
-from virtual_staining.models.config import ModelConfig
-from virtual_staining.training.config import TrainingConfig
 
 
 def _section(raw: dict[str, Any], name: str) -> dict[str, Any]:

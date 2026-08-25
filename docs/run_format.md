@@ -114,10 +114,15 @@ local_workspace/results/<run_name>/
     └── skipped.csv
 ```
 
-`prepare` is dataset-owned: it writes dataset config/environment snapshots,
-fingerprint, manifest, split, input-hash, and `dataset_build.json` files under
-the dataset root. It does not write experiment `run.json`, `events.jsonl`, or
-`metadata/stages/prepare.json`.
+`prepare` is dataset-owned: `data/provenance.py` writes dataset
+config/environment snapshots, fingerprint, manifest, split, input-hash, and
+`dataset_build.json` files under the dataset root. It does not write experiment
+`run.json`, `events.jsonl`, or `metadata/stages/prepare.json`.
+
+Run checkpoint metadata uses the neutral `checkpoint_contract.py` and
+`checkpoint_selection.py` modules; optimizer, scaler, scheduler, and resume
+state remain training-owned. Training progress is a callback event rendered by
+the CLI, not terminal output from library code.
 
 ## File Descriptions
 

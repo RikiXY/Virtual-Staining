@@ -8,14 +8,16 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
+from virtual_staining.applications.train import ProgressReporter
 from virtual_staining.cli._common import (
     add_config_argument,
     add_log_level_argument,
     configure_logging,
 )
+from virtual_staining.cli._progress import render_training_progress
 
-Command = Callable[[list[str] | None], None]
 VALID_STAGES = ("prepare", "train", "infer", "evaluate")
+Command = Callable[[list[str] | None], None]
 
 
 class _QueueResult(Protocol):
@@ -38,22 +40,40 @@ _COMMAND_HELP = {
 }
 
 
-def run_stage(config_path: Path, stage: str) -> object:
+def run_stage(
+    config_path: Path,
+    stage: str,
+    *,
+    progress_reporter: ProgressReporter | None = None,
+) -> object:
     from virtual_staining.applications.pipeline import run_stage as run
 
-    return run(config_path, stage)
+    return run(config_path, stage, progress_reporter=progress_reporter)
 
 
-def run_stages(config_path: Path, stages: tuple[str, ...] | list[str] | None = None) -> object:
+def run_stages(
+    config_path: Path,
+    stages: tuple[str, ...] | list[str] | None = None,
+    *,
+    progress_reporter: ProgressReporter | None = None,
+) -> object:
     from virtual_staining.applications.pipeline import run_stages as run
 
-    return run(config_path) if stages is None else run(config_path, stages)
+    return (
+        run(config_path, progress_reporter=progress_reporter)
+        if stages is None
+        else run(config_path, stages, progress_reporter=progress_reporter)
+    )
 
 
-def run_queue(queue_path: Path) -> _QueueResult:
+def run_queue(
+    queue_path: Path,
+    *,
+    progress_reporter: ProgressReporter | None = None,
+) -> _QueueResult:
     from virtual_staining.applications.run_queue import run_queue as run
 
-    return run(queue_path)
+    return run(queue_path, progress_reporter=progress_reporter)
 
 
 def _run_cli_module(name: str, argv: list[str] | None) -> None:
@@ -74,7 +94,11 @@ def _run_stage_command(stage: str, argv: list[str] | None) -> None:
     add_log_level_argument(parser)
     args = parser.parse_args(argv)
     configure_logging(args.log_level)
-    run_stage(Path(args.config).resolve(), stage)
+    run_stage(
+        Path(args.config).resolve(),
+        stage,
+        progress_reporter=render_training_progress if stage == "train" else None,
+    )
 
 
 def _run_pipeline(argv: list[str] | None) -> None:
@@ -92,9 +116,9 @@ def _run_pipeline(argv: list[str] | None) -> None:
     configure_logging(args.log_level)
     config_path = Path(args.config).resolve()
     if args.stages is None:
-        run_stages(config_path)
+        run_stages(config_path, progress_reporter=render_training_progress)
     else:
-        run_stages(config_path, args.stages)
+        run_stages(config_path, args.stages, progress_reporter=render_training_progress)
 
 
 def _run_queue(argv: list[str] | None) -> None:
@@ -103,7 +127,13 @@ def _run_queue(argv: list[str] | None) -> None:
     add_log_level_argument(parser)
     args = parser.parse_args(argv)
     configure_logging(args.log_level)
-    if run_queue(Path(args.queue).resolve()).status == "failed":
+    if (
+        run_queue(
+            Path(args.queue).resolve(),
+            progress_reporter=render_training_progress,
+        ).status
+        == "failed"
+    ):
         raise SystemExit(1)
 
 

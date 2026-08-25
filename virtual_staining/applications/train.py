@@ -16,11 +16,14 @@ from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import ConcatUNetGenerator
 from virtual_staining.training.augmentation import build_training_paired_transform
+from virtual_staining.training.progress import ProgressReporter, ProgressUpdate, format_progress_log
 from virtual_staining.training.results import TrainingResult
 from virtual_staining.training.trainer import Trainer
 from virtual_staining.utils.dimensions import to_torchvision_hw
 
 logger = logging.getLogger(__name__)
+
+__all__ = ["ProgressReporter", "ProgressUpdate", "format_progress_log", "train"]
 
 
 def set_seed(seed: int) -> None:
@@ -39,7 +42,12 @@ def _requires_foreground_masks(config: RunConfig) -> bool:
     return any(term.requires_mask for term in config.training.losses.generator)
 
 
-def train(config: RunConfig, config_path: Path) -> TrainingResult:
+def train(
+    config: RunConfig,
+    config_path: Path,
+    *,
+    progress_reporter: ProgressReporter | None = None,
+) -> TrainingResult:
     """Build training components, persist provenance, and execute training."""
     if config.training is None:
         raise ValueError("RunConfig.training must be present for train().")
@@ -160,6 +168,7 @@ def train(config: RunConfig, config_path: Path) -> TrainingResult:
             device=device,
             image_size=config.project.image_size,
             train_dir=config.project.split_dir("train"),
+            progress_reporter=progress_reporter,
             val_dir=config.project.split_dir("val"),
             losses=training.losses,
             target_modality=config.model.target,

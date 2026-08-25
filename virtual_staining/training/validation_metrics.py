@@ -6,6 +6,9 @@ import numpy as np
 import torch
 
 from virtual_staining.metrics import (
+    VALIDATION_IMAGE_METRIC_NAMES as _VALIDATION_IMAGE_METRIC_NAMES,
+)
+from virtual_staining.metrics import (
     compute_mae,
     compute_pcc_gray,
     compute_pcc_rgb,
@@ -14,14 +17,7 @@ from virtual_staining.metrics import (
     compute_ssim,
 )
 
-VALIDATION_IMAGE_METRIC_NAMES = [
-    "val_ssim",
-    "val_mae",
-    "val_rmse",
-    "val_psnr",
-    "val_pcc_gray",
-    "val_pcc_rgb_mean",
-]
+VALIDATION_IMAGE_METRIC_NAMES = list(_VALIDATION_IMAGE_METRIC_NAMES)
 
 
 class ValidationImageMetricAccumulator:

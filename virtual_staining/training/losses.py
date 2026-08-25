@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.amp import autocast
 
-from virtual_staining.training.loss_config import LossMaskConfig, LossTermConfig
+from virtual_staining.config.losses import LossMaskConfig, LossTermConfig
 
 
 @dataclass(frozen=True)

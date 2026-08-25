@@ -40,7 +40,7 @@ def test_run_queue_main_passes_queue_path(tmp_path: Path, monkeypatch: pytest.Mo
     )
     captured: dict[str, object] = {}
 
-    def _fake_run_queue(incoming_path: Path) -> object:
+    def _fake_run_queue(incoming_path: Path, **kwargs: object) -> object:
         captured["queue_path"] = incoming_path
         return SimpleNamespace(status="completed")
 
@@ -143,7 +143,7 @@ def test_run_queue_executes_jobs_in_order_and_persists_state(
     )
     calls: list[tuple[Path, tuple[str, ...]]] = []
 
-    def _fake_run_stages(config_path: Path, stages: Sequence[str]) -> None:
+    def _fake_run_stages(config_path: Path, stages: Sequence[str], **kwargs: object) -> None:
         calls.append((config_path, tuple(stages)))
 
     monkeypatch.setattr(
@@ -232,7 +232,7 @@ def test_run_queue_ablation_validation_passes_and_writes_summary(
     )
     calls: list[Path] = []
 
-    def _fake_run_stages(config_path: Path, stages: Sequence[str]) -> None:
+    def _fake_run_stages(config_path: Path, stages: Sequence[str], **kwargs: object) -> None:
         del stages
         calls.append(config_path)
 
@@ -299,7 +299,7 @@ def test_run_queue_ablation_validation_fails_on_undeclared_difference(
     calls: list[Path] = []
     monkeypatch.setattr(
         "virtual_staining.applications.run_queue.run_stages",
-        lambda config_path, stages: calls.append(config_path),
+        lambda config_path, stages, **kwargs: calls.append(config_path),
     )
 
     state = run_queue(queue_path)
@@ -371,7 +371,7 @@ def test_run_queue_ablation_canonicalizes_loss_list_order(
     )
     monkeypatch.setattr(
         "virtual_staining.applications.run_queue.run_stages",
-        lambda config_path, stages: None,
+        lambda config_path, stages, **kwargs: None,
     )
 
     state = run_queue(queue_path)
@@ -394,7 +394,7 @@ def test_run_queue_stops_on_failure_when_continue_on_failure_is_false(
     )
     calls: list[Path] = []
 
-    def _fake_run_stages(config_path: Path, stages: Sequence[str]) -> None:
+    def _fake_run_stages(config_path: Path, stages: Sequence[str], **kwargs: object) -> None:
         del stages
         calls.append(config_path)
         raise RuntimeError("boom")
@@ -430,7 +430,7 @@ def test_run_queue_continues_after_failure_when_configured(
     )
     calls: list[Path] = []
 
-    def _fake_run_stages(config_path: Path, stages: Sequence[str]) -> None:
+    def _fake_run_stages(config_path: Path, stages: Sequence[str], **kwargs: object) -> None:
         del stages
         calls.append(config_path)
         if config_path == config_a.resolve():
@@ -477,7 +477,7 @@ def test_run_queue_preflights_configs_before_running_any_job(
     )
     calls: list[Path] = []
 
-    def _fake_run_stages(config_path: Path, stages: Sequence[str]) -> None:
+    def _fake_run_stages(config_path: Path, stages: Sequence[str], **kwargs: object) -> None:
         del stages
         calls.append(config_path)
 

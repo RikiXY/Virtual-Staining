@@ -8,8 +8,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.amp import GradScaler, autocast
 
+from virtual_staining.config.losses import LossTermConfig
 from virtual_staining.models.generator import concat_inputs
-from virtual_staining.training.loss_config import LossTermConfig
 from virtual_staining.training.losses import (
     ConfiguredLossEvaluator,
     LossEvaluationContext,

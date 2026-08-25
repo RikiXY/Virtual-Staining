@@ -5,9 +5,18 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
+from virtual_staining.checkpoint_selection import (
+    SUPPORTED_CHECKPOINT_METRICS,
+    CheckpointMetric,
+    CheckpointMode,
+    default_checkpoint_mode,
+)
+from virtual_staining.config.losses import LossConfig, parse_loss_config
 from virtual_staining.config.validation import parse_bool_strict, parse_choice, reject_unknown_keys
-from virtual_staining.metrics import is_higher_better_metric
-from virtual_staining.training.loss_config import LossConfig, parse_loss_config
+
+AugmentationIntensity = Literal["light", "medium", "strong"]
+LearningRateSchedulerName = Literal["none", "linear_decay", "reduce_on_plateau"]
+EarlyStoppingMonitor = str
 
 _TRAINING_KEYS: frozenset[str] = frozenset(
     {
@@ -36,30 +45,6 @@ _SCHEDULER_KEYS: frozenset[str] = frozenset(
 _EARLY_STOPPING_KEYS: frozenset[str] = frozenset({"monitor", "mode", "patience", "min_delta"})
 _AUGMENTATION_KEYS: frozenset[str] = frozenset({"enabled", "expansion_factor", "intensity"})
 
-AugmentationIntensity = Literal["light", "medium", "strong"]
-CheckpointMetric = Literal[
-    "loss_G_val",
-    "val_ssim",
-    "val_mae",
-    "val_rmse",
-    "val_psnr",
-    "val_pcc_gray",
-    "val_pcc_rgb_mean",
-]
-CheckpointMode = Literal["min", "max"]
-LearningRateSchedulerName = Literal["none", "linear_decay", "reduce_on_plateau"]
-EarlyStoppingMonitor = str
-SUPPORTED_CHECKPOINT_METRICS: frozenset[str] = frozenset(
-    {
-        "loss_G_val",
-        "val_ssim",
-        "val_mae",
-        "val_rmse",
-        "val_psnr",
-        "val_pcc_gray",
-        "val_pcc_rgb_mean",
-    }
-)
 _VALIDATION_LOSS_MONITOR_PATTERN = re.compile(
     r"^loss_val_(?:total_(?:generator|discriminator)|"
     r"(?:raw|weighted|current_weight)_(?:generator|discriminator)_[a-z0-9_]+)$"
@@ -383,16 +368,3 @@ class TrainingConfig:
             self.early_stopping.validate()
         self.augmentation.validate()
         self.losses.validate()
-
-
-def default_checkpoint_mode(metric: str) -> CheckpointMode:
-    if metric not in SUPPORTED_CHECKPOINT_METRICS:
-        raise ValueError(
-            f"Unsupported checkpoint_metric {metric!r}. "
-            f"Supported metrics: {sorted(SUPPORTED_CHECKPOINT_METRICS)}."
-        )
-    if metric == "loss_G_val":
-        return "min"
-    if metric.startswith("val_"):
-        return "max" if is_higher_better_metric(metric.removeprefix("val_")) else "min"
-    raise AssertionError(f"Unsupported checkpoint_metric slipped through validation: {metric!r}")

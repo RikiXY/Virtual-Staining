@@ -5,7 +5,7 @@ from typing import cast
 
 import pytest
 
-from virtual_staining.data.config import PreprocessingConfig
+from virtual_staining.config.data import PreprocessingConfig
 
 
 def _mapping(**overrides: object) -> dict[str, object]:

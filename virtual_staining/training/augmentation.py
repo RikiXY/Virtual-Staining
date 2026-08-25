@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from virtual_staining.training.config import AugmentationConfig, AugmentationIntensity
+from virtual_staining.config.training import AugmentationConfig, AugmentationIntensity
 
 
 class PairedAlbumentationsTransform:

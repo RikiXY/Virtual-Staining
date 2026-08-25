@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from virtual_staining.data.config import PreprocessingConfig
+    from virtual_staining.config.data import PreprocessingConfig
 
 MODALITY_NAME_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
 SET_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")

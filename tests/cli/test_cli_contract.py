@@ -54,17 +54,28 @@ def test_stage_commands_dispatch(
 ) -> None:
     config_path = _write_config(tmp_path)
     captured: list[tuple[Path, str]] = []
-    monkeypatch.setattr(cli, "run_stage", lambda path, stage: captured.append((path, stage)))
+    reporters: dict[str, object] = {}
+
+    def fake_run_stage(path: Path, stage: str, **kwargs: object) -> None:
+        captured.append((path, stage))
+        reporters[stage] = kwargs["progress_reporter"]
+
+    monkeypatch.setattr(cli, "run_stage", fake_run_stage)
 
     cli.main([command, "--config", str(config_path)])
 
     assert captured == [(config_path.resolve(), command)]
+    assert reporters[command] is (cli.render_training_progress if command == "train" else None)
 
 
 def test_run_defaults_to_complete_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = _write_config(tmp_path)
     captured: list[tuple[Path, object]] = []
-    monkeypatch.setattr(cli, "run_stages", lambda path: captured.append((path, None)))
+    monkeypatch.setattr(
+        cli,
+        "run_stages",
+        lambda path, **kwargs: captured.append((path, kwargs.get("stages"))),
+    )
 
     cli.main(["run", "--config", str(config_path)])
 
@@ -79,9 +90,8 @@ def test_run_passes_selected_stages_in_order(
     monkeypatch.setattr(
         cli,
         "run_stages",
-        lambda path, stages: captured.append((path, tuple(stages))),
+        lambda path, stages, **kwargs: captured.append((path, tuple(stages))),
     )
-
     cli.main(["run", "--config", str(config_path), "--stages", "train", "infer", "evaluate"])
 
     assert captured == [(config_path.resolve(), ("train", "infer", "evaluate"))]
@@ -97,7 +107,7 @@ def test_queue_dispatches_resolved_path(tmp_path: Path, monkeypatch: pytest.Monk
     queue_path = tmp_path / "queue.yaml"
     captured: list[Path] = []
 
-    def fake_run_queue(path: Path) -> object:
+    def fake_run_queue(path: Path, **kwargs: object) -> object:
         captured.append(path)
         return SimpleNamespace(status="completed")
 
@@ -110,7 +120,7 @@ def test_queue_dispatches_resolved_path(tmp_path: Path, monkeypatch: pytest.Monk
 def test_queue_returns_nonzero_for_failed_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(cli, "run_queue", lambda path: SimpleNamespace(status="failed"))
+    monkeypatch.setattr(cli, "run_queue", lambda path, **kwargs: SimpleNamespace(status="failed"))
     with pytest.raises(SystemExit) as exc:
         cli.main(["queue", "--queue", str(tmp_path / "queue.yaml")])
     assert exc.value.code == 1

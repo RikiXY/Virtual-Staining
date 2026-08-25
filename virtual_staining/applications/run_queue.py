@@ -11,6 +11,7 @@ from virtual_staining.applications.pipeline import (
     VALID_STAGES,
     run_stages,
 )
+from virtual_staining.applications.train import ProgressReporter
 from virtual_staining.config.loader import load_yaml_mapping
 from virtual_staining.config.run import RunConfig
 from virtual_staining.config.validation import parse_bool_strict, reject_unknown_keys
@@ -421,7 +422,11 @@ def _mark_preflight_failure(state: QueueState, error: QueuePreflightError) -> No
     state.current_job_index = None
 
 
-def run_queue(queue_path: Path) -> QueueState:
+def run_queue(
+    queue_path: Path,
+    *,
+    progress_reporter: ProgressReporter | None = None,
+) -> QueueState:
     queue = load_local_run_queue(queue_path.resolve())
     state = _initial_queue_state(queue)
     state.save(queue.state_path)
@@ -442,7 +447,11 @@ def run_queue(queue_path: Path) -> QueueState:
         state.save(queue.state_path)
 
         try:
-            run_stages(job.config_path, job.stages or DEFAULT_FULL_RUN_STAGES)
+            run_stages(
+                job.config_path,
+                job.stages or DEFAULT_FULL_RUN_STAGES,
+                progress_reporter=progress_reporter,
+            )
         except Exception as exc:
             failures += 1
             job_state.status = "failed"

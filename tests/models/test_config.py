@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from virtual_staining.models.config import ModelConfig
+from virtual_staining.config.model import ModelConfig
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import ConcatUNetGenerator
 

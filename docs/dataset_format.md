@@ -39,9 +39,10 @@ dataset_root/
 
 `metadata/dataset_build.json` is the successful dataset provenance record.
 `metadata/dataset_fingerprint.json` stores the semantic preprocessing,
-canonical inventory, source-file hashes, and a `sha256:` fingerprint. Experiment
-runs read this fingerprint and the manifest hash as lineage; they do not write
-generic run, event, or stage metadata into the dataset directory.
+canonical inventory, source-file hashes, and a `sha256:` fingerprint. These
+dataset-owned artifacts are built by `data/provenance.py`. Experiment runs read
+this fingerprint and the manifest hash as lineage; they do not write generic
+run, event, or stage metadata into the dataset directory.
 
 Every non-reference input and the target is aligned directly to the reference
 coordinate frame. No full aligned whole-slide image is created.

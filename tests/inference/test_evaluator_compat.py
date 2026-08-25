@@ -8,11 +8,11 @@ import pytest
 import torch
 from PIL import Image
 
-from virtual_staining.config.run import RunConfig
 from virtual_staining.data.manifest import ManifestMetadata, ManifestRecord
 from virtual_staining.inference.outputs import generated_path_for_record
 from virtual_staining.inference.runner import predict_batch
 from virtual_staining.inference.single import (
+    InferenceRuntime,
     SingleInferenceResult,
     _predict_images,
     _run_tiled_prediction,
@@ -123,22 +123,20 @@ def test_directory_inputs_pair_exact_relative_paths_and_preserve_subdirectories(
         _write_image(root / "top.png")
         _write_image(root / "nested" / "sample.png")
 
-    config = SimpleNamespace(
-        model=SimpleNamespace(inputs=("LF", "AF")),
-        inference=SimpleNamespace(output_dir=None),
-    )
     runtime = SimpleNamespace(
         generator=SimpleNamespace(input_names=("LF", "AF")),
-        paths=SimpleNamespace(artifacts_dir=tmp_path / "artifacts"),
         checkpoint_path=tmp_path / "checkpoint.pth",
         image_size=(4, 4),
         device=torch.device("cpu"),
+        default_single_output_dir=tmp_path / "artifacts" / "output_single",
+        default_directory_output_dir=tmp_path / "artifacts" / "output_images",
     )
     results: list[SingleInferenceResult] = []
 
     import virtual_staining.inference.single as single
 
-    monkeypatch.setattr(single, "_build_runtime", lambda config: runtime)
+    def runtime_factory() -> InferenceRuntime:
+        return cast(InferenceRuntime, runtime)
 
     def fake_run_one(
         runtime: object,
@@ -162,8 +160,8 @@ def test_directory_inputs_pair_exact_relative_paths_and_preserve_subdirectories(
     monkeypatch.setattr(single, "_run_one_image", fake_run_one)
 
     result = run_image_directory_inference(
-        cast(RunConfig, config),
-        {"AF": af_root, "LF": lf_root},
+        runtime_factory,
+        {"LF": lf_root, "AF": af_root},
         tmp_path / "out",
         recursive=True,
     )
@@ -183,20 +181,12 @@ def test_directory_input_set_mismatch_names_offending_modality(
     af_root = tmp_path / "af"
     _write_image(lf_root / "sample.png")
     _write_image(af_root / "other.png")
-    config = SimpleNamespace(
-        model=SimpleNamespace(inputs=("LF", "AF")),
-        inference=SimpleNamespace(output_dir=None),
-    )
 
-    import virtual_staining.inference.single as single
+    def runtime_factory() -> InferenceRuntime:
+        pytest.fail("checkpoint must not load for path mismatch")
 
-    monkeypatch.setattr(
-        single,
-        "_build_runtime",
-        lambda config: pytest.fail("checkpoint must not load for path mismatch"),
-    )
     with pytest.raises(ValueError, match=r"Input modality AF.*missing=.*sample.*extra=.*other"):
-        run_image_directory_inference(cast(RunConfig, config), {"LF": lf_root, "AF": af_root})
+        run_image_directory_inference(runtime_factory, {"LF": lf_root, "AF": af_root})
 
 
 def test_file_inputs_reject_unequal_dimensions_before_prediction(
@@ -206,24 +196,21 @@ def test_file_inputs_reject_unequal_dimensions_before_prediction(
     af_path = tmp_path / "af.png"
     _write_image(lf_path, (4, 4))
     _write_image(af_path, (5, 4))
-    config = SimpleNamespace(
-        model=SimpleNamespace(inputs=("LF", "AF")),
-        inference=SimpleNamespace(output_dir=None),
-    )
     runtime = SimpleNamespace(
         generator=SimpleNamespace(input_names=("LF", "AF")),
-        paths=SimpleNamespace(artifacts_dir=tmp_path / "artifacts"),
         checkpoint_path=tmp_path / "checkpoint.pth",
         image_size=(4, 4),
         device=torch.device("cpu"),
+        default_single_output_dir=tmp_path / "artifacts" / "output_single",
+        default_directory_output_dir=tmp_path / "artifacts" / "output_images",
     )
 
-    import virtual_staining.inference.single as single
+    def runtime_factory() -> InferenceRuntime:
+        return cast(InferenceRuntime, runtime)
 
-    monkeypatch.setattr(single, "_build_runtime", lambda config: runtime)
     with pytest.raises(ValueError, match="dimensions must match"):
         run_image_path_inference(
-            cast(RunConfig, config),
+            runtime_factory,
             {"AF": af_path, "LF": lf_path},
             tmp_path / "out.png",
         )
@@ -234,6 +221,8 @@ def test_file_and_directory_inputs_are_rejected_before_dispatch(tmp_path: Path) 
     directory = tmp_path / "images"
     _write_image(image)
     directory.mkdir()
-    config = SimpleNamespace(model=SimpleNamespace(inputs=("LF", "AF")))
     with pytest.raises(ValueError, match="files or all input paths must be directories"):
-        run_image_path_inference(cast(RunConfig, config), {"LF": image, "AF": directory})
+        run_image_path_inference(
+            lambda: pytest.fail("runtime must not load"),
+            {"LF": image, "AF": directory},
+        )

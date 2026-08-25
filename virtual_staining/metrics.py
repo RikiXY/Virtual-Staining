@@ -32,6 +32,15 @@ METRIC_SPECS: dict[str, MetricSpec] = {
     "pcc_b": MetricSpec(True, (0.95, 0.90, 0.80)),
 }
 
+VALIDATION_IMAGE_METRIC_NAMES = (
+    "val_ssim",
+    "val_mae",
+    "val_rmse",
+    "val_psnr",
+    "val_pcc_gray",
+    "val_pcc_rgb_mean",
+)
+
 DEFAULT_METRICS = (
     "ssim",
     "psnr",

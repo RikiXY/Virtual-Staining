@@ -3,10 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from virtual_staining.config.run import RunConfig
+from virtual_staining.experiment.run_paths import RunPaths
+from virtual_staining.inference.runner import load_inference_generator, resolve_inference_device
 from virtual_staining.inference.single import (
     DEFAULT_TILE_OVERLAP,
     SUPPORTED_OUTPUT_FORMATS,
     DirectoryInferenceResult,
+    InferenceRuntime,
     SingleInferenceMode,
     SingleInferenceResult,
     run_image_path_inference,
@@ -61,6 +64,24 @@ def _resolve_input_specs(
     return {name: named[name] for name in input_names}
 
 
+def _create_runtime(config: RunConfig) -> InferenceRuntime:
+    if config.inference is None:
+        raise ValueError("RunConfig.inference is required to run image inference.")
+    paths = RunPaths(config.project.run_root)
+    paths.create_directories()
+    device = resolve_inference_device()
+    generator, checkpoint_path = load_inference_generator(config, paths, device)
+    output_dir = config.inference.output_dir
+    return InferenceRuntime(
+        generator=generator,
+        checkpoint_path=checkpoint_path,
+        image_size=config.project.image_size,
+        device=device,
+        default_single_output_dir=output_dir or paths.artifacts_dir / "output_single",
+        default_directory_output_dir=output_dir or paths.artifacts_dir / "output_images",
+    )
+
+
 def infer_images(
     config_path: Path,
     input_specs: tuple[str, ...],
@@ -75,7 +96,7 @@ def infer_images(
     config = RunConfig.from_yaml(config_path.resolve())
     input_paths = _resolve_input_specs(input_specs, tuple(config.model.inputs))
     return run_image_path_inference(
-        config,
+        lambda: _create_runtime(config),
         input_paths,
         output_path,
         recursive=recursive,

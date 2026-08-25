@@ -7,9 +7,9 @@ from pathlib import Path
 from types import TracebackType
 from typing import TextIO
 
+from virtual_staining.metrics import VALIDATION_IMAGE_METRIC_NAMES
 from virtual_staining.training.helpers import metrics_fieldnames
 from virtual_staining.training.results import EpochMetrics
-from virtual_staining.training.validation_metrics import VALIDATION_IMAGE_METRIC_NAMES
 
 
 class TrainingHistory:
@@ -23,7 +23,7 @@ class TrainingHistory:
             raise ValueError("resume_at must be non-negative")
         self._file: TextIO | None = None
         self._writer: csv.DictWriter[str] | None = None
-        self._fieldnames = metrics_fieldnames(loss_names) + VALIDATION_IMAGE_METRIC_NAMES
+        self._fieldnames = metrics_fieldnames(loss_names) + list(VALIDATION_IMAGE_METRIC_NAMES)
 
     def __enter__(self) -> TrainingHistory:
         self._path.parent.mkdir(parents=True, exist_ok=True)

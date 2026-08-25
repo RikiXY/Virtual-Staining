@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 from torch.amp import autocast
 
+from virtual_staining.config.losses import LossConfig
 from virtual_staining.models.generator import concat_inputs
 from virtual_staining.training.helpers import (
     LossComponentAccumulator,
@@ -15,7 +16,6 @@ from virtual_staining.training.helpers import (
     save_images,
     unpack_batch,
 )
-from virtual_staining.training.loss_config import LossConfig
 from virtual_staining.training.losses import ConfiguredLossEvaluator, LossEvaluationContext
 from virtual_staining.training.results import EpochMetrics
 from virtual_staining.training.validation_metrics import ValidationImageMetricAccumulator

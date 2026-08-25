@@ -2,8 +2,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from virtual_staining.data.provenance import (
+    build_dataset_fingerprint_metadata,
+    resolve_prepare_snapshot_paths,
+)
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
-from virtual_staining.experiment.snapshots import build_dataset_fingerprint_metadata
+from virtual_staining.experiment.snapshots import compute_config_hash, save_resolved_config
+
+
+def test_prepare_snapshot_paths_and_config_hash(tmp_path: Path) -> None:
+    paths = resolve_prepare_snapshot_paths(tmp_path)
+    save_resolved_config({"b": 2, "a": 1}, paths.resolved_config)
+    assert paths.resolved_config.exists()
+    assert compute_config_hash(paths.resolved_config).startswith("sha256:")
 
 
 def _sets(root: Path) -> tuple[SlideSet, ...]:

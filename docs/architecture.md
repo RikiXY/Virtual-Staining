@@ -15,17 +15,19 @@ upper layers may import from lower layers, never the reverse.
 
 | Package | Responsibility |
 |---|---|
-| `metrics.py` | Image metric computations, directions, and quality thresholds |
+| `metrics.py` | Image metric computations, directions, quality thresholds, and validation image metric names |
+| `checkpoint_contract.py` | Neutral v3 checkpoint format and generator metadata validation |
+| `checkpoint_selection.py` | Neutral `best.json` ranking, policy, and metric-direction selection |
 | `utils/` | Shared primitives: image dimensions and image I/O helpers |
-| `config/` | YAML loading and validation, typed config dataclasses, per-section accessors |
-| `experiment/` | `RunPaths`, strict `LocalRunStore`/`ExperimentSession` persistence, reporter seam, and environment snapshots |
-| `models/` | `ConcatUNetGenerator` (ordered early RGB concatenation), internal `UNetGenerator`, `PatchGANDiscriminator`, and model config |
-| `data/` | `SlideAsset`, `SlideSet`, v3 `DatasetManifest`, `ManifestRecord`, and `DatasetBuilder` |
-| `training/` | Training mechanics: `Trainer`, validation, metric history, losses, per-step logic, checkpoint state and selection |
-| `inference/` | Reusable checkpoint loading, device selection, named-input prediction, single-image workflows, and output naming |
-| `evaluation/` | Set evaluation, diagnostic plots, representative selection, comparison panels, summary statistics, ranking utilities |
-| `applications/` | User-visible stage lifecycle owners (`prepare.py`, `train.py`, `infer.py`, `evaluate.py`) and other use cases - no `argparse` |
-| `cli/` | The `argparse` entrypoint and helpers for `vs <command>` - thin adapters over `applications/` |
+| `config/` | Sole owner of YAML-facing dataclasses and strict parsers for every config section |
+| `experiment/` | Run paths, stage snapshots, run metadata, manifest/config hashing, and environment snapshots |
+| `models/` | `ConcatUNetGenerator`, internal `UNetGenerator`, and `PatchGANDiscriminator` |
+| `data/` | Slide sets, manifests, dataset building, and dataset-owned provenance/fingerprints |
+| `training/` | Training mechanics, validation, history, losses, resume state, and callback-driven progress events |
+| `inference/` | Reusable checkpoint loading and runtime inference; application code owns runtime composition |
+| `evaluation/` | Set evaluation, diagnostic plots, representative selection, comparison panels, and summaries |
+| `applications/` | User-visible stage lifecycle owners and infer-images runtime composition; no `argparse` |
+| `cli/` | The `argparse` entrypoint, terminal rendering, and thin adapters over `applications/` |
 
 ## Purity and I/O Boundaries
 
@@ -50,18 +52,21 @@ The architectural boundary is not “no I/O in library code.” The actual rule 
 
 - reusable package code should keep I/O explicit and testable
 - orchestration belongs in `applications/`
-- CLI translation belongs in `cli/`
-
 The `ExperimentSession` owns each train/infer/evaluate lifecycle: stage snapshots,
 strict local metadata writes, and best-effort reporter callbacks. Preparation is
-dataset-owned and writes only dataset provenance. Training model construction and
-dataset wiring terminate in the reusable `Trainer`; test-set inference delegates
-checkpoint loading, device selection, transforms, and batch prediction to `inference/`.
+dataset-owned and writes only dataset provenance. Dataset provenance lives in
+`data/provenance.py`; run provenance lives in `experiment/snapshots.py`.
+Training model construction and dataset wiring terminate in the reusable `Trainer`;
+its `ProgressUpdate` callback is silent unless an adapter supplies a reporter.
+The CLI supplies terminal rendering, while application/library callers remain
+presentation-neutral. Infer-images runtime creation belongs to `applications/`;
+`inference/single.py` accepts an already-loaded `InferenceRuntime`.
 
 Within training, `trainer.py` owns epoch orchestration, `validator.py` owns validation
 inference, `history.py` owns metric CSV persistence, `checkpoints.py` owns model/training
-state, and `checkpoint_selection.py` owns `best.json` ranking and resolution. Evaluation
-keeps plot primitives in `diagnostics.py`, representative-row policy in `selection.py`,
+state, `checkpoint_contract.py` owns the neutral v3 contract, and
+`checkpoint_selection.py` owns `best.json` ranking and resolution. Evaluation keeps
+plot primitives in `diagnostics.py`, representative-row policy in `selection.py`,
 and composed image layouts in `panels.py`.
 
 ## Architectural Rules
@@ -74,6 +79,29 @@ These constraints are enforced by convention and checked in code review:
   suppress or redirect output.
 - **No `sys.exit()` outside `cli/`** - applications raise exceptions; the CLI
   layer converts them to exit codes.
+
+The library graph is an enforced direct-edge DAG:
+
+```text
+cli -> applications, cli, metrics
+applications -> checkpoint_contract, checkpoint_selection, config, data, evaluation,
+                experiment, inference, metrics, models, training, utils
+config -> config, checkpoint_selection, metrics, utils
+checkpoint_selection -> metrics
+data -> config, data, utils
+models -> models
+experiment -> config, experiment
+training -> checkpoint_contract, checkpoint_selection, config, experiment, metrics,
+            models, training, utils
+inference -> checkpoint_contract, checkpoint_selection, config, data, experiment,
+             inference, models, utils
+evaluation -> config, evaluation, metrics, utils
+utils -> utils
+```
+
+`tests/architecture/test_package_dependencies.py` resolves absolute, relative,
+nested, and `TYPE_CHECKING` imports with the standard library. It reports the
+source file and illegal import, and verifies the allowlist topologically sorts.
 
 ## Configuration Policy
 

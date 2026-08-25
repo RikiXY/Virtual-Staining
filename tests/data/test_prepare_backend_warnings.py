@@ -52,12 +52,11 @@ def test_auto_backend_warns_when_openslide_is_unavailable(
         "detect_openslide_format",
         lambda path: (_ for _ in ()).throw(RuntimeError("missing")),
     )
-    monkeypatch.setattr(prepare_app, "style", lambda text, color: f"{color}:{text}")
 
     with caplog.at_level(logging.WARNING, logger="virtual_staining.applications.prepare"):
         prepare_app._warn_image_backend(_config(tmp_path), slide_sets)
 
-    assert caplog.messages[-1].startswith("yellow:")
+    assert not caplog.messages[-1].startswith("\x1b")
     assert "Pillow because OpenSlide is unavailable" in caplog.messages[-1]
 
 
@@ -66,12 +65,11 @@ def test_forced_openslide_warns_for_incompatible_images(
 ) -> None:
     slide_sets = _sets(tmp_path)
     monkeypatch.setattr(prepare_app, "detect_openslide_format", lambda path: None)
-    monkeypatch.setattr(prepare_app, "style", lambda text, color: f"{color}:{text}")
 
     with caplog.at_level(logging.WARNING, logger="virtual_staining.applications.prepare"):
         prepare_app._warn_image_backend(_config(tmp_path, "openslide"), slide_sets)
 
-    assert caplog.messages[-1].startswith("yellow:")
+    assert not caplog.messages[-1].startswith("\x1b")
     assert "cannot use the requested backend" in caplog.messages[-1]
 
 

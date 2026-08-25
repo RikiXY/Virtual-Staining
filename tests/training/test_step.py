@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from virtual_staining.training.loss_config import LossTermConfig
+from virtual_staining.config.losses import LossTermConfig
 from virtual_staining.training.steps import Pix2PixTrainingStep
 
 

@@ -13,18 +13,17 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.amp import GradScaler
 
-from virtual_staining.experiment.run_paths import RunPaths
-from virtual_staining.experiment.session import ExperimentSession
-from virtual_staining.training.checkpoint_selection import (
+from virtual_staining.checkpoint_selection import (
+    SUPPORTED_CHECKPOINT_METRICS,
+    default_checkpoint_mode,
     load_best_checkpoint_record,
     update_checkpoint_selection,
 )
+from virtual_staining.config.losses import LossConfig
+from virtual_staining.config.training import TrainingConfig
+from virtual_staining.experiment.run_paths import RunPaths
+from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.training.checkpoints import CheckpointManager
-from virtual_staining.training.config import (
-    SUPPORTED_CHECKPOINT_METRICS,
-    TrainingConfig,
-    default_checkpoint_mode,
-)
 from virtual_staining.training.helpers import (
     LossComponentAccumulator,
     configured_loss_names,
@@ -33,13 +32,13 @@ from virtual_staining.training.helpers import (
     unpack_batch,
 )
 from virtual_staining.training.history import TrainingHistory
-from virtual_staining.training.loss_config import LossConfig
 from virtual_staining.training.losses import ConfiguredLossEvaluator, StepLosses
 from virtual_staining.training.progress import (
+    ProgressReporter,
     ProgressTracker,
-    emit_progress_update,
-    finish_console_progress,
+    ProgressUpdate,
     format_duration,
+    format_progress_log,
 )
 from virtual_staining.training.results import EpochMetrics, TrainingResult
 from virtual_staining.training.steps import Pix2PixTrainingStep
@@ -101,8 +100,10 @@ class Trainer:
         target_modality: str | None = None,
         experiment_session: ExperimentSession,
         config_hash: str,
+        progress_reporter: ProgressReporter | None = None,
     ) -> None:
         self.config = config
+        self.progress_reporter = progress_reporter
         self._run_paths = run_paths
         self._experiment_session = experiment_session
         self._config_hash = config_hash
@@ -223,7 +224,6 @@ class Trainer:
             if session.best_checkpoint_path is not None:
                 session.best_checkpoint = session.best_checkpoint_path.name
 
-        finish_console_progress()
         total_seconds = time.time() - start_time
         logger.info("Execution completed. Total time = %.2f seconds", total_seconds)
         return TrainingResult(
@@ -699,7 +699,7 @@ class Trainer:
         eta_str: str,
         progress: float | None = None,
     ) -> None:
-        emit_progress_update(
+        update = ProgressUpdate(
             progress=(
                 progress
                 if progress is not None
@@ -708,7 +708,8 @@ class Trainer:
             epoch_progress=1.0,
             epoch=epoch,
             batch_index=len(self.train_loader) - 1,
-            progress_tracker=session.progress_tracker,
+            total_epochs=session.progress_tracker.total_epochs,
+            total_batches=session.progress_tracker.total_batches,
             step_losses=StepLosses(
                 loss_G=epoch_metrics.loss_G,
                 loss_D=epoch_metrics.loss_D,
@@ -722,6 +723,9 @@ class Trainer:
             eval_losses=session.latest_eval_losses,
             eval_epoch=session.latest_eval_epoch,
         )
+        if self.progress_reporter is not None:
+            self.progress_reporter(update)
+        logger.debug("%s", format_progress_log(update))
 
     def _train_epoch(
         self,
@@ -768,12 +772,13 @@ class Trainer:
                 i % self.config.log_rate == 0 or i == len(self.train_loader) - 1
             )
             if should_update_progress:
-                emit_progress_update(
+                update = ProgressUpdate(
                     progress=progress,
                     epoch_progress=epoch_progress,
                     epoch=epoch,
                     batch_index=i,
-                    progress_tracker=session.progress_tracker,
+                    total_epochs=session.progress_tracker.total_epochs,
+                    total_batches=session.progress_tracker.total_batches,
                     step_losses=step_losses,
                     elapsed_str=elapsed_str,
                     eta_str=eta_str,
@@ -784,6 +789,9 @@ class Trainer:
                     eval_losses=session.latest_eval_losses,
                     eval_epoch=session.latest_eval_epoch,
                 )
+                if self.progress_reporter is not None:
+                    self.progress_reporter(update)
+                logger.debug("%s", format_progress_log(update))
 
         if num_batches == 0:
             raise RuntimeError("Training loader was empty; cannot compute epoch metrics.")

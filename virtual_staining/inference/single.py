@@ -3,10 +3,10 @@ from __future__ import annotations
 import logging
 import math
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, TypeAlias, cast
 
 import numpy as np
 import torch
@@ -14,14 +14,10 @@ from PIL import Image
 from torchvision import transforms
 from torchvision.utils import save_image
 
-from virtual_staining.config.run import RunConfig
-from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.inference.outputs import generated_filename_for_sample
 from virtual_staining.inference.runner import (
     build_inference_transform,
-    load_inference_generator,
     predict_batch,
-    resolve_inference_device,
 )
 from virtual_staining.utils.image_io import (
     VALID_IMAGE_EXTENSIONS,
@@ -61,12 +57,16 @@ class DirectoryInferenceResult:
 
 
 @dataclass(frozen=True)
-class _InferenceRuntime:
-    paths: RunPaths
+class InferenceRuntime:
     generator: torch.nn.Module
     checkpoint_path: Path
     image_size: tuple[int, int]
     device: torch.device
+    default_single_output_dir: Path
+    default_directory_output_dir: Path
+
+
+RuntimeFactory: TypeAlias = Callable[[], InferenceRuntime]
 
 
 def _generator_input_names(generator: torch.nn.Module) -> tuple[str, ...]:
@@ -401,31 +401,8 @@ def _run_wsi_prediction(
         _save_pyramidal_tiff(raw_path, output_path, first_reader.metadata)
 
 
-def _build_runtime(config: RunConfig) -> _InferenceRuntime:
-    paths = RunPaths(config.project.run_root)
-    paths.create_directories()
-
-    device = resolve_inference_device()
-    logger.info("Image inference device: %s", device)
-    generator, checkpoint_path = load_inference_generator(config, paths, device)
-    return _InferenceRuntime(
-        paths=paths,
-        generator=generator,
-        checkpoint_path=checkpoint_path,
-        image_size=config.project.image_size,
-        device=device,
-    )
-
-
-def _default_output_dir(config: RunConfig, paths: RunPaths, dirname: str) -> Path:
-    if config.inference is None:
-        raise ValueError("RunConfig.inference is required to run image inference.")
-    return config.inference.output_dir or paths.artifacts_dir / dirname
-
-
 def _resolve_output_path(
-    config: RunConfig,
-    paths: RunPaths,
+    runtime: InferenceRuntime,
     input_path: Path,
     output_image: Path | None,
     *,
@@ -435,13 +412,17 @@ def _resolve_output_path(
     if output_image is not None:
         return output_image
 
-    output_dir = _default_output_dir(config, paths, default_dirname)
+    output_dir = (
+        runtime.default_single_output_dir
+        if default_dirname == "output_single"
+        else runtime.default_directory_output_dir
+    )
     output_suffix = _output_suffix_for_input(input_path, output_format)
     return output_dir / _generated_filename_for_input(input_path, output_suffix)
 
 
 def _run_one_image(
-    runtime: _InferenceRuntime,
+    runtime: InferenceRuntime,
     input_images: dict[str, Path],
     *,
     output_path: Path,
@@ -557,7 +538,7 @@ def collect_input_images(input_dir: Path, *, recursive: bool = False) -> tuple[P
 
 
 def run_single_image_inference(
-    config: RunConfig,
+    runtime: InferenceRuntime,
     input_images: dict[str, Path],
     output_image: Path | None = None,
     *,
@@ -565,46 +546,19 @@ def run_single_image_inference(
     tile_overlap: int = DEFAULT_TILE_OVERLAP,
     output_format: str = "same",
 ) -> SingleInferenceResult:
-    """Load a checkpoint, run the generator on one image, and save the generated output."""
-    return _run_image_file_inference(
-        config,
-        input_images,
-        output_image,
-        mode=mode,
-        tile_overlap=tile_overlap,
-        output_format=output_format,
-        default_dirname="output_single",
-    )
-
-
-def _run_image_file_inference(
-    config: RunConfig,
-    input_images: dict[str, Path],
-    output_image: Path | None = None,
-    *,
-    mode: SingleInferenceMode = "auto",
-    tile_overlap: int = DEFAULT_TILE_OVERLAP,
-    output_format: str = "same",
-    default_dirname: str,
-) -> SingleInferenceResult:
-    if config.inference is None:
-        raise ValueError("RunConfig.inference is required to run image inference.")
-    input_names = tuple(config.model.inputs)
+    """Run the generator on one image."""
+    input_names = _generator_input_names(runtime.generator)
     if set(input_images) != set(input_names):
         raise ValueError(
-            f"Input modalities must match configured names {input_names}, got {tuple(input_images)}"
+            f"Input modalities must match generator input names {input_names}, "
+            f"got {tuple(input_images)}"
         )
-
     input_paths = {name: Path(input_images[name]) for name in input_names}
-    first_input_path = input_paths[input_names[0]]
-    runtime = _build_runtime(config)
     output_path = _resolve_output_path(
-        config,
-        runtime.paths,
-        first_input_path,
+        runtime,
+        input_paths[input_names[0]],
         output_image,
         output_format=output_format,
-        default_dirname=default_dirname,
     )
     return _run_one_image(
         runtime,
@@ -616,7 +570,7 @@ def _run_image_file_inference(
 
 
 def run_image_directory_inference(
-    config: RunConfig,
+    runtime_factory: RuntimeFactory,
     input_dirs: dict[str, Path],
     output_dir: Path | None = None,
     *,
@@ -626,16 +580,10 @@ def run_image_directory_inference(
     output_format: str = "same",
 ) -> DirectoryInferenceResult:
     """Run image inference for all supported image files in named directories."""
-    if config.inference is None:
-        raise ValueError("RunConfig.inference is required to run image inference.")
-    input_names = tuple(config.model.inputs)
-    if set(input_dirs) != set(input_names):
-        raise ValueError(
-            f"Input modalities must match configured names {input_names}, got {tuple(input_dirs)}"
-        )
-
-    roots = {name: Path(input_dirs[name]) for name in input_names}
-    first_name = input_names[0]
+    if not input_dirs:
+        raise ValueError("At least one input directory is required.")
+    roots = {name: Path(path) for name, path in input_dirs.items()}
+    first_name = next(iter(roots))
     first_root = roots[first_name]
     images_by_name = {
         name: collect_input_images(root, recursive=recursive) for name, root in roots.items()
@@ -645,7 +593,6 @@ def run_image_directory_inference(
             f"No supported images found in {first_root}. "
             f"Supported extensions: {sorted(VALID_IMAGE_EXTENSIONS)}"
         )
-
     first_relative = {path.relative_to(first_root) for path in images_by_name[first_name]}
     for name, root in roots.items():
         if name == first_name:
@@ -657,21 +604,21 @@ def run_image_directory_inference(
             raise ValueError(
                 f"Input modality {name} relative paths differ: missing={missing}, extra={extra}"
             )
-    runtime = _build_runtime(config)
     if output_dir is not None and output_dir.suffix:
         raise NotADirectoryError(
             f"Output path for directory inference must be a directory: {output_dir}"
         )
-    resolved_output_dir = output_dir or _default_output_dir(
-        config,
-        runtime.paths,
-        "output_images",
-    )
+    runtime = runtime_factory()
+    ordered_names = _generator_input_names(runtime.generator)
+    if set(roots) != set(ordered_names):
+        raise ValueError(
+            f"Input modalities must match generator input names {ordered_names}, got {tuple(roots)}"
+        )
+    resolved_output_dir = output_dir or runtime.default_directory_output_dir
     if resolved_output_dir.exists() and not resolved_output_dir.is_dir():
         raise NotADirectoryError(
             f"Output path for directory inference must be a directory: {resolved_output_dir}"
         )
-    ordered_names = _generator_input_names(runtime.generator)
     results: list[SingleInferenceResult] = []
     for relative_path in sorted(first_relative):
         source_paths = {name: roots[name] / relative_path for name in ordered_names}
@@ -691,7 +638,6 @@ def run_image_directory_inference(
                 tile_overlap=tile_overlap,
             )
         )
-
     return DirectoryInferenceResult(
         input_dirs={name: roots[name] for name in ordered_names},
         output_dir=resolved_output_dir,
@@ -703,7 +649,7 @@ def run_image_directory_inference(
 
 
 def run_image_path_inference(
-    config: RunConfig,
+    runtime_factory: RuntimeFactory,
     input_paths: dict[str, Path],
     output_path: Path | None = None,
     *,
@@ -730,7 +676,7 @@ def run_image_path_inference(
         raise ValueError("All input paths must be files or all input paths must be directories.")
     if "directory" in kinds:
         return run_image_directory_inference(
-            config,
+            runtime_factory,
             paths,
             output_path,
             recursive=recursive,
@@ -738,8 +684,9 @@ def run_image_path_inference(
             tile_overlap=tile_overlap,
             output_format=output_format,
         )
+    runtime = runtime_factory()
     return run_single_image_inference(
-        config,
+        runtime,
         paths,
         output_path,
         mode=mode,

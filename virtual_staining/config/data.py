@@ -7,8 +7,14 @@ from pathlib import Path
 from typing import Any
 
 from virtual_staining.config.validation import parse_bool_strict, reject_unknown_keys
-from virtual_staining.data.preprocessing import ALLOWED_MASK_STRATEGIES
 from virtual_staining.utils.dimensions import parse_wh_size
+
+MASK_STRATEGY_CONNECTED_COMPONENTS = "connected_components"
+MASK_STRATEGY_HSV = "hsv"
+ALLOWED_MASK_STRATEGIES: tuple[str, str] = (
+    MASK_STRATEGY_CONNECTED_COMPONENTS,
+    MASK_STRATEGY_HSV,
+)
 
 _SECTION_KEYS = frozenset({"inputs", "patching", "masks", "alignment", "filtering", "split", "io"})
 _MODality_NAME = __import__("re").compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")

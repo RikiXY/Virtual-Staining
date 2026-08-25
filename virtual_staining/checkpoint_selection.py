@@ -4,9 +4,36 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+from virtual_staining.metrics import VALIDATION_IMAGE_METRIC_NAMES, is_higher_better_metric
 
 logger = logging.getLogger(__name__)
+
+CheckpointMetric = Literal[
+    "loss_G_val",
+    "val_ssim",
+    "val_mae",
+    "val_rmse",
+    "val_psnr",
+    "val_pcc_gray",
+    "val_pcc_rgb_mean",
+]
+CheckpointMode = Literal["min", "max"]
+SUPPORTED_CHECKPOINT_METRICS = frozenset(("loss_G_val", *VALIDATION_IMAGE_METRIC_NAMES))
+
+
+def default_checkpoint_mode(metric: str) -> CheckpointMode:
+    if metric not in SUPPORTED_CHECKPOINT_METRICS:
+        raise ValueError(
+            f"Unsupported checkpoint_metric {metric!r}. "
+            f"Supported metrics: {sorted(SUPPORTED_CHECKPOINT_METRICS)}."
+        )
+    if metric == "loss_G_val":
+        return "min"
+    if metric.startswith("val_"):
+        return "max" if is_higher_better_metric(metric.removeprefix("val_")) else "min"
+    raise AssertionError(f"Unsupported checkpoint_metric slipped through validation: {metric!r}")
 
 
 @dataclass(frozen=True)

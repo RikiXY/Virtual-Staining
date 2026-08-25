@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from virtual_staining.training.config import TrainingConfig
+from virtual_staining.config.training import TrainingConfig
 
 
 def _mapping(**overrides: object) -> dict[str, object]:

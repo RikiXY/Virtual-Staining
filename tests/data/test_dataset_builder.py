@@ -4,14 +4,14 @@ from pathlib import Path
 
 import numpy as np
 
-from virtual_staining.data import builder as builder_module
-from virtual_staining.data.builder import AlignmentResult, DatasetBuilder
-from virtual_staining.data.config import (
+from virtual_staining.config.data import (
     InputConfig,
     PatchingConfig,
     PreprocessingConfig,
     SplitConfig,
 )
+from virtual_staining.data import builder as builder_module
+from virtual_staining.data.builder import AlignmentResult, DatasetBuilder
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
 
 

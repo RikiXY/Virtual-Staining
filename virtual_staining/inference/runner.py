@@ -8,14 +8,14 @@ import torch.nn as nn
 from torch.amp import autocast
 from torchvision import transforms
 
+from virtual_staining.checkpoint_contract import (
+    check_generator_arch,
+    validate_checkpoint_metadata,
+)
+from virtual_staining.checkpoint_selection import resolve_best_checkpoint_path
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.models.generator import ConcatUNetGenerator
-from virtual_staining.training.checkpoint_selection import resolve_best_checkpoint_path
-from virtual_staining.training.checkpoints import (
-    _check_generator_arch,
-    _validate_checkpoint_metadata,
-)
 from virtual_staining.utils.dimensions import to_torchvision_hw
 
 
@@ -102,7 +102,7 @@ def load_inference_generator(
             f"config image_size={tuple(config.project.image_size)}."
         )
 
-    checkpoint_arch = _validate_checkpoint_metadata(checkpoint, checkpoint_path)
+    checkpoint_arch = validate_checkpoint_metadata(checkpoint, checkpoint_path)
 
     generator_config = config.model.generator
     generator = ConcatUNetGenerator(
@@ -112,7 +112,7 @@ def load_inference_generator(
         dropout=generator_config.dropout,
         bilinear=generator_config.bilinear,
     ).to(device)
-    _check_generator_arch(checkpoint_arch, generator, target_modality=config.model.target)
+    check_generator_arch(checkpoint_arch, generator, target_modality=config.model.target)
     generator.load_state_dict(checkpoint["generator_state_dict"])
     generator.eval()
     return generator, checkpoint_path

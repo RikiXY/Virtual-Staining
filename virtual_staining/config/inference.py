@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from virtual_staining.checkpoint_selection import SUPPORTED_CHECKPOINT_METRICS
 from virtual_staining.config.validation import reject_unknown_keys
-from virtual_staining.training.config import SUPPORTED_CHECKPOINT_METRICS
 
 SUPPORTED_CHECKPOINT_POLICIES: frozenset[str] = frozenset({"latest", "best", "top_k"})
 

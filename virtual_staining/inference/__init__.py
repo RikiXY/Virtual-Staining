@@ -1,12 +1,9 @@
 from typing import TYPE_CHECKING, Any
 
-from virtual_staining.inference.config import InferenceConfig
-
 if TYPE_CHECKING:
     from virtual_staining.inference.runner import InferenceResult
 
 __all__ = [
-    "InferenceConfig",
     "InferenceResult",
 ]
 

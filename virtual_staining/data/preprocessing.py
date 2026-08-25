@@ -12,6 +12,12 @@ from typing import TypeVar
 import cv2
 import numpy as np
 
+from virtual_staining.config.data import (
+    ALLOWED_MASK_STRATEGIES,
+    MASK_STRATEGY_CONNECTED_COMPONENTS,
+    MASK_STRATEGY_HSV,
+)
+
 # Only the N largest connected components are considered; smaller ones are noise.
 N_TOP_COMPONENTS = 10
 # Components whose ROI std dev is below this are uniform (background) and are masked out.
@@ -22,12 +28,6 @@ MIN_STD_DEV = 15
 # different scales makes the mask robust to both fine and coarse background regions.
 MASK_PARAMETER_GRID = [(2, 3), (4, 6), (6, 9), (8, 15)]
 
-MASK_STRATEGY_CONNECTED_COMPONENTS = "connected_components"
-MASK_STRATEGY_HSV = "hsv"
-ALLOWED_MASK_STRATEGIES: tuple[str, str] = (
-    MASK_STRATEGY_CONNECTED_COMPONENTS,
-    MASK_STRATEGY_HSV,
-)
 
 ALLOWED_EXTENSIONS = {".tif", ".tiff", ".png"}
 T = TypeVar("T")

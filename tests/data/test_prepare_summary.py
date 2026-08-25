@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from virtual_staining.applications.prepare import _log_prepare_summary
-from virtual_staining.data.config import InputConfig, PreprocessingConfig
+from virtual_staining.config.data import InputConfig, PreprocessingConfig
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
 
 
