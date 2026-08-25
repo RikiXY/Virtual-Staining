@@ -1,245 +1,129 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from typing import Any, cast
 
-import cv2
-import numpy as np
 import pytest
 
-from tests.config_helpers import write_run_config
-from virtual_staining.applications.prepare import prepare
-from virtual_staining.config.run import RunConfig
-from virtual_staining.data.preprocessing import AlignmentMetadata
-from virtual_staining.experiment.metadata import (
-    RunProvenance,
-    append_run_event,
-    ensure_run_metadata,
-    save_stage_metadata,
-)
+from virtual_staining.experiment.run_paths import RunPaths
+from virtual_staining.experiment.session import ExperimentSession, LocalRunStore
 
 
-def _white_mask(img: np.ndarray, _params: object) -> np.ndarray:
-    return np.full((img.shape[0], img.shape[1]), 255, dtype=np.uint8)
+class Reporter:
+    def __init__(self, events: list[tuple[str, object]]) -> None:
+        self.events = events
+
+    def start(self, run: dict[str, object]) -> None:
+        self.events.append(("start", run))
+
+    def log_metrics(self, metrics: dict[str, float], *, step: int | None = None) -> None:
+        self.events.append(("metrics", (metrics, step)))
+
+    def finish(self, status: str) -> None:
+        self.events.append(("finish", status))
 
 
-def _identity_align(
-    _src: np.ndarray,
-    tgt: np.ndarray,
-    mask_1: np.ndarray | None = None,
-    mask_2: np.ndarray | None = None,
-    scale: float = 0.5,
-    **_kwargs: object,
-) -> tuple[np.ndarray, AlignmentMetadata]:
-    del _src, tgt, mask_1, mask_2, scale
-    eye = np.eye(2, 3, dtype=np.float64)
-    metadata = AlignmentMetadata(
-        n_keypoints_src=100,
-        n_keypoints_tgt=100,
-        n_matches=50,
-        n_inliers=45,
-        inlier_ratio=0.9,
-        scale_x=1.0,
-        scale_y=1.0,
-        rotation_deg=0.0,
-        translation_x=0.0,
-        translation_y=0.0,
-        warp_matrix=eye.tolist(),
+class BrokenReporter(Reporter):
+    def start(self, run: dict[str, object]) -> None:
+        super().start(run)
+        raise RuntimeError("reporter start")
+
+    def log_metrics(self, metrics: dict[str, float], *, step: int | None = None) -> None:
+        super().log_metrics(metrics, step=step)
+        raise RuntimeError("reporter metrics")
+
+    def finish(self, status: str) -> None:
+        super().finish(status)
+        raise RuntimeError("reporter finish")
+
+
+def _config(tmp_path: Path) -> tuple[Any, Path]:
+    dataset_root = tmp_path / "dataset"
+    manifest = dataset_root / "manifests" / "manifest.csv"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("sample_id\n", encoding="utf-8")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("project: test\n", encoding="utf-8")
+    project = SimpleNamespace(
+        run_root=tmp_path / "run",
+        run_name="demo",
+        manifest_path=manifest,
+        dataset_root=dataset_root,
     )
-    return eye, metadata
+    config = SimpleNamespace(project=project, to_dict=lambda: {"project": "test"})
+    return config, config_path
 
 
-@contextmanager
-def _patched_prepare_dependencies() -> Iterator[None]:
-    with (
-        patch(
-            "virtual_staining.data.builder.calculate_mask_with_multiple_parameters",
-            side_effect=_white_mask,
-        ),
-        patch(
-            "virtual_staining.data.builder.estimate_affine_from_scaled",
-            side_effect=_identity_align,
-        ),
-    ):
-        yield
+def _events(paths: RunPaths) -> list[dict[str, object]]:
+    return [json.loads(line) for line in paths.events.read_text(encoding="utf-8").splitlines()]
 
 
-def test_stage_metadata_overwrites_current_state_and_events_append(tmp_path: Path) -> None:
-    metadata_dir = tmp_path / "metadata"
-    ensure_run_metadata(metadata_dir / "run.json", run_name="demo", entrypoint="vs train")
-
-    save_stage_metadata(
-        "infer",
-        {"stage": "infer", "status": "running", "started_at": "2026-01-01T00:00:00+00:00"},
-        metadata_dir,
-    )
-    append_run_event(
-        {
-            "timestamp": "2026-01-01T00:00:00+00:00",
-            "run_name": "demo",
-            "stage": "infer",
-            "event_type": "stage_started",
-            "status": "running",
-            "config_hash": "sha256:a",
-            "details": {"attempt": 1},
-        },
-        metadata_dir,
-    )
-
-    save_stage_metadata(
-        "infer",
-        {
-            "stage": "infer",
-            "status": "completed",
-            "started_at": "2026-01-01T00:00:00+00:00",
-            "completed_at": "2026-01-01T00:01:00+00:00",
-        },
-        metadata_dir,
-    )
-    append_run_event(
-        {
-            "timestamp": "2026-01-01T00:01:00+00:00",
-            "run_name": "demo",
-            "stage": "infer",
-            "event_type": "stage_completed",
-            "status": "completed",
-            "config_hash": "sha256:a",
-            "details": {"attempt": 1},
-        },
-        metadata_dir,
-    )
-
-    stage_data = json.loads((metadata_dir / "stages" / "infer.json").read_text(encoding="utf-8"))
-    assert stage_data["status"] == "completed"
-
-    events = [
-        json.loads(line)
-        for line in (metadata_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
-    ]
-    assert len(events) == 2
-    assert [event["event_type"] for event in events] == ["stage_started", "stage_completed"]
-
-    run_data = json.loads((metadata_dir / "run.json").read_text(encoding="utf-8"))
-    assert run_data["stages_present"] == ["infer"]
-    assert run_data["last_completed_stage"] == "infer"
-    assert run_data["last_event_at"] == "2026-01-01T00:01:00+00:00"
+def test_run_identity_is_stable_and_fingerprint_conflicts_fail(tmp_path: Path) -> None:
+    paths = RunPaths(tmp_path / "run")
+    first = LocalRunStore(paths, run_name="demo", dataset_fingerprint="sha256:a").ensure_run()
+    second = LocalRunStore(paths, run_name="demo", dataset_fingerprint="sha256:a").ensure_run()
+    assert first["run_id"] == second["run_id"]
+    with pytest.raises(ValueError, match="conflicts"):
+        LocalRunStore(paths, run_name="demo", dataset_fingerprint="sha256:b").ensure_run()
+    with pytest.raises(ValueError, match="mismatch"):
+        LocalRunStore(paths, run_name="other", dataset_fingerprint="sha256:a").ensure_run()
 
 
-def test_run_provenance_records_stage_result(tmp_path: Path) -> None:
-    metadata_dir = tmp_path / "metadata"
-    ensure_run_metadata(metadata_dir / "run.json", run_name="demo")
+def test_session_overwrites_current_stage_and_appends_events(tmp_path: Path) -> None:
+    config, config_path = _config(tmp_path)
+    with ExperimentSession.open(config=config, config_path=config_path, stage="infer") as run:
+        run.result(attempt=1, inferred_count=1)
+    with ExperimentSession.open(config=config, config_path=config_path, stage="infer") as run:
+        run.result(attempt=2, inferred_count=2)
 
-    run = RunProvenance(metadata_dir, "demo", "sha256:a")
-    with run.stage("infer", details={"attempt": 1}) as stage:
-        stage.result(inferred_count=1)
-        stage.result(inferred_count=2)
-
-    stage_data = json.loads((metadata_dir / "stages" / "infer.json").read_text())
-    events = [json.loads(line) for line in (metadata_dir / "events.jsonl").read_text().splitlines()]
-    assert stage_data["status"] == "completed"
-    assert stage_data["attempt"] == 1
-    assert stage_data["inferred_count"] == 2
-    assert [event["event_type"] for event in events] == [
+    paths = RunPaths(tmp_path / "run")
+    stage = json.loads((paths.metadata_dir / "stages" / "infer.json").read_text())
+    assert stage["status"] == "completed"
+    assert stage["details"] == {"attempt": 2, "inferred_count": 2}
+    assert [event["event_type"] for event in _events(paths)] == [
+        "stage_started",
+        "stage_completed",
         "stage_started",
         "stage_completed",
     ]
-    assert events[-1]["details"]["inferred_count"] == 2
 
 
-def test_run_provenance_records_failure_and_reraises(tmp_path: Path) -> None:
-    metadata_dir = tmp_path / "metadata"
-    run = RunProvenance(metadata_dir, "demo", "sha256:a")
-
-    with pytest.raises(RuntimeError, match="boom"), run.stage("infer") as stage:
-        stage.result(inferred_count=1)
+def test_session_records_failure_and_reraises(tmp_path: Path) -> None:
+    config, config_path = _config(tmp_path)
+    with (
+        pytest.raises(RuntimeError, match="boom"),
+        ExperimentSession.open(config=config, config_path=config_path, stage="infer") as run,
+    ):
+        run.result(inferred_count=1)
         raise RuntimeError("boom")
-
-    stage_data = json.loads((metadata_dir / "stages" / "infer.json").read_text())
-    events = [json.loads(line) for line in (metadata_dir / "events.jsonl").read_text().splitlines()]
-    assert stage_data["status"] == "failed"
-    assert stage_data["inferred_count"] == 1
-    assert stage_data["error"] == "boom"
-    assert [event["event_type"] for event in events] == ["stage_started", "stage_failed"]
+    paths = RunPaths(tmp_path / "run")
+    stage = json.loads((paths.metadata_dir / "stages" / "infer.json").read_text())
+    assert stage["status"] == "failed"
+    assert stage["error_type"] == "RuntimeError"
+    assert stage["error"] == "boom"
 
 
-def test_prepare_writes_stage_metadata_and_events(tmp_path: Path) -> None:
-    dataset_root = tmp_path / "dataset"
-    dataset_root.mkdir()
-    image = np.full((192, 192, 3), 64, dtype=np.uint8)
-    cv2.imwrite(str(dataset_root / "source.png"), image)
-    cv2.imwrite(str(dataset_root / "target.png"), image + 8)
-    (dataset_root / "inputs").mkdir()
-    (dataset_root / "inputs" / "slide_sets.csv").write_text(
-        "set_id,input__source_path,input__source_aligned,target_path,target_aligned\n"
-        "P1,source.png,true,target.png,true\n",
-        encoding="utf-8",
-    )
+def test_reporters_run_after_local_writes_and_fail_independently(tmp_path: Path) -> None:
+    config, config_path = _config(tmp_path)
+    events: list[tuple[str, object]] = []
+    reporters = (BrokenReporter(events), Reporter(events))
+    with ExperimentSession.open(
+        config=config,
+        config_path=config_path,
+        stage="train",
+        reporters=cast(Any, reporters),
+    ) as run:
+        run.log_metrics({"loss": 1.0, "bad": float("nan")}, step=3)
 
-    config_path = write_run_config(
-        tmp_path,
-        """\
-            image_size: [64, 64]
-            model:
-              inputs: [source]
-              target: target
-            preprocessing:
-              inputs:
-                inventory: inputs/slide_sets.csv
-                modalities: [source]
-                reference: source
-                target_modality: target
-              patching:
-                patch_size: [64, 64]
-                grid_movement: [64, 64]
-                margin: 0
-              filtering:
-                foreground:
-                  min_ratio: 0.0
-                max_white_ratio: 1.0
-                white_threshold: 250
-                max_largest_white_component_ratio: 1.0
-              split:
-                unit: patch
-                train: 1.0
-                val: 0.0
-                test: 0.0
-                seed: 42
-              io:
-                tiled: false
-        """,
-        filename="prepare.yaml",
-        dataset_root=dataset_root,
-        results_path=tmp_path / "results",
-        run_name="prepare_run",
-    )
-    config = RunConfig.from_yaml(config_path)
-
-    with _patched_prepare_dependencies():
-        prepare(config, config_path)
-
-    metadata_dir = dataset_root / "metadata"
-    run_data = json.loads((metadata_dir / "run.json").read_text(encoding="utf-8"))
-    stage_data = json.loads((metadata_dir / "stages" / "prepare.json").read_text(encoding="utf-8"))
-    fingerprint_data = json.loads(
-        (metadata_dir / "dataset_fingerprint.json").read_text(encoding="utf-8")
-    )
-    events = [
-        json.loads(line)
-        for line in (metadata_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    assert [name for name, _ in events] == [
+        "start",
+        "start",
+        "metrics",
+        "metrics",
+        "finish",
+        "finish",
     ]
-
-    assert run_data["stages_present"] == ["prepare"]
-    assert run_data["last_completed_stage"] == "prepare"
-    assert stage_data["stage"] == "prepare"
-    assert stage_data["status"] == "completed"
-    assert stage_data["reused"] is False
-    assert stage_data["manifest_path"].endswith("manifests/manifest.csv")
-    assert fingerprint_data["fingerprint"].startswith("sha256:")
-    assert {item["path"] for item in fingerprint_data["files"]} == {
-        str((dataset_root / "source.png").resolve()),
-        str((dataset_root / "target.png").resolve()),
-    }
-    assert [event["event_type"] for event in events] == ["stage_started", "stage_completed"]
+    stage = json.loads((tmp_path / "run" / "metadata" / "stages" / "train.json").read_text())
+    assert stage["status"] == "completed"

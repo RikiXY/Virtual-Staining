@@ -12,18 +12,7 @@ from torchvision import transforms
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.dataset import PairedManifestDataset
 from virtual_staining.data.manifest import load_manifest_or_raise
-from virtual_staining.experiment.metadata import (
-    RunMetadata,
-    RunProvenance,
-    ensure_run_metadata,
-)
-from virtual_staining.experiment.run_paths import RunPaths
-from virtual_staining.experiment.snapshots import (
-    compute_manifest_hash,
-    resolve_run_snapshot_paths,
-    save_environment_snapshot,
-    save_stage_config_snapshots,
-)
+from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import ConcatUNetGenerator
 from virtual_staining.training.augmentation import build_training_paired_transform
@@ -50,189 +39,136 @@ def _requires_foreground_masks(config: RunConfig) -> bool:
     return any(term.requires_mask for term in config.training.losses.generator)
 
 
-def train(
-    config: RunConfig,
-    config_path: Path,
-) -> TrainingResult:
-    """Build all training components, persist provenance, and execute training."""
+def train(config: RunConfig, config_path: Path) -> TrainingResult:
+    """Build training components, persist provenance, and execute training."""
     if config.training is None:
         raise ValueError("RunConfig.training must be present for train().")
     training = config.training
 
-    seed = training.seed if training.seed is not None else random.randint(0, 2**32 - 1)
-    set_seed(seed)
+    with ExperimentSession.open(config=config, config_path=config_path, stage="train") as session:
+        seed = training.seed if training.seed is not None else random.randint(0, 2**32 - 1)
+        set_seed(seed)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        logger.info("Device: %s", device)
 
-    run_root = config.project.results_path / config.project.run_name
-    paths = RunPaths(run_root)
-    paths.create_directories()
-    snapshot_paths = resolve_run_snapshot_paths(stage="training", run_paths=paths)
+        manifest = load_manifest_or_raise(config.project)
+        if not set(config.model.inputs).issubset(manifest.metadata.input_modalities):
+            raise ValueError("model.inputs must be a subset of manifest input modalities")
+            raise ValueError("model.target must equal manifest target modality")
+        train_manifest = manifest.filter_split("train")
+        val_manifest = manifest.filter_split("val")
 
-    config_hash = save_stage_config_snapshots(
-        config,
-        config_path,
-        input_dest=snapshot_paths.input_config,
-        resolved_dest=snapshot_paths.resolved_config,
-        hash_dest=snapshot_paths.config_hash,
-    )
+        effective_train_sample_count = (
+            len(train_manifest) * training.augmentation.effective_expansion_factor
+        )
+        train_details = {
+            "seed": seed,
+            "device": str(device),
+            "cuda_device_name": (
+                torch.cuda.get_device_name(device) if device.type == "cuda" else None
+            ),
+            "train_sample_count": len(train_manifest),
+            "effective_train_sample_count": effective_train_sample_count,
+            "augmentation_enabled": training.augmentation.enabled,
+            "augmentation_intensity": training.augmentation.intensity,
+            "augmentation_expansion_factor": training.augmentation.effective_expansion_factor,
+            "val_sample_count": len(val_manifest),
+        }
+        session.result(**train_details)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("Device: %s", device)
+        transform = transforms.Compose(
+            [
+                transforms.Resize(to_torchvision_hw(config.project.image_size)),
+                transforms.ToTensor(),
+                transforms.Normalize([0.5] * 3, [0.5] * 3),
+            ]
+        )
+        train_paired_transform = build_training_paired_transform(
+            training.augmentation,
+            image_size=config.project.image_size,
+            seed=seed,
+            input_names=config.model.inputs,
+            reference_modality=config.preprocessing.inputs.reference
+            if config.preprocessing
+            else config.model.inputs[0],
+        )
+        train_dataset = PairedManifestDataset(
+            train_manifest,
+            input_names=config.model.inputs,
+            transform=None if train_paired_transform is not None else transform,
+            paired_transform=train_paired_transform,
+            include_foreground_mask=_requires_foreground_masks(config),
+            virtual_expansion_factor=training.augmentation.effective_expansion_factor,
+        )
+        val_dataset = PairedManifestDataset(
+            val_manifest,
+            input_names=config.model.inputs,
+            transform=transform,
+            include_foreground_mask=_requires_foreground_masks(config),
+        )
+        logger.info(
+            "Loaded manifest: %s train samples (%s effective), %s val samples",
+            len(train_manifest),
+            len(train_dataset),
+            len(val_dataset),
+        )
 
-    manifest = load_manifest_or_raise(config.project)
-    if not set(config.model.inputs).issubset(manifest.metadata.input_modalities):
-        raise ValueError("model.inputs must be a subset of manifest input modalities")
-    if config.model.target != manifest.metadata.target_modality:
-        raise ValueError("model.target must equal manifest target modality")
-    train_manifest = manifest.filter_split("train")
-    val_manifest = manifest.filter_split("val")
-    manifest_path = config.project.manifest_path
-    manifest_hash = compute_manifest_hash(manifest_path)
+        train_loader_generator = torch.Generator()
+        train_loader_generator.manual_seed(seed)
+        val_loader_generator = torch.Generator()
+        val_loader_generator.manual_seed(seed + 1)
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=training.batch_size,
+            shuffle=True,
+            num_workers=training.num_workers,
+            pin_memory=device.type == "cuda",
+            generator=train_loader_generator,
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=training.batch_size,
+            shuffle=False,
+            num_workers=training.num_workers,
+            pin_memory=device.type == "cuda",
+            generator=val_loader_generator,
+        )
 
-    run_metadata = RunMetadata.create(
-        run_name=config.project.run_name,
-        entrypoint="vs train",
-        seed=seed,
-        config_hash=config_hash,
-        manifest_path=str(manifest_path),
-        manifest_sha256=manifest_hash,
-        device=str(device),
-        cuda_device_name=torch.cuda.get_device_name(device) if device.type == "cuda" else None,
-    )
-    ensure_run_metadata(
-        paths.run_metadata,
-        run_name=run_metadata.run_name,
-        entrypoint=run_metadata.entrypoint,
-        config_hash=run_metadata.config_hash,
-        manifest_path=run_metadata.manifest_path,
-        manifest_sha256=run_metadata.manifest_sha256,
-        seed=run_metadata.seed,
-        device=run_metadata.device,
-        cuda_device_name=run_metadata.cuda_device_name,
-        git_commit=run_metadata.git_commit,
-        git_dirty=run_metadata.git_dirty,
-        package_version=run_metadata.package_version,
-    )
+        generator_config = config.model.generator
+        generator = ConcatUNetGenerator(
+            config.model.inputs,
+            base_channels=generator_config.base_channels,
+            norm=generator_config.norm,
+            dropout=generator_config.dropout,
+            bilinear=generator_config.bilinear,
+        ).to(device)
+        discriminator_config = config.model.discriminator
+        discriminator = PatchGANDiscriminator(
+            in_channels=(3 * len(config.model.inputs)) + 3,
+            ndf=discriminator_config.ndf,
+            norm=discriminator_config.norm,
+            use_sigmoid=discriminator_config.use_sigmoid,
+        ).to(device)
 
-    save_environment_snapshot(snapshot_paths.environment)
-
-    effective_train_sample_count = (
-        len(train_manifest) * training.augmentation.effective_expansion_factor
-    )
-    train_details = {
-        "manifest_path": str(manifest_path),
-        "manifest_sha256": manifest_hash,
-        "seed": seed,
-        "device": str(device),
-        "cuda_device_name": torch.cuda.get_device_name(device) if device.type == "cuda" else None,
-        "train_sample_count": len(train_manifest),
-        "effective_train_sample_count": effective_train_sample_count,
-        "augmentation_enabled": training.augmentation.enabled,
-        "augmentation_intensity": training.augmentation.intensity,
-        "augmentation_expansion_factor": training.augmentation.effective_expansion_factor,
-        "val_sample_count": len(val_manifest),
-    }
-
-    transform = transforms.Compose(
-        [
-            transforms.Resize(to_torchvision_hw(config.project.image_size)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5] * 3, [0.5] * 3),
-        ]
-    )
-    train_dir = config.project.split_dir("train")
-    val_dir = config.project.split_dir("val")
-    include_foreground_mask = _requires_foreground_masks(config)
-    train_paired_transform = build_training_paired_transform(
-        training.augmentation,
-        image_size=config.project.image_size,
-        seed=seed,
-        input_names=config.model.inputs,
-        reference_modality=config.preprocessing.inputs.reference
-        if config.preprocessing
-        else config.model.inputs[0],
-    )
-    train_dataset = PairedManifestDataset(
-        train_manifest,
-        input_names=config.model.inputs,
-        transform=None if train_paired_transform is not None else transform,
-        paired_transform=train_paired_transform,
-        include_foreground_mask=include_foreground_mask,
-        virtual_expansion_factor=training.augmentation.effective_expansion_factor,
-    )
-    val_dataset = PairedManifestDataset(
-        val_manifest,
-        input_names=config.model.inputs,
-        transform=transform,
-        include_foreground_mask=include_foreground_mask,
-    )
-    logger.info(
-        "Loaded manifest: %s train samples (%s effective), %s val samples",
-        len(train_manifest),
-        len(train_dataset),
-        len(val_dataset),
-    )
-
-    train_loader_generator = torch.Generator()
-    train_loader_generator.manual_seed(seed)
-    val_loader_generator = torch.Generator()
-    val_loader_generator.manual_seed(seed + 1)
-
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=training.batch_size,
-        shuffle=True,
-        num_workers=training.num_workers,
-        pin_memory=(device.type == "cuda"),
-        generator=train_loader_generator,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=training.batch_size,
-        shuffle=False,
-        num_workers=training.num_workers,
-        pin_memory=(device.type == "cuda"),
-        generator=val_loader_generator,
-    )
-
-    generator_config = config.model.generator
-    generator = ConcatUNetGenerator(
-        config.model.inputs,
-        base_channels=generator_config.base_channels,
-        norm=generator_config.norm,
-        dropout=generator_config.dropout,
-        bilinear=generator_config.bilinear,
-    ).to(device)
-    discriminator_config = config.model.discriminator
-    discriminator = PatchGANDiscriminator(
-        in_channels=(3 * len(config.model.inputs)) + 3,
-        ndf=discriminator_config.ndf,
-        norm=discriminator_config.norm,
-        use_sigmoid=discriminator_config.use_sigmoid,
-    ).to(device)
-
-    trainer = Trainer(
-        config=training,
-        run_paths=paths,
-        generator=generator,
-        discriminator=discriminator,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        device=device,
-        image_size=config.project.image_size,
-        train_dir=train_dir,
-        val_dir=val_dir,
-        losses=training.losses,
-        target_modality=config.model.target,
-    )
-
-    start_epoch = 0
-    if training.resume is not None:
-        start_epoch = trainer.resume(training.resume)
-
-    run = RunProvenance(paths.metadata_dir, config.project.run_name, config_hash)
-    with run.stage("train", details=train_details) as stage:
+        trainer = Trainer(
+            config=training,
+            run_paths=session.paths,
+            generator=generator,
+            discriminator=discriminator,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            device=device,
+            image_size=config.project.image_size,
+            train_dir=config.project.split_dir("train"),
+            val_dir=config.project.split_dir("val"),
+            losses=training.losses,
+            target_modality=config.model.target,
+            experiment_session=session,
+            config_hash=session.config_hash,
+        )
+        start_epoch = trainer.resume(training.resume) if training.resume is not None else 0
         result = trainer.train(seed=seed, start_epoch=start_epoch)
-        stage.result(
+        session.result(
             final_epoch=result.final_epoch,
             stopped_early=result.stopped_early,
             stop_epoch=result.stop_epoch,

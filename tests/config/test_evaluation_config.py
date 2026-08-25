@@ -225,10 +225,9 @@ def test_evaluate_writes_stage_scoped_snapshot_files(tmp_path: Path) -> None:
     evaluate(run_config, yaml_file)
 
     run_root = tmp_path / "results" / "eval_run"
-    assert (run_root / "config" / "evaluation.input.yaml").exists()
-    assert (run_root / "config" / "evaluation.resolved.yaml").exists()
-    assert (run_root / "metadata" / "evaluation_config_hash.txt").exists()
-    assert (run_root / "metadata" / "evaluation_environment.json").exists()
+    assert (run_root / "config" / "evaluate" / "input.yaml").exists()
+    assert (run_root / "config" / "evaluate" / "resolved.yaml").exists()
+    assert (run_root / "metadata" / "environments" / "evaluate.json").exists()
     assert not (run_root / "config" / "input.yaml").exists()
     assert not (run_root / "config" / "resolved.yaml").exists()
     assert not (run_root / "metadata" / "config_hash.txt").exists()
@@ -254,20 +253,18 @@ def test_evaluate_preserves_existing_training_snapshot_files(tmp_path: Path) -> 
         """,
     )
     run_root = tmp_path / "results" / "eval_run"
-    config_dir = run_root / "config"
+    config_dir = run_root / "config" / "train"
     metadata_dir = run_root / "metadata"
     config_dir.mkdir(parents=True)
     metadata_dir.mkdir(parents=True)
     (config_dir / "input.yaml").write_text("train input\n", encoding="utf-8")
     (config_dir / "resolved.yaml").write_text("train resolved\n", encoding="utf-8")
-    (metadata_dir / "config_hash.txt").write_text("sha256:train\n", encoding="utf-8")
 
     run_config = RunConfig.from_yaml(yaml_file)
     evaluate(run_config, yaml_file)
 
     assert (config_dir / "input.yaml").read_text(encoding="utf-8") == "train input\n"
     assert (config_dir / "resolved.yaml").read_text(encoding="utf-8") == "train resolved\n"
-    assert (metadata_dir / "config_hash.txt").read_text(encoding="utf-8") == "sha256:train\n"
 
 
 def test_evaluate_raises_if_manifest_missing(tmp_path: Path) -> None:
@@ -395,13 +392,13 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
     assert metadata["status"] == "completed"
     assert metadata["completed_at"]
     assert metadata["started_at"]
-    assert metadata["manifest_path"] == str(manifest_path)
-    assert metadata["manifest_sha256"] == expected_manifest_hash
-    assert metadata["evaluated_count"] == 1
-    assert metadata["skipped_count"] == 0
-    assert metadata["metrics_csv_path"] == str(output_dir / "per_image_metrics.csv")
-    assert metadata["summary_csv_path"] == str(output_dir / "summary.csv")
-    assert metadata["metric_config"] == {name: True for name in METRIC_SPECS}
+    assert metadata["dataset"]["manifest_path"] == str(manifest_path)
+    assert metadata["dataset"]["manifest_sha256"] == expected_manifest_hash
+    assert metadata["details"]["evaluated_count"] == 1
+    assert metadata["details"]["skipped_count"] == 0
+    assert metadata["details"]["metrics_csv_path"] == str(output_dir / "per_image_metrics.csv")
+    assert metadata["details"]["summary_csv_path"] == str(output_dir / "summary.csv")
+    assert metadata["details"]["metric_config"] == {name: True for name in METRIC_SPECS}
 
     events = [
         json.loads(line)

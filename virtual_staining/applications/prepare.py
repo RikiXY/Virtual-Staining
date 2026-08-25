@@ -9,11 +9,10 @@ from virtual_staining.config.run import RunConfig
 from virtual_staining.data.builder import DatasetBuilder, DatasetBuildResult
 from virtual_staining.data.config import PreprocessingConfig
 from virtual_staining.data.slide_sets import SlideSet, resolve_slide_sets
-from virtual_staining.experiment.metadata import RunProvenance, ensure_run_metadata
 from virtual_staining.experiment.snapshots import (
     build_dataset_fingerprint_metadata,
-    compute_manifest_hash,
     resolve_prepare_snapshot_paths,
+    save_config_hash,
     save_environment_snapshot,
     save_stage_config_snapshots,
 )
@@ -145,42 +144,23 @@ def prepare(config: RunConfig, config_path: Path) -> DatasetBuildResult:
         config_path,
         input_dest=snapshot_paths.input_config,
         resolved_dest=snapshot_paths.resolved_config,
-        hash_dest=snapshot_paths.config_hash,
     )
+    save_config_hash(config_hash, metadata_dir / "config_hash.txt")
     save_environment_snapshot(snapshot_paths.environment)
-    ensure_run_metadata(
-        metadata_dir / "run.json",
-        run_name=config.project.run_name,
-        entrypoint="vs prepare",
-        config_hash=config_hash,
-    )
-    run = RunProvenance(metadata_dir, config.project.run_name, config_hash)
-    with run.stage("prepare", details={"dataset_root": str(root)}) as stage:
-        fingerprint = _build_current_fingerprint(config, slide_sets)
-        result = None
-        stored = _load_json(root / "metadata" / "dataset_fingerprint.json")
-        if (
-            stored
-            and stored.get("fingerprint") == fingerprint.get("fingerprint")
-            and _dataset_outputs_are_complete(root)
-        ):
-            result = _build_reused_result(root)
-        _log_prepare_summary(config.preprocessing, slide_sets, reused=result is not None)
-        if result is None:
-            _warn_image_backend(config, slide_sets)
-            result = DatasetBuilder(
-                config.preprocessing, slide_sets=slide_sets, fingerprint_metadata=fingerprint
-            ).run_all()
-        manifest_path = root / "manifests" / "manifest.csv"
-        stage.result(
-            manifest_path=str(manifest_path),
-            manifest_sha256=compute_manifest_hash(manifest_path),
-            train_count=result.train_count,
-            val_count=result.val_count,
-            test_count=result.test_count,
-            skipped_count=result.skipped_count,
-            reused=result.reused,
-            set_inventory_count=len(slide_sets),
-            canonical_inventory_sha256=fingerprint.get("canonical_inventory_sha256"),
-        )
+
+    fingerprint = _build_current_fingerprint(config, slide_sets)
+    stored = _load_json(root / "metadata" / "dataset_fingerprint.json")
+    result = None
+    if (
+        stored
+        and stored.get("fingerprint") == fingerprint.get("fingerprint")
+        and _dataset_outputs_are_complete(root)
+    ):
+        result = _build_reused_result(root)
+    _log_prepare_summary(config.preprocessing, slide_sets, reused=result is not None)
+    if result is None:
+        _warn_image_backend(config, slide_sets)
+        result = DatasetBuilder(
+            config.preprocessing, slide_sets=slide_sets, fingerprint_metadata=fingerprint
+        ).run_all()
     return result

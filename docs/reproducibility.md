@@ -25,10 +25,12 @@ equivalent effective configurations, regardless of input key order. The hash
 identifies the resolved configuration bytes; it does not include source data or
 the software environment.
 
-Training writes `config/resolved.yaml` and `metadata/config_hash.txt` under the
-run directory. Inference and evaluation use stage-specific resolved YAML and
-hash files so they do not overwrite training provenance. Preparation writes the
-same snapshot set under the dataset root.
+Each run stage writes `config/<stage>/input.yaml`,
+`config/<stage>/resolved.yaml`, and
+`metadata/environments/<stage>.json`. The resolved YAML hash is stored in the
+stage record and event rather than in a standalone hash file. Preparation keeps
+its dataset-local `config/input.yaml`, `config/resolved.yaml`,
+`metadata/config_hash.txt`, and `metadata/environment.json` snapshots.
 
 Configuration hashes are only one part of the provenance record. Dataset
 manifests and source files have separate SHA-256 values, while environment JSON

@@ -201,6 +201,15 @@ def test_full_pipeline_smoke(tmp_path: Path) -> None:
 
     assert rows
     assert rows[0]["sample_id"]
+    run_root = tmp_path / "runs" / "smoke_run"
+    run_data = json.loads((run_root / "metadata" / "run.json").read_text(encoding="utf-8"))
+    assert run_data["stages_present"] == ["train", "infer", "evaluate"]
+    assert (run_root / "logs" / "run.log").is_file()
+    assert (run_root / "metrics" / "epochs.csv").is_file()
+    for legacy in ("training.log", "train.csv", "validation.csv", "all.csv"):
+        assert not any(path.name == legacy for path in run_root.rglob(legacy))
+    assert not (dataset_root / "metadata" / "run.json").exists()
+    assert not (dataset_root / "metadata" / "events.jsonl").exists()
 
 
 @pytest.mark.slow
@@ -233,17 +242,16 @@ def test_prepare_smoke_reuses_cached_dataset(tmp_path: Path) -> None:
         side_effect=AssertionError("prepare should reuse the prepared dataset"),
     ):
         second = prepare(config, config_path)
-
-    stage_data = json.loads(
-        (dataset_root / "metadata" / "stages" / "prepare.json").read_text(encoding="utf-8")
-    )
-
     assert first.reused is False
     assert second.reused is True
     assert second.train_count == first.train_count
     assert second.val_count == first.val_count
     assert second.test_count == first.test_count
-    assert stage_data["reused"] is True
+    assert (dataset_root / "metadata" / "dataset_build.json").exists()
+    assert (dataset_root / "metadata" / "dataset_fingerprint.json").exists()
+    assert not (dataset_root / "metadata" / "run.json").exists()
+    assert not (dataset_root / "metadata" / "events.jsonl").exists()
+    assert not (dataset_root / "metadata" / "stages").exists()
 
 
 @pytest.mark.slow
@@ -259,10 +267,10 @@ def test_complete_run_smoke_reuses_cached_dataset(tmp_path: Path) -> None:
     ):
         run_stages(config_path)
 
-    stage_data = json.loads(
-        (dataset_root / "metadata" / "stages" / "prepare.json").read_text(encoding="utf-8")
-    )
-    assert stage_data["reused"] is True
+    assert (dataset_root / "metadata" / "dataset_build.json").exists()
+    assert (dataset_root / "metadata" / "dataset_fingerprint.json").exists()
+    assert not (dataset_root / "metadata" / "run.json").exists()
+    assert not (dataset_root / "metadata" / "events.jsonl").exists()
 
 
 @pytest.mark.slow

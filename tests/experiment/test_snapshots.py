@@ -3,10 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
+from virtual_staining.experiment.run_paths import RunPaths
 from virtual_staining.experiment.snapshots import (
     build_dataset_fingerprint_metadata,
     compute_config_hash,
     resolve_prepare_snapshot_paths,
+    resolve_run_snapshot_paths,
     save_resolved_config,
 )
 
@@ -19,6 +21,13 @@ def _slide_set(root: Path) -> tuple[SlideSet, ...]:
             "S1", (SlideAsset("LF", Path("source")),), SlideAsset("target", Path("target")), "LF"
         ),
     )
+
+
+def test_snapshot_paths_are_stage_owned(tmp_path: Path) -> None:
+    paths = resolve_run_snapshot_paths(stage="infer", run_paths=RunPaths(tmp_path / "run"))
+    assert paths.input_config == tmp_path / "run" / "config" / "infer" / "input.yaml"
+    assert paths.resolved_config == tmp_path / "run" / "config" / "infer" / "resolved.yaml"
+    assert paths.environment == tmp_path / "run" / "metadata" / "environments" / "infer.json"
 
 
 def test_prepare_snapshot_paths_and_config_hash(tmp_path: Path) -> None:

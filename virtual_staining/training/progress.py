@@ -5,7 +5,6 @@ import logging as stdlib_logging
 import os
 import sys
 import time
-from pathlib import Path
 from typing import TextIO
 
 from virtual_staining.training.steps import StepLosses
@@ -13,34 +12,6 @@ from virtual_staining.utils.console import style
 
 logger = stdlib_logging.getLogger("virtual_staining.training.trainer")
 _PLAIN_TEXT_STREAM = io.StringIO()
-
-
-class TrainingLogSession:
-    def __init__(self, log_file: Path, *loggers: stdlib_logging.Logger) -> None:
-        self.log_file = log_file
-        self.loggers = loggers
-        self.handler: stdlib_logging.FileHandler | None = None
-        self._old_states: list[tuple[stdlib_logging.Logger, int, bool]] = []
-
-    def __enter__(self) -> None:
-        handler = stdlib_logging.FileHandler(self.log_file, mode="w", encoding="utf-8")
-        handler.setLevel(stdlib_logging.DEBUG)
-        handler.setFormatter(stdlib_logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-        self.handler = handler
-
-        for log in self.loggers:
-            self._old_states.append((log, log.level, log.propagate))
-            log.setLevel(stdlib_logging.DEBUG)
-            log.propagate = False
-            log.addHandler(handler)
-
-    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        assert self.handler is not None
-        for log, old_level, old_propagate in reversed(self._old_states):
-            log.removeHandler(self.handler)
-            log.propagate = old_propagate
-            log.setLevel(old_level)
-        self.handler.close()
 
 
 def format_duration(seconds: float | None) -> str:

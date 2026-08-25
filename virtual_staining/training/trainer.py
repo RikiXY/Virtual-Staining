@@ -14,6 +14,7 @@ import torch.optim as optim
 from torch.amp import GradScaler
 
 from virtual_staining.experiment.run_paths import RunPaths
+from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.training.checkpoint_selection import (
     load_best_checkpoint_record,
     update_checkpoint_selection,
@@ -36,7 +37,6 @@ from virtual_staining.training.loss_config import LossConfig
 from virtual_staining.training.losses import ConfiguredLossEvaluator, StepLosses
 from virtual_staining.training.progress import (
     ProgressTracker,
-    TrainingLogSession,
     emit_progress_update,
     finish_console_progress,
     format_duration,
@@ -78,11 +78,10 @@ class _TrainingSession:
 
 class Trainer:
     """
-    Orchestrates a Pix2Pix training run.
-
-    Owns the training loop, validation, checkpoint save/load, progress
-    progress display and metric logging. Models and data loaders are constructed
-    outside and injected - Trainer does not hardcode architecture choices.
+    Owns the training loop, validation, checkpoint save/load, and progress
+    display. Models and data loaders are constructed outside and injected -
+    Trainer does not hardcode architecture choices; the active session owns
+    canonical history and reporter dispatch.
     """
 
     def __init__(
@@ -100,9 +99,13 @@ class Trainer:
         val_dir: Path,
         losses: LossConfig | None = None,
         target_modality: str | None = None,
+        experiment_session: ExperimentSession,
+        config_hash: str,
     ) -> None:
         self.config = config
         self._run_paths = run_paths
+        self._experiment_session = experiment_session
+        self._config_hash = config_hash
         self.generator = generator
         self.discriminator = discriminator
         self.train_loader = train_loader
@@ -210,41 +213,36 @@ class Trainer:
         """Run the full training loop."""
         start_time = time.time()
         self._prepare_run_directories()
+        self._clear_training_outputs()
+        self._log_training_start(seed, start_epoch)
 
-        log_file = self._training_log_path()
-        with TrainingLogSession(log_file, logger, checkpoint_logger):
-            self._clear_training_outputs()
-            self._log_training_start(seed, start_epoch, log_file)
+        session = self._run_training_epochs(start_epoch=start_epoch, start_time=start_time)
 
-            session = self._run_training_epochs(start_epoch=start_epoch, start_time=start_time)
+        if session.best_checkpoint_path is None:
+            session.best_checkpoint_path = self._checkpoint_manager.latest()
+            if session.best_checkpoint_path is not None:
+                session.best_checkpoint = session.best_checkpoint_path.name
 
-            if session.best_checkpoint_path is None:
-                session.best_checkpoint_path = self._checkpoint_manager.latest()
-                if session.best_checkpoint_path is not None:
-                    session.best_checkpoint = session.best_checkpoint_path.name
-
-            finish_console_progress()
-            total_seconds = time.time() - start_time
-            logger.info("Execution completed. Total time = %.2f seconds", total_seconds)
-            return TrainingResult(
-                final_epoch=session.final_epoch,
-                best_checkpoint_path=session.best_checkpoint_path,
-                stopped_early=session.stopped,
-                stop_epoch=session.stop_epoch,
-                stop_reason=session.stop_reason,
-                early_stopping_monitor=(
-                    self.config.early_stopping.monitor
-                    if self.config.early_stopping is not None
-                    else None
-                ),
-                early_stopping_mode=(
-                    self.config.early_stopping.mode
-                    if self.config.early_stopping is not None
-                    else None
-                ),
-                early_stopping_best_epoch=session.early_stopping_best_epoch,
-                early_stopping_best_value=session.early_stopping_best_value,
-            )
+        finish_console_progress()
+        total_seconds = time.time() - start_time
+        logger.info("Execution completed. Total time = %.2f seconds", total_seconds)
+        return TrainingResult(
+            final_epoch=session.final_epoch,
+            best_checkpoint_path=session.best_checkpoint_path,
+            stopped_early=session.stopped,
+            stop_epoch=session.stop_epoch,
+            stop_reason=session.stop_reason,
+            early_stopping_monitor=(
+                self.config.early_stopping.monitor
+                if self.config.early_stopping is not None
+                else None
+            ),
+            early_stopping_mode=(
+                self.config.early_stopping.mode if self.config.early_stopping is not None else None
+            ),
+            early_stopping_best_epoch=session.early_stopping_best_epoch,
+            early_stopping_best_value=session.early_stopping_best_value,
+        )
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -259,15 +257,12 @@ class Trainer:
         ]:
             directory.mkdir(parents=True, exist_ok=True)
 
-    def _training_log_path(self) -> Path:
-        return self._logs_dir / "training.log"
-
     def _clear_training_outputs(self) -> None:
         for output_file in self._output_train_dir.iterdir():
             if output_file.is_file():
                 output_file.unlink()
 
-    def _log_training_start(self, seed: int, start_epoch: int, log_file: Path) -> None:
+    def _log_training_start(self, seed: int, start_epoch: int) -> None:
         device_name = (
             torch.cuda.get_device_name(self.device) if self.device.type == "cuda" else "CPU"
         )
@@ -290,7 +285,6 @@ class Trainer:
         logger.info("Validation samples: %s", dataset_len(self.val_loader))
         logger.info("Train batches/epoch: %s", len(self.train_loader))
         logger.info("Validation batches: %s", len(self.val_loader))
-        logger.info("Detailed log: %s", log_file)
         logger.info(
             "Hyperparameters | lr_g=%s | lr_d=%s | beta1=%s | beta2=%s | scheduler=%s",
             self.config.lr_g,
@@ -353,7 +347,11 @@ class Trainer:
         loss_names = configured_loss_names(self.losses)
         progress_tracker = self._start_progress_tracker(start_epoch)
 
-        with TrainingHistory(self._run_paths.metrics_dir, loss_names) as history:
+        with TrainingHistory(
+            self._run_paths.epochs_csv,
+            loss_names,
+            resume_at=start_epoch,
+        ) as history:
             session = _TrainingSession(
                 start_epoch=start_epoch,
                 start_time=start_time,
@@ -399,7 +397,8 @@ class Trainer:
             existing_checkpoint_path=validation_checkpoint_path,
         )
 
-        session.history.write_epoch(epoch, epoch_metrics, val_metrics)
+        reported = session.history.write_epoch(epoch, epoch_metrics, val_metrics)
+        self._experiment_session.log_metrics(reported, step=epoch)
         if val_metrics is not None and self.config.early_stopping is not None:
             self._update_early_stopping(epoch=epoch, val_metrics=val_metrics, session=session)
         return epoch_metrics
@@ -455,7 +454,7 @@ class Trainer:
                 checkpoint_path=None,
                 session=session,
             )
-            config_hash = self._read_config_hash()
+            config_hash = self._config_hash
             loss_config = self.losses.to_dict() if self.losses is not None else None
             checkpoint_modes = self._checkpoint_selection_modes()
             update_checkpoint_selection(
@@ -637,12 +636,6 @@ class Trainer:
 
     def _checkpoint_selection_modes(self) -> dict[str, str]:
         return {metric: default_checkpoint_mode(metric) for metric in SUPPORTED_CHECKPOINT_METRICS}
-
-    def _read_config_hash(self) -> str | None:
-        if not self._run_paths.config_hash.exists():
-            return None
-        value = self._run_paths.config_hash.read_text(encoding="utf-8").strip()
-        return value or None
 
     def _sync_best_checkpoint(self, session: _TrainingSession) -> None:
         try:

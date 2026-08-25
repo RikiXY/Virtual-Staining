@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import logging
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -136,7 +137,12 @@ def main(argv: list[str] | None = None) -> None:
     handler = _commands().get(command)
     if handler is None:
         parser.error(f"unknown command: {command}")
-    handler(args)
+    package_logger = logging.getLogger("virtual_staining")
+    old_propagate = package_logger.propagate
+    try:
+        handler(args)
+    finally:
+        package_logger.propagate = old_propagate
 
 
 if __name__ == "__main__":

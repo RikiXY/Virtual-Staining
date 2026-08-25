@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import torch
 from torch.utils.data import DataLoader
 
 from virtual_staining.config.project import ProjectConfig
 from virtual_staining.experiment.run_paths import RunPaths
+from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import ConcatUNetGenerator
 from virtual_staining.training.config import TrainingConfig
 from virtual_staining.training.helpers import unpack_batch
 from virtual_staining.training.trainer import Trainer
+
+
+def _session() -> ExperimentSession:
+    return cast(ExperimentSession, SimpleNamespace(log_metrics=lambda *_args, **_kwargs: None))
 
 
 def test_unpack_batch_preserves_named_inputs_and_validates_shapes() -> None:
@@ -62,6 +69,8 @@ def test_trainer_requires_named_generator_and_keeps_validation_dir(tmp_path: Pat
         loader,
         loader,
         torch.device("cpu"),
+        experiment_session=_session(),
+        config_hash="sha256:test",
         image_size=(8, 8),
         train_dir=tmp_path / "train",
         val_dir=tmp_path / "val",

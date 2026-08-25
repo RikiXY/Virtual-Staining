@@ -8,14 +8,7 @@ from torchvision.utils import save_image
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.dataset import PairedManifestDataset
 from virtual_staining.data.manifest import load_manifest_or_raise
-from virtual_staining.experiment.metadata import RunProvenance, ensure_run_metadata
-from virtual_staining.experiment.run_paths import RunPaths
-from virtual_staining.experiment.snapshots import (
-    compute_manifest_hash,
-    resolve_run_snapshot_paths,
-    save_environment_snapshot,
-    save_stage_config_snapshots,
-)
+from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.inference.outputs import generated_filename_for_sample
 from virtual_staining.inference.runner import (
     InferenceResult,
@@ -33,59 +26,34 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
     if config.inference is None:
         raise ValueError("RunConfig.inference is required to run inference.")
 
-    device = resolve_inference_device()
-    logger.info("Inference device: %s", device)
+    with ExperimentSession.open(config=config, config_path=config_path, stage="infer") as session:
+        device = resolve_inference_device()
+        logger.info("Inference device: %s", device)
+        generator, checkpoint_path = load_inference_generator(config, session.paths, device)
+        transform = build_inference_transform(config.project.image_size)
+        output_dir = config.inference.output_dir or session.paths.output_test_dir
 
-    paths = RunPaths(config.project.run_root)
-    paths.create_directories()
-    snapshot_paths = resolve_run_snapshot_paths(stage="inference", run_paths=paths)
-    config_hash = save_stage_config_snapshots(
-        config,
-        config_path,
-        input_dest=snapshot_paths.input_config,
-        resolved_dest=snapshot_paths.resolved_config,
-        hash_dest=snapshot_paths.config_hash,
-    )
-    save_environment_snapshot(snapshot_paths.environment)
-    generator, checkpoint_path = load_inference_generator(config, paths, device)
-    transform = build_inference_transform(config.project.image_size)
+        manifest = load_manifest_or_raise(config.project)
+        if not set(config.model.inputs).issubset(manifest.metadata.input_modalities):
+            raise ValueError("model.inputs must be a subset of manifest input modalities")
+        if config.model.target != manifest.metadata.target_modality:
+            raise ValueError("model.target must equal manifest target modality")
+        manifest.validate(check_files_exist=True, require_splits={"test"})
+        test_manifest = manifest.filter_split("test")
+        dataset = PairedManifestDataset(
+            test_manifest, input_names=config.model.inputs, transform=transform
+        )
+        logger.info("Loaded manifest: %s test samples", len(dataset))
+        session.result(
+            checkpoint_path=str(checkpoint_path),
+            output_dir=str(output_dir),
+            test_sample_count=len(test_manifest.records),
+            device=str(device),
+            inferred_count=0,
+        )
 
-    output_dir = config.inference.output_dir or paths.output_test_dir
-    manifest = load_manifest_or_raise(config.project)
-    if not set(config.model.inputs).issubset(manifest.metadata.input_modalities):
-        raise ValueError("model.inputs must be a subset of manifest input modalities")
-    if config.model.target != manifest.metadata.target_modality:
-        raise ValueError("model.target must equal manifest target modality")
-    manifest.validate(check_files_exist=True, require_splits={"test"})
-    manifest_path = config.project.manifest_path
-    manifest_hash = compute_manifest_hash(manifest_path)
-    ensure_run_metadata(
-        paths.run_metadata,
-        run_name=config.project.run_name,
-        entrypoint="vs infer",
-        config_hash=config_hash,
-        manifest_path=str(manifest_path),
-        manifest_sha256=manifest_hash,
-        device=str(device),
-    )
-    test_manifest = manifest.filter_split("test")
-    dataset = PairedManifestDataset(
-        test_manifest, input_names=config.model.inputs, transform=transform
-    )
-    logger.info("Loaded manifest: %s test samples", len(dataset))
-    infer_details: dict[str, object] = {
-        "checkpoint_path": str(checkpoint_path),
-        "manifest_path": str(manifest_path),
-        "manifest_sha256": manifest_hash,
-        "output_dir": str(output_dir),
-        "test_sample_count": len(test_manifest.records),
-        "device": str(device),
-    }
-    run = RunProvenance(paths.metadata_dir, config.project.run_name, config_hash)
-    with run.stage("infer", details=infer_details) as stage:
         output_dir.mkdir(parents=True, exist_ok=True)
         result = InferenceResult(output_dir=output_dir)
-        stage.result(inferred_count=0)
         if len(dataset) == 0:
             logger.warning("No test pairs found in manifest: %s", config.project.manifest_path)
             return result
@@ -101,6 +69,6 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
             save_image(output, out_path)
             result.generated_paths.append(out_path)
             result.num_samples += 1
-            stage.result(inferred_count=result.num_samples)
+            session.result(inferred_count=result.num_samples)
     logger.info("Inference complete: %s samples -> %s", result.num_samples, output_dir)
     return result

@@ -49,24 +49,26 @@ class RunPaths:
         return self.root / "evaluation"
 
     @property
-    def input_config(self) -> Path:
-        return self.config_dir / "input.yaml"
-
-    @property
-    def resolved_config(self) -> Path:
-        return self.config_dir / "resolved.yaml"
-
-    @property
     def run_metadata(self) -> Path:
         return self.metadata_dir / "run.json"
 
     @property
-    def environment_metadata(self) -> Path:
-        return self.metadata_dir / "environment.json"
+    def events(self) -> Path:
+        return self.metadata_dir / "events.jsonl"
 
     @property
-    def config_hash(self) -> Path:
-        return self.metadata_dir / "config_hash.txt"
+    def run_log(self) -> Path:
+        return self.logs_dir / "run.log"
+
+    @property
+    def epochs_csv(self) -> Path:
+        return self.metrics_dir / "epochs.csv"
+
+    def stage_config_dir(self, stage: str) -> Path:
+        return self.config_dir / stage
+
+    def stage_environment(self, stage: str) -> Path:
+        return self.metadata_dir / "environments" / f"{stage}.json"
 
     def create_directories(self) -> None:
         """Create directories used directly by training and inference."""

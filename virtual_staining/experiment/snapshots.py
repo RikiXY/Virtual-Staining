@@ -20,38 +20,23 @@ from virtual_staining.experiment.run_paths import RunPaths
 class SnapshotPaths:
     input_config: Path
     resolved_config: Path
-    config_hash: Path
     environment: Path
 
 
 def resolve_run_snapshot_paths(
     *,
-    stage: Literal["training", "inference", "evaluation"],
+    stage: Literal["train", "infer", "evaluate"],
     run_paths: RunPaths,
 ) -> SnapshotPaths:
     """Return canonical snapshot destinations for a run-scoped stage."""
-    if stage == "training":
-        return SnapshotPaths(
-            input_config=run_paths.input_config,
-            resolved_config=run_paths.resolved_config,
-            config_hash=run_paths.config_hash,
-            environment=run_paths.environment_metadata,
-        )
-    if stage == "inference":
-        return SnapshotPaths(
-            input_config=run_paths.config_dir / "inference.input.yaml",
-            resolved_config=run_paths.config_dir / "inference.resolved.yaml",
-            config_hash=run_paths.metadata_dir / "inference_config_hash.txt",
-            environment=run_paths.metadata_dir / "inference_environment.json",
-        )
-    if stage == "evaluation":
-        return SnapshotPaths(
-            input_config=run_paths.config_dir / "evaluation.input.yaml",
-            resolved_config=run_paths.config_dir / "evaluation.resolved.yaml",
-            config_hash=run_paths.metadata_dir / "evaluation_config_hash.txt",
-            environment=run_paths.metadata_dir / "evaluation_environment.json",
-        )
-    raise ValueError(f"Unsupported run snapshot stage: {stage}")
+    if stage not in {"train", "infer", "evaluate"}:
+        raise ValueError(f"Unsupported run snapshot stage: {stage}")
+    config_dir = run_paths.stage_config_dir(stage)
+    return SnapshotPaths(
+        input_config=config_dir / "input.yaml",
+        resolved_config=config_dir / "resolved.yaml",
+        environment=run_paths.stage_environment(stage),
+    )
 
 
 def resolve_prepare_snapshot_paths(dataset_root: Path) -> SnapshotPaths:
@@ -59,7 +44,6 @@ def resolve_prepare_snapshot_paths(dataset_root: Path) -> SnapshotPaths:
     return SnapshotPaths(
         input_config=dataset_root / "config" / "input.yaml",
         resolved_config=dataset_root / "config" / "resolved.yaml",
-        config_hash=dataset_root / "metadata" / "config_hash.txt",
         environment=dataset_root / "metadata" / "environment.json",
     )
 
@@ -226,28 +210,25 @@ def build_dataset_fingerprint_metadata(
     )
     dataset_root_resolved = str(dataset_root.resolve())
     semantic_config = json.loads(json.dumps(preprocessing_config))
-    if isinstance(semantic_config.get("inputs"), dict):
-        semantic_config["inputs"].pop("hash_verification", None)
     preprocessing_hash = compute_payload_hash(semantic_config)
     fingerprint_payload = {
         "dataset_root": dataset_root_resolved,
         "preprocessing": semantic_config,
         "canonical_inventory": canonical_sets,
         "files": files,
+        "schema_version": "3.0",
     }
-    result = {
+    return {
         "schema_version": "3.0",
         "fingerprint": compute_payload_hash(fingerprint_payload),
         "prepared_at": prepared_at or datetime.now(UTC).isoformat(),
         "dataset_root": dataset_root_resolved,
         "preprocessing": semantic_config,
-        "preprocessing_hash": preprocessing_hash,
-        "canonical_inventory": canonical_sets,
+        "preprocessing_sha256": preprocessing_hash,
         "canonical_inventory_sha256": canonical_inventory_hash,
         "raw_inventory_sha256": raw_inventory_sha256,
         "files": files,
     }
-    return result
 
 
 def save_dataset_fingerprint(metadata: dict[str, Any], dest: Path) -> None:
@@ -268,14 +249,11 @@ def save_stage_config_snapshots(
     *,
     input_dest: Path,
     resolved_dest: Path,
-    hash_dest: Path,
 ) -> str:
-    """Write the canonical input/resolved/hash snapshot set for a stage."""
+    """Write canonical input/resolved snapshots and return the config hash."""
     save_input_config(config_path, input_dest)
     save_resolved_config(config.to_dict(), resolved_dest)
-    config_hash = compute_config_hash(resolved_dest)
-    save_config_hash(config_hash, hash_dest)
-    return config_hash
+    return compute_config_hash(resolved_dest)
 
 
 def save_environment_snapshot(dest: Path) -> None:

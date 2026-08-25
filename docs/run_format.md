@@ -71,42 +71,53 @@ state file records queue-level status plus per-job fields such as
 
 ## Directory Layout
 
-All outputs for a training run are written under:
+All outputs for an experiment run are written under:
 
-```
+```text
 local_workspace/results/<run_name>/
 ├── config/
-│   ├── input.yaml              # exact copy of the user-supplied run YAML
-│   └── resolved.yaml           # fully expanded effective config
+│   ├── train/
+│   │   ├── input.yaml
+│   │   └── resolved.yaml
+│   ├── infer/
+│   │   ├── input.yaml
+│   │   └── resolved.yaml
+│   └── evaluate/
+│       ├── input.yaml
+│       └── resolved.yaml
 ├── metadata/
-│   ├── run.json                # run-level provenance and aggregate stage summary
-│   ├── environment.json        # training-stage environment snapshot
-│   ├── config_hash.txt         # training-stage sha256 of resolved.yaml
-│   ├── events.jsonl            # append-only stage lifecycle log
-│   └── stages/
-│       ├── train.json          # current train stage state
-│       ├── infer.json          # current inference stage state
-│       └── evaluate.json       # current evaluation stage state
+│   ├── environments/
+│   │   ├── train.json
+│   │   ├── infer.json
+│   │   └── evaluate.json
+│   ├── stages/
+│   │   ├── train.json
+│   │   ├── infer.json
+│   │   └── evaluate.json
+│   ├── events.jsonl
+│   └── run.json
 ├── logs/
-│   └── training.log            # Python logging output
-├── checkpoints/
-│   ├── ep010.pth               # checkpoint saved every checkpoint_rate epochs
-│   ├── ep020.pth
-│   └── ...
+│   └── run.log
 ├── metrics/
-│   ├── train.csv               # per-epoch training losses
-│   ├── validation.csv          # validation losses and image-quality metrics
-│   └── all.csv                 # combined train and validation epoch metrics
+│   └── epochs.csv
+├── checkpoints/
+│   ├── ep010.pth
+│   ├── ep020.pth
+│   └── best.json
 ├── artifacts/
-│   ├── output_train/           # generated images for train-split samples
-│   ├── output_val/             # generated images for validation-split samples
-│   └── output_test/            # generated images for test-split samples (from vs infer)
-├── evaluation/
-│   ├── per_image_metrics.csv   # per-image metrics for all evaluated test samples
-│   ├── summary.csv             # aggregate statistics across the test split
-│   └── skipped.csv             # samples that could not be evaluated (optional)
-└── comparisons/                # comparison panels produced by vs panels
+│   ├── output_train/
+│   ├── output_val/
+│   └── output_test/
+└── evaluation/
+    ├── per_image_metrics.csv
+    ├── summary.csv
+    └── skipped.csv
 ```
+
+`prepare` is dataset-owned: it writes dataset config/environment snapshots,
+fingerprint, manifest, split, input-hash, and `dataset_build.json` files under
+the dataset root. It does not write experiment `run.json`, `events.jsonl`, or
+`metadata/stages/prepare.json`.
 
 ## File Descriptions
 
@@ -236,9 +247,8 @@ raise an error instead of being treated as all-foreground. The manifest loads
 the exact `foreground_mask_path` written when `masks.save_patch_masks: true`.
 The saved patch mask is the aligned target foreground mask.
 
-When configured loss terms are present, `metrics/train.csv`,
-`metrics/validation.csv`, and `metrics/all.csv` add deterministic component
-columns using normalized names:
+When configured loss terms are present, `metrics/epochs.csv` adds deterministic
+component columns using normalized names:
 
 ```text
 loss_train_total_generator
@@ -260,68 +270,72 @@ when validation runs.
 
 ### `metadata/run.json`
 
-Stable run-level provenance and aggregate summary. It identifies what the run is
-without pretending to be the complete lifecycle record for every stage.
-See [run.json Schema](#runjson-schema) below.
+Run identity and aggregate state only:
 
-### `metadata/environment.json`
+```json
+{
+  "schema_version": 1,
+  "run_id": "uuid",
+  "run_name": "example_run",
+  "created_at": "2025-01-15T10:30:00+00:00",
+  "dataset_fingerprint": "sha256:...",
+  "last_event_at": "2025-01-15T12:45:00+00:00",
+  "stages_present": ["train", "infer", "evaluate"],
+  "last_completed_stage": "evaluate"
+}
+```
 
-Snapshot of the runtime environment captured for the training stage:
-
-- Python version and platform
-- `torch`, `numpy`, `opencv`, `albumentations` package versions
-- CUDA availability, CUDA version, GPU name
-
-### `metadata/config_hash.txt`
-
-SHA-256 hash of `config/resolved.yaml` for the training stage. Inference and
-evaluation keep their own stage-scoped hash files (`inference_config_hash.txt`
-and `evaluation_config_hash.txt`).
+The first non-null dataset fingerprint becomes run identity. A later conflicting
+fingerprint or run name fails rather than mixing artifacts. Stage config,
+device, entrypoint, manifest, git, and package provenance do not belong here.
 
 ### `metadata/stages/<stage>.json`
 
-Current-state records for each stage. These files are overwritten on rerun and
-contain fields such as:
+The current stage view is replaced on every attempt. Its normalized shape is:
 
-- `stage`
-- `status`
-- `started_at`
-- `completed_at`
-- `config_hash`
-- stage-specific provenance such as checkpoint path, manifest hash, counts, and output paths
+```json
+{
+  "schema_version": 1,
+  "stage": "train",
+  "status": "completed",
+  "started_at": "...",
+  "completed_at": "...",
+  "entrypoint": "vs train",
+  "config": {
+    "input_path": "config/train/input.yaml",
+    "resolved_path": "config/train/resolved.yaml",
+    "sha256": "sha256:..."
+  },
+  "environment_path": "metadata/environments/train.json",
+  "dataset": {
+    "fingerprint": "sha256:...",
+    "manifest_path": ".../manifest.csv",
+    "manifest_sha256": "sha256:..."
+  },
+  "details": {}
+}
+```
+
+Failed stages add `error_type` and `error`. Stage-specific results remain under
+`details`; later `run.result()` calls replace earlier values by key.
 
 ### `metadata/events.jsonl`
 
-Append-only execution log. Each line is a JSON object representing a lifecycle
-event such as:
+Append-only events use the same config/environment/dataset/details fields plus
+`schema_version`, `timestamp`, `run_id`, `run_name`, `stage`, `event_type`, and
+`status`. The event is appended before the stage and run JSON views are replaced.
+All local writes are strict; external reporters run only after successful local
+writes and cannot invalidate them.
 
-- `stage_started`
-- `stage_completed`
-- `stage_failed`
+### `metrics/epochs.csv`
 
-Events include `timestamp`, `run_name`, `stage`, `status`, `config_hash`, and
-optional `details`.
-
-### `metrics/train.csv`
-
-One row per training epoch. Columns include at minimum `epoch`, `loss_G_train`,
-and `loss_D_train`. Written incrementally during training so partial results are
-available if the run is interrupted.
-
-### `metrics/validation.csv`
-
-One row per validation epoch. Columns include at minimum `epoch`, `loss_G_val`,
-`loss_D_val`, `val_ssim`, `val_mae`, `val_rmse`, `val_psnr`, `val_pcc_gray`,
-and `val_pcc_rgb_mean`. Validation image metrics are computed from generated and
-target tensors converted from `[-1, 1]` to `[0, 1]`, reusing the same metric
-semantics as test-set evaluation. Non-finite aggregates are written as blank
-cells.
-
-### `metrics/all.csv`
-
-One row per training epoch with the union of `metrics/train.csv` and
-`metrics/validation.csv` columns. Validation columns are blank on epochs where
-validation does not run.
+One canonical row per training epoch. The header is the deterministic union of
+train, validation, configured component-loss, and validation-image columns.
+Values use six decimal places; missing or non-finite validation values are blank.
+Rows flush after every epoch. Resume requires a matching header and complete
+epochs `0..resume_at-1`; stale rows at or after `resume_at` are discarded before
+new rows append. Missing, malformed, gapped, duplicate, or incompatible history
+fails instead of silently truncating it.
 
 ### `checkpoints/ep<NNN>.pth`
 
@@ -390,43 +404,3 @@ per skipped sample.
 | `generated_path` | Absolute path to the expected generated image |
 
 This file is not written when all test samples are evaluated successfully.
-
-## run.json Schema
-
-```json
-{
-  "run_name":       "example_run",
-  "started_at":     "2025-01-15T10:30:00+00:00",
-  "git_commit":     "abc1234...",
-  "git_dirty":      false,
-  "config_hash":    "sha256:e3b0c4...",
-  "manifest_path":  "/abs/path/to/manifest.csv",
-  "manifest_sha256": "sha256:abcd...",
-  "seed":           42,
-  "device":         "cuda",
-  "cuda_device_name": "NVIDIA GeForce RTX 3090",
-  "entrypoint":     "vs train",
-  "package_version": "0.1.0",
-  "last_event_at":  "2025-01-15T12:45:00+00:00",
-  "stages_present": ["train", "infer", "evaluate"],
-  "last_completed_stage": "evaluate"
-}
-```
-
-| Field | Description |
-|---|---|
-| `run_name` | Value of `run_name` from the config |
-| `started_at` | UTC ISO 8601 timestamp when `run.json` was first bootstrapped |
-| `git_commit` | Full SHA of HEAD at run start; `null` if not in a git repo |
-| `git_dirty` | `true` if there were uncommitted changes; `null` if not in a git repo |
-| `config_hash` | Most recently recorded stable config hash for the run-level bootstrap |
-| `manifest_path` | Most recently recorded manifest path associated with the run |
-| `manifest_sha256` | Hash of the recorded manifest |
-| `seed` | Training seed when training has populated the record |
-| `device` | Training or inference device string (`"cuda"` or `"cpu"`) when available |
-| `cuda_device_name` | GPU model name; `null` when running on CPU or unknown |
-| `entrypoint` | CLI command that first created the run record |
-| `package_version` | Installed `virtual-staining` package version |
-| `last_event_at` | Timestamp of the most recent appended stage event |
-| `stages_present` | Unique set of stage names observed so far in `events.jsonl` |
-| `last_completed_stage` | Most recent stage that completed successfully |
