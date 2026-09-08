@@ -176,5 +176,7 @@ def test_resolve_alignment_resizes_masks_to_each_preview(full_size_masks: bool) 
     np.testing.assert_allclose(result.warp_matrix[:, :2], np.eye(2), atol=0.05)
     np.testing.assert_allclose(result.warp_matrix[:, 2], [-48.0, 32.0], atol=4.0)
     assert result.metadata["mask_iou"] > 0.9
+    assert reference.mask is not None
+    assert moving.mask is not None
     assert np.array_equal(reference.mask, reference_mask_before)
     assert np.array_equal(moving.mask, moving_mask_before)

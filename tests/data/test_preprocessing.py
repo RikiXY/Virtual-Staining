@@ -449,7 +449,10 @@ def test_estimate_affine_transform_rejects_invalid_mask_geometry_before_sift(
         patch("virtual_staining.data.preprocessing.cv2.SIFT_create") as sift,
         pytest.raises(ValueError, match=rf"{name} geometry"),
     ):
-        estimate_affine_transform(_textured_image(), _textured_image(), **{name: mask})
+        if name == "mask_1":
+            estimate_affine_transform(_textured_image(), _textured_image(), mask_1=mask)
+        else:
+            estimate_affine_transform(_textured_image(), _textured_image(), mask_2=mask)
 
     sift.assert_not_called()
 
