@@ -31,9 +31,12 @@ def _write_config(tmp_path: Path, section_yaml: str = "") -> Path:
     return write_run_config(tmp_path, section_yaml)
 
 
-def test_pyproject_publishes_only_vs() -> None:
+def test_pyproject_publishes_cli_and_ui_entry_points() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-    assert pyproject["project"]["scripts"] == {"vs": "virtual_staining.cli:main"}
+    assert pyproject["project"]["scripts"] == {
+        "vs": "virtual_staining.cli:main",
+        "vs-ui": "virtual_staining.ui:main",
+    }
 
 
 def test_root_help_lists_the_public_commands() -> None:

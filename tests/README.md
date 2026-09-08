@@ -11,6 +11,7 @@ Tests are grouped by the subsystem they exercise:
 - `models/`: model configuration and concrete architectures.
 - `smoke/`: end-to-end pipeline smoke tests.
 - `training/`: checkpoints, trainer behavior, and training result contracts.
+- `ui/`: focused contracts for non-visual NiceGUI behavior.
 - `applications/`: user-visible stage orchestration contracts.
 - `utils/`: shared utility modules.
 

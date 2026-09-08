@@ -17,6 +17,7 @@ COMPONENTS = {
     "experiment",
     "training",
     "inference",
+    "ui",
     "evaluation",
     "utils",
 }
@@ -62,6 +63,7 @@ ALLOWED_EDGES = {
         "models",
         "utils",
     },
+    "ui": {"inference"},
     "evaluation": {"config", "evaluation", "metrics", "utils"},
     "utils": {"utils"},
 }

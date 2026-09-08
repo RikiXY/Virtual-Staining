@@ -26,6 +26,19 @@ class InferenceResult:
     num_samples: int = 0
 
 
+@dataclass(frozen=True)
+class LoadedCheckpointGenerator:
+    """Generator and inference metadata reconstructed from one checkpoint."""
+
+    generator: nn.Module
+    checkpoint_path: Path
+    image_size: tuple[int, int]
+    input_names: tuple[str, ...]
+    target_modality: str
+    channels_per_input: int
+    device: torch.device
+
+
 @torch.no_grad()
 def predict_batch(
     generator: nn.Module,
@@ -50,6 +63,107 @@ def build_inference_transform(image_size: tuple[int, int]) -> transforms.Compose
             transforms.ToTensor(),
             transforms.Normalize([0.5] * 3, [0.5] * 3),
         ]
+    )
+
+
+def load_checkpoint_generator(
+    checkpoint_path: Path,
+    device: torch.device,
+) -> LoadedCheckpointGenerator:
+    """Reconstruct a generator using only a current-format checkpoint."""
+    checkpoint_path = Path(checkpoint_path)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    if not isinstance(checkpoint, dict):
+        raise ValueError(f"Checkpoint '{checkpoint_path}' must contain a mapping.")
+
+    checkpoint_arch = validate_checkpoint_metadata(checkpoint, checkpoint_path)
+    generator_arch = checkpoint_arch["generator"]
+
+    input_names_value = generator_arch.get("input_names")
+    if not isinstance(input_names_value, list) or any(
+        not isinstance(name, str) or not name.strip() for name in input_names_value
+    ):
+        raise ValueError("Checkpoint generator input_names must contain non-empty strings.")
+    input_names = tuple(input_names_value)
+    if not input_names or len(set(input_names)) != len(input_names):
+        raise ValueError("Checkpoint generator input_names must be non-empty and unique.")
+
+    image_size_value = checkpoint.get("image_size")
+    if (
+        not isinstance(image_size_value, (list, tuple))
+        or len(image_size_value) != 2
+        or any(isinstance(value, bool) or not isinstance(value, int) for value in image_size_value)
+        or any(value <= 0 for value in image_size_value)
+    ):
+        raise ValueError(
+            "Checkpoint image_size must contain two positive integers for "
+            "checkpoint-only inference."
+        )
+    image_size = (image_size_value[0], image_size_value[1])
+
+    if generator_arch.get("class") != "ConcatUNetGenerator":
+        raise ValueError(
+            "Checkpoint generator class is not supported for checkpoint-only inference: "
+            f"{generator_arch.get('class')!r}."
+        )
+    in_channels = generator_arch.get("in_channels")
+    if (
+        isinstance(in_channels, bool)
+        or not isinstance(in_channels, int)
+        or in_channels <= 0
+        or in_channels % len(input_names) != 0
+    ):
+        raise ValueError(
+            "Checkpoint generator in_channels must be a positive multiple of its input count."
+        )
+    if generator_arch.get("out_channels") != 3:
+        raise ValueError("Checkpoint-only inference currently requires three output channels.")
+
+    base_channels = generator_arch.get("base_channels")
+    if isinstance(base_channels, bool) or not isinstance(base_channels, int) or base_channels <= 0:
+        raise ValueError("Checkpoint generator base_channels must be a positive integer.")
+    norm = generator_arch.get("norm")
+    if norm not in {"batch", "instance"}:
+        raise ValueError(f"Checkpoint generator norm is not supported: {norm!r}.")
+    dropout = generator_arch.get("dropout")
+    bilinear = generator_arch.get("bilinear")
+    if not isinstance(dropout, bool) or not isinstance(bilinear, bool):
+        raise ValueError("Checkpoint generator dropout and bilinear metadata must be booleans.")
+
+    target_modality = generator_arch.get("target_modality")
+    if not isinstance(target_modality, str) or not target_modality.strip():
+        raise ValueError("Checkpoint generator target_modality must be a non-empty string.")
+
+    channels_per_input = in_channels // len(input_names)
+    generator = ConcatUNetGenerator(
+        input_names,
+        channels_per_input=channels_per_input,
+        base_channels=base_channels,
+        norm=norm,
+        dropout=dropout,
+        bilinear=bilinear,
+    ).to(device)
+    check_generator_arch(checkpoint_arch, generator, target_modality=target_modality)
+
+    state_dict = checkpoint.get("generator_state_dict")
+    if not isinstance(state_dict, dict):
+        raise ValueError("Checkpoint has no valid generator_state_dict.")
+    try:
+        generator.load_state_dict(state_dict)
+    except RuntimeError as exc:
+        raise ValueError(
+            "Checkpoint generator weights do not match its architecture metadata."
+        ) from exc
+    generator.eval()
+
+    return LoadedCheckpointGenerator(
+        generator=generator,
+        checkpoint_path=checkpoint_path,
+        image_size=image_size,
+        input_names=input_names,
+        target_modality=target_modality,
+        channels_per_input=channels_per_input,
+        device=device,
     )
 
 

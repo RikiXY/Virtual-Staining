@@ -16,6 +16,7 @@ from torchvision.utils import save_image
 
 from virtual_staining.inference.outputs import generated_filename_for_sample
 from virtual_staining.inference.runner import (
+    LoadedCheckpointGenerator,
     build_inference_transform,
     predict_batch,
 )
@@ -177,6 +178,47 @@ def _predict_images(
             raise TypeError("Inference transform must return a torch.Tensor")
         inputs[name] = source_tensor.unsqueeze(0)
     return predict_batch(generator, inputs, device)[0].cpu()
+
+
+def validate_patch_image(image: Image.Image, expected_size: tuple[int, int]) -> None:
+    """Reject images that cannot be processed as one inference patch."""
+    if image.size == expected_size:
+        return
+    expected_width, expected_height = expected_size
+    received_width, received_height = image.size
+    raise ValueError(
+        "This inference path supports patch-sized inputs only. "
+        f"Expected input size: {expected_width} × {expected_height} px. "
+        f"Received: {received_width} × {received_height} px. "
+        "Large-image inference will be added in a future version."
+    )
+
+
+def predict_single_patch(
+    runtime: LoadedCheckpointGenerator,
+    image: Image.Image,
+) -> Image.Image:
+    """Run strict, single-input patch inference without resizing the image."""
+    if len(runtime.input_names) != 1:
+        raise ValueError(
+            "Single-patch inference requires a checkpoint with exactly one input modality. "
+            f"The selected checkpoint requires {len(runtime.input_names)}."
+        )
+    if runtime.channels_per_input != 3:
+        raise ValueError(
+            "Single-patch inference supports RGB checkpoints only. "
+            f"The selected checkpoint expects {runtime.channels_per_input} channels."
+        )
+
+    validate_patch_image(image, runtime.image_size)
+    input_name = runtime.input_names[0]
+    output = _predict_images(
+        {input_name: image.convert("RGB")},
+        runtime.generator,
+        runtime.device,
+        _build_no_resize_transform(),
+    )
+    return transforms.ToPILImage()(output)
 
 
 def _run_resized_prediction(

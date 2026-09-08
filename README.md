@@ -58,6 +58,39 @@ vs run --config config/runs/local/my_run.yaml --stages train infer evaluate
 vs status
 ```
 
+### NiceGUI demo
+
+The v0.1 web interface runs inference with known local pretrained checkpoints:
+
+```bash
+uv sync --locked
+uv run vs-ui
+```
+
+Open [http://localhost:8080](http://localhost:8080). The public control is
+**Transformation** rather than a model or checkpoint selector. The supported
+transformations and expected checkpoint locations are:
+
+- **Label-Free → H&E:** `local_workspace/ui/checkpoints/lf-to-he-v1.pth`
+- **H&E → Label-Free-like:** `local_workspace/ui/checkpoints/he-to-lf-v1.pth`
+
+These checkpoint files are local artifacts and must not be committed. The GUI
+expects the current checkpoint contract: format-v3 checkpoints contain the
+metadata required to reconstruct the generator without a YAML file. Legacy
+format-v2 checkpoints require a one-time compatibility migration; checkpoints
+created by the current training code are already v3.
+
+The demo accepts exactly one compatible patch-sized image and reads its expected
+dimensions from the selected checkpoint. The current reference checkpoints expect
+256 × 256 px. Inputs are never silently resized or tiled; large-image and WSI
+inference are outside the v0.1 scope.
+
+**Generate** runs inference and displays the result. **Save** writes the generated
+PNG to the configured output folder, using numbered filenames instead of
+overwriting an existing result. Relative output paths are resolved from the
+repository root. Generated images and other local artifacts are not intended for
+Git.
+
 Convert one or more large TIFFs—or a whole directory recursively—without loading them fully
 into memory. Directory inputs keep their relative layout under the output directory:
 
@@ -218,6 +251,7 @@ From H&E staining to label-free:
 - `data/` - dataset, manifest, builder, preprocessing pipeline
 - `training/` - training mechanics: Trainer, steps, losses, validation, checkpoints
 - `inference/` - reusable model loading, prediction, single-image workflows, output naming
+- `ui/` - NiceGUI entry point for the local pretrained inference demo
 - `evaluation/` - evaluator, plots, summaries, panels, ranking
 - `applications/` - stage lifecycle owners (`prepare`, `train`, `infer`, `evaluate`) and other use cases
 - `cli/` - thin argparse entrypoints delegating to `applications/`
@@ -239,7 +273,8 @@ Virtual-Staining/
 ├── local_workspace/
 │   ├── datasets/               # input paired samples (gitignored)
 │   ├── queues/                 # queue state files (gitignored except .gitkeep)
-│   └── results/                # run outputs (gitignored)
+│   ├── results/                # run outputs (gitignored)
+│   └── ui/                     # local UI checkpoints and outputs (gitignored)
 ├── tests/                      # pytest suite grouped by subsystem
 │   ├── cli/
 │   ├── config/
@@ -250,6 +285,7 @@ Virtual-Staining/
 │   ├── models/
 │   ├── smoke/
 │   ├── training/
+│   ├── ui/
 │   └── utils/
 ├── virtual_staining/           # installable package
 │   ├── metrics.py              # metric computations and metadata
@@ -262,6 +298,7 @@ Virtual-Staining/
 │   ├── inference/
 │   ├── models/
 │   ├── training/
+│   ├── ui/
 │   └── utils/
 ├── Makefile
 ├── flake.nix

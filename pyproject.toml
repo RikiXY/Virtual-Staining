@@ -7,6 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
     "albumentations>=2.0",
     "matplotlib>=3.7",
+    "nicegui>=3.16.0",
     "numpy>=2.0",
     "opencv-python-headless>=4.8",
     "pandas>=2.0",
@@ -23,6 +24,7 @@ wsi = ["openslide-python>=1.4", "pyvips>=3.1"]
 
 [project.scripts]
 vs = "virtual_staining.cli:main"
+vs-ui = "virtual_staining.ui:main"
 
 [build-system]
 requires = ["hatchling"]
