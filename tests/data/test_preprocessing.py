@@ -433,6 +433,36 @@ def test_estimate_affine_transform_uses_ratio_test_and_explicit_ransac() -> None
     }
 
 
+@pytest.mark.parametrize(
+    ("name", "mask"),
+    [
+        pytest.param("mask_1", np.ones((299, 300), dtype=np.uint8), id="mask-1-2d"),
+        pytest.param("mask_2", np.ones((300, 299), dtype=np.uint8), id="mask-2-2d"),
+        pytest.param("mask_1", np.ones((300, 300, 1), dtype=np.uint8), id="mask-1-3d"),
+        pytest.param("mask_2", np.ones((300, 300, 1), dtype=np.uint8), id="mask-2-3d"),
+    ],
+)
+def test_estimate_affine_transform_rejects_invalid_mask_geometry_before_sift(
+    name: str, mask: np.ndarray
+) -> None:
+    with (
+        patch("virtual_staining.data.preprocessing.cv2.SIFT_create") as sift,
+        pytest.raises(ValueError, match=rf"{name} geometry"),
+    ):
+        estimate_affine_transform(_textured_image(), _textured_image(), **{name: mask})
+
+    sift.assert_not_called()
+
+
+def test_estimate_affine_transform_accepts_none_masks() -> None:
+    image = _textured_image()
+
+    warp_matrix, metadata = estimate_affine_transform(image, image, mask_1=None, mask_2=None)
+
+    np.testing.assert_allclose(warp_matrix, np.eye(2, 3), atol=0.01)
+    assert metadata.mask_iou is None
+
+
 def test_estimate_affine_transform_raises_on_low_feature_count() -> None:
     with (
         patch(

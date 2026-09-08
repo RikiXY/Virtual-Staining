@@ -127,10 +127,10 @@ def _identity() -> np.ndarray:
     return np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
 
 
-def _mask_to_image_space(mask: np.ndarray, state: AssetState) -> np.ndarray:
-    if state.shape is None or mask.shape[:2] == state.shape:
+def _mask_to_preview_space(mask: np.ndarray, preview: np.ndarray) -> np.ndarray:
+    if mask.shape == preview.shape[:2]:
         return mask
-    return cv2.resize(mask, (state.shape[1], state.shape[0]), interpolation=cv2.INTER_NEAREST)
+    return cv2.resize(mask, (preview.shape[1], preview.shape[0]), interpolation=cv2.INTER_NEAREST)
 
 
 def _validate_identity(reference: AssetState, moving: AssetState, policy: Any) -> None:
@@ -182,8 +182,8 @@ def resolve_alignment(reference: AssetState, moving: AssetState, policy: Any) ->
     matrix, metadata = estimate_affine_from_scaled(
         reference.preview,
         moving.preview,
-        mask_1=_mask_to_image_space(reference.mask, reference),
-        mask_2=_mask_to_image_space(moving.mask, moving),
+        mask_1=_mask_to_preview_space(reference.mask, reference.preview),
+        mask_2=_mask_to_preview_space(moving.mask, moving.preview),
         scale=0.5,
     )
     preview_scale = reference.preview.shape[1] / reference.shape[1]

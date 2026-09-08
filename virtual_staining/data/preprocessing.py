@@ -354,9 +354,9 @@ def estimate_affine_transform(
     img2 : np.ndarray
         Image to align to the reference.
     mask_1 : np.ndarray, optional
-        The mask for the first image. Default is None.
+        Mask in exactly ``img1.shape[:2]`` coordinates. Default is None.
     mask_2 : np.ndarray, optional
-        The mask for the second image. Default is None.
+        Mask in exactly ``img2.shape[:2]`` coordinates. Default is None.
     nfeatures : int, optional
         Number of features for SIFT computation. Default is 10000.
     ratio_threshold : float, optional
@@ -370,6 +370,11 @@ def estimate_affine_transform(
     metadata : AlignmentMetadata
         Keypoint, match, inlier counts and the warp matrix.
     """
+    for name, image, mask in (("mask_1", img1, mask_1), ("mask_2", img2, mask_2)):
+        if mask is not None and mask.shape != image.shape[:2]:
+            raise ValueError(
+                f"{name} geometry must match image: expected {image.shape[:2]}, got {mask.shape}"
+            )
     clahe = cv2.createCLAHE(clipLimit=18.0, tileGridSize=(8, 8))
     img1_clahe = img1
     img2_clahe = img2
