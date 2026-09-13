@@ -180,18 +180,26 @@ def _predict_images(
     return predict_batch(generator, inputs, device)[0].cpu()
 
 
-def validate_patch_image(image: Image.Image, expected_size: tuple[int, int]) -> None:
-    """Reject images that cannot be processed as one inference patch."""
-    if image.size == expected_size:
-        return
-    expected_width, expected_height = expected_size
-    received_width, received_height = image.size
-    raise ValueError(
-        "This inference path supports patch-sized inputs only. "
-        f"Expected input size: {expected_width} × {expected_height} px. "
-        f"Received: {received_width} × {received_height} px. "
-        "Large-image inference will be added in a future version."
-    )
+def validate_patch_image(
+    image: Image.Image,
+    expected_size: tuple[int, int],
+    expected_channels: int = 3,
+) -> None:
+    """Reject patch inputs whose dimensions or mode violate the model contract."""
+    if image.size != expected_size:
+        expected_width, expected_height = expected_size
+        received_width, received_height = image.size
+        raise ValueError(
+            "This inference path supports patch-sized inputs only. "
+            f"Expected input size: {expected_width} × {expected_height} px. "
+            f"Received: {received_width} × {received_height} px. "
+            "Large-image inference will be added in a future version."
+        )
+    if expected_channels == 3 and image.mode != "RGB":
+        raise ValueError(
+            "This checkpoint requires an RGB image with exactly three channels. "
+            f"Received image mode: {image.mode!r}. Convert the source explicitly before upload."
+        )
 
 
 def predict_single_patch(
@@ -210,10 +218,10 @@ def predict_single_patch(
             f"The selected checkpoint expects {runtime.channels_per_input} channels."
         )
 
-    validate_patch_image(image, runtime.image_size)
+    validate_patch_image(image, runtime.image_size, runtime.channels_per_input)
     input_name = runtime.input_names[0]
     output = _predict_images(
-        {input_name: image.convert("RGB")},
+        {input_name: image},
         runtime.generator,
         runtime.device,
         _build_no_resize_transform(),

@@ -60,36 +60,37 @@ vs status
 
 ### NiceGUI demo
 
-The v0.1 web interface runs inference with known local pretrained checkpoints:
+The web interface discovers compatible current-format checkpoints from a configurable
+directory:
 
 ```bash
 uv sync --locked
-uv run vs-ui
+uv run vs-ui \
+  --checkpoint-dir local_workspace/ui/checkpoints \
+  --output-dir local_workspace/ui/outputs
 ```
 
-Open [http://localhost:8080](http://localhost:8080). The public control is
-**Transformation** rather than a model or checkpoint selector. The supported
-transformations and expected checkpoint locations are:
+Open [http://localhost:8080](http://localhost:8080). Both paths may be located outside
+the repository. They can also be configured with `VIRTUAL_STAINING_CHECKPOINT_DIR`
+and `VIRTUAL_STAINING_OUTPUT_DIR`; CLI options take precedence. With neither setting,
+the defaults are `./checkpoints` and `./outputs`, resolved from the launch directory.
+The UI starts with a useful empty state when no compatible checkpoint is available.
 
-- **Label-Free → H&E:** `local_workspace/ui/checkpoints/lf-to-he-v1.pth`
-- **H&E → Label-Free-like:** `local_workspace/ui/checkpoints/he-to-lf-v1.pth`
+The catalog validates `.pth` files recursively and derives transformation labels,
+input/target domains, architecture, image size, and channel requirements from existing
+format-v3 checkpoint metadata. Legacy or incompatible checkpoints are skipped and
+reported in the interface. Checkpoint files are local artifacts and must not be
+committed.
 
-These checkpoint files are local artifacts and must not be committed. The GUI
-expects the current checkpoint contract: format-v3 checkpoints contain the
-metadata required to reconstruct the generator without a YAML file. Legacy
-format-v2 checkpoints require a one-time compatibility migration; checkpoints
-created by the current training code are already v3.
+The demo accepts exactly one RGB patch whose dimensions match the selected model.
+Inputs with incompatible modes or dimensions are rejected; images are never silently
+converted, resized, or tiled. Large-image and WSI inference remain outside this UI.
 
-The demo accepts exactly one compatible patch-sized image and reads its expected
-dimensions from the selected checkpoint. The current reference checkpoints expect
-256 × 256 px. Inputs are never silently resized or tiled; large-image and WSI
-inference are outside the v0.1 scope.
-
-**Generate** runs inference and displays the result. **Save** writes the generated
-PNG to the configured output folder, using numbered filenames instead of
-overwriting an existing result. Relative output paths are resolved from the
-repository root. Generated images and other local artifacts are not intended for
-Git.
+**Generate** runs the shared inference core and displays a responsive source/result
+comparison with provenance. **Save result** writes a generated PNG and adjacent JSON
+provenance sidecar, using numbered filenames instead of overwriting either existing
+file. The sidecar records portable identifiers and known runtime/model metadata, not
+machine-specific checkpoint paths.
 
 Convert one or more large TIFFs—or a whole directory recursively—without loading them fully
 into memory. Directory inputs keep their relative layout under the output directory:

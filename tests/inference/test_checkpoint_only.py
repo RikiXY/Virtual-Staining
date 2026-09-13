@@ -109,6 +109,12 @@ def test_patch_validation_rejects_incompatible_dimensions() -> None:
         validate_patch_image(image, (32, 32))
 
 
+@pytest.mark.parametrize("mode", ["L", "RGBA", "CMYK", "P"])
+def test_patch_validation_rejects_incompatible_image_mode(mode: str) -> None:
+    with pytest.raises(ValueError, match=r"requires an RGB image.*Received image mode"):
+        validate_patch_image(Image.new(mode, (32, 32)), (32, 32))
+
+
 def test_valid_patch_passes_through_checkpoint_only_inference(tmp_path: Path) -> None:
     checkpoint_path, _ = _write_checkpoint(tmp_path)
     runtime = load_checkpoint_generator(checkpoint_path, torch.device("cpu"))

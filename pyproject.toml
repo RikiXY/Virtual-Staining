@@ -24,7 +24,7 @@ wsi = ["openslide-python>=1.4", "pyvips>=3.1"]
 
 [project.scripts]
 vs = "virtual_staining.cli:main"
-vs-ui = "virtual_staining.ui:main"
+vs-ui = "virtual_staining.cli.ui:main"
 
 [build-system]
 requires = ["hatchling"]

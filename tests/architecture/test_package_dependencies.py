@@ -22,7 +22,7 @@ COMPONENTS = {
     "utils",
 }
 ALLOWED_EDGES = {
-    "cli": {"applications", "cli", "metrics"},
+    "cli": {"applications", "cli", "metrics", "ui"},
     "applications": {
         "checkpoint_contract",
         "checkpoint_selection",
@@ -63,7 +63,7 @@ ALLOWED_EDGES = {
         "models",
         "utils",
     },
-    "ui": {"inference"},
+    "ui": {"applications"},
     "evaluation": {"config", "evaluation", "metrics", "utils"},
     "utils": {"utils"},
 }
@@ -151,7 +151,7 @@ def test_cli_commands_use_application_or_cli_surfaces() -> None:
             continue
         for imported in _imports(path):
             if imported.startswith("virtual_staining.") and not imported.startswith(
-                ("virtual_staining.applications", "virtual_staining.cli")
+                ("virtual_staining.applications", "virtual_staining.cli", "virtual_staining.ui")
             ):
                 violations.append(f"{path}: {imported}")
     assert not violations, "CLI command boundary violations:\n" + "\n".join(violations)

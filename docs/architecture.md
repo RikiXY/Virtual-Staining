@@ -9,7 +9,7 @@ upper layers may import from lower layers, never the reverse.
 |---|---|---|
 | **Library** | Reusable package code with explicit, testable I/O boundaries. Some modules are pure helpers; others are side-effecting services. | `metrics.py`, `utils/`, `config/`, `experiment/`, `models/`, `data/`, `training/`, `inference/`, `evaluation/` |
 | **Application** | Use-case orchestrators that wire core modules together | `applications/` |
-| **Adapter** | Entry points that translate CLI arguments into application calls | `cli/` |
+| **Adapter** | Entry points that translate CLI or browser interactions into application calls | `cli/`, `ui/` |
 
 ## Package Map
 
@@ -28,6 +28,7 @@ upper layers may import from lower layers, never the reverse.
 | `evaluation/` | Set evaluation, diagnostic plots, representative selection, comparison panels, and summaries |
 | `applications/` | User-visible stage lifecycle owners and infer-images runtime composition; no `argparse` |
 | `cli/` | The `argparse` entrypoint, terminal rendering, and thin adapters over `applications/` |
+| `ui/` | NiceGUI presentation code consuming the UI inference application facade |
 
 ## Purity and I/O Boundaries
 
@@ -61,6 +62,9 @@ its `ProgressUpdate` callback is silent unless an adapter supplies a reporter.
 The CLI supplies terminal rendering, while application/library callers remain
 presentation-neutral. Infer-images runtime creation belongs to `applications/`;
 `inference/single.py` accepts an already-loaded `InferenceRuntime`.
+The NiceGUI page similarly consumes `applications/ui_inference.py`, whose model
+descriptors and result/provenance records isolate browser presentation from current
+checkpoint reconstruction and single-patch prediction internals.
 
 Within training, `trainer.py` owns epoch orchestration, `validator.py` owns validation
 inference, `history.py` owns metric CSV persistence, `checkpoints.py` owns model/training
@@ -83,7 +87,7 @@ These constraints are enforced by convention and checked in code review:
 The library graph is an enforced direct-edge DAG:
 
 ```text
-cli -> applications, cli, metrics
+cli -> applications, cli, metrics, ui
 applications -> checkpoint_contract, checkpoint_selection, config, data, evaluation,
                 experiment, inference, metrics, models, training, utils
 config -> config, checkpoint_selection, metrics, utils
@@ -95,6 +99,7 @@ training -> checkpoint_contract, checkpoint_selection, config, experiment, metri
             models, training, utils
 inference -> checkpoint_contract, checkpoint_selection, config, data, experiment,
              inference, models, utils
+ui -> applications
 evaluation -> config, evaluation, metrics, utils
 utils -> utils
 ```

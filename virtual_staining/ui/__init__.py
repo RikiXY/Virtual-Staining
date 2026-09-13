@@ -1,9 +1,16 @@
-"""NiceGUI entry point for Virtual-Staining."""
+"""NiceGUI presentation adapter for Virtual-Staining."""
 
-__all__ = ["main"]
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from virtual_staining.ui.app import run_ui
+
+__all__ = ["run_ui"]
 
 
-def main() -> None:
-    from virtual_staining.ui.app import main as run
+def __getattr__(name: str) -> Any:
+    if name == "run_ui":
+        from virtual_staining.ui.app import run_ui
 
-    run()
+        return run_ui
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

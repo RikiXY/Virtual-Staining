@@ -39,6 +39,24 @@ class LoadedCheckpointGenerator:
     device: torch.device
 
 
+@dataclass(frozen=True)
+class CheckpointGeneratorMetadata:
+    """Validated metadata needed to describe and reconstruct one generator."""
+
+    checkpoint_path: Path
+    format_version: int
+    image_size: tuple[int, int]
+    input_names: tuple[str, ...]
+    target_modality: str
+    channels_per_input: int
+    generator_class: str
+    architecture: str
+    base_channels: int
+    norm: str
+    dropout: bool
+    bilinear: bool
+
+
 @torch.no_grad()
 def predict_batch(
     generator: nn.Module,
@@ -66,15 +84,18 @@ def build_inference_transform(image_size: tuple[int, int]) -> transforms.Compose
     )
 
 
-def load_checkpoint_generator(
-    checkpoint_path: Path,
-    device: torch.device,
-) -> LoadedCheckpointGenerator:
-    """Reconstruct a generator using only a current-format checkpoint."""
+def _load_checkpoint_payload(checkpoint_path: Path, map_location: torch.device | str) -> dict:
     checkpoint_path = Path(checkpoint_path)
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    checkpoint = torch.load(checkpoint_path, map_location=map_location, weights_only=False)
     if not isinstance(checkpoint, dict):
         raise ValueError(f"Checkpoint '{checkpoint_path}' must contain a mapping.")
+    return checkpoint
+
+
+def _checkpoint_generator_metadata(
+    checkpoint: dict, checkpoint_path: Path
+) -> CheckpointGeneratorMetadata:
+    """Validate current checkpoint-only inference metadata without building a model."""
 
     checkpoint_arch = validate_checkpoint_metadata(checkpoint, checkpoint_path)
     generator_arch = checkpoint_arch["generator"]
@@ -133,21 +154,54 @@ def load_checkpoint_generator(
     target_modality = generator_arch.get("target_modality")
     if not isinstance(target_modality, str) or not target_modality.strip():
         raise ValueError("Checkpoint generator target_modality must be a non-empty string.")
+    if not isinstance(checkpoint.get("generator_state_dict"), dict):
+        raise ValueError("Checkpoint has no valid generator_state_dict.")
 
     channels_per_input = in_channels // len(input_names)
-    generator = ConcatUNetGenerator(
-        input_names,
+    return CheckpointGeneratorMetadata(
+        checkpoint_path=checkpoint_path,
+        format_version=int(checkpoint["format_version"]),
+        image_size=image_size,
+        input_names=input_names,
+        target_modality=target_modality,
         channels_per_input=channels_per_input,
+        generator_class=str(generator_arch["class"]),
+        architecture=str(generator_arch["architecture"]),
         base_channels=base_channels,
         norm=norm,
         dropout=dropout,
         bilinear=bilinear,
-    ).to(device)
-    check_generator_arch(checkpoint_arch, generator, target_modality=target_modality)
+    )
 
-    state_dict = checkpoint.get("generator_state_dict")
-    if not isinstance(state_dict, dict):
-        raise ValueError("Checkpoint has no valid generator_state_dict.")
+
+def inspect_checkpoint_generator(checkpoint_path: Path) -> CheckpointGeneratorMetadata:
+    """Read and validate metadata for checkpoint-only inference without building a model."""
+    path = Path(checkpoint_path)
+    checkpoint = _load_checkpoint_payload(path, "cpu")
+    return _checkpoint_generator_metadata(checkpoint, path)
+
+
+def load_checkpoint_generator(
+    checkpoint_path: Path,
+    device: torch.device,
+) -> LoadedCheckpointGenerator:
+    """Reconstruct a generator using only a current-format checkpoint."""
+    checkpoint_path = Path(checkpoint_path)
+    checkpoint = _load_checkpoint_payload(checkpoint_path, device)
+    metadata = _checkpoint_generator_metadata(checkpoint, checkpoint_path)
+
+    generator = ConcatUNetGenerator(
+        metadata.input_names,
+        channels_per_input=metadata.channels_per_input,
+        base_channels=metadata.base_channels,
+        norm=metadata.norm,
+        dropout=metadata.dropout,
+        bilinear=metadata.bilinear,
+    ).to(device)
+    checkpoint_arch = checkpoint["architecture"]
+    check_generator_arch(checkpoint_arch, generator, target_modality=metadata.target_modality)
+
+    state_dict = checkpoint["generator_state_dict"]
     try:
         generator.load_state_dict(state_dict)
     except RuntimeError as exc:
@@ -159,10 +213,10 @@ def load_checkpoint_generator(
     return LoadedCheckpointGenerator(
         generator=generator,
         checkpoint_path=checkpoint_path,
-        image_size=image_size,
-        input_names=input_names,
-        target_modality=target_modality,
-        channels_per_input=channels_per_input,
+        image_size=metadata.image_size,
+        input_names=metadata.input_names,
+        target_modality=metadata.target_modality,
+        channels_per_input=metadata.channels_per_input,
         device=device,
     )
 

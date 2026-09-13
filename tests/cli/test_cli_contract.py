@@ -35,7 +35,7 @@ def test_pyproject_publishes_cli_and_ui_entry_points() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     assert pyproject["project"]["scripts"] == {
         "vs": "virtual_staining.cli:main",
-        "vs-ui": "virtual_staining.ui:main",
+        "vs-ui": "virtual_staining.cli.ui:main",
     }
 
 
