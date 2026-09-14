@@ -29,7 +29,7 @@ class AlignmentImage:
 
 
 @dataclass(frozen=True)
-class _RegistrationDiagnostics:
+class RegistrationDiagnostics:
     """Counts and overlap at estimation resolution; geometry at result resolution."""
 
     n_keypoints_reference: int
@@ -63,12 +63,13 @@ class AlignmentResult:
     method: Literal["identity", "affine_sift"]
     warp_matrix: np.ndarray
     reason: str | None = None
-    diagnostics: _RegistrationDiagnostics | None = None
+    diagnostics: RegistrationDiagnostics | None = None
 
     def __post_init__(self) -> None:
         matrix = np.asarray(self.warp_matrix, dtype=np.float64)
         _validate_affine(matrix)
-        matrix = np.frombuffer(matrix.tobytes(), dtype=np.float64).reshape(2, 3)
+        matrix = matrix.copy()
+        matrix.setflags(write=False)
         object.__setattr__(self, "warp_matrix", matrix)
 
     @property

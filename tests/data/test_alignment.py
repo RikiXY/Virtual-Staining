@@ -14,12 +14,12 @@ from virtual_staining.data.alignment import (
     AlignmentError,
     AlignmentImage,
     AlignmentResult,
+    RegistrationDiagnostics,
     identity_alignment,
     resolve_alignment,
     warp_aligned_mask_patch,
     warp_aligned_patch,
 )
-from virtual_staining.data.alignment.models import _RegistrationDiagnostics
 from virtual_staining.data.alignment.registration import (
     _aligned_mask_iou,
     _estimate_affine,
@@ -294,13 +294,13 @@ def test_estimate_affine_raises_on_low_inlier_count() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _RegistrationDiagnostics - structure
+# RegistrationDiagnostics - structure
 # ---------------------------------------------------------------------------
 
 
 def test_alignment_metadata_has_expected_fields() -> None:
     eye = np.eye(2, 3, dtype=np.float64)
-    meta = _RegistrationDiagnostics(
+    meta = RegistrationDiagnostics(
         n_keypoints_reference=200,
         n_keypoints_moving=180,
         n_matches=60,
@@ -328,7 +328,7 @@ def test_alignment_metadata_has_expected_fields() -> None:
 def test_resolve_alignment_uses_nearest_neighbor_for_scaled_masks() -> None:
     img = _textured_image()
     mask = np.full(img.shape[:2], 255, dtype=np.uint8)
-    metadata = _RegistrationDiagnostics(
+    metadata = RegistrationDiagnostics(
         n_keypoints_reference=100,
         n_keypoints_moving=100,
         n_matches=50,
@@ -506,8 +506,8 @@ def test_resolve_alignment_resizes_masks_to_each_preview(full_size_masks: bool) 
     assert np.array_equal(moving.mask, moving_mask_before)
 
 
-def _diagnostics() -> _RegistrationDiagnostics:
-    return _RegistrationDiagnostics(100, 90, 20, 18, 0.9, 1.0, 1.0, 0.0, 0.0, 0.0, 0.8)
+def _diagnostics() -> RegistrationDiagnostics:
+    return RegistrationDiagnostics(100, 90, 20, 18, 0.9, 1.0, 1.0, 0.0, 0.0, 0.0, 0.8)
 
 
 def _image(
@@ -681,6 +681,26 @@ def test_preview_rounding_uses_separate_x_and_y_scales() -> None:
     ):
         result = resolve_alignment(reference, moving, AlignmentConfig())
     np.testing.assert_allclose(result.warp_matrix, [[123 / 125, 0, 24.6], [0, 83 / 85, -16.6]])
+
+
+def test_sift_resize_rounding_uses_actual_estimation_dimensions() -> None:
+    reference = _image((84, 124), (21, 31))
+    moving = _image((100, 132), (25, 33))
+    estimated = np.array([[1.0, -0.5, 3.0], [0.5, 1.0, -2.0]])
+    with patch(
+        "virtual_staining.data.alignment.registration._estimate_affine",
+        return_value=(estimated, _diagnostics()),
+    ) as estimate:
+        result = resolve_alignment(reference, moving, AlignmentConfig())
+
+    reference_preview, moving_preview, reference_mask, moving_mask = estimate.call_args.args
+    assert reference_preview.shape[:2] == reference_mask.shape == (10, 16)
+    assert moving_preview.shape[:2] == moving_mask.shape == (12, 16)
+    # Actual (x, y) scales are (16/124, 10/84) and (16/132, 12/100).
+    expected = [[31 / 33, -0.465, 23.25], [28 / 55, 126 / 125, -16.8]]
+    np.testing.assert_allclose(result.warp_matrix, expected)
+    assert result.metadata["translation_x"] == pytest.approx(23.25)
+    assert result.metadata["translation_y"] == pytest.approx(-16.8)
 
 
 @pytest.mark.parametrize(

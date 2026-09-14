@@ -110,20 +110,21 @@ nested, and `TYPE_CHECKING` imports with the standard library. It reports the
 source file and illegal import, and verifies the allowlist topologically sorts.
 
 Registration is implemented entirely in `data/alignment/`: `models.py` defines
-`AlignmentImage`, immutable `AlignmentResult` and `AlignmentError`;
+`AlignmentImage`, immutable `AlignmentResult`, `RegistrationDiagnostics`, and `AlignmentError`;
 `registration.py` owns identity/declared-alignment policy, SIFT/RANSAC, validation
 and diagnostics; `warping.py` owns affine application and coordinate conversion.
-The package exports only those three types, `identity_alignment`,
+The package exports only those four types, `identity_alignment`,
 `resolve_alignment`, `warp_aligned_patch`, and `warp_aligned_mask_patch`.
-SIFT helpers and diagnostics are private. `preprocessing.py` retains general
-mask generation/sampling and patch filtering, with no registration dependency.
+SIFT helpers are private. `preprocessing.py` retains general mask generation/sampling
+and patch filtering, with no registration dependency.
 
 Every result matrix maps moving full-resolution `(x, y)` into reference
 full-resolution `(x, y)`. Array shapes are `(height, width)`; output sizes are
 `(width, height)`. Registration normalizes whole-image masks to preview geometry
 with nearest neighbors, halves previews for estimation, then compensates for
-both images' per-axis preview scales and that extra halving. Mask IoU describes
-estimation-space overlap and is diagnostic, with no rejection threshold.
+both images' per-axis scales using the actual SIFT input dimensions, including
+resize rounding. Mask IoU describes estimation-space overlap and is diagnostic,
+with no rejection threshold.
 Serialized keypoint fields retain their existing `src`/`tgt` names for dataset
 metadata compatibility; the implementation uses reference/moving terminology.
 

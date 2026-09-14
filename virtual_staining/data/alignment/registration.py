@@ -11,7 +11,7 @@ from virtual_staining.data.alignment.models import (
     AlignmentError,
     AlignmentImage,
     AlignmentResult,
-    _RegistrationDiagnostics,
+    RegistrationDiagnostics,
     _validate_affine,
 )
 from virtual_staining.data.alignment.warping import (
@@ -85,7 +85,7 @@ def _estimate_affine(
     moving_mask: np.ndarray | None = None,
     nfeatures: int = 10000,
     ratio_threshold: float = _LOWE_RATIO_THRESHOLD,
-) -> tuple[np.ndarray, _RegistrationDiagnostics]:
+) -> tuple[np.ndarray, RegistrationDiagnostics]:
     """Estimate moving->reference (x, y) in the supplied images' pixel frames.
 
     Images are uint8 BGR or grayscale. Optional uint8 2D masks must match their
@@ -189,7 +189,7 @@ def _estimate_affine(
         warp_matrix,
         (reference.shape[1], reference.shape[0]),
     )
-    metadata = _RegistrationDiagnostics(
+    metadata = RegistrationDiagnostics(
         n_keypoints_reference=n_reference_keypoints,
         n_keypoints_moving=n_moving_keypoints,
         n_matches=len(filtered_matches),
@@ -275,17 +275,16 @@ def resolve_alignment(
     matrix, diagnostics = _estimate_affine(
         reference_preview, moving_preview, reference_mask, moving_mask
     )
-    # Previews use actual per-axis geometry; the extra cv2.resize above uses
-    # the explicit factor 0.5 (even when its output dimensions round).
+    # Use the actual SIFT input dimensions, including rounding during resizing.
     matrix = _rescale_transform(
         matrix,
         reference_scale=(
-            0.5 * reference.preview.shape[1] / reference.full_shape[1],
-            0.5 * reference.preview.shape[0] / reference.full_shape[0],
+            reference_preview.shape[1] / reference.full_shape[1],
+            reference_preview.shape[0] / reference.full_shape[0],
         ),
         moving_scale=(
-            0.5 * moving.preview.shape[1] / moving.full_shape[1],
-            0.5 * moving.preview.shape[0] / moving.full_shape[0],
+            moving_preview.shape[1] / moving.full_shape[1],
+            moving_preview.shape[0] / moving.full_shape[0],
         ),
     )
     diagnostics = replace(diagnostics, **_affine_diagnostics(matrix))
