@@ -155,3 +155,22 @@ def test_cli_commands_use_application_or_cli_surfaces() -> None:
             ):
                 violations.append(f"{path}: {imported}")
     assert not violations, "CLI command boundary violations:\n" + "\n".join(violations)
+
+
+def test_ui_uses_only_the_public_application_api() -> None:
+    violations: list[str] = []
+    for path in sorted(Path("virtual_staining/ui").glob("*.py")):
+        for imported in _imports(path):
+            if imported.startswith("virtual_staining.applications") and not imported.startswith(
+                "virtual_staining.applications.api"
+            ):
+                violations.append(f"{path}: {imported}")
+            if imported.startswith(
+                (
+                    "virtual_staining.evaluation",
+                    "virtual_staining.inference",
+                    "virtual_staining.models",
+                )
+            ):
+                violations.append(f"{path}: {imported}")
+    assert not violations, "UI application-boundary violations:\n" + "\n".join(violations)

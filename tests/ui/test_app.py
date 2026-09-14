@@ -5,9 +5,12 @@ from pathlib import Path
 
 import pytest
 import torch
+from nicegui.client import Client
+from nicegui.page import page
 from PIL import Image
 
 import virtual_staining.ui.app as ui_app
+from virtual_staining.applications.api import ApplicationService
 from virtual_staining.applications.ui_inference import UIInferenceError, UIInferenceService
 from virtual_staining.checkpoint_contract import (
     CHECKPOINT_FORMAT_VERSION,
@@ -209,3 +212,91 @@ def test_nicegui_page_has_no_repository_checkpoint_mapping() -> None:
     assert "TRANSFORMATIONS" not in source
     assert "models.generator" not in source
     assert "inference.runner" not in source
+    assert "evaluation." not in source
+    assert "models." not in source
+    assert "virtual_staining.applications.api" in source
+
+
+def test_main_navigation_starts_on_source_only_inference(tmp_path: Path) -> None:
+    service = ApplicationService(
+        tmp_path / "checkpoints",
+        tmp_path / "outputs",
+        tmp_path / "results",
+    )
+
+    with Client(page("/navigation-test")) as client:
+        ui_app._build_page(service, tmp_path / "outputs")
+
+    header_bar = next(
+        element for element in client.elements.values() if "vs-header-bar" in element._classes
+    )
+    header_icons = [
+        element
+        for element in client.elements.values()
+        if element.tag == "q-icon" and "vs-brand-symbol" in element._classes
+    ]
+    tutorial_button = next(
+        element
+        for element in client.elements.values()
+        if element.tag == "q-btn" and "vs-tutorial-button" in element._classes
+    )
+    drawer = next(element for element in client.elements.values() if element.tag == "q-drawer")
+    menu_button = next(
+        element
+        for element in client.elements.values()
+        if element.tag == "q-btn" and element._props.get("aria-label") == "Open navigation menu"
+    )
+    workspace_buttons = {
+        element._props.get("aria-label"): element
+        for element in client.elements.values()
+        if element.tag == "q-btn"
+        and element._props.get("aria-label") in {"Open Inference", "Open Experiments"}
+    }
+    current_page = next(
+        element for element in client.elements.values() if "vs-current-page" in element._classes
+    )
+    inference_page = next(
+        element for element in client.elements.values() if "vs-inference-page" in element._classes
+    )
+    experiments_page = next(
+        element for element in client.elements.values() if "vs-experiments-page" in element._classes
+    )
+    sample_images = next(
+        element for element in client.elements.values() if "vs-sample-images" in element._classes
+    )
+    sample_metrics = next(
+        element for element in client.elements.values() if "vs-sample-metrics" in element._classes
+    )
+    sample_comparison = next(
+        element
+        for element in client.elements.values()
+        if "vs-sample-comparison" in element._classes
+    )
+
+    assert drawer.value is False
+    assert menu_button.parent_slot.parent is header_bar
+    assert set(workspace_buttons) == {"Open Inference", "Open Experiments"}
+    assert tutorial_button.parent_slot.parent is not header_bar
+    assert current_page.text == "Inference"
+    assert inference_page.visible is True
+    assert experiments_page.visible is False
+    assert len(header_icons) == 1
+    assert sample_images.id < sample_metrics.id < sample_comparison.id
+
+
+def test_web_app_uses_packaged_favicon(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(ui_app.ui, "run", lambda **kwargs: captured.update(kwargs))
+
+    ui_app.run_ui(
+        tmp_path / "checkpoints",
+        tmp_path / "outputs",
+        tmp_path / "results",
+    )
+
+    assert ui_app.APP_ICON_PATH.is_file()
+    assert captured["title"] == "Virtual Staining"
+    assert captured["favicon"] == ui_app.APP_ICON_PATH

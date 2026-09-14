@@ -1,0 +1,315 @@
+from __future__ import annotations
+
+import logging
+from dataclasses import replace
+from io import BytesIO
+from pathlib import Path
+
+from nicegui import events, run, ui
+from PIL import Image
+
+from virtual_staining.applications.api import (
+    ApplicationError,
+    ApplicationService,
+    InferenceRequest,
+    InferenceResult,
+    ModelCatalog,
+    ModelDescriptor,
+    ResultProvenance,
+)
+from virtual_staining.ui.theme import empty_state, section_heading
+
+logger = logging.getLogger(__name__)
+
+
+def build_inference_page(
+    service: ApplicationService,
+    catalog: ModelCatalog,
+    output_directory: Path,
+) -> None:
+    selected_image: Image.Image | None = None
+    selected_filename: str | None = None
+    inference_result: InferenceResult | None = None
+    models = {descriptor.identifier: descriptor for descriptor in catalog.models}
+    initial_model_id = catalog.models[0].identifier if catalog.models else None
+
+    with ui.column().classes("w-full gap-5"):
+        with ui.column().classes("gap-1"):
+            ui.label("Inference").classes("text-3xl md:text-4xl font-semibold tracking-tight")
+            ui.label(
+                "Generate one virtual stain from a validated, exact-size source patch."
+            ).classes("text-slate-500")
+
+        with ui.card().classes("vs-card w-full rounded-xl p-5 md:p-6 gap-4"):
+            section_heading("memory", "Model", "Choose a compatible checkpoint and transformation.")
+            if catalog.models:
+                model_select = ui.select(
+                    {item.identifier: item.display_name for item in catalog.models},
+                    value=initial_model_id,
+                    label="Available model",
+                ).classes("w-full")
+                with ui.row().classes("w-full gap-2 flex-wrap"):
+                    transformation_chip = ui.badge().props("color=teal-8")
+                    size_chip = ui.badge().props("outline color=blue-grey-7")
+                    channel_chip = ui.badge().props("outline color=blue-grey-7")
+                    schema_chip = ui.badge().props("outline color=blue-grey-7")
+                model_details = ui.markdown().classes("text-base text-slate-600")
+            else:
+                model_select = ui.select({}, label="Available model").classes("w-full")
+                model_select.disable()
+                transformation_chip = ui.badge()
+                size_chip = ui.badge()
+                channel_chip = ui.badge()
+                schema_chip = ui.badge()
+                model_details = ui.markdown()
+                for element in (
+                    transformation_chip,
+                    size_chip,
+                    channel_chip,
+                    schema_chip,
+                    model_details,
+                ):
+                    element.set_visibility(False)
+                empty_state(
+                    "inventory_2",
+                    "No compatible checkpoints found",
+                    "Start vs-ui with --checkpoint-dir PATH or set "
+                    "VIRTUAL_STAINING_CHECKPOINT_DIR.",
+                )
+            if catalog.issues:
+                with ui.expansion(
+                    f"{len(catalog.issues)} checkpoint(s) skipped", icon="warning_amber"
+                ).classes("w-full text-base text-amber-800"):
+                    for issue in catalog.issues:
+                        ui.label(f"{issue.checkpoint}: {issue.reason}").classes(
+                            "text-sm text-slate-600"
+                        )
+
+        with ui.card().classes("vs-card w-full rounded-xl p-5 md:p-6 gap-4"):
+            section_heading(
+                "add_photo_alternate",
+                "Source image",
+                "Upload one exact-size RGB patch. Scientific inputs are not resized.",
+            )
+            uploader = (
+                ui.upload(
+                    label="Drop a source image here or browse",
+                    auto_upload=True,
+                    max_files=1,
+                    max_file_size=50 * 1024 * 1024,
+                )
+                .props('accept=".bmp,.jpeg,.jpg,.png,.tif,.tiff" flat bordered no-thumbnails')
+                .classes("w-full")
+            )
+            if not catalog.models:
+                uploader.disable()
+            input_status = ui.label("Select a model, then upload a compatible patch.").classes(
+                "text-base text-slate-500"
+            )
+
+        with ui.card().classes("vs-card w-full rounded-xl p-5 md:p-6 gap-5"):
+            section_heading(
+                "compare",
+                "Generated result",
+                "Review source and virtual stain side by side before exporting.",
+            )
+            result_status = ui.label("Waiting for a validated source image.").classes(
+                "text-base text-slate-500"
+            )
+            with ui.row().classes("w-full flex-col md:flex-row gap-5 items-stretch"):
+                input_preview, input_empty = _image_panel("Source", "No input selected")
+                output_preview, output_empty = _image_panel("Generated", "No result generated")
+
+            output_folder = ui.input(label="Output folder", value=str(output_directory)).classes(
+                "w-full"
+            )
+            ui.label(
+                "A PNG and portable JSON provenance sidecar are saved without overwriting files."
+            ).classes("text-sm text-slate-500 -mt-3")
+            with ui.row().classes("w-full gap-3 flex-wrap"):
+                generate_button = ui.button("Generate", icon="auto_awesome").props(
+                    "color=primary unelevated"
+                )
+                save_button = ui.button("Save result", icon="save").props(
+                    "outline color=blue-grey-8"
+                )
+                reset_button = ui.button("New image", icon="refresh").props(
+                    "flat color=blue-grey-8"
+                )
+                generate_button.disable()
+                save_button.disable()
+                reset_button.disable()
+            with ui.expansion("Model & provenance", icon="fingerprint").classes(
+                "w-full border-t border-slate-100 pt-2 text-base"
+            ):
+                provenance_details = ui.markdown(
+                    "Generate an image to record result provenance."
+                ).classes("text-base text-slate-600")
+
+    def selected_descriptor() -> ModelDescriptor | None:
+        return models.get(str(model_select.value)) if model_select.value is not None else None
+
+    def show_descriptor(descriptor: ModelDescriptor | None) -> None:
+        if descriptor is None:
+            return
+        width, height = descriptor.image_size
+        transformation_chip.set_text(descriptor.transformation)
+        size_chip.set_text(f"{width} × {height} px")
+        channel_chip.set_text(f"{descriptor.channels_per_input} channels")
+        schema_chip.set_text(f"schema v{descriptor.checkpoint_schema_version}")
+        model_details.set_content(_descriptor_details(descriptor))
+
+    def clear_input() -> None:
+        nonlocal selected_image, selected_filename, inference_result
+        selected_image = None
+        selected_filename = None
+        inference_result = None
+        uploader.reset()
+        input_preview.set_source("")
+        input_preview.set_visibility(False)
+        input_empty.set_visibility(True)
+        output_preview.set_source("")
+        output_preview.set_visibility(False)
+        output_empty.set_visibility(True)
+        input_status.set_text("Upload a compatible exact-size RGB image patch.")
+        result_status.set_text("Waiting for a validated source image.")
+        provenance_details.set_content("Generate an image to record result provenance.")
+        generate_button.disable()
+        save_button.disable()
+        reset_button.disable()
+
+    async def handle_upload(event: events.UploadEventArguments) -> None:
+        nonlocal selected_image, selected_filename, inference_result
+        descriptor = selected_descriptor()
+        if descriptor is None:
+            ui.notify("Select an available model first.", type="warning")
+            return
+        try:
+            candidate = await _read_upload(event)
+            service.validate_inference_input(descriptor.identifier, candidate)
+        except ApplicationError as exc:
+            ui.notify(str(exc), type="negative", multi_line=True, close_button=True)
+            clear_input()
+            return
+        except OSError:
+            ui.notify("The upload is not a readable image.", type="negative", close_button=True)
+            clear_input()
+            return
+        selected_image = candidate
+        selected_filename = event.file.name
+        inference_result = None
+        input_preview.set_source(candidate)
+        input_preview.set_visibility(True)
+        input_empty.set_visibility(False)
+        output_preview.set_visibility(False)
+        output_empty.set_visibility(True)
+        input_status.set_text(
+            f"Ready · {candidate.mode} · {candidate.size[0]} × {candidate.size[1]} px"
+        )
+        result_status.set_text("Input validated. Ready to generate.")
+        generate_button.enable()
+        save_button.disable()
+        reset_button.enable()
+
+    async def handle_generate() -> None:
+        nonlocal inference_result
+        descriptor = selected_descriptor()
+        if selected_image is None or selected_filename is None or descriptor is None:
+            ui.notify("Select a valid input image first.", type="warning")
+            return
+        generate_button.disable()
+        generate_button.props("loading")
+        result_status.set_text("Generating the virtual stain…")
+        try:
+            completed = await run.io_bound(
+                service.run_inference,
+                InferenceRequest(descriptor.identifier, selected_image, selected_filename),
+            )
+        except ApplicationError as exc:
+            inference_result = None
+            result_status.set_text("Inference failed. Review the message and try again.")
+            ui.notify(str(exc), type="negative", multi_line=True, close_button=True)
+        except Exception:
+            logger.exception("Unexpected UI inference failure")
+            inference_result = None
+            result_status.set_text("Inference failed.")
+            ui.notify("An unexpected inference error occurred.", type="negative")
+        else:
+            assert completed is not None
+            inference_result = completed
+            output_preview.set_source(completed.generated_image)
+            output_preview.set_visibility(True)
+            output_empty.set_visibility(False)
+            provenance_details.set_content(_provenance_details(completed.provenance))
+            result_status.set_text("Inference complete. Review the result before saving.")
+            save_button.enable()
+            ui.notify("Virtual stain generated.", type="positive")
+        finally:
+            generate_button.props(remove="loading")
+            generate_button.enable()
+
+    def handle_save() -> None:
+        nonlocal inference_result
+        if inference_result is None:
+            ui.notify("Generate an image before saving.", type="warning")
+            return
+        try:
+            saved = service.save_inference_result(inference_result, str(output_folder.value or ""))
+        except ApplicationError as exc:
+            ui.notify(str(exc), type="negative", multi_line=True, close_button=True)
+            return
+        inference_result = replace(inference_result, provenance=saved.provenance)
+        provenance_details.set_content(_provenance_details(saved.provenance))
+        ui.notify(f"Saved {saved.image_path.name} and provenance.", type="positive")
+
+    if catalog.models:
+        show_descriptor(catalog.models[0])
+    model_select.on_value_change(
+        lambda _event: (clear_input(), show_descriptor(selected_descriptor()))
+    )
+    uploader.on_upload(handle_upload)
+    generate_button.on_click(handle_generate)
+    save_button.on_click(handle_save)
+    reset_button.on_click(clear_input)
+
+
+def _image_panel(title: str, empty_text: str):
+    with ui.column().classes("flex-1 min-w-0 gap-2"):
+        ui.label(title).classes("text-base font-medium text-slate-700")
+        with ui.element("div").classes("vs-image-frame w-full aspect-square rounded-lg"):
+            empty = ui.label(empty_text).classes(
+                "absolute inset-0 flex items-center justify-center text-base text-slate-400"
+            )
+            preview = ui.image().props("fit=contain").classes("vs-image")
+            preview.set_visibility(False)
+    return preview, empty
+
+
+async def _read_upload(event: events.UploadEventArguments) -> Image.Image:
+    with Image.open(BytesIO(await event.file.read())) as uploaded:
+        uploaded.load()
+        return uploaded.copy()
+
+
+def _descriptor_details(descriptor: ModelDescriptor) -> str:
+    width, height = descriptor.image_size
+    return (
+        f"**Transformation:** {descriptor.transformation}  \n"
+        f"**Checkpoint:** `{descriptor.checkpoint_filename}`  \n"
+        f"**Architecture:** {descriptor.architecture_id} ({descriptor.model_class})  \n"
+        f"**Required input:** {width} × {height} px, {descriptor.channels_per_input} channels"
+    )
+
+
+def _provenance_details(provenance: ResultProvenance) -> str:
+    width, height = provenance.required_image_size
+    return (
+        f"**Transformation:** {provenance.transformation}  \n"
+        f"**Model:** `{provenance.model_identifier}` · schema "
+        f"v{provenance.checkpoint_schema_version}  \n"
+        f"**Checkpoint:** `{provenance.checkpoint_filename}`  \n"
+        f"**Architecture:** {provenance.architecture_id} ({provenance.model_class})  \n"
+        f"**Input:** `{provenance.source_filename}` · {width} × {height} px · "
+        f"{provenance.input_image_mode}  \n"
+        f"**Runtime:** {provenance.runtime_device}"
+    )

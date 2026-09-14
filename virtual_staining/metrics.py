@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
+from typing import Literal, cast
 
 import numpy as np
 
@@ -17,19 +17,29 @@ except ImportError as exc:
 class MetricSpec:
     higher_is_better: bool
     thresholds: tuple[float, ...]
+    quality_thresholds: tuple[float, float, float, float]
+
+
+MetricQuality = Literal["very_good", "good", "fair", "poor", "very_poor", "unknown"]
 
 
 METRIC_SPECS: dict[str, MetricSpec] = {
-    "ssim": MetricSpec(True, (0.85, 0.75, 0.65)),
-    "psnr": MetricSpec(True, (25.0, 20.0, 15.0)),
-    "mae": MetricSpec(False, (0.06, 0.10, 0.16)),
-    "rmse": MetricSpec(False, (0.08, 0.12, 0.20)),
-    "mse": MetricSpec(False, (0.0036, 0.0100, 0.0256)),
-    "pcc_gray": MetricSpec(True, (0.95, 0.90, 0.80)),
-    "pcc_rgb_mean": MetricSpec(True, (0.95, 0.90, 0.80)),
-    "pcc_r": MetricSpec(True, (0.95, 0.90, 0.80)),
-    "pcc_g": MetricSpec(True, (0.95, 0.90, 0.80)),
-    "pcc_b": MetricSpec(True, (0.95, 0.90, 0.80)),
+    # quality_thresholds are ordered: very good, good, fair, poor.
+    # Values beyond the poor threshold are classified as very poor.
+    "ssim": MetricSpec(True, (0.85, 0.75, 0.65), (0.85, 0.80, 0.75, 0.65)),
+    "psnr": MetricSpec(True, (25.0, 20.0, 15.0), (25.0, 22.5, 20.0, 15.0)),
+    "mae": MetricSpec(False, (0.06, 0.10, 0.16), (0.06, 0.08, 0.10, 0.16)),
+    "rmse": MetricSpec(False, (0.08, 0.12, 0.20), (0.08, 0.10, 0.12, 0.20)),
+    "mse": MetricSpec(
+        False,
+        (0.0036, 0.0100, 0.0256),
+        (0.0036, 0.0068, 0.0100, 0.0256),
+    ),
+    "pcc_gray": MetricSpec(True, (0.95, 0.90, 0.80), (0.95, 0.925, 0.90, 0.80)),
+    "pcc_rgb_mean": MetricSpec(True, (0.95, 0.90, 0.80), (0.95, 0.925, 0.90, 0.80)),
+    "pcc_r": MetricSpec(True, (0.95, 0.90, 0.80), (0.95, 0.925, 0.90, 0.80)),
+    "pcc_g": MetricSpec(True, (0.95, 0.90, 0.80), (0.95, 0.925, 0.90, 0.80)),
+    "pcc_b": MetricSpec(True, (0.95, 0.90, 0.80), (0.95, 0.925, 0.90, 0.80)),
 }
 
 VALIDATION_IMAGE_METRIC_NAMES = (
@@ -69,6 +79,20 @@ def is_higher_better_metric(metric_name: str) -> bool:
 def get_metric_thresholds(metric_name: str) -> list[float]:
     """Returns the default thresholds used by comparison summaries."""
     return sorted(_metric_spec(metric_name).thresholds)
+
+
+def metric_quality(metric_name: str, value: float) -> MetricQuality:
+    """Classify a metric value using its five-level, direction-aware quality scale."""
+    if not np.isfinite(value) or metric_name not in METRIC_SPECS:
+        return "unknown"
+    spec = METRIC_SPECS[metric_name]
+    levels: tuple[MetricQuality, ...] = ("very_good", "good", "fair", "poor")
+    for threshold, level in zip(spec.quality_thresholds, levels, strict=True):
+        if spec.higher_is_better and value >= threshold:
+            return level
+        if not spec.higher_is_better and value <= threshold:
+            return level
+    return "very_poor"
 
 
 def compute_mae(target: np.ndarray, generated: np.ndarray) -> float:

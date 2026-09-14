@@ -26,9 +26,9 @@ upper layers may import from lower layers, never the reverse.
 | `training/` | Training mechanics, validation, history, losses, resume state, and callback-driven progress events |
 | `inference/` | Reusable checkpoint loading and runtime inference; application code owns runtime composition |
 | `evaluation/` | Set evaluation, diagnostic plots, representative selection, comparison panels, and summaries |
-| `applications/` | User-visible stage lifecycle owners and infer-images runtime composition; no `argparse` |
+| `applications/` | Public application API plus user-visible use-case and stage lifecycle owners; no `argparse` |
 | `cli/` | The `argparse` entrypoint, terminal rendering, and thin adapters over `applications/` |
-| `ui/` | NiceGUI presentation code consuming the UI inference application facade |
+| `ui/` | NiceGUI presentation code consuming only the public application API |
 
 ## Purity and I/O Boundaries
 
@@ -62,9 +62,13 @@ its `ProgressUpdate` callback is silent unless an adapter supplies a reporter.
 The CLI supplies terminal rendering, while application/library callers remain
 presentation-neutral. Infer-images runtime creation belongs to `applications/`;
 `inference/single.py` accepts an already-loaded `InferenceRuntime`.
-The NiceGUI page similarly consumes `applications/ui_inference.py`, whose model
-descriptors and result/provenance records isolate browser presentation from current
-checkpoint reconstruction and single-patch prediction internals.
+CLI commands consume focused use-case modules in `applications/`. NiceGUI consumes
+only `applications/api.py`, which is the stable Python-facing facade for checkpoint
+discovery, inference, single-sample evaluation, run discovery/evaluation, representative
+samples, and comparison. Its request/result dataclasses keep presentation code unaware
+of checkpoint reconstruction, metric modules, config parsing, CSV schemas, and run
+directory conventions. `applications/ui_inference.py` remains a compatibility
+implementation behind that facade for the original strict single-patch workflow.
 
 Within training, `trainer.py` owns epoch orchestration, `validator.py` owns validation
 inference, `history.py` owns metric CSV persistence, `checkpoints.py` owns model/training
@@ -83,6 +87,8 @@ These constraints are enforced by convention and checked in code review:
   suppress or redirect output.
 - **No `sys.exit()` outside `cli/`** - applications raise exceptions; the CLI
   layer converts them to exit codes.
+- **UI imports only `applications.api`** - browser pages never import model,
+  inference, evaluation, or config implementations directly.
 
 The library graph is an enforced direct-edge DAG:
 

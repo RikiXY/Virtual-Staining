@@ -10,12 +10,13 @@ from virtual_staining.ui.app import run_ui
 
 CHECKPOINT_DIRECTORY_ENV = "VIRTUAL_STAINING_CHECKPOINT_DIR"
 OUTPUT_DIRECTORY_ENV = "VIRTUAL_STAINING_OUTPUT_DIR"
+RESULTS_DIRECTORY_ENV = "VIRTUAL_STAINING_RESULTS_DIR"
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vs-ui",
-        description="Launch the Virtual-Staining single-patch research interface.",
+        description="Launch the Virtual-Staining inference and experiments interface.",
     )
     parser.add_argument(
         "--checkpoint-dir",
@@ -33,6 +34,14 @@ def _build_parser() -> argparse.ArgumentParser:
             f"(default: ${OUTPUT_DIRECTORY_ENV} or ./outputs)."
         ),
     )
+    parser.add_argument(
+        "--results-dir",
+        default=os.environ.get(RESULTS_DIRECTORY_ENV, "results"),
+        help=(
+            "Directory searched for experiment runs "
+            f"(default: ${RESULTS_DIRECTORY_ENV} or ./results)."
+        ),
+    )
     parser.add_argument("--host", default="0.0.0.0", help="Interface to bind (default: 0.0.0.0).")
     parser.add_argument("--port", type=int, default=8080, help="Port to bind (default: 8080).")
     add_log_level_argument(parser)
@@ -48,6 +57,7 @@ def main(argv: list[str] | None = None) -> None:
         run_ui(
             Path(args.checkpoint_dir),
             Path(args.output_dir),
+            Path(args.results_dir),
             host=args.host,
             port=args.port,
         )

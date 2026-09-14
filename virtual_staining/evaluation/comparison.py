@@ -258,8 +258,15 @@ def plot_distribution_ecdf(
 
 def plot_paired_delta_histogram(signed_delta: np.ndarray, column: str, output_dir: Path) -> None:
     """Save the histogram of signed deltas for the paired comparison."""
+    minimum = float(np.min(signed_delta))
+    maximum = float(np.max(signed_delta))
+    if np.isclose(minimum, maximum):
+        padding = max(abs(minimum) * 0.05, 0.01)
+        bins: int | np.ndarray = np.linspace(minimum - padding, maximum + padding, 31)
+    else:
+        bins = 30
     plt.figure(figsize=(9, 5))
-    plt.hist(signed_delta, bins=30)
+    plt.hist(signed_delta, bins=bins)
     plt.axvline(0.0, linestyle="--", linewidth=1)
     plt.xlabel(f"Signed delta of {column}")
     plt.ylabel("Count")

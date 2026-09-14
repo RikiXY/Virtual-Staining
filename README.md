@@ -58,7 +58,7 @@ vs run --config config/runs/local/my_run.yaml --stages train infer evaluate
 vs status
 ```
 
-### NiceGUI demo
+### NiceGUI application
 
 The web interface discovers compatible current-format checkpoints from a configurable
 directory:
@@ -67,14 +67,16 @@ directory:
 uv sync --locked
 uv run vs-ui \
   --checkpoint-dir local_workspace/ui/checkpoints \
-  --output-dir local_workspace/ui/outputs
+  --output-dir local_workspace/ui/outputs \
+  --results-dir local_workspace/results
 ```
 
-Open [http://localhost:8080](http://localhost:8080). Both paths may be located outside
-the repository. They can also be configured with `VIRTUAL_STAINING_CHECKPOINT_DIR`
-and `VIRTUAL_STAINING_OUTPUT_DIR`; CLI options take precedence. With neither setting,
-the defaults are `./checkpoints` and `./outputs`, resolved from the launch directory.
-The UI starts with a useful empty state when no compatible checkpoint is available.
+Open [http://localhost:8080](http://localhost:8080). The paths may be located outside
+the repository. They can also be configured with `VIRTUAL_STAINING_CHECKPOINT_DIR`,
+`VIRTUAL_STAINING_OUTPUT_DIR`, and `VIRTUAL_STAINING_RESULTS_DIR`; CLI options take
+precedence. Defaults are `./checkpoints`, `./outputs`, and `./results`, resolved from
+the launch directory. The UI starts with useful empty states when no compatible
+checkpoint or evaluated run is available.
 
 The catalog validates `.pth` files recursively and derives transformation labels,
 input/target domains, architecture, image size, and channel requirements from existing
@@ -82,7 +84,7 @@ format-v3 checkpoint metadata. Legacy or incompatible checkpoints are skipped an
 reported in the interface. Checkpoint files are local artifacts and must not be
 committed.
 
-The demo accepts exactly one RGB patch whose dimensions match the selected model.
+The Inference workflow accepts exactly one RGB patch whose dimensions match the selected model.
 Inputs with incompatible modes or dimensions are rejected; images are never silently
 converted, resized, or tiled. Large-image and WSI inference remain outside this UI.
 
@@ -91,6 +93,15 @@ comparison with provenance. **Save result** writes a generated PNG and adjacent 
 provenance sidecar, using numbered filenames instead of overwriting either existing
 file. The sidecar records portable identifiers and known runtime/model metadata, not
 machine-specific checkpoint paths.
+
+Experiments provides three research workflows: Test can generate with a source alone,
+then accepts an optional target before or after generation to display canonical metrics
+plus an absolute-difference map, animated opacity overlap, and draggable horizontal reveal
+comparison with configurable playback speed and replay;
+Evaluate executes or loads run-level evaluation, plots, tables, and representative
+samples; Compare runs the existing paired or unpaired statistical comparison pipeline.
+A guided tutorial is always available from the header and never opens automatically.
+All browser callbacks delegate to `virtual_staining.applications.api`.
 
 Convert one or more large TIFFs—or a whole directory recursively—without loading them fully
 into memory. Directory inputs keep their relative layout under the output directory:
@@ -252,9 +263,9 @@ From H&E staining to label-free:
 - `data/` - dataset, manifest, builder, preprocessing pipeline
 - `training/` - training mechanics: Trainer, steps, losses, validation, checkpoints
 - `inference/` - reusable model loading, prediction, single-image workflows, output naming
-- `ui/` - NiceGUI entry point for the local pretrained inference demo
+- `ui/` - NiceGUI Inference and Experiments presentation adapters
 - `evaluation/` - evaluator, plots, summaries, panels, ranking
-- `applications/` - stage lifecycle owners (`prepare`, `train`, `infer`, `evaluate`) and other use cases
+- `applications/` - stable Python API, stage lifecycle owners, and other use cases
 - `cli/` - thin argparse entrypoints delegating to `applications/`
 
 See [`docs/architecture.md`](docs/architecture.md) for the full description and layer boundaries.

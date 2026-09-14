@@ -6,6 +6,7 @@ import pytest
 
 from tests.image_helpers import write_rgb_image, write_rgb_pair
 from virtual_staining.evaluation import diagnostics
+from virtual_staining.evaluation.comparison import plot_paired_delta_histogram
 from virtual_staining.evaluation.panels import (
     DiagnosticEntry,
     build_metric_case_artifacts,
@@ -42,6 +43,14 @@ def test_save_diagnostic_plots_delegates_to_canonical_plotters(
         f"{sample_id}_target_vs_generated_scatter_by_channel.png",
         f"{sample_id}_intensity_overlay_histogram.png",
     ]
+
+
+def test_paired_delta_histogram_accepts_constant_small_deltas(tmp_path: Path) -> None:
+    import numpy as np
+
+    plot_paired_delta_histogram(np.array([0.1, 0.1]), "ssim", tmp_path)
+
+    assert (tmp_path / "paired_delta_histogram.png").is_file()
 
 
 def test_select_representative_rows_uses_higher_is_better_direction() -> None:

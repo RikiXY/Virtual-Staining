@@ -15,6 +15,7 @@ from virtual_staining.metrics import (
     compute_ssim,
     get_metric_thresholds,
     is_higher_better_metric,
+    metric_quality,
 )
 
 
@@ -132,6 +133,32 @@ def test_metric_specs_supply_direction_and_comparison_thresholds() -> None:
     assert is_higher_better_metric("ssim") is True
     assert is_higher_better_metric("mae") is False
     assert get_metric_thresholds("ssim") == [0.65, 0.75, 0.85]
+
+
+@pytest.mark.parametrize(
+    ("metric", "value", "expected"),
+    [
+        ("ssim", 0.90, "very_good"),
+        ("ssim", 0.82, "good"),
+        ("ssim", 0.76, "fair"),
+        ("ssim", 0.70, "poor"),
+        ("ssim", 0.50, "very_poor"),
+        ("mae", 0.05, "very_good"),
+        ("mae", 0.07, "good"),
+        ("mae", 0.09, "fair"),
+        ("mae", 0.14, "poor"),
+        ("mae", 0.20, "very_poor"),
+    ],
+)
+def test_metric_quality_uses_direction_aware_five_level_scale(
+    metric: str, value: float, expected: str
+) -> None:
+    assert metric_quality(metric, value) == expected
+
+
+def test_metric_quality_does_not_grade_unknown_or_non_finite_values() -> None:
+    assert metric_quality("unknown", 0.9) == "unknown"
+    assert metric_quality("ssim", float("nan")) == "unknown"
 
 
 def test_unknown_metric_spec_is_rejected() -> None:
