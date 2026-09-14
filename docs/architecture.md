@@ -43,7 +43,8 @@ Typical examples:
 | Pure helper | `metrics.py` | Metric computations over arrays |
 | I/O helper | `utils/image_io.py` | Reads/writes image files |
 | Mostly pure indexing/data model | `data/dataset.py` | Dataset indexing and manifest-backed lookup |
-| Side-effecting preprocessing service | `data/builder.py` | Builds datasets, writes patches/manifests/metadata |
+| Dataset orchestration | `data/builder.py` | Coordinates slide-set processing and writes manifests, metadata and provenance |
+| Slide-set processing | `data/slide_set_processor.py` | Masks, aligns and writes patches for one set; returns `SetBuildResult` and closes readers |
 | Side-effecting training service | `training/trainer.py` | Training loop, checkpoint and epoch-history writes; the active session owns run metadata/logging |
 | Side-effecting inference service | `inference/runner.py`, `inference/single.py` | Reusable model loading and prediction plus single-image output writing |
 | Side-effecting evaluation service | `evaluation/` runners/report writers | Metrics computation plus report/CSV output |

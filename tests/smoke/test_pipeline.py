@@ -81,11 +81,11 @@ def _identity_align(
 def _patched_prepare_dependencies() -> Iterator[None]:
     with (
         patch(
-            "virtual_staining.data.builder.calculate_mask_with_multiple_parameters",
+            "virtual_staining.data.slide_set_processor.calculate_mask_with_multiple_parameters",
             side_effect=_white_mask,
         ),
         patch(
-            "virtual_staining.data.builder.estimate_affine_from_scaled",
+            "virtual_staining.data.slide_set_processor.estimate_affine_from_scaled",
             side_effect=_identity_align,
         ),
     ):
