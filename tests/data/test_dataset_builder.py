@@ -21,6 +21,7 @@ from virtual_staining.config.data import (
 )
 from virtual_staining.data import builder as builder_module
 from virtual_staining.data import slide_set_processor as processor_module
+from virtual_staining.data.alignment import AlignmentResult, identity_alignment
 from virtual_staining.data.builder import DatasetBuilder
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.manifest import DatasetManifest, ManifestMetadata
@@ -369,65 +370,56 @@ def test_build_outputs_are_stable_with_an_excluded_set(tmp_path, tiled, unit):
     assert outputs() == before
 
 
-def _centered_tissue_preview(shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
-    image = np.full((*shape, 3), 255, dtype=np.uint8)
-    mask = np.zeros(shape, dtype=np.uint8)
-    top, bottom = shape[0] // 4, 3 * shape[0] // 4
-    left, right = shape[1] // 4, 3 * shape[1] // 4
-    rng = np.random.default_rng(0)
-    image[top:bottom, left:right] = rng.integers(
-        10, 200, image[top:bottom, left:right].shape, dtype=np.uint8
-    )
-    mask[top:bottom, left:right] = 255
-    return image, mask
+def test_align_delegates_all_moving_assets_with_explicit_data(tmp_path, monkeypatch) -> None:
+    processor = SlideSetProcessor(_config(tmp_path), _slide_set(tmp_path))
+    processor.compute_masks()
+    result = identity_alignment("delegated")
+    resolve = Mock(return_value=result)
+    monkeypatch.setattr(processor_module, "resolve_alignment", resolve)
+    try:
+        processor.align()
+        assert processor.reference.alignment is not None
+        assert processor.reference.alignment.reason == "reference"
+        assert resolve.call_count == 2
+        for call, state in zip(
+            resolve.call_args_list, (processor.inputs["AF"], processor.target), strict=True
+        ):
+            reference, moving, policy = call.args
+            assert reference.preview is processor.reference.preview
+            assert reference.full_shape == processor.reference.shape
+            assert moving.preview is state.preview and moving.mask is state.mask
+            assert moving.full_shape == state.shape
+            assert moving.name == state.asset.modality
+            assert moving.mpp == (None, None)
+            assert policy is processor.config.alignment
+            assert call.kwargs == {"already_aligned": state.asset.already_aligned}
+            assert state.alignment is result
+    finally:
+        processor.close()
 
 
-@pytest.mark.parametrize("full_size_masks", [False, True], ids=["preview", "full_size"])
-def test_resolve_alignment_resizes_masks_to_each_preview(full_size_masks: bool) -> None:
-    reference_preview, reference_mask = _centered_tissue_preview((640, 640))
-    moving_preview = cv2.warpAffine(
-        reference_preview,
-        np.array([[1.0, 0.0, 12.0], [0.0, 1.0, -8.0]]),
-        (652, 624),
-        borderValue=(255, 255, 255),
-    )
-    moving_mask = cv2.warpAffine(
-        reference_mask,
-        np.array([[1.0, 0.0, 12.0], [0.0, 1.0, -8.0]]),
-        (652, 624),
-        flags=cv2.INTER_NEAREST,
-    )
-    reference_input_mask = (
-        cv2.resize(reference_mask, (2560, 2560), interpolation=cv2.INTER_NEAREST)
-        if full_size_masks
-        else reference_mask.copy()
-    )
-    moving_input_mask = (
-        cv2.resize(moving_mask, (2608, 2496), interpolation=cv2.INTER_NEAREST)
-        if full_size_masks
-        else moving_mask.copy()
-    )
-    reference_mask_before = reference_input_mask.copy()
-    moving_mask_before = moving_input_mask.copy()
-    reference = processor_module.AssetState(
-        SlideAsset("reference", Path("reference"), already_aligned=True),
-        preview=reference_preview,
-        mask=reference_input_mask,
-        shape=(2560, 2560),
-    )
-    moving = processor_module.AssetState(
-        SlideAsset("moving", Path("moving"), already_aligned=False),
-        preview=moving_preview,
-        mask=moving_input_mask,
-        shape=(2496, 2608),
-    )
-
-    result = processor_module.resolve_alignment(reference, moving, AlignmentConfig(mode="always"))
-
-    np.testing.assert_allclose(result.warp_matrix[:, :2], np.eye(2), atol=0.05)
-    np.testing.assert_allclose(result.warp_matrix[:, 2], [-48.0, 32.0], atol=4.0)
-    assert result.metadata["mask_iou"] > 0.9
-    assert reference.mask is not None
-    assert moving.mask is not None
-    assert np.array_equal(reference.mask, reference_mask_before)
-    assert np.array_equal(moving.mask, moving_mask_before)
+@pytest.mark.parametrize("tiled", [False, True])
+def test_affine_extraction_handles_downsampled_masks_in_both_io_paths(tmp_path, tiled) -> None:
+    config = replace(_config(tmp_path), io=IOConfig(tiled=tiled, backend="pillow"))
+    processor = SlideSetProcessor(config, _slide_set(tmp_path))
+    try:
+        processor.compute_masks()
+        state = processor.target
+        state.mask = np.zeros((4, 8), dtype=np.uint8)
+        state.mask[:, :4] = 255
+        state.alignment = AlignmentResult(
+            "affine_sift", np.array([[1.0, 0.0, -2.0], [0.0, 1.0, 0.0]])
+        )
+        image, mask = processor.extract_asset_patch(state, x=0, y=0, width=8, height=8)
+        expected_mask = cv2.warpAffine(
+            state.mask,
+            np.array([[2.0, 0.0, -2.0], [0.0, 2.0, 0.0]]),
+            (8, 8),
+            flags=cv2.INTER_NEAREST,
+        )
+        expected_image = np.full((8, 8, 3), 255, dtype=np.uint8)
+        expected_image[:, :6] = 100
+        np.testing.assert_array_equal(mask, expected_mask)
+        np.testing.assert_array_equal(image, expected_image)
+    finally:
+        processor.close()

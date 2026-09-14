@@ -44,7 +44,8 @@ Typical examples:
 | I/O helper | `utils/image_io.py` | Reads/writes image files |
 | Mostly pure indexing/data model | `data/dataset.py` | Dataset indexing and manifest-backed lookup |
 | Dataset orchestration | `data/builder.py` | Coordinates slide-set processing and writes manifests, metadata and provenance |
-| Slide-set processing | `data/slide_set_processor.py` | Masks, aligns and writes patches for one set; returns `SetBuildResult` and closes readers |
+| Registration and warping | `data/alignment/` | Identity/SIFT policy, affine estimation, diagnostics, coordinate conversion and image/mask warping |
+| Slide-set processing | `data/slide_set_processor.py` | Computes masks, delegates alignment and writes patches for one set; returns `SetBuildResult` and closes readers |
 | Side-effecting training service | `training/trainer.py` | Training loop, checkpoint and epoch-history writes; the active session owns run metadata/logging |
 | Side-effecting inference service | `inference/runner.py`, `inference/single.py` | Reusable model loading and prediction plus single-image output writing |
 | Side-effecting evaluation service | `evaluation/` runners/report writers | Metrics computation plus report/CSV output |
@@ -107,6 +108,31 @@ utils -> utils
 `tests/architecture/test_package_dependencies.py` resolves absolute, relative,
 nested, and `TYPE_CHECKING` imports with the standard library. It reports the
 source file and illegal import, and verifies the allowlist topologically sorts.
+
+Registration is implemented entirely in `data/alignment/`: `models.py` defines
+`AlignmentImage`, immutable `AlignmentResult` and `AlignmentError`;
+`registration.py` owns identity/declared-alignment policy, SIFT/RANSAC, validation
+and diagnostics; `warping.py` owns affine application and coordinate conversion.
+The package exports only those three types, `identity_alignment`,
+`resolve_alignment`, `warp_aligned_patch`, and `warp_aligned_mask_patch`.
+SIFT helpers and diagnostics are private. `preprocessing.py` retains general
+mask generation/sampling and patch filtering, with no registration dependency.
+
+Every result matrix maps moving full-resolution `(x, y)` into reference
+full-resolution `(x, y)`. Array shapes are `(height, width)`; output sizes are
+`(width, height)`. Registration normalizes whole-image masks to preview geometry
+with nearest neighbors, halves previews for estimation, then compensates for
+both images' per-axis preview scales and that extra halving. Mask IoU describes
+estimation-space overlap and is diagnostic, with no rejection threshold.
+Serialized keypoint fields retain their existing `src`/`tgt` names for dataset
+metadata compatibility; the implementation uses reference/moving terminology.
+
+Reader-backed warping accepts an already-open reader's `read_region` callback:
+alignment computes inverse bounds and the local matrix, IO reads the requested
+region. Opening, backend selection, cleanup and `skip_set` remain outside
+alignment. Dependency tests enforce `models <- warping <- registration`, forbid
+alignment's dependencies on orchestration/training/inference/evaluation, and
+require the processor to use the public alignment API.
 
 ## Configuration Policy
 

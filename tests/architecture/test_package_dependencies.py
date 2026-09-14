@@ -84,7 +84,7 @@ def _component(module: str) -> str | None:
 
 def _imports(path: Path) -> set[str]:
     module_name = _module_name(path)
-    package = module_name.rpartition(".")[0]
+    package = module_name if path.name == "__init__.py" else module_name.rpartition(".")[0]
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     imports: set[str] = set()
     for node in ast.walk(tree):
@@ -153,3 +153,41 @@ def test_cli_commands_use_application_or_cli_surfaces() -> None:
             ):
                 violations.append(f"{path}: {imported}")
     assert not violations, "CLI command boundary violations:\n" + "\n".join(violations)
+
+
+def test_alignment_dependency_boundary() -> None:
+    alignment = "virtual_staining.data.alignment"
+    allowed = {
+        "models.py": (f"{alignment}.models.",),
+        "warping.py": (f"{alignment}.models.",),
+        "registration.py": (
+            "virtual_staining.config.",
+            f"{alignment}.models.",
+            f"{alignment}.warping.",
+        ),
+        "__init__.py": (f"{alignment}.",),
+    }
+    violations = []
+    for path in Path("virtual_staining/data/alignment").rglob("*.py"):
+        for imported in _imports(path):
+            if imported.startswith("virtual_staining.") and not imported.startswith(
+                allowed[path.name]
+            ):
+                violations.append(f"{path}: {imported}")
+    for module in ("preprocessing", "slide_set_processor"):
+        path = Path(f"virtual_staining/data/{module}.py")
+        for imported in _imports(path):
+            if imported.startswith(f"{alignment}.") and (
+                module == "preprocessing" or imported.removeprefix(f"{alignment}.").count(".")
+            ):
+                violations.append(f"{path}: use only the public alignment API: {imported}")
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Attribute) and node.attr in {
+                "SIFT_create",
+                "BFMatcher",
+                "estimateAffinePartial2D",
+                "warpAffine",
+                "invertAffineTransform",
+            }:
+                violations.append(f"{path}: alignment implementation: {node.attr}")
+    assert not violations, "Alignment boundary violations:\n" + "\n".join(violations)

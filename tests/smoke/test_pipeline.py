@@ -16,7 +16,6 @@ from virtual_staining.applications.pipeline import run_stage, run_stages
 from virtual_staining.applications.prepare import prepare
 from virtual_staining.applications.run_queue import run_queue
 from virtual_staining.config.run import RunConfig
-from virtual_staining.data.preprocessing import AlignmentMetadata
 
 
 def _make_synthetic_dataset(dataset_root: Path, size: int = 192) -> Path:
@@ -50,43 +49,12 @@ def _white_mask(img: np.ndarray, _params: object) -> np.ndarray:
     return np.full((img.shape[0], img.shape[1]), 255, dtype=np.uint8)
 
 
-def _identity_align(
-    _src: np.ndarray,
-    tgt: np.ndarray,
-    mask_1: np.ndarray | None = None,
-    mask_2: np.ndarray | None = None,
-    scale: float = 0.5,
-    **_kwargs: object,
-) -> tuple[np.ndarray, AlignmentMetadata]:
-    """Return an identity matrix with valid alignment metadata."""
-    del _src, tgt, mask_1, mask_2, scale
-    eye = np.eye(2, 3, dtype=np.float64)
-    metadata = AlignmentMetadata(
-        n_keypoints_src=100,
-        n_keypoints_tgt=100,
-        n_matches=50,
-        n_inliers=45,
-        inlier_ratio=0.9,
-        scale_x=1.0,
-        scale_y=1.0,
-        rotation_deg=0.0,
-        translation_x=0.0,
-        translation_y=0.0,
-        warp_matrix=eye.tolist(),
-    )
-    return eye, metadata
-
-
 @contextmanager
 def _patched_prepare_dependencies() -> Iterator[None]:
     with (
         patch(
             "virtual_staining.data.slide_set_processor.calculate_mask_with_multiple_parameters",
             side_effect=_white_mask,
-        ),
-        patch(
-            "virtual_staining.data.slide_set_processor.estimate_affine_from_scaled",
-            side_effect=_identity_align,
         ),
     ):
         yield
