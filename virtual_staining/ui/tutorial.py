@@ -3,13 +3,14 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from nicegui import ui
+from nicegui.element import Element
 
 
 def build_tutorial() -> Callable[[], None]:
     """Build the reusable, user-opened onboarding dialog and return its opener."""
     slide_index = 0
-    slides: list[object] = []
-    dots: list[object] = []
+    slides: list[Element] = []
+    dots: list[Element] = []
 
     with (
         ui.dialog() as dialog,
@@ -26,9 +27,7 @@ def build_tutorial() -> Callable[[], None]:
                 "flat round color=blue-grey-8 aria-label=Close"
             )
 
-        slide_host = ui.column().classes(
-            "w-full flex-1 px-5 sm:px-10 py-7 gap-0 overflow-y-auto"
-        )
+        slide_host = ui.column().classes("w-full flex-1 px-5 sm:px-10 py-7 gap-0 overflow-y-auto")
         with slide_host:
             slides.append(
                 _slide(
@@ -113,13 +112,9 @@ def build_tutorial() -> Callable[[], None]:
                 )
             )
 
-        with ui.element("div").classes(
-            "vs-tutorial-footer w-full px-5 sm:px-8 py-4 border-t"
-        ):
+        with ui.element("div").classes("vs-tutorial-footer w-full px-5 sm:px-8 py-4 border-t"):
             with ui.row().classes("justify-self-start min-w-24"):
-                previous = ui.button("Previous", icon="arrow_back").props(
-                    "flat color=blue-grey-8"
-                )
+                previous = ui.button("Previous", icon="arrow_back").props("flat color=blue-grey-8")
             with ui.row().classes("justify-self-center items-center gap-2"):
                 for _ in slides:
                     dots.append(ui.icon("circle", size="8px"))
@@ -132,9 +127,9 @@ def build_tutorial() -> Callable[[], None]:
         nonlocal slide_index
         slide_index = max(0, min(index, len(slides) - 1))
         for position, slide in enumerate(slides):
-            slide.set_visibility(position == slide_index)  # type: ignore[attr-defined]
+            slide.set_visibility(position == slide_index)
         for position, dot in enumerate(dots):
-            dot.classes(replace="text-teal-600" if position == slide_index else "text-slate-300")  # type: ignore[attr-defined]
+            dot.classes(replace="text-teal-600" if position == slide_index else "text-slate-300")
         previous.set_visibility(slide_index > 0)
         next_button.set_text("Finish" if slide_index == len(slides) - 1 else "Next")
         next_button.set_icon("check" if slide_index == len(slides) - 1 else "arrow_forward")
@@ -161,7 +156,7 @@ def _slide(
     title: str,
     body: str,
     visual: Callable[[], None],
-):
+) -> Element:
     with ui.column().classes("w-full h-full items-center text-center gap-5") as slide:
         with ui.element("div").classes(
             "w-16 h-16 rounded-2xl bg-teal-50 flex items-center justify-center"

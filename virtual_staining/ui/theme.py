@@ -53,10 +53,12 @@ body { background: var(--vs-bg); color: var(--vs-ink); font-size: 1rem; }
 }
 .vs-image { position: absolute !important; inset: 0; width: 100%; height: 100% !important; }
 .vs-image .q-img__image { object-fit: contain !important; }
+.vs-result-image-header { min-height: 3.25rem; }
 .vs-overlap-frame { max-width: 48rem; margin-inline: auto; }
 .vs-comparison-header { min-height: 3.5rem; }
 .vs-comparison-panel { height: 100%; }
 .vs-overlap-generated { pointer-events: none; transition: opacity 80ms linear; }
+.vs-hard-cut-generated { pointer-events: none; transition: none !important; }
 .vs-reveal-generated { pointer-events: none; transition: clip-path 60ms linear; }
 .vs-reveal-divider {
   position: absolute; inset-block: 0; width: 2rem; z-index: 2; cursor: ew-resize;
@@ -73,6 +75,23 @@ body { background: var(--vs-bg); color: var(--vs-ink); font-size: 1rem; }
   color: #0f766e; background: white; border: 1px solid #cbd5e1;
   box-shadow: 0 2px 6px rgb(15 23 42 / .2); font-size: .875rem; font-weight: 700;
 }
+.vs-evaluation-chart { min-height: 20rem; }
+.vs-evaluation-chart canvas { cursor: grab !important; }
+.vs-evaluation-tooltip {
+  background: #020617 !important; color: #fff !important;
+  border: 2px solid #5eead4 !important; opacity: 1 !important;
+  transition: none !important; pointer-events: none !important;
+  box-shadow: 0 8px 24px rgb(0 0 0 / .55) !important;
+}
+.vs-evaluation-tooltip * { color: inherit; }
+.vs-statistical-plot-card { align-self: stretch; }
+.vs-statistical-plot-frame {
+  aspect-ratio: 16 / 10; min-height: 18rem; overflow: hidden; background: #fff;
+}
+.vs-statistical-plot-image { position: relative !important; }
+.vs-statistical-plot-image .q-img__image { object-fit: contain !important; }
+.vs-ranked-comparison { border-left: 3px solid #5eead4; }
+.vs-case-row { border-left: 3px solid #99f6e4; }
 .vs-metric { border-left: 4px solid #94a3b8; background: #f8fafc; }
 .vs-metric--very-good { border-left-color: #16a34a; background: #f0fdf4; }
 .vs-metric--good { border-left-color: #84a914; background: #f7fee7; }
@@ -99,6 +118,7 @@ body { background: var(--vs-bg); color: var(--vs-ink); font-size: 1rem; }
 }
 @media (max-width: 640px) {
   .vs-image-frame { min-height: 12rem; }
+  .vs-statistical-plot-frame { min-height: 12rem; }
   .vs-header-bar { gap: .75rem; }
   .vs-brand-copy .text-2xl { font-size: 1.25rem; }
   .vs-current-page { font-size: .9375rem; }

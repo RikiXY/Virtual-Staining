@@ -6,6 +6,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from virtual_staining.evaluation import serialized_plot
 from virtual_staining.metrics import DEFAULT_METRICS
 
 METRIC_NAMES = list(DEFAULT_METRICS)
@@ -46,6 +47,7 @@ def get_metric_plot_range(metric: str) -> tuple[float, float]:
         ) from None
 
 
+@serialized_plot
 def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) -> list[Path]:
     """Saves histograms with fixed axes and a final summary boxplot.
 

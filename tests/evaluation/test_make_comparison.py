@@ -13,7 +13,10 @@ from virtual_staining.evaluation.panels import (
     save_comparison_panel,
     save_metric_diagnostics_summary,
 )
-from virtual_staining.evaluation.selection import select_representative_rows
+from virtual_staining.evaluation.selection import (
+    infer_source_path_from_row,
+    select_representative_rows,
+)
 
 
 def test_save_diagnostic_plots_delegates_to_canonical_plotters(
@@ -85,6 +88,17 @@ def test_select_representative_rows_uses_lower_is_better_direction() -> None:
     assert selected["best"]["sample_id"] == "low"
     assert selected["median"]["sample_id"] == "mid"
     assert selected["worst"]["sample_id"] == "high"
+
+
+def test_infer_source_path_supports_named_manifest_input_patches(tmp_path: Path) -> None:
+    sample_id = "S1__x00000000_y00000000"
+    split_dir = tmp_path / "splits" / "test" / "S1"
+    source = write_rgb_image(split_dir / f"{sample_id}__input__unstained.png")
+    target = write_rgb_image(split_dir / f"{sample_id}__target.png")
+
+    assert (
+        infer_source_path_from_row({"sample_id": sample_id, "target_path": str(target)}) == source
+    )
 
 
 def test_build_metric_case_artifacts_saves_panel_without_metric_suptitle(

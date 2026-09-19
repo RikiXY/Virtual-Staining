@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 
+from virtual_staining.evaluation import serialized_plot
 from virtual_staining.evaluation.diagnostics import (
     compute_absolute_difference_map,
     save_diagnostic_plots,
@@ -104,6 +105,7 @@ def build_metric_case_artifacts(
     return selection_row, diagnostic_entry
 
 
+@serialized_plot
 def save_comparison_panel(
     source_path: str | Path,
     generated_path: str | Path,
@@ -150,6 +152,7 @@ def save_comparison_panel(
     return save_path
 
 
+@serialized_plot
 def save_stacked_image_panel(
     image_paths: list[str | Path],
     save_path: str | Path,

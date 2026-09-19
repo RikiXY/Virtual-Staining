@@ -5,6 +5,7 @@ import logging
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from threading import RLock
 from typing import Literal, cast
 
 import numpy as np
@@ -31,7 +32,10 @@ from virtual_staining.applications.ui_inference import (
 from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.diagnostics import compute_absolute_difference_map
 from virtual_staining.evaluation.plotting import save_dataset_plots
-from virtual_staining.evaluation.selection import select_representative_rows
+from virtual_staining.evaluation.selection import (
+    infer_source_path_from_row,
+    select_representative_rows,
+)
 from virtual_staining.evaluation.summaries import (
     read_per_image_metrics_csv,
     read_summary_csv,
@@ -202,6 +206,7 @@ class ApplicationService:
             output_directory,
             working_directory=self.working_directory,
         )
+        self._analysis_lock = RLock()
 
     @property
     def supported_metrics(self) -> tuple[str, ...]:
@@ -357,6 +362,10 @@ class ApplicationService:
         return tuple(runs)
 
     def evaluate_run(self, request: RunEvaluationRequest) -> RunEvaluationResult:
+        with self._analysis_lock:
+            return self._evaluate_run_unlocked(request)
+
+    def _evaluate_run_unlocked(self, request: RunEvaluationRequest) -> RunEvaluationResult:
         if (request.config_path is None) == (request.run_path is None):
             raise ApplicationError("Choose exactly one run directory or evaluation config.")
 
@@ -382,6 +391,10 @@ class ApplicationService:
         )
 
     def compare_runs(self, request: ComparisonRequest) -> ComparisonResult:
+        with self._analysis_lock:
+            return self._compare_runs_unlocked(request)
+
+    def _compare_runs_unlocked(self, request: ComparisonRequest) -> ComparisonResult:
         run_a = self._resolve(request.run_a)
         run_b = self._resolve(request.run_b)
         if run_a == run_b:
@@ -540,7 +553,7 @@ class ApplicationService:
                 sample_id=row["sample_id"],
                 metric=metric,
                 value=float(row[metric]),
-                source_path=_optional_existing_path(row.get("source_path")),
+                source_path=_representative_source_path(row),
                 generated_path=_optional_existing_path(row.get("generated_path")),
                 target_path=_optional_existing_path(row.get("target_path")),
             )
@@ -638,3 +651,13 @@ def _optional_existing_path(value: str | None) -> Path | None:
         return None
     path = Path(value)
     return path if path.is_file() else None
+
+
+def _representative_source_path(row: dict[str, str]) -> Path | None:
+    """Resolve legacy metric rows which did not persist an explicit source path."""
+    direct = _optional_existing_path(row.get("source_path"))
+    if direct is not None:
+        return direct
+    with suppress(OSError, ValueError):
+        return infer_source_path_from_row(row)
+    return None

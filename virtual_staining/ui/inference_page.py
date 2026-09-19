@@ -264,9 +264,12 @@ def build_inference_page(
 
     if catalog.models:
         show_descriptor(catalog.models[0])
-    model_select.on_value_change(
-        lambda _event: (clear_input(), show_descriptor(selected_descriptor()))
-    )
+
+    def handle_model_change() -> None:
+        clear_input()
+        show_descriptor(selected_descriptor())
+
+    model_select.on_value_change(lambda _event: handle_model_change())
     uploader.on_upload(handle_upload)
     generate_button.on_click(handle_generate)
     save_button.on_click(handle_save)

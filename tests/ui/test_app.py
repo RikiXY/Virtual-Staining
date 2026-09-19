@@ -272,6 +272,14 @@ def test_main_navigation_starts_on_source_only_inference(tmp_path: Path) -> None
         for element in client.elements.values()
         if "vs-sample-comparison" in element._classes
     )
+    experiment_panels = next(
+        element for element in client.elements.values() if element.tag == "q-tab-panels"
+    )
+    evaluation_status = next(
+        element
+        for element in client.elements.values()
+        if "vs-evaluation-status" in element._classes
+    )
 
     assert drawer.value is False
     assert menu_button.parent_slot.parent is header_bar
@@ -280,6 +288,10 @@ def test_main_navigation_starts_on_source_only_inference(tmp_path: Path) -> None
     assert current_page.text == "Inference"
     assert inference_page.visible is True
     assert experiments_page.visible is False
+    assert not experiment_panels._props.get("animated", False)
+    assert evaluation_status.visible is False
+    assert not any(element.tag == "q-linear-progress" for element in client.elements.values())
+    assert not any(element.tag == "q-spinner" for element in client.elements.values())
     assert len(header_icons) == 1
     assert sample_images.id < sample_metrics.id < sample_comparison.id
 

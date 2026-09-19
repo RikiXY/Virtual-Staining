@@ -48,8 +48,19 @@ def infer_source_path_from_row(row: dict[str, str]) -> Path:
             return candidate
 
     if row.get("target_path"):
+        target_directory = Path(row["target_path"]).parent
+        manifest_inputs = sorted(
+            path
+            for path in target_directory.glob(f"{sample_id}__input__*")
+            if path.is_file() and path.suffix.lower() in VALID_IMAGE_EXTENSIONS
+        )
+        if manifest_inputs:
+            # Evaluation rows currently identify the target and generated files.
+            # A v3 manifest keeps named input patches beside the target; use the
+            # first configured input as the representative source preview.
+            return manifest_inputs[0]
         try:
-            return find_existing_image(Path(row["target_path"]).parent, sample_id, "_source")
+            return find_existing_image(target_directory, sample_id, "_source")
         except FileNotFoundError:
             pass
 

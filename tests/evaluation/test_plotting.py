@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import math
+import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import matplotlib
 import pytest
 
 from virtual_staining.evaluation.plotting import METRIC_NAMES, save_dataset_plots
@@ -23,6 +26,17 @@ def test_save_dataset_plots_creates_expected_files(tmp_path: Path) -> None:
 
     assert {path.name for path in saved_paths} == expected_names
     assert all(path.is_file() for path in saved_paths)
+
+
+def test_plotting_from_worker_thread_uses_non_interactive_backend(tmp_path: Path) -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            saved_paths = executor.submit(save_dataset_plots, [_row(0.5)], tmp_path).result()
+
+    assert matplotlib.get_backend().lower() == "agg"
+    assert all(path.is_file() for path in saved_paths)
+    assert not any("GUI outside of the main thread" in str(item.message) for item in caught)
 
 
 # ---------------------------------------------------------------------------

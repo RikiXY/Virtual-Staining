@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 
+from virtual_staining.evaluation import serialized_plot
 from virtual_staining.evaluation.selection import extract_generated_sample_id
 from virtual_staining.utils.image_io import open_rgb, to_float01
 
@@ -26,6 +27,7 @@ def compute_absolute_difference_map(
     return np.mean(np.abs(target - generated), axis=2)
 
 
+@serialized_plot
 def make_error_histogram(
     target: np.ndarray,
     generated: np.ndarray,
@@ -46,6 +48,7 @@ def make_error_histogram(
     return output_path
 
 
+@serialized_plot
 def make_intensity_overlay_histogram(
     target: np.ndarray,
     generated: np.ndarray,
@@ -73,6 +76,7 @@ def make_intensity_overlay_histogram(
     return output_path
 
 
+@serialized_plot
 def make_scatter_by_channel(
     target: np.ndarray,
     generated: np.ndarray,

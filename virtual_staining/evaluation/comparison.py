@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from virtual_staining.evaluation import serialized_plot
 from virtual_staining.evaluation.statistics import (
     PairedSummary,
     UnpairedComparison,
@@ -209,6 +210,7 @@ def ecdf(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return x, y
 
 
+@serialized_plot
 def plot_distribution_histogram(
     a: np.ndarray,
     b: np.ndarray,
@@ -232,6 +234,7 @@ def plot_distribution_histogram(
     plt.close()
 
 
+@serialized_plot
 def plot_distribution_ecdf(
     a: np.ndarray,
     b: np.ndarray,
@@ -256,6 +259,7 @@ def plot_distribution_ecdf(
     plt.close()
 
 
+@serialized_plot
 def plot_paired_delta_histogram(signed_delta: np.ndarray, column: str, output_dir: Path) -> None:
     """Save the histogram of signed deltas for the paired comparison."""
     minimum = float(np.min(signed_delta))
@@ -276,6 +280,7 @@ def plot_paired_delta_histogram(signed_delta: np.ndarray, column: str, output_di
     plt.close()
 
 
+@serialized_plot
 def plot_paired_scatter(
     merged: pd.DataFrame,
     label_a: str,
