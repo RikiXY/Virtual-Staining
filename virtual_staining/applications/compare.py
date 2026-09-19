@@ -87,7 +87,6 @@ class CompareResult:
 
 
 def compare(request: CompareRequest) -> CompareResult:
-    """Run the full comparison pipeline for paired or unpaired metric distributions."""
     if request.mode not in {"paired", "unpaired"}:
         raise ValueError(f"Unsupported comparison mode: {request.mode}")
     resolved = _resolve_request(request)

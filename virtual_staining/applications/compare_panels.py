@@ -49,7 +49,6 @@ class FromMetricsResult:
 
 
 def compare_panels(request: ComparePanelsRequest) -> SinglePanelResult | FromMetricsResult:
-    """Run a single-pair panel comparison or metric-based representative comparisons."""
     if request.mode == "single":
         return _run_single(request)
     if request.mode == "from_metrics":

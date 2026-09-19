@@ -47,7 +47,6 @@ def train(
     *,
     progress_reporter: ProgressReporter | None = None,
 ) -> TrainingResult:
-    """Build training components, persist provenance, and execute training."""
     if config.training is None:
         raise ValueError("RunConfig.training must be present for train().")
     training = config.training

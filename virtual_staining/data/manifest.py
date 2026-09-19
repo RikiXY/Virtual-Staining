@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 
 Split = Literal["train", "val", "test", "discarded"]
 _VALID_SPLITS: frozenset[str] = frozenset({"train", "val", "test", "discarded"})
-# Shared by manifest metadata, dataset-build metadata, and dataset fingerprints.
 MANIFEST_SCHEMA_VERSION = "3.0"
 
 

@@ -16,14 +16,9 @@ from virtual_staining.config.data import (
     MASK_STRATEGY_HSV,
 )
 
-# Only the N largest connected components are considered; smaller ones are noise.
 N_TOP_COMPONENTS = 10
-# Components whose ROI std dev is below this are uniform (background) and are masked out.
 MIN_STD_DEV = 15
 
-# Each (divisor, grid) pair controls one mask pass: the image is divided into a grid of
-# (grid x grid) tiles, each of size (H/divisor x W/divisor). Using multiple passes at
-# different scales makes the mask robust to both fine and coarse background regions.
 MASK_PARAMETER_GRID = [(2, 3), (4, 6), (6, 9), (8, 15)]
 
 
@@ -34,27 +29,6 @@ SPLIT_NAMES: tuple[str, str, str] = ("train", "val", "test")
 
 
 def pad_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
-    """
-    Expands the image with a white border.
-
-    Parameters
-    ----------
-    img : np.ndarray
-        Input image.
-    x : int
-        X coordinate of the border.
-    y : int
-        Y coordinate of the border.
-    w : int
-        Width of the output image.
-    h : int
-        Height of the output image.
-
-    Returns
-    -------
-    padded_image : np.ndarray
-        Expanded (padded) image.
-    """
     top = y
     bottom = h - y - img.shape[0]
     left = x
@@ -71,7 +45,6 @@ def assign_split_by_hash(
     sample_id: str,
     ratios: Sequence[float],
 ) -> str:
-    """Assign a sample to train/val/test using a stable hash of seed and sample id."""
     if len(ratios) != len(SPLIT_NAMES):
         raise ValueError(f"Expected {len(SPLIT_NAMES)} split ratios, got {len(ratios)}")
     if any(ratio < 0 for ratio in ratios):
@@ -92,19 +65,6 @@ def assign_split_by_hash(
 
 
 def calculate_mask(img: np.ndarray) -> np.ndarray:
-    """
-    Finds the mask for the connected components in the image.
-
-    Parameters
-    ----------
-    img : np.ndarray
-        Input image.
-
-    Returns
-    -------
-    mask : np.ndarray
-        Image mask.
-    """
     _, binary = cv2.threshold(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 230, 255, cv2.THRESH_BINARY)
 
     _, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
@@ -132,30 +92,11 @@ def calculate_mask(img: np.ndarray) -> np.ndarray:
             mask_roi = mask[y : y + h, x : x + w]
             mask_roi[component_mask == 255] = 255
 
-    # Inverts the mask to get the foreground.
-    # The mask is 255 for the foreground and 0 for the background.
     mask = cv2.bitwise_not(mask)
     return mask
 
 
 def calculate_mask_with_grid(img: np.ndarray, sub_shape: tuple[int, int], grid: int) -> np.ndarray:
-    """
-    Finds the mask for the connected components of the image using a grid.
-
-    Parameters
-    ----------
-    img : np.ndarray
-        Input image.
-    sub_shape : tuple[int, int]
-        Size of the region of interest.
-    grid : int
-        Number of regions per side of the grid.
-
-    Returns
-    -------
-    mask : np.ndarray
-        Mask of the image.
-    """
     mask = np.ones((img.shape[0], img.shape[1]), dtype=np.uint8) * 255
     step_y = max(1, img.shape[0] // grid)
     step_x = max(1, img.shape[1] // grid)
@@ -176,21 +117,6 @@ def calculate_mask_with_grid(img: np.ndarray, sub_shape: tuple[int, int], grid: 
 def calculate_mask_with_multiple_parameters(
     img: np.ndarray, parameters: list[tuple[int, int]]
 ) -> np.ndarray:
-    """
-    Calculates the mask for the input image using multiple parameter pairs.
-
-    Parameters
-    ----------
-    img : np.ndarray
-        Input image.
-    parameters : list[tuple[int, int]]
-        List of (divisor, grid) pairs used to calculate the masks.
-
-    Returns
-    -------
-    mask : np.ndarray
-        Mask of the image.
-    """
     mask = np.ones((img.shape[0], img.shape[1]), dtype=np.uint8) * 255
 
     for divisor, grid in parameters:
@@ -204,7 +130,6 @@ def calculate_mask_with_multiple_parameters(
 
 
 def apply_mask_morphology(mask: np.ndarray, *, kernel_size: int = 5) -> np.ndarray:
-    """Clean small mask speckles and holes while preserving a binary foreground mask."""
     if kernel_size <= 1:
         return mask
     kernel_size = kernel_size if kernel_size % 2 == 1 else kernel_size + 1
@@ -220,12 +145,6 @@ def calculate_hsv_tissue_mask(
     max_value: int = 245,
     morphology_kernel_size: int = 5,
 ) -> np.ndarray:
-    """
-    Build a foreground mask from HSV saturation and value thresholds.
-
-    Tissue is considered foreground when it is either visibly saturated or dark
-    enough to be distinct from bright background.
-    """
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     saturation = hsv[:, :, 1]
     value = hsv[:, :, 2]
@@ -240,7 +159,6 @@ def calculate_mask_by_strategy(
     strategy: str = MASK_STRATEGY_CONNECTED_COMPONENTS,
     parameters: list[tuple[int, int]] | None = None,
 ) -> np.ndarray:
-    """Dispatch tissue-mask generation through a named strategy."""
     if strategy == MASK_STRATEGY_CONNECTED_COMPONENTS:
         return calculate_mask_with_multiple_parameters(
             img,
@@ -262,7 +180,6 @@ def mask_window_for_patch(
     width: int,
     height: int,
 ) -> np.ndarray:
-    """Return the mask-space window corresponding to a full-resolution image patch."""
     if width <= 0 or height <= 0:
         raise ValueError("Patch width and height must be positive")
 
@@ -294,33 +211,11 @@ def foreground_ratio_for_patch(
     width: int,
     height: int,
 ) -> float:
-    """Compute approximate foreground coverage for an image patch from mask-space pixels."""
     window = mask_window_for_patch(mask, image_shape, x=x, y=y, width=width, height=height)
     return cv2.countNonZero(window) / window.size
 
 
 def extract_image(img: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
-    """
-    Extracts a region from the image.
-
-    Parameters
-    ----------
-    img : np.ndarray
-        Input image
-    x : int
-        x-coordinate of the top-left corner
-    y : int
-        y-coordinate of the top-left corner
-    w : int
-        Width of the region
-    h : int
-        Height of the region
-
-    Returns
-    -------
-    roi : np.ndarray
-        Region of the image
-    """
     return img[y : y + h, x : x + w]
 
 
@@ -331,12 +226,6 @@ def iter_image_with_grid(
     mask: np.ndarray | None = None,
     max_mask_percentage: float = 0.4,
 ) -> Iterator[tuple[tuple[int, int], np.ndarray, np.ndarray | None]]:
-    """
-    Yield valid grid patches one at a time instead of materializing them all.
-
-    Each yielded item contains ``((x, y), image_patch, mask_patch)`` where
-    ``mask_patch`` is ``None`` when no mask was provided.
-    """
     for x in range(0, img.shape[1], grid_movement[0]):
         for y in range(0, img.shape[0], grid_movement[1]):
             roi_img = extract_image(img, x, y, img_size[0], img_size[1])
@@ -354,21 +243,6 @@ def iter_image_with_grid(
 
 
 def split_items(items: list[T], ratios: Sequence[float]) -> list[list[T]]:
-    """
-    Splits the input list into N sublists according to the specified ratios.
-
-    Parameters
-    ----------
-    items : list
-        List to split.
-    ratios : list[int]
-        Split ratios (e.g. [0.7, 0.15, 0.15]).
-
-    Returns
-    -------
-    output : list[list]
-        List of generated sublists.
-    """
     if len(ratios) < 2:
         raise ValueError("At least 2 ratios must be specified")
     if any(ratio < 0 for ratio in ratios):
@@ -411,9 +285,6 @@ def compute_white_stats(
     *,
     largest_component_threshold: float | None = None,
 ) -> tuple[float, float]:
-    """
-    Compute the white-pixel ratio and largest white-component ratio in one pass.
-    """
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     white_mask = gray >= white_threshold
     white_ratio = float(np.mean(white_mask))
@@ -435,14 +306,6 @@ def compute_white_stats(
 
 
 def ensure_clean_directory(directory: str | Path) -> None:
-    """
-    Removes an output directory if it already exists and recreates it empty.
-
-    Parameters
-    ----------
-    directory : str | Path
-        Directory to clean and recreate.
-    """
     directory = Path(directory)
     if directory.exists():
         shutil.rmtree(directory)
@@ -459,16 +322,6 @@ def is_valid_patch_pair(
     white_threshold: int,
     max_largest_white_component_ratio: float,
 ) -> tuple[bool, dict[str, float | list[str]]]:
-    """
-    Validates a source/target patch pair using both mask coverage and white ratio.
-
-    Returns
-    -------
-    is_valid : bool
-        True if the patch pair is valid, False otherwise.
-    debug_info : dict[str, float | list[str]]
-        Dictionary containing computed ratios and discard reasons.
-    """
     source_foreground_ratio = cv2.countNonZero(source_mask) / source_mask.size
     target_foreground_ratio = cv2.countNonZero(target_mask) / target_mask.size
 

@@ -33,7 +33,6 @@ class OrganizeResult:
 
 
 def organize(request: OrganizeRequest) -> OrganizeResult:
-    """Organize generated, target, and source images by metric ranking."""
     metrics_csv, output_dir = _resolve_paths(request)
     output_dir.mkdir(parents=True, exist_ok=True)
     summaries, summary_csv, image_columns = organize_by_metrics(

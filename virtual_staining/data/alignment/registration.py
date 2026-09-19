@@ -46,7 +46,6 @@ def _ratio_test_matches(
     *,
     ratio_threshold: float = _LOWE_RATIO_THRESHOLD,
 ) -> list[cv2.DMatch]:
-    """Keep descriptor matches whose nearest neighbor is clearly better than the second."""
     good_matches = []
     for candidates in knn_matches:
         if len(candidates) < 2:
@@ -63,7 +62,6 @@ def _aligned_mask_iou(
     warp_matrix: np.ndarray,
     output_size: tuple[int, int],
 ) -> float | None:
-    """Compute foreground IoU after warping moving_mask into reference_mask coordinates."""
     if reference_mask is None or moving_mask is None:
         return None
 
@@ -86,12 +84,6 @@ def _estimate_affine(
     nfeatures: int = 10000,
     ratio_threshold: float = _LOWE_RATIO_THRESHOLD,
 ) -> tuple[np.ndarray, RegistrationDiagnostics]:
-    """Estimate moving->reference (x, y) in the supplied images' pixel frames.
-
-    Images are uint8 BGR or grayscale. Optional uint8 2D masks must match their
-    respective image's (height, width) exactly. No scale compensation occurs
-    here; diagnostics and mask IoU describe this same estimation resolution.
-    """
     for name, image, mask in (
         ("reference_mask", reference, reference_mask),
         ("moving_mask", moving, moving_mask),
@@ -207,7 +199,6 @@ def _estimate_affine(
 
 
 def identity_alignment(reason: str = "reference") -> AlignmentResult:
-    """Create the canonical full-resolution identity result and its metadata."""
     return AlignmentResult("identity", np.eye(2, 3, dtype=np.float64), reason=reason)
 
 
@@ -220,7 +211,6 @@ def _validate_identity(reference: AlignmentImage, moving: AlignmentImage) -> Non
 
 
 def _registration_preview(image: AlignmentImage) -> tuple[np.ndarray, np.ndarray]:
-    """Normalize the whole-image mask to preview geometry, then halve both for SIFT."""
     preview = image.preview
     if (
         preview.dtype != np.uint8
@@ -229,7 +219,7 @@ def _registration_preview(image: AlignmentImage) -> tuple[np.ndarray, np.ndarray
         or min(preview.shape[:2]) < 2
     ):
         raise AlignmentError(f"Invalid preview for {image.name}: expected uint8 BGR or grayscale")
-    assert image.mask is not None  # resolve_alignment checks both masks before entering here.
+    assert image.mask is not None
     _validate_mask_geometry(image.mask, image.full_shape, name=f"{image.name} mask")
     mask = image.mask
     if mask.shape != preview.shape[:2]:
@@ -249,14 +239,6 @@ def resolve_alignment(
     *,
     already_aligned: bool | None = None,
 ) -> AlignmentResult:
-    """Resolve identity or SIFT registration; return moving-full -> reference-full.
-
-    Declared alignment takes precedence even in ``always`` mode. ``never`` with
-    an explicitly unaligned image is an error. Identity validation checks full
-    geometry and available pixel sizes only when ``validate_declared`` is set.
-    Registration requires whole-image masks; mask IoU remains diagnostic only.
-    Errors propagate; set failure policy and resource cleanup belong to callers.
-    """
     estimate = already_aligned is not True and (
         already_aligned is False or policy.mode in {"auto", "always"}
     )
@@ -275,7 +257,6 @@ def resolve_alignment(
     matrix, diagnostics = _estimate_affine(
         reference_preview, moving_preview, reference_mask, moving_mask
     )
-    # Use the actual SIFT input dimensions, including rounding during resizing.
     matrix = _rescale_transform(
         matrix,
         reference_scale=(

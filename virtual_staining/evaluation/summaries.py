@@ -13,7 +13,6 @@ SUMMARY_METRIC_NAMES = list(DEFAULT_METRICS)
 
 
 def metric_value(row: dict[str, object], metric: str) -> float:
-    """Returns a metric value from a CSV-style row as a float."""
     value = row[metric]
     if isinstance(value, str | int | float):
         return float(value)
@@ -21,7 +20,6 @@ def metric_value(row: dict[str, object], metric: str) -> float:
 
 
 def build_summary_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
-    """Builds aggregated rows for summary.csv using finite values only."""
     summary_rows: list[dict[str, object]] = []
 
     for metric in SUMMARY_METRIC_NAMES:
@@ -65,7 +63,6 @@ def write_summary_csv(
     num_pairs_evaluated: int | None = None,
     num_skipped: int | None = None,
 ) -> Path:
-    """Writes a summary CSV for metric rows, preserving non-finite accounting."""
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / filename
     summary_rows = build_summary_rows(rows)
@@ -106,7 +103,6 @@ def write_summary_csv(
 
 
 def read_summary_csv(path: str | Path) -> dict[str, dict[str, float]]:
-    """Read summary.csv and return aggregate statistics per metric."""
     summary_path = Path(path)
 
     if not summary_path.is_file():
@@ -155,7 +151,6 @@ def read_summary_csv(path: str | Path) -> dict[str, dict[str, float]]:
 
 
 def read_per_image_metrics_csv(path: str | Path) -> list[dict[str, str]]:
-    """Read per_image_metrics.csv and return all rows as dictionaries."""
     csv_path = Path(path)
 
     if not csv_path.is_file():

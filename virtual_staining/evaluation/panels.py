@@ -44,7 +44,6 @@ def build_metric_case_artifacts(
     metric_summary: dict[str, float],
     metric_dir: Path,
 ) -> tuple[dict[str, object], DiagnosticEntry]:
-    """Build and save the artefacts for a representative case."""
     sample_id = row["sample_id"]
     metric_value = float(row[metric_name])
 
@@ -111,7 +110,6 @@ def save_comparison_panel(
     save_path: str | Path,
     suptitle: str | None = None,
 ) -> Path:
-    """Saves a panel with source, generated, target and MAE map."""
     source_img = open_rgb(source_path)
     generated_img = open_rgb(generated_path)
     target_img = open_rgb(target_path)
@@ -156,7 +154,6 @@ def save_stacked_image_panel(
     row_titles: list[str] | None = None,
     suptitle: str | None = None,
 ) -> Path:
-    """Saves a vertical panel composed of already-generated images."""
     if not image_paths:
         raise ValueError("No image paths provided for stacked panel.")
 
@@ -199,7 +196,6 @@ def save_metric_diagnostics_summary(
     metric_dir: str | Path,
     diagnostic_entries: list[DiagnosticEntry],
 ) -> list[Path]:
-    """Saves aggregated panels for a metric across best, median and worst cases."""
     metric_dir = Path(metric_dir)
     output_specs: list[tuple[DiagnosticPathKey, str, str]] = [
         (

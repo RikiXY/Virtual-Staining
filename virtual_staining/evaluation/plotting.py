@@ -32,12 +32,10 @@ def _metric_value(row: dict[str, object], metric: str) -> float:
 
 
 def _finite_metric_values(rows: list[dict[str, object]], metric: str) -> list[float]:
-    """Returns metric values that are finite, intentionally skipping inf and nan."""
     return [v for row in rows if math.isfinite(v := _metric_value(row, metric))]
 
 
 def get_metric_plot_range(metric: str) -> tuple[float, float]:
-    """Returns the fixed range used in plots for a metric."""
     try:
         return METRIC_PLOT_RANGES[metric]
     except KeyError:
@@ -47,10 +45,6 @@ def get_metric_plot_range(metric: str) -> tuple[float, float]:
 
 
 def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) -> list[Path]:
-    """Saves histograms with fixed axes and a final summary boxplot.
-
-    Non-finite values (inf, nan) are intentionally excluded from all plots.
-    """
     output_directory = Path(output_dir)
     output_directory.mkdir(parents=True, exist_ok=True)
     saved_paths: list[Path] = []

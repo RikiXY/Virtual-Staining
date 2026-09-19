@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 
 def infer(config: RunConfig, config_path: Path) -> InferenceResult:
-    """Load a checkpoint, run the generator on the test split, and write outputs."""
     if config.inference is None:
         raise ValueError("RunConfig.inference is required to run inference.")
 

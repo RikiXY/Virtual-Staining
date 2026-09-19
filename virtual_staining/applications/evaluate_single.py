@@ -45,7 +45,6 @@ def evaluate_pair(
     generated_path: Path,
     output_dir: Path | None = None,
 ) -> SingleEvalResult:
-    """Evaluate one user-selected target/generated image pair."""
     return _run_single(
         _EvaluateRequest(
             target_dir=target_path.parent,

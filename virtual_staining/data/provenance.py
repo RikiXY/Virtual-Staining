@@ -11,7 +11,6 @@ from virtual_staining.utils.hashing import sha256_file, sha256_json
 
 
 def build_file_provenance(path: Path) -> dict[str, Any]:
-    """Return canonical provenance for one source dataset file."""
     resolved = path.resolve()
     stat = resolved.stat()
     return {
@@ -136,7 +135,6 @@ def build_dataset_fingerprint_metadata(
 
 
 def save_dataset_fingerprint(metadata: dict[str, Any], dest: Path) -> None:
-    """Persist dataset fingerprint metadata as canonical JSON."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     with dest.open("w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2)

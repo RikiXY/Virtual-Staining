@@ -38,7 +38,6 @@ def _conversion_paths(inputs: tuple[Path, ...], output_dir: Path) -> tuple[tuple
 
 
 def convert_images(inputs: tuple[Path, ...], output_dir: Path) -> tuple[Path, ...]:
-    """Convert TIFF images to lossless tiled pyramidal BigTIFFs."""
     output_dir = output_dir.resolve()
     if not inputs:
         raise ValueError("At least one input TIFF is required")

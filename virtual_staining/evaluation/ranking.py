@@ -20,12 +20,10 @@ IMAGE_COLUMNS = [
 
 
 def ensure_parent(path: Path) -> None:
-    """Creates the parent directory for a file path."""
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
 def place_file(src: Path, dst: Path, mode: str, overwrite: bool = False) -> None:
-    """Places a file by hardlink, symlink or copy."""
     if not src.exists():
         logger.warning("Missing file: %s", src)
         return
@@ -57,12 +55,10 @@ def place_file(src: Path, dst: Path, mode: str, overwrite: bool = False) -> None
 
 
 def get_existing_image_columns(df: pd.DataFrame) -> list[str]:
-    """Returns path columns available in the metrics CSV."""
     return [column for column in IMAGE_COLUMNS if column in df.columns]
 
 
 def infer_role_from_column(column: str) -> str:
-    """Infers the image role from a CSV column name."""
     if column == "generated_path":
         return "generated"
     if column == "target_path":
@@ -80,7 +76,6 @@ def export_ranked_subset(
     mode: str,
     overwrite: bool,
 ) -> int:
-    """Exports a ranked DataFrame subset."""
     destination_dir.mkdir(parents=True, exist_ok=True)
     placed_files = 0
 
@@ -115,7 +110,6 @@ def organize_metric(
     overwrite: bool,
     include_all_ranked: bool,
 ) -> dict[str, Any] | None:
-    """Organizes files for a single metric."""
     if metric not in df.columns:
         logger.warning("Metric %r not found in CSV; skipping", metric)
         return None
@@ -176,7 +170,6 @@ def organize_metric(
 
 
 def write_organization_summary(rows: list[dict[str, Any]], output_dir: Path) -> Path:
-    """Writes the organization summary CSV."""
     summary_path = output_dir / "organization_summary.csv"
     pd.DataFrame(rows).to_csv(summary_path, index=False)
     return summary_path
@@ -192,10 +185,6 @@ def organize_by_metrics(
     overwrite: bool = False,
     include_all_ranked: bool = False,
 ) -> tuple[list[dict[str, Any]], Path | None, tuple[str, ...]]:
-    """
-    Read a per_image_metrics.csv and copy/link the top-N and worst-N images
-    per metric into <output_dir>/<metric>/best/ and <output_dir>/<metric>/worst/.
-    """
     df = pd.read_csv(csv_path)
     image_columns = get_existing_image_columns(df)
 

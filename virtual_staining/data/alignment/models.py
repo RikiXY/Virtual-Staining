@@ -77,7 +77,6 @@ class AlignmentResult:
         metadata: dict[str, str | int | float | None | list[list[float]]] = {}
         if self.diagnostics is not None:
             metadata.update(asdict(self.diagnostics))
-            # Preserve the dataset metadata schema; registration itself uses neutral names.
             metadata["n_keypoints_src"] = metadata.pop("n_keypoints_reference")
             metadata["n_keypoints_tgt"] = metadata.pop("n_keypoints_moving")
         metadata.update(method=self.method, warp_matrix=self.warp_matrix.tolist())

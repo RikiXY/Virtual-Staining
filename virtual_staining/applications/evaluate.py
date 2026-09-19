@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 
 
 def evaluate(config: RunConfig, config_path: Path) -> None:
-    """Evaluate generated images against ground-truth targets."""
     project = config.project
     with ExperimentSession.open(
         config=config, config_path=config_path, stage="evaluate"

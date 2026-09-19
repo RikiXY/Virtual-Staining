@@ -41,7 +41,6 @@ def evaluate_pair(
     target_path: str | Path,
     generated_path: str | Path,
 ) -> tuple[dict[str, float], tuple[int, int, int]]:
-    """Load one image pair and compute the standard metrics."""
     target = load_rgb_image(target_path)
     generated = load_rgb_image(generated_path)
     if target.shape != generated.shape:

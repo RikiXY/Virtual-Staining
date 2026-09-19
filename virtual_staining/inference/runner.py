@@ -41,17 +41,14 @@ def predict_batch(
 
 
 def resolve_inference_device() -> torch.device:
-    """Return the device used by inference entry points."""
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def build_inference_transform(image_size: tuple[int, int]) -> transforms.Compose:
-    """Build the image transform expected by the generator."""
     return build_model_input_transform(image_size)
 
 
 def _resolve_checkpoint(config: RunConfig, paths: RunLayout) -> Path:
-    """Resolve the inference checkpoint path from RunConfig."""
     if config.inference is None:
         raise ValueError("RunConfig.inference is required to run inference.")
 
@@ -77,7 +74,6 @@ def load_inference_generator(
     paths: RunLayout,
     device: torch.device,
 ) -> tuple[nn.Module, Path]:
-    """Load and validate the configured generator checkpoint."""
     checkpoint_path = _resolve_checkpoint(config, paths)
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 

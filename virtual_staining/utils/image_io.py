@@ -32,30 +32,18 @@ class RegionImageReader(Protocol):
     path: Path
 
     @property
-    def size(self) -> tuple[int, int]:
-        """Return image size as ``(width, height)``."""
-        ...
+    def size(self) -> tuple[int, int]: ...
 
     @property
-    def metadata(self) -> ImageMetadata:
-        """Return basic image metadata."""
-        ...
+    def metadata(self) -> ImageMetadata: ...
 
-    def read_region(self, x: int, y: int, width: int, height: int) -> np.ndarray:
-        """Read a BGR uint8 region, padding out-of-bounds areas with white."""
-        ...
+    def read_region(self, x: int, y: int, width: int, height: int) -> np.ndarray: ...
 
-    def read_preview(self, scale: float) -> np.ndarray:
-        """Read a BGR uint8 downscaled preview."""
-        ...
+    def read_preview(self, scale: float) -> np.ndarray: ...
 
-    def read_full(self) -> np.ndarray:
-        """Read the full image as BGR uint8."""
-        ...
+    def read_full(self) -> np.ndarray: ...
 
-    def close(self) -> None:
-        """Release backend resources."""
-        ...
+    def close(self) -> None: ...
 
 
 def _pil_to_bgr_array(img: Image.Image) -> np.ndarray:
@@ -144,7 +132,7 @@ class OpenSlideRegionImageReader:
             raise FileNotFoundError(f"Image not found: {self.path}")
         if detect_openslide_format(self.path) is None:
             raise ValueError(f"OpenSlide does not support: {self.path}")
-        import openslide  # pyright: ignore[reportMissingImports]
+        import openslide
 
         self._slide: Any = openslide.OpenSlide(str(self.path))
 
@@ -201,7 +189,6 @@ class OpenSlideRegionImageReader:
 
 
 def open_image_reader(path: str | Path, backend: str = "auto") -> RegionImageReader:
-    """Open a local image with Pillow or the optional native WSI backend."""
     if backend not in SUPPORTED_IMAGE_BACKENDS:
         raise ValueError("backend must be auto, pillow, or openslide")
     if backend == "pillow":
@@ -218,9 +205,8 @@ def open_image_reader(path: str | Path, backend: str = "auto") -> RegionImageRea
 
 
 def detect_openslide_format(path: str | Path) -> str | None:
-    """Return the OpenSlide format name without decoding the image."""
     try:
-        import openslide  # pyright: ignore[reportMissingImports]
+        import openslide
     except ImportError as exc:
         raise RuntimeError(
             "OpenSlide is unavailable; install the 'wsi' extra and native OpenSlide"
@@ -229,7 +215,6 @@ def detect_openslide_format(path: str | Path) -> str | None:
 
 
 def open_rgb(path: str | Path) -> Image.Image:
-    """Opens an image file and returns it as an RGB PIL image."""
     image_path = Path(path)
 
     if not image_path.exists():
@@ -243,7 +228,6 @@ def open_rgb(path: str | Path) -> Image.Image:
 
 
 def load_rgb_image(path: str | Path) -> np.ndarray:
-    """Loads an image from disk and returns it as a uint8 RGB array."""
     image_path = Path(path)
 
     if not image_path.is_file():
@@ -258,5 +242,4 @@ def load_rgb_image(path: str | Path) -> np.ndarray:
 
 
 def to_float01(image: np.ndarray | Image.Image) -> np.ndarray:
-    """Converts an image to float32 [0, 1]."""
     return np.asarray(image, dtype=np.float32) / 255.0

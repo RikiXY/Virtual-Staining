@@ -232,7 +232,6 @@ def _write_tiled_rgb(
     image_size: tuple[int, int],
     tile_overlap: int,
 ) -> None:
-    """Run tiled inference into a disk-backed RGB byte buffer."""
     _validate_tile_overlap(image_size, tile_overlap)
 
     image_w, image_h = readers[_generator_input_names(generator)[0]].size
@@ -289,9 +288,8 @@ def _write_tiled_rgb(
 
 
 def _save_pyramidal_tiff(raw_path: Path, output_path: Path, metadata: ImageMetadata) -> None:
-    """Encode a raw RGB buffer as an OpenSlide-readable pyramidal BigTIFF."""
     try:
-        import pyvips  # pyright: ignore[reportMissingImports]
+        import pyvips
     except (ImportError, OSError) as exc:
         raise RuntimeError(
             "pyvips and libvips are required; install the 'wsi' extra and run inside 'nix develop'"
@@ -519,7 +517,6 @@ def _run_one_image(
 
 
 def collect_input_images(input_dir: Path, *, recursive: bool = False) -> tuple[Path, ...]:
-    """Return supported image files from a directory in deterministic order."""
     if not input_dir.is_dir():
         raise NotADirectoryError(f"Input directory not found: {input_dir}")
 
@@ -542,7 +539,6 @@ def run_single_image_inference(
     tile_overlap: int = DEFAULT_TILE_OVERLAP,
     output_format: str = "same",
 ) -> SingleInferenceResult:
-    """Run the generator on one image."""
     input_names = _generator_input_names(runtime.generator)
     if set(input_images) != set(input_names):
         raise ValueError(
@@ -575,7 +571,6 @@ def run_image_directory_inference(
     tile_overlap: int = DEFAULT_TILE_OVERLAP,
     output_format: str = "same",
 ) -> DirectoryInferenceResult:
-    """Run image inference for all supported image files in named directories."""
     if not input_dirs:
         raise ValueError("At least one input directory is required.")
     roots = {name: Path(path) for name, path in input_dirs.items()}
@@ -654,7 +649,6 @@ def run_image_path_inference(
     tile_overlap: int = DEFAULT_TILE_OVERLAP,
     output_format: str = "same",
 ) -> SingleInferenceResult | DirectoryInferenceResult:
-    """Run image inference on named files or named directories."""
     paths = {name: Path(path) for name, path in input_paths.items()}
     if not paths:
         raise ValueError("At least one input path is required.")

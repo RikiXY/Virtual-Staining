@@ -251,7 +251,6 @@ def _cuda_status(torch: Any | None, import_error: str | None) -> dict[str, Any]:
 
 
 def collect_status() -> dict[str, Any]:
-    """Collect a complete, non-mutating health report for the active runtime."""
     runtime = RuntimeInfo.collect(("torch", "numpy", "cv2", "albumentations"))
     packages, modules = _required_packages()
     package_modules = {

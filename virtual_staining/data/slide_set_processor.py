@@ -91,7 +91,6 @@ class SlideSetProcessor:
         self._maskless = False
 
     def process(self) -> SetBuildResult:
-        """Process the set under its failure policy and always close its readers."""
         valid_rows: list[dict[str, Any]] = []
         discarded_rows: list[dict[str, Any]] = []
         error: str | None = None

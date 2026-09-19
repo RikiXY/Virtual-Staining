@@ -41,7 +41,6 @@ class ValidationImageMetricAccumulator:
 
 
 def normalized_tensor_batch_to_images(tensor: torch.Tensor) -> list[np.ndarray]:
-    """Converts normalized NCHW tensors from [-1, 1] to NHWC arrays in [0, 1]."""
     if tensor.ndim != 4:
         raise ValueError("validation image metric tensors must be NCHW batches")
     images = denormalize_model_output(tensor.detach().to(device="cpu", dtype=torch.float32))
