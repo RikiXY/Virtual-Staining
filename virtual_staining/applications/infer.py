@@ -3,16 +3,18 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from PIL import Image
 from torchvision.utils import save_image
 
 from virtual_staining.config.run import RunConfig
-from virtual_staining.data.dataset import PairedManifestDataset
+from virtual_staining.data.dataset import PairedManifestDataset, resolve_domain_images
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.manifest import load_manifest_or_raise
 from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.inference.runner import (
     InferenceResult,
     build_inference_transform,
+    inference_input_names,
     load_inference_generator,
     predict_batch,
     resolve_inference_device,
@@ -33,6 +35,39 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
         generator, checkpoint_path = load_inference_generator(config, session.paths, device)
         transform = build_inference_transform(config.project.image_size)
         output_dir = config.inference.output_dir or session.paths.output_test_dir
+
+        if config.data.pairing == "unpaired":
+            input_name = inference_input_names(config)[0]
+            paths = resolve_domain_images(
+                config.project.dataset_root,
+                config.data.domains[input_name],
+                "test",
+            )
+            session.result(
+                checkpoint_path=str(checkpoint_path),
+                output_dir=str(output_dir),
+                test_sample_count=len(paths),
+                device=str(device),
+                method=config.method.name,
+                pairing=config.data.pairing,
+                direction=config.inference.direction,
+                paired_metrics_available=False,
+                inferred_count=0,
+            )
+            output_dir.mkdir(parents=True, exist_ok=True)
+            result = InferenceResult(output_dir=output_dir)
+            for path in paths:
+                tensor = transform(Image.open(path).convert("RGB"))
+                output = predict_batch(generator, {input_name: tensor.unsqueeze(0)}, device)[0]
+                out_path = output_dir / f"{path.stem}_generated{path.suffix}"
+                save_image(output, out_path)
+                result.generated_paths.append(out_path)
+                result.num_samples += 1
+                session.result(inferred_count=result.num_samples)
+            logger.info(
+                "Unpaired inference complete: %s samples -> %s", result.num_samples, output_dir
+            )
+            return result
 
         manifest = load_manifest_or_raise(config.project)
         if not set(config.model.inputs).issubset(manifest.metadata.input_modalities):

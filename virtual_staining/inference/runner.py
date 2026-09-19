@@ -29,6 +29,18 @@ class InferenceResult:
     num_samples: int = 0
 
 
+class _TensorGeneratorAdapter(nn.Module):
+    def __init__(self, generator: nn.Module, input_name: str) -> None:
+        super().__init__()
+        self.generator = generator
+        self.input_names = (input_name,)
+
+    def forward(self, inputs: dict[str, torch.Tensor]) -> torch.Tensor:
+        if tuple(inputs) != self.input_names:
+            raise ValueError(f"Expected inference input {self.input_names}, got {tuple(inputs)}")
+        return self.generator(inputs[self.input_names[0]])
+
+
 @torch.no_grad()
 def predict_batch(
     generator: nn.Module,
@@ -89,10 +101,50 @@ def load_inference_generator(
             f"config image_size={tuple(config.project.image_size)}."
         )
 
-    checkpoint_arch = validate_checkpoint_metadata(checkpoint, checkpoint_path)
+    if checkpoint.get("format_version") == 3:
+        if config.method.name != "pix2pix":
+            raise ValueError("Legacy v3 checkpoints can only be loaded as Pix2Pix")
+        checkpoint_arch = validate_checkpoint_metadata(checkpoint, checkpoint_path)
+        generator = build_generator(config.model).to(device)
+        check_generator_arch(checkpoint_arch, generator, target_modality=config.model.target)
+        generator.load_state_dict(checkpoint["generator_state_dict"])
+        generator.eval()
+        return generator, checkpoint_path
 
+    if checkpoint.get("format_version") != 4:
+        raise ValueError(
+            f"Unsupported checkpoint format version {checkpoint.get('format_version')!r}; "
+            "supported versions are Pix2Pix v3 and method checkpoint v4"
+        )
+    method = checkpoint.get("method")
+    if not isinstance(method, dict) or method.get("name") != config.method.name:
+        raise ValueError("Checkpoint method does not match the configured method")
+    state = checkpoint.get("method_state")
+    if not isinstance(state, dict) or not isinstance(state.get("models"), dict):
+        raise ValueError("Method checkpoint is missing model state")
     generator = build_generator(config.model).to(device)
-    check_generator_arch(checkpoint_arch, generator, target_modality=config.model.target)
-    generator.load_state_dict(checkpoint["generator_state_dict"])
+    if config.method.name == "cyclegan":
+        assert config.inference is not None
+        direction = config.inference.direction or "A_to_B"
+        state_name = f"G_{direction}"
+        if state_name not in state["models"]:
+            raise ValueError(f"CycleGAN checkpoint has no generator for direction {direction}")
+        generator.load_state_dict(state["models"][state_name])
+        input_name = config.model.inputs[0] if direction == "A_to_B" else config.model.target
+        generator = _TensorGeneratorAdapter(generator, input_name).to(device)
+    else:
+        if "generator" not in state["models"]:
+            raise ValueError("Pix2Pix method checkpoint is missing generator state")
+        generator.load_state_dict(state["models"]["generator"])
     generator.eval()
     return generator, checkpoint_path
+
+
+def inference_input_names(config: RunConfig) -> tuple[str, ...]:
+    if (
+        config.method.name == "cyclegan"
+        and config.inference is not None
+        and config.inference.direction == "B_to_A"
+    ):
+        return (config.model.target,)
+    return config.model.inputs

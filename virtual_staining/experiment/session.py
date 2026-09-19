@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
@@ -10,6 +11,7 @@ from types import TracebackType
 from typing import Protocol
 
 from virtual_staining.config.run import RunConfig
+from virtual_staining.data.dataset import resolve_domain_images
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.experiment.snapshots import (
@@ -42,10 +44,16 @@ class LocalRunStore:
         *,
         run_name: str,
         dataset_fingerprint: str | None,
+        method_name: str | None = None,
+        pairing: str | None = None,
+        domains: Mapping[str, object] | None = None,
     ) -> None:
         self.paths = paths
         self.run_name = run_name
         self.dataset_fingerprint = dataset_fingerprint
+        self.method_name = method_name
+        self.pairing = pairing
+        self.domains = {str(name): str(value) for name, value in (domains or {}).items()}
 
     def ensure_run(self) -> dict[str, object]:
         path = self.paths.run_metadata
@@ -86,6 +94,7 @@ class LocalRunStore:
             if existing_fingerprint is None and self.dataset_fingerprint is not None:
                 data["dataset_fingerprint"] = self.dataset_fingerprint
                 _replace_json(path, data)
+            self._add_method_metadata(data, path)
             return data
 
         data: dict[str, object] = {
@@ -98,8 +107,22 @@ class LocalRunStore:
             "stages_present": [],
             "last_completed_stage": None,
         }
+        self._add_method_metadata(data)
         _replace_json(path, data)
         return data
+
+    def _add_method_metadata(self, data: dict[str, object], path: Path | None = None) -> None:
+        changed = False
+        for key, value in (
+            ("method", self.method_name),
+            ("pairing", self.pairing),
+            ("domains", self.domains or None),
+        ):
+            if value is not None and data.get(key) != value:
+                data[key] = value
+                changed = True
+        if changed and path is not None:
+            _replace_json(path, data)
 
     def record_stage(
         self,
@@ -185,6 +208,9 @@ class ExperimentSession:
                 self.paths,
                 run_name=self.config.project.run_name,
                 dataset_fingerprint=None,
+                method_name=getattr(getattr(self.config, "method", None), "name", "pix2pix"),
+                pairing=self._pairing(),
+                domains=getattr(getattr(self.config, "data", None), "domains", {}),
             )
             self._run = self._store.ensure_run()
             self._attach_file_handler()
@@ -235,16 +261,24 @@ class ExperimentSession:
             )
             save_environment_snapshot(stage_layout.environment)
             manifest_path = dataset_layout.manifest_path
-            if not manifest_path.is_file():
-                raise FileNotFoundError(f"Manifest not found at {manifest_path}. Run 'vs prepare'.")
-            self.manifest_hash = sha256_file(manifest_path)
-            self.dataset_fingerprint = _load_dataset_fingerprint(
-                dataset_layout.dataset_fingerprint_path
-            )
+            if self._pairing() == "paired":
+                if not manifest_path.is_file():
+                    raise FileNotFoundError(
+                        f"Manifest not found at {manifest_path}. Run 'vs prepare'."
+                    )
+                self.manifest_hash = sha256_file(manifest_path)
+                self.dataset_fingerprint = _load_dataset_fingerprint(
+                    dataset_layout.dataset_fingerprint_path
+                )
+            else:
+                self.dataset_fingerprint = _unpaired_dataset_fingerprint(self.config)
             self._store = LocalRunStore(
                 self.paths,
                 run_name=self.config.project.run_name,
                 dataset_fingerprint=self.dataset_fingerprint,
+                method_name=getattr(getattr(self.config, "method", None), "name", "pix2pix"),
+                pairing=self._pairing(),
+                domains=getattr(getattr(self.config, "data", None), "domains", {}),
             )
             self._run = self._store.ensure_run()
             return self
@@ -408,11 +442,21 @@ class ExperimentSession:
 
     def _dataset_view(self) -> dict[str, object]:
         layout = DatasetLayout.from_project(self.config.project)
+        data_config = getattr(self.config, "data", None)
+        pairing = self._pairing()
         return {
             "fingerprint": self.dataset_fingerprint,
-            "manifest_path": str(layout.manifest_path),
-            "manifest_sha256": self.manifest_hash,
+            "pairing": pairing,
+            "domains": {
+                name: str(path) for name, path in getattr(data_config, "domains", {}).items()
+            },
+            "manifest_path": str(layout.manifest_path) if pairing == "paired" else None,
+            "manifest_sha256": self.manifest_hash or None,
         }
+
+    def _pairing(self) -> str:
+        data_config = getattr(self.config, "data", None)
+        return str(getattr(data_config, "pairing", "paired"))
 
     def _attach_file_handler(self) -> None:
         handler = logging.FileHandler(self.paths.run_log, mode="a", encoding="utf-8")
@@ -445,6 +489,30 @@ def _load_dataset_fingerprint(path: Path) -> str | None:
         raise ValueError(f"Dataset fingerprint at {path} must be an object")
     value = data.get("fingerprint")
     return str(value) if value is not None else None
+
+
+def _unpaired_dataset_fingerprint(config: RunConfig) -> str:
+    digest = hashlib.sha256()
+    layout = DatasetLayout.from_project(config.project)
+    prepared_fingerprint = _load_dataset_fingerprint(layout.dataset_fingerprint_path)
+    if prepared_fingerprint is not None:
+        digest.update(prepared_fingerprint.encode())
+    if layout.manifest_path.is_file():
+        digest.update(sha256_file(layout.manifest_path).encode())
+    for domain, domain_spec in sorted(config.data.domains.items()):
+        digest.update(domain.encode())
+        digest.update(str(domain_spec).encode())
+        for split in ("train", "val", "test"):
+            digest.update(split.encode())
+            for path in resolve_domain_images(config.project.dataset_root, domain_spec, split):
+                try:
+                    identifier = path.relative_to(config.project.dataset_root).as_posix()
+                except ValueError:
+                    identifier = str(path)
+                digest.update(identifier.encode())
+                if prepared_fingerprint is None:
+                    digest.update(sha256_file(path).encode())
+    return digest.hexdigest()
 
 
 def _is_finite(value: float) -> bool:
