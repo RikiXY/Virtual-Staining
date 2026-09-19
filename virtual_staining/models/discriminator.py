@@ -71,7 +71,7 @@ class PatchGANDiscriminator(nn.Module):
 
         self.model = nn.Sequential(*layers)
 
-    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, y: torch.Tensor | None = None) -> torch.Tensor:
         """
         Args:
             x (Tensor): Input image.
@@ -80,4 +80,5 @@ class PatchGANDiscriminator(nn.Module):
         Returns:
             Tensor: Map of real/fake predictions per patch.
         """
-        return self.model(torch.cat([x, y], dim=1))
+        value = x if y is None else torch.cat([x, y], dim=1)
+        return self.model(value)

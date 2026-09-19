@@ -201,3 +201,83 @@ class ConcatUNetGenerator(nn.Module):
 
     def forward(self, inputs: Mapping[str, torch.Tensor]) -> torch.Tensor:
         return self.unet(concat_inputs(inputs, self.input_names))
+
+
+class ResnetBlock(nn.Module):
+    def __init__(self, channels: int, norm: str) -> None:
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.ReflectionPad2d(1),
+            nn.Conv2d(channels, channels, kernel_size=3, bias=False),
+            _make_norm(norm, channels),
+            nn.ReLU(inplace=True),
+            nn.ReflectionPad2d(1),
+            nn.Conv2d(channels, channels, kernel_size=3, bias=False),
+            _make_norm(norm, channels),
+        )
+
+    def forward(self, value: torch.Tensor) -> torch.Tensor:
+        return value + self.block(value)
+
+
+class ResNetGenerator(nn.Module):
+    """Compact CycleGAN-style ResNet generator for RGB-to-RGB translation."""
+
+    def __init__(
+        self,
+        in_channels: int = 3,
+        out_channels: int = 3,
+        base_channels: int = 64,
+        blocks: int = 6,
+        norm: str = "instance",
+    ) -> None:
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.base_channels = base_channels
+        self.blocks = blocks
+        self.norm = norm
+        layers: list[nn.Module] = [
+            nn.ReflectionPad2d(3),
+            nn.Conv2d(in_channels, base_channels, kernel_size=7, bias=False),
+            _make_norm(norm, base_channels),
+            nn.ReLU(inplace=True),
+        ]
+        channels = base_channels
+        for _ in range(2):
+            layers.extend(
+                [
+                    nn.Conv2d(channels, channels * 2, kernel_size=3, stride=2, padding=1),
+                    _make_norm(norm, channels * 2),
+                    nn.ReLU(inplace=True),
+                ]
+            )
+            channels *= 2
+        layers.extend(ResnetBlock(channels, norm) for _ in range(blocks))
+        for _ in range(2):
+            layers.extend(
+                [
+                    nn.ConvTranspose2d(
+                        channels,
+                        channels // 2,
+                        kernel_size=3,
+                        stride=2,
+                        padding=1,
+                        output_padding=1,
+                    ),
+                    _make_norm(norm, channels // 2),
+                    nn.ReLU(inplace=True),
+                ]
+            )
+            channels //= 2
+        layers.extend(
+            [
+                nn.ReflectionPad2d(3),
+                nn.Conv2d(channels, out_channels, kernel_size=7),
+                nn.Tanh(),
+            ]
+        )
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, value: torch.Tensor) -> torch.Tensor:
+        return self.model(value)

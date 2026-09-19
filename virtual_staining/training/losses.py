@@ -25,6 +25,13 @@ LOSS_REGISTRY: dict[str, LossRegistryEntry] = {
         roles=("generator", "discriminator"),
         targets=("discriminator_logits",),
     ),
+    "adversarial_lsgan": LossRegistryEntry(
+        name="adversarial_lsgan",
+        roles=("generator", "discriminator"),
+        targets=("discriminator_logits",),
+    ),
+    "cycle_l1": LossRegistryEntry(name="cycle_l1", roles=("generator",), targets=("image",)),
+    "identity_l1": LossRegistryEntry(name="identity_l1", roles=("generator",), targets=("image",)),
     "l1": LossRegistryEntry(name="l1", roles=("generator",), targets=("image",)),
     "ssim": LossRegistryEntry(name="ssim", roles=("generator",), targets=("image",)),
 }
@@ -123,6 +130,21 @@ class ConfiguredLossEvaluator:
             total = total + result.weighted
             results.append(result)
         return _aggregate_loss_results(total, results)
+
+
+class LeastSquaresAdversarialLoss(nn.Module):
+    """Conventional LSGAN objectives over discriminator prediction maps."""
+
+    def generator(self, fake_prediction: torch.Tensor) -> torch.Tensor:
+        return F.mse_loss(fake_prediction, torch.ones_like(fake_prediction))
+
+    def discriminator(
+        self, real_prediction: torch.Tensor, fake_prediction: torch.Tensor
+    ) -> torch.Tensor:
+        return 0.5 * (
+            F.mse_loss(real_prediction, torch.ones_like(real_prediction))
+            + F.mse_loss(fake_prediction, torch.zeros_like(fake_prediction))
+        )
 
 
 class SsimLoss(nn.Module):
@@ -295,12 +317,16 @@ def evaluate_generator_loss_term(
     current_weight = term.current_weight(epoch=epoch, global_step=global_step)
     if term.name == "ssim":
         raw = _ensure_scalar(_evaluate_ssim_term(term, prediction, target, masks=masks))
-    elif term.name == "l1":
+    elif term.name in {"cycle_l1", "identity_l1", "l1"}:
         raw = _ensure_scalar(_evaluate_l1_term(term, prediction, target, masks=masks))
     elif term.name == "adversarial_bce":
         if discriminator_fake is None:
             raise ValueError("generator adversarial_bce loss requires discriminator_fake logits")
         raw = _bce_with_logits(discriminator_fake, torch.ones_like(discriminator_fake))
+    elif term.name == "adversarial_lsgan":
+        if discriminator_fake is None:
+            raise ValueError("generator adversarial_lsgan loss requires discriminator_fake logits")
+        raw = LeastSquaresAdversarialLoss().generator(discriminator_fake)
     else:
         raise ValueError(f"Unsupported generator loss term: {term.name!r}")
     return LossTermResult(
@@ -325,6 +351,15 @@ def evaluate_discriminator_loss_term(
         raw = _bce_with_logits(
             discriminator_real, torch.ones_like(discriminator_real)
         ) + _bce_with_logits(discriminator_fake, torch.zeros_like(discriminator_fake))
+        return LossTermResult(
+            name=term.name,
+            raw=raw,
+            weighted=raw * current_weight,
+            current_weight=current_weight,
+            stage="discriminator",
+        )
+    if term.name == "adversarial_lsgan":
+        raw = LeastSquaresAdversarialLoss().discriminator(discriminator_real, discriminator_fake)
         return LossTermResult(
             name=term.name,
             raw=raw,
