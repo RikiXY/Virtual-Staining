@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, get_args
@@ -12,9 +14,11 @@ logger = logging.getLogger(__name__)
 
 CheckpointMetric = str
 CheckpointMode = Literal["min", "max"]
+CHECKPOINT_SELECTION_SCHEMA_VERSION = 1
 SUPPORTED_CHECKPOINT_METRICS = frozenset(("loss_G_val", *VALIDATION_IMAGE_METRIC_NAMES))
 RANKED_CHECKPOINT_POLICIES = frozenset({"best", "top_k"})
 SUPPORTED_CHECKPOINT_POLICIES = frozenset({"latest"}) | RANKED_CHECKPOINT_POLICIES
+_CHECKPOINT_NAME_PATTERN = re.compile(r"^ep(?P<epoch>\d+)\.pth$")
 
 
 def default_checkpoint_mode(metric: str) -> CheckpointMode:
@@ -53,20 +57,30 @@ def update_checkpoint_selection(
 ) -> Path:
     if top_k <= 0:
         raise ValueError("top_k must be greater than 0")
+    if epoch < 0:
+        raise ValueError("epoch must be greater than or equal to 0")
     if not metrics:
         raise ValueError("metrics must contain at least one finite metric value")
-    if not checkpoint_path.exists():
+    if not checkpoint_path.is_file():
         raise FileNotFoundError(f"Cannot rank missing checkpoint file: {checkpoint_path}")
+
+    for metric, metric_value in metrics.items():
+        if isinstance(metric_value, bool) or not isinstance(metric_value, int | float):
+            raise ValueError(f"Checkpoint metric {metric!r} must be numeric")
+        if not math.isfinite(float(metric_value)):
+            raise ValueError(f"Checkpoint metric {metric!r} must be finite")
+        if metric not in modes:
+            raise ValueError(f"Missing checkpoint mode for metric {metric!r}")
+        if modes[metric] not in set(get_args(CheckpointMode)):
+            raise ValueError("mode must be one of ['max', 'min']")
 
     best_path = checkpoints_dir / "best.json"
     payload = _load_selection_payload(best_path)
-    payload["schema_version"] = 1
-    payload["metrics"] = _selection_metrics(payload)
+    payload["schema_version"] = CHECKPOINT_SELECTION_SCHEMA_VERSION
+    payload["metrics"] = _selection_metrics(payload, best_path)
 
     for metric, metric_value in sorted(metrics.items()):
         mode = modes[metric]
-        if mode not in set(get_args(CheckpointMode)):
-            raise ValueError("mode must be one of ['max', 'min']")
         metric_payload = payload["metrics"].get(metric)
         if not isinstance(metric_payload, dict) or metric_payload.get("mode") != mode:
             metric_payload = {"mode": mode, "top_k": top_k, "records": []}
@@ -75,12 +89,12 @@ def update_checkpoint_selection(
             record
             for record in _selection_records(metric_payload, best_path)
             if record["epoch"] != epoch
-            and _checkpoint_record_path(checkpoints_dir, str(record["checkpoint_path"])).exists()
+            and _checkpoint_record_path(checkpoints_dir, str(record["checkpoint_path"])).is_file()
         ]
         record: dict[str, Any] = {
             "epoch": epoch,
             "checkpoint_path": checkpoint_path.name,
-            "metric_value": metric_value,
+            "metric_value": float(metric_value),
         }
         if config_hash is not None:
             record["config_hash"] = config_hash
@@ -111,11 +125,11 @@ def load_best_checkpoint_record(
         raise FileNotFoundError(
             f"checkpoint_policy={policy!r} requires {best_path}, but that file does not exist."
         )
-    payload = _read_payload(best_path)
     if rank <= 0:
         raise ValueError("checkpoint_rank must be greater than 0")
 
-    metrics = _selection_metrics(payload)
+    payload = _load_selection_payload(best_path)
+    metrics = _selection_metrics(payload, best_path)
     selected_metric = _select_metric_from_policy(policy=policy, metric=metric)
     metric_payload = metrics.get(selected_metric)
     if not isinstance(metric_payload, dict):
@@ -123,6 +137,7 @@ def load_best_checkpoint_record(
             f"Best checkpoint metadata at {best_path} has no records for metric "
             f"{selected_metric!r}."
         )
+    mode = _selection_mode(metric_payload, best_path)
     records = _selection_records(metric_payload, best_path)
     matching = [record for record in records if record.get("rank") == rank]
     if not matching:
@@ -132,7 +147,7 @@ def load_best_checkpoint_record(
         )
     record = matching[0]
     checkpoint_path = _checkpoint_record_path(checkpoints_dir, str(record["checkpoint_path"]))
-    if not checkpoint_path.exists():
+    if not checkpoint_path.is_file():
         raise FileNotFoundError(
             f"Best checkpoint metadata at {best_path} points to missing file {checkpoint_path}."
         )
@@ -142,7 +157,7 @@ def load_best_checkpoint_record(
         epoch=int(record["epoch"]),
         checkpoint_path=checkpoint_path,
         metric_value=float(record["metric_value"]),
-        mode=str(metric_payload.get("mode")) if metric_payload.get("mode") is not None else None,
+        mode=mode,
     )
 
 
@@ -162,8 +177,14 @@ def _resolve_best_checkpoint_path(
 
 
 def latest_checkpoint_path(checkpoints_dir: Path) -> Path | None:
-    candidates = sorted(checkpoints_dir.glob("ep*.pth"))
-    return candidates[-1] if candidates else None
+    candidates: list[tuple[int, Path]] = []
+    for path in checkpoints_dir.glob("ep*.pth"):
+        match = _CHECKPOINT_NAME_PATTERN.fullmatch(path.name)
+        if match is not None and path.is_file():
+            candidates.append((int(match.group("epoch")), path))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda candidate: (candidate[0], candidate[1].name))[1]
 
 
 def resolve_checkpoint_path(
@@ -189,11 +210,31 @@ def resolve_checkpoint_path(
 
 def _load_selection_payload(best_path: Path) -> dict[str, Any]:
     if not best_path.exists():
-        return {"schema_version": 1, "metrics": {}}
+        return _empty_selection_payload()
+
     payload = _read_payload(best_path)
-    if "metrics" in payload:
-        return payload
-    raise ValueError(f"Best checkpoint metadata at {best_path} is not a selection record.")
+    schema_version = payload.get("schema_version")
+    if schema_version is None:
+        raise ValueError(
+            f"Checkpoint selection metadata at {best_path} is missing schema_version. "
+            f"Legacy/unversioned best.json records are not supported; expected schema version "
+            f"{CHECKPOINT_SELECTION_SCHEMA_VERSION}."
+        )
+    if type(schema_version) is not int:
+        raise ValueError(
+            f"Checkpoint selection metadata at {best_path} has invalid schema_version."
+        )
+    if schema_version != CHECKPOINT_SELECTION_SCHEMA_VERSION:
+        raise ValueError(
+            f"Unsupported checkpoint selection schema_version {schema_version} at {best_path}. "
+            f"Supported version: {CHECKPOINT_SELECTION_SCHEMA_VERSION}."
+        )
+    _selection_metrics(payload, best_path)
+    return payload
+
+
+def _empty_selection_payload() -> dict[str, Any]:
+    return {"schema_version": CHECKPOINT_SELECTION_SCHEMA_VERSION, "metrics": {}}
 
 
 def _read_payload(path: Path) -> dict[str, Any]:
@@ -217,14 +258,22 @@ def _select_metric_from_policy(*, policy: str, metric: str | None) -> str:
     raise ValueError(f"checkpoint_policy={policy!r} requires checkpoint_metric.")
 
 
-def _selection_metrics(payload: dict[str, Any]) -> dict[str, Any]:
-    metrics = payload.get("metrics", {})
+def _selection_metrics(payload: dict[str, Any], path: Path) -> dict[str, Any]:
+    metrics = payload.get("metrics")
     if not isinstance(metrics, dict):
-        raise ValueError("Best checkpoint metadata has invalid metrics.")
+        raise ValueError(f"Best checkpoint metadata at {path} has invalid metrics.")
     return metrics
 
 
+def _selection_mode(metric_payload: dict[str, Any], path: Path) -> str:
+    mode = metric_payload.get("mode")
+    if not isinstance(mode, str) or mode not in set(get_args(CheckpointMode)):
+        raise ValueError(f"Best checkpoint metadata at {path} has invalid metric mode.")
+    return mode
+
+
 def _selection_records(metric_payload: dict[str, Any], path: Path) -> list[dict[str, Any]]:
+    _selection_mode(metric_payload, path)
     records = metric_payload.get("records", [])
     if not isinstance(records, list):
         raise ValueError(f"Best checkpoint metadata at {path} has invalid records.")
@@ -235,7 +284,7 @@ def _normalize_top_k_record(record: Any, top_k_path: Path) -> dict[str, Any]:
     if not isinstance(record, dict):
         raise ValueError(f"Top-k checkpoint metadata at {top_k_path} contains a non-object record.")
     epoch = record.get("epoch")
-    if not isinstance(epoch, int):
+    if type(epoch) is not int or epoch < 0:
         raise ValueError(f"Top-k checkpoint metadata at {top_k_path} has invalid record epoch.")
     checkpoint_value = record.get("checkpoint_path")
     if not isinstance(checkpoint_value, str) or not checkpoint_value.strip():
@@ -243,7 +292,11 @@ def _normalize_top_k_record(record: Any, top_k_path: Path) -> dict[str, Any]:
             f"Top-k checkpoint metadata at {top_k_path} has invalid record checkpoint_path."
         )
     metric_value = record.get("metric_value")
-    if not isinstance(metric_value, int | float):
+    if (
+        isinstance(metric_value, bool)
+        or not isinstance(metric_value, int | float)
+        or not math.isfinite(float(metric_value))
+    ):
         raise ValueError(
             f"Top-k checkpoint metadata at {top_k_path} has invalid record metric_value."
         )
@@ -255,7 +308,7 @@ def _normalize_top_k_record(record: Any, top_k_path: Path) -> dict[str, Any]:
     }
     if "rank" in record:
         rank = record["rank"]
-        if not isinstance(rank, int):
+        if type(rank) is not int or rank <= 0:
             raise ValueError(f"Top-k checkpoint metadata at {top_k_path} has invalid record rank.")
         normalized["rank"] = rank
     if "config_hash" in record:
@@ -281,15 +334,14 @@ def _rank_top_k_records(
     mode: str,
     top_k: int,
 ) -> list[dict[str, Any]]:
-    reverse = mode == "max"
+    metric_direction = -1.0 if mode == "max" else 1.0
     sorted_records = sorted(
         records,
         key=lambda record: (
-            (float(record["metric_value"]), -int(record["epoch"]))
-            if reverse
-            else (float(record["metric_value"]), int(record["epoch"]))
+            metric_direction * float(record["metric_value"]),
+            int(record["epoch"]),
+            str(record["checkpoint_path"]),
         ),
-        reverse=reverse,
     )
     ranked_records: list[dict[str, Any]] = []
     for rank, record in enumerate(sorted_records[:top_k], start=1):
