@@ -8,6 +8,27 @@ from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import ConcatUNetGenerator
 
 
+@pytest.mark.parametrize("section", ["generator", "discriminator"])
+@pytest.mark.parametrize("norm", ["batch", "instance"])
+def test_model_config_accepts_norm_choices(section: str, norm: str) -> None:
+    config = ModelConfig.from_mapping(
+        {"inputs": ["LF"], "target": "stained", section: {"norm": norm}}
+    )
+    assert config.to_dict()[section]["norm"] == norm
+
+
+@pytest.mark.parametrize(
+    ("section", "field"),
+    [("generator", "architecture"), ("generator", "norm"), ("discriminator", "norm")],
+)
+@pytest.mark.parametrize(("value", "error"), [("unknown", ValueError), (False, TypeError)])
+def test_model_config_rejects_invalid_choices(
+    section: str, field: str, value: object, error: type[Exception]
+) -> None:
+    with pytest.raises(error, match=rf"model\.{section}\.{field} must be"):
+        ModelConfig.from_mapping({"inputs": ["LF"], "target": "stained", section: {field: value}})
+
+
 def test_model_config_defaults_match_models() -> None:
     config = ModelConfig.from_mapping({"inputs": ["LF", "AF"], "target": "stained"})
     generator = ConcatUNetGenerator(config.inputs, base_channels=config.generator.base_channels)

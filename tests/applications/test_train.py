@@ -10,7 +10,11 @@ from tests.manifest_helpers import make_manifest_record
 from virtual_staining.applications import train as train_app
 from virtual_staining.applications.train import _requires_foreground_masks
 from virtual_staining.config.run import RunConfig
-from virtual_staining.data.manifest import DatasetManifest, ManifestMetadata
+from virtual_staining.data.manifest import (
+    MANIFEST_SCHEMA_VERSION,
+    DatasetManifest,
+    ManifestMetadata,
+)
 
 
 class _InertSession:
@@ -42,7 +46,7 @@ def _manifest(tmp_path: Path, *, target_modality: str, splits: tuple[str, ...]) 
     return DatasetManifest(
         tuple(records),
         tmp_path / "dataset",
-        ManifestMetadata("3.0", ("LF", "AF"), "LF", target_modality),
+        ManifestMetadata(MANIFEST_SCHEMA_VERSION, ("LF", "AF"), "LF", target_modality),
     )
 
 

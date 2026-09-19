@@ -4,7 +4,13 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
-from virtual_staining.data.manifest import DatasetManifest, ManifestMetadata, ManifestRecord, Split
+from virtual_staining.data.manifest import (
+    MANIFEST_SCHEMA_VERSION,
+    DatasetManifest,
+    ManifestMetadata,
+    ManifestRecord,
+    Split,
+)
 
 INPUT_MODALITIES = ("label_free",)
 REFERENCE_MODALITY = "label_free"
@@ -50,7 +56,9 @@ def make_manifest_record(
 
 
 def manifest_metadata(input_modalities: tuple[str, ...] = INPUT_MODALITIES) -> ManifestMetadata:
-    return ManifestMetadata("3.0", input_modalities, input_modalities[0], TARGET_MODALITY)
+    return ManifestMetadata(
+        MANIFEST_SCHEMA_VERSION, input_modalities, input_modalities[0], TARGET_MODALITY
+    )
 
 
 def make_manifest_records(

@@ -82,6 +82,12 @@ def test_run_config_composes_domains_and_round_trips(tmp_path: Path) -> None:
     assert RunConfig.from_yaml(resolved_path) == config
 
 
+def test_run_config_rejects_arbitrary_unknown_top_level_key(tmp_path: Path) -> None:
+    path = write_yaml(tmp_path / "run.yaml", _canonical_yaml() + "\nunexpected_option: true\n")
+    with pytest.raises(ValueError, match=r"^Unknown key\(s\) in top level: unexpected_option$"):
+        RunConfig.from_yaml(path)
+
+
 @pytest.mark.parametrize(
     ("fragment", "match"),
     [

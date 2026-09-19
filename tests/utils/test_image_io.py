@@ -8,6 +8,7 @@ from PIL import Image
 
 from tests.image_helpers import make_rgb_image, write_rgb_image
 from virtual_staining.utils.image_io import (
+    SUPPORTED_IMAGE_BACKENDS,
     VALID_IMAGE_EXTENSIONS,
     PillowRegionImageReader,
     load_rgb_image,
@@ -99,6 +100,22 @@ def test_open_image_reader_returns_default_region_reader(tmp_path: Path) -> None
     reader = open_image_reader(image_path)
 
     assert reader.size == (8, 6)
+
+
+@pytest.mark.parametrize("backend", sorted(SUPPORTED_IMAGE_BACKENDS))
+def test_open_image_reader_accepts_supported_backends(tmp_path: Path, monkeypatch, backend) -> None:
+    from virtual_staining.utils import image_io
+
+    reader = object()
+    monkeypatch.setattr(image_io, "PillowRegionImageReader", lambda _path: reader)
+    monkeypatch.setattr(image_io, "OpenSlideRegionImageReader", lambda _path: reader)
+    monkeypatch.setattr(image_io, "detect_openslide_format", lambda _path: None)
+    assert open_image_reader(tmp_path / "image.png", backend=backend) is reader
+
+
+def test_open_image_reader_rejects_unknown_backend_before_opening(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="backend must be auto, pillow, or openslide"):
+        open_image_reader(tmp_path / "missing.png", backend="unknown")
 
 
 def test_region_image_reader_reads_bgr_region(tmp_path: Path) -> None:

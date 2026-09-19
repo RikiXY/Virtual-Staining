@@ -3,10 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from virtual_staining.data.layout import DatasetLayout
-from virtual_staining.data.provenance import build_dataset_fingerprint_metadata
+from virtual_staining.data.manifest import MANIFEST_SCHEMA_VERSION
+from virtual_staining.data.provenance import (
+    build_dataset_fingerprint_metadata,
+    canonical_set_payload,
+)
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
 from virtual_staining.experiment.snapshots import save_resolved_config
-from virtual_staining.utils.hashing import sha256_file
+from virtual_staining.utils.hashing import sha256_file, sha256_json
 
 
 def test_prepare_snapshot_paths_and_config_hash(tmp_path: Path) -> None:
@@ -51,8 +55,17 @@ def test_fingerprint_is_row_order_independent_and_schema_v3(tmp_path: Path) -> N
         slide_sets=sets,
     )
     reordered = _fingerprint(tmp_path, tuple(reversed(sets)))
-    assert first["schema_version"] == "3.0"
+    assert first["schema_version"] == MANIFEST_SCHEMA_VERSION
     assert first["fingerprint"] == reordered
+    assert first["fingerprint"] == sha256_json(
+        {
+            "dataset_root": str(tmp_path.resolve()),
+            "preprocessing": first["preprocessing"],
+            "canonical_inventory": canonical_set_payload(sets),
+            "files": first["files"],
+            "schema_version": MANIFEST_SCHEMA_VERSION,
+        }
+    )
 
 
 def test_each_asset_and_mask_changes_fingerprint(tmp_path: Path) -> None:

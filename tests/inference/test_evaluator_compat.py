@@ -8,7 +8,11 @@ import pytest
 import torch
 from PIL import Image
 
-from virtual_staining.data.manifest import ManifestMetadata, ManifestRecord
+from virtual_staining.data.manifest import (
+    MANIFEST_SCHEMA_VERSION,
+    ManifestMetadata,
+    ManifestRecord,
+)
 from virtual_staining.inference.outputs import generated_path_for_record
 from virtual_staining.inference.runner import predict_batch
 from virtual_staining.inference.single import (
@@ -31,7 +35,7 @@ def test_manifest_inference_passes_named_inputs_in_order() -> None:
 
 
 def test_output_naming_uses_target_suffix(tmp_path: Path) -> None:
-    metadata = ManifestMetadata("3.0", ("LF",), "LF", "target")
+    metadata = ManifestMetadata(MANIFEST_SCHEMA_VERSION, ("LF",), "LF", "target")
     record = ManifestRecord(
         "S1__x00000000_y00000000",
         "S1",

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import Any, Literal, cast, get_args
 
 from virtual_staining.checkpoint_selection import (
     SUPPORTED_CHECKPOINT_METRICS,
@@ -70,10 +70,10 @@ class LearningRateSchedulerConfig:
     min_lr: float = 0.0
 
     def validate(self, *, epochs: int) -> None:
-        if self.name not in {"none", "linear_decay", "reduce_on_plateau"}:
+        if self.name not in set(get_args(LearningRateSchedulerName)):
             raise ValueError(
                 "training.scheduler.name must be one of "
-                "['linear_decay', 'none', 'reduce_on_plateau']"
+                f"{sorted(get_args(LearningRateSchedulerName))}"
             )
         if self.name == "linear_decay":
             if self.decay_start_epoch is None:
@@ -90,7 +90,7 @@ class LearningRateSchedulerConfig:
                     "training.scheduler.monitor must be one of "
                     f"{sorted(SUPPORTED_CHECKPOINT_METRICS)}"
                 )
-            if self.mode not in {"min", "max"}:
+            if self.mode not in set(get_args(CheckpointMode)):
                 raise ValueError("training.scheduler.mode must be one of ['max', 'min']")
             if not (0.0 < self.factor < 1.0):
                 raise ValueError("training.scheduler.factor must be in (0, 1)")
@@ -130,7 +130,7 @@ class EarlyStoppingConfig:
                 "such as loss_G_val, loss_D_val, val_ssim, val_mae, or a configured "
                 "loss_val_* column"
             )
-        if self.mode not in {"min", "max"}:
+        if self.mode not in set(get_args(CheckpointMode)):
             raise ValueError("training.early_stopping.mode must be one of ['max', 'min']")
         if self.patience < 0:
             raise ValueError("training.early_stopping.patience must be >= 0")
@@ -155,8 +155,10 @@ class AugmentationConfig:
     def validate(self) -> None:
         if self.expansion_factor < 1:
             raise ValueError("augmentation.expansion_factor must be greater than or equal to 1")
-        if self.intensity not in {"light", "medium", "strong"}:
-            raise ValueError("augmentation.intensity must be one of ['light', 'medium', 'strong']")
+        if self.intensity not in set(get_args(AugmentationIntensity)):
+            raise ValueError(
+                f"augmentation.intensity must be one of {sorted(get_args(AugmentationIntensity))}"
+            )
 
     @property
     def effective_expansion_factor(self) -> int:
@@ -187,7 +189,7 @@ def parse_augmentation_config(raw: Any) -> AugmentationConfig:
             parse_choice(
                 raw.get("intensity", "light"),
                 "augmentation.intensity",
-                {"light", "medium", "strong"},
+                set(get_args(AugmentationIntensity)),
             ),
         ),
     )
@@ -204,7 +206,7 @@ def parse_learning_rate_scheduler_config(raw: Any, *, epochs: int) -> LearningRa
     name = parse_choice(
         raw.get("name", "none"),
         "training.scheduler.name",
-        {"none", "linear_decay", "reduce_on_plateau"},
+        set(get_args(LearningRateSchedulerName)),
     )
     monitor = parse_choice(
         raw.get("monitor", "loss_G_val"),
@@ -222,7 +224,7 @@ def parse_learning_rate_scheduler_config(raw: Any, *, epochs: int) -> LearningRa
             parse_choice(
                 raw.get("mode", default_checkpoint_mode(monitor)),
                 "training.scheduler.mode",
-                {"min", "max"},
+                set(get_args(CheckpointMode)),
             ),
         ),
         factor=float(raw.get("factor", 0.1)),
@@ -258,7 +260,9 @@ def parse_early_stopping_config(raw: Any) -> EarlyStoppingConfig | None:
         mode=cast(
             CheckpointMode,
             parse_choice(
-                raw.get("mode", default_mode), "training.early_stopping.mode", {"min", "max"}
+                raw.get("mode", default_mode),
+                "training.early_stopping.mode",
+                set(get_args(CheckpointMode)),
             ),
         ),
         patience=int(raw.get("patience", 15)),

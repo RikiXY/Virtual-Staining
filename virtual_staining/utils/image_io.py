@@ -11,6 +11,7 @@ from PIL import Image
 VALID_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
     {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff"}
 )
+SUPPORTED_IMAGE_BACKENDS: frozenset[str] = frozenset({"auto", "pillow", "openslide"})
 
 
 @dataclass(frozen=True)
@@ -201,7 +202,7 @@ class OpenSlideRegionImageReader:
 
 def open_image_reader(path: str | Path, backend: str = "auto") -> RegionImageReader:
     """Open a local image with Pillow or the optional native WSI backend."""
-    if backend not in {"auto", "pillow", "openslide"}:
+    if backend not in SUPPORTED_IMAGE_BACKENDS:
         raise ValueError("backend must be auto, pillow, or openslide")
     if backend == "pillow":
         return PillowRegionImageReader(path)

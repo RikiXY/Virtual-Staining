@@ -3,21 +3,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
-    {
-        "dataset_root",
-        "results_path",
-        "run_name",
-        "image_size",
-        "manifest_path",
-        "preprocessing",
-        "training",
-        "inference",
-        "evaluation",
-        "model",
-    }
-)
-
 
 def reject_unknown_keys(data: Mapping[str, Any], allowed: frozenset[str], context: str) -> None:
     """Raise ValueError listing any keys in *data* that are not in *allowed*."""

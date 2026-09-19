@@ -24,7 +24,11 @@ from virtual_staining.data import slide_set_processor as processor_module
 from virtual_staining.data.alignment import AlignmentResult, identity_alignment
 from virtual_staining.data.builder import DatasetBuilder
 from virtual_staining.data.layout import DatasetLayout
-from virtual_staining.data.manifest import DatasetManifest, ManifestMetadata
+from virtual_staining.data.manifest import (
+    MANIFEST_SCHEMA_VERSION,
+    DatasetManifest,
+    ManifestMetadata,
+)
 from virtual_staining.data.provenance import build_dataset_fingerprint_metadata
 from virtual_staining.data.slide_set_processor import SetBuildResult, SlideSetProcessor
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
@@ -94,7 +98,7 @@ def test_builder_emits_dynamic_manifest_and_set_metadata(tmp_path, monkeypatch) 
             return self.result
 
     monkeypatch.setattr(builder_module, "SlideSetProcessor", FakeProcessor)
-    builder = DatasetBuilder(config, slide_sets, {"schema_version": "3.0"})
+    builder = DatasetBuilder(config, slide_sets, {"schema_version": MANIFEST_SCHEMA_VERSION})
     result = builder.run_all()
     assert result.train_count == 2
     assert not hasattr(builder, "_current_set_id")
@@ -119,13 +123,17 @@ def test_builder_emits_dynamic_manifest_and_set_metadata(tmp_path, monkeypatch) 
         "identity",
     ]
     assert _read_csv(layout.metadata_dir / "excluded_sets.csv") == []
-    assert json.loads(layout.dataset_fingerprint_path.read_text()) == {"schema_version": "3.0"}
+    assert json.loads(layout.dataset_fingerprint_path.read_text()) == {
+        "schema_version": MANIFEST_SCHEMA_VERSION
+    }
 
 
 @pytest.mark.parametrize("discarded", [False, True])
 def test_records_use_explicit_set_id_without_mutating_builder(tmp_path, discarded) -> None:
     config = _config(tmp_path)
-    builder = DatasetBuilder(config, (_slide_set(tmp_path),), {"schema_version": "3.0"})
+    builder = DatasetBuilder(
+        config, (_slide_set(tmp_path),), {"schema_version": MANIFEST_SCHEMA_VERSION}
+    )
     rows = (
         {
             "sample_id": "x",
@@ -197,7 +205,7 @@ def test_process_returns_rows_and_metadata_after_cleanup(
     builder = DatasetBuilder(config, (slide_set,))
     records = builder._records(result.set_id, result.valid_rows)
     manifest = DatasetManifest(
-        records, tmp_path, ManifestMetadata("3.0", ("LF", "AF"), "LF", "target")
+        records, tmp_path, ManifestMetadata(MANIFEST_SCHEMA_VERSION, ("LF", "AF"), "LF", "target")
     )
     manifest.validate(check_files_exist=True)
 
@@ -280,7 +288,7 @@ def test_build_outputs_are_stable_with_an_excluded_set(tmp_path, tiled, unit):
     assert not hasattr(builder, "_current_set_id")
     assert result.train_count + result.val_count + result.test_count == 2
     assert result.skipped_count == 2
-    metadata = ManifestMetadata("3.0", ("LF", "AF"), "LF", "target")
+    metadata = ManifestMetadata(MANIFEST_SCHEMA_VERSION, ("LF", "AF"), "LF", "target")
     valid = DatasetManifest.from_csv(layout.manifest_path, tmp_path, metadata)
     discarded = DatasetManifest.from_csv(layout.discarded_manifest_path, tmp_path, metadata)
     valid.validate(check_files_exist=True)
@@ -317,7 +325,7 @@ def test_build_outputs_are_stable_with_an_excluded_set(tmp_path, tiled, unit):
     assert all(row["unit"] == unit for row in assignments)
     build_metadata = json.loads(layout.dataset_build_path.read_text())
     assert build_metadata == {
-        "schema_version": "3.0",
+        "schema_version": MANIFEST_SCHEMA_VERSION,
         "num_sets": 3,
         "num_sets_excluded": 1,
         "patches": {
@@ -339,6 +347,7 @@ def test_build_outputs_are_stable_with_an_excluded_set(tmp_path, tiled, unit):
         },
     }
     fingerprint = json.loads(layout.dataset_fingerprint_path.read_text())
+    assert fingerprint["schema_version"] == MANIFEST_SCHEMA_VERSION
     assert fingerprint == build_dataset_fingerprint_metadata(
         dataset_root=tmp_path,
         preprocessing_config=config.to_dict(),

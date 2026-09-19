@@ -8,6 +8,7 @@ from typing import Any
 
 from virtual_staining.config.validation import parse_bool_strict, reject_unknown_keys
 from virtual_staining.utils.dimensions import parse_wh_size
+from virtual_staining.utils.image_io import SUPPORTED_IMAGE_BACKENDS
 
 MASK_STRATEGY_CONNECTED_COMPONENTS = "connected_components"
 MASK_STRATEGY_HSV = "hsv"
@@ -161,7 +162,7 @@ class PreprocessingConfig:
             raise ValueError("patching.margin must be greater than or equal to 0")
         if self.io.max_memory_gb is not None and self.io.max_memory_gb <= 0:
             raise ValueError("io.max_memory_gb must be greater than 0 when provided")
-        if self.io.backend not in {"auto", "pillow", "openslide"}:
+        if self.io.backend not in SUPPORTED_IMAGE_BACKENDS:
             raise ValueError("io.backend must be auto, pillow, or openslide")
         if self.masks.generation not in {"never", "if_missing", "always"}:
             raise ValueError("masks.generation must be never, if_missing, or always")

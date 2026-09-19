@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from virtual_staining.data.manifest import MANIFEST_SCHEMA_VERSION
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
 from virtual_staining.utils.hashing import sha256_file, sha256_json
 
@@ -119,10 +120,10 @@ def build_dataset_fingerprint_metadata(
         "preprocessing": semantic_config,
         "canonical_inventory": canonical_sets,
         "files": files,
-        "schema_version": "3.0",
+        "schema_version": MANIFEST_SCHEMA_VERSION,
     }
     return {
-        "schema_version": "3.0",
+        "schema_version": MANIFEST_SCHEMA_VERSION,
         "fingerprint": sha256_json(fingerprint_payload),
         "prepared_at": prepared_at or datetime.now(UTC).isoformat(),
         "dataset_root": dataset_root_resolved,

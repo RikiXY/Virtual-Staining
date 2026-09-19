@@ -9,7 +9,13 @@ from typing import Any, cast
 
 from virtual_staining.config.data import PreprocessingConfig
 from virtual_staining.data.layout import DatasetLayout
-from virtual_staining.data.manifest import DatasetManifest, ManifestMetadata, ManifestRecord, Split
+from virtual_staining.data.manifest import (
+    MANIFEST_SCHEMA_VERSION,
+    DatasetManifest,
+    ManifestMetadata,
+    ManifestRecord,
+    Split,
+)
 from virtual_staining.data.preprocessing import ensure_clean_directory
 from virtual_staining.data.provenance import (
     build_dataset_fingerprint_metadata,
@@ -38,7 +44,7 @@ class DatasetBuildResult:
         path.write_text(
             json.dumps(
                 {
-                    "schema_version": "3.0",
+                    "schema_version": MANIFEST_SCHEMA_VERSION,
                     "num_sets": num_sets,
                     "num_sets_excluded": num_sets_excluded,
                     "patches": {
@@ -59,7 +65,7 @@ class DatasetBuildResult:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError(f"Invalid dataset build metadata at {path}") from exc
-        if not isinstance(data, dict) or data.get("schema_version") != "3.0":
+        if not isinstance(data, dict) or data.get("schema_version") != MANIFEST_SCHEMA_VERSION:
             raise ValueError(f"Invalid dataset build metadata at {path}")
         patches = data.get("patches")
         if not isinstance(patches, dict):
@@ -209,7 +215,7 @@ class DatasetBuilder:
         discarded_records: list[ManifestRecord],
     ) -> None:
         metadata = ManifestMetadata(
-            "3.0",
+            MANIFEST_SCHEMA_VERSION,
             cast(tuple[str, ...], self.config.inputs.modalities),
             self.config.inputs.reference,
             self.config.inputs.target_modality,
