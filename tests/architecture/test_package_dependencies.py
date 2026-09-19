@@ -14,6 +14,7 @@ COMPONENTS = {
     "metrics",
     "data",
     "models",
+    "methods",
     "experiment",
     "training",
     "inference",
@@ -32,6 +33,7 @@ ALLOWED_EDGES = {
         "inference",
         "metrics",
         "models",
+        "methods",
         "training",
         "utils",
     },
@@ -42,6 +44,7 @@ ALLOWED_EDGES = {
     "data": {"config", "data", "utils"},
     "experiment": {"config", "data", "experiment", "utils"},
     "models": {"config", "models"},
+    "methods": {"config", "models", "training"},
     "training": {
         "checkpoint_contract",
         "checkpoint_selection",
