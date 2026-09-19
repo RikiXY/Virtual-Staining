@@ -1,7 +1,7 @@
 [project]
 name = "virtual-staining"
 version = "0.1.0"
-description = "Paired virtual staining pipeline for histopathology images"
+description = "Configurable paired and unpaired image-translation experiments for virtual staining"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

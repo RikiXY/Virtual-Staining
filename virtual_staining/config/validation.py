@@ -15,6 +15,8 @@ _TOP_LEVEL_KEYS: frozenset[str] = frozenset(
         "inference",
         "evaluation",
         "model",
+        "method",
+        "data",
     }
 )
 

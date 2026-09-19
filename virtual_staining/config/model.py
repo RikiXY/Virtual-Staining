@@ -1,14 +1,27 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 from virtual_staining.config.validation import parse_bool_strict, reject_unknown_keys
 
 NormName = Literal["batch", "instance"]
 _MODEL_KEYS = frozenset({"inputs", "target", "generator", "discriminator"})
-_GENERATOR_KEYS = frozenset({"architecture", "base_channels", "norm", "dropout", "bilinear"})
-_DISCRIMINATOR_KEYS = frozenset({"ndf", "norm", "use_sigmoid"})
+_GENERATOR_KEYS = frozenset(
+    {
+        "architecture",
+        "base_channels",
+        "norm",
+        "dropout",
+        "bilinear",
+        "blocks",
+        "class_path",
+        "params",
+    }
+)
+_DISCRIMINATOR_KEYS = frozenset(
+    {"architecture", "ndf", "norm", "use_sigmoid", "class_path", "params"}
+)
 
 
 def _choice(value: Any, field_name: str, choices: set[str]) -> str:
@@ -21,18 +34,24 @@ def _choice(value: Any, field_name: str, choices: set[str]) -> str:
 
 @dataclass(frozen=True)
 class GeneratorConfig:
-    architecture: Literal["concat_unet"] = "concat_unet"
+    architecture: str = "concat_unet"
     base_channels: int = 64
     norm: NormName = "batch"
     dropout: bool = False
     bilinear: bool = False
+    blocks: int = 6
+    class_path: str | None = None
+    params: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class DiscriminatorConfig:
+    architecture: str = "patchgan"
     ndf: int = 64
     norm: NormName = "instance"
     use_sigmoid: bool = False
+    class_path: str | None = None
+    params: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -51,10 +70,22 @@ class ModelConfig:
             raise ValueError("model.inputs must be a non-empty tuple of unique names")
         if not self.target.strip():
             raise ValueError("model.target must not be blank")
-        if self.generator.architecture != "concat_unet":
-            raise ValueError("model.generator.architecture must be concat_unet")
-        if self.generator.bilinear:
+        if self.generator.architecture not in {"concat_unet", "resnet", "custom"}:
+            raise ValueError(
+                "model.generator.architecture must be one of ['concat_unet', 'custom', 'resnet']"
+            )
+        if self.generator.architecture == "concat_unet" and self.generator.bilinear:
             raise ValueError("model.generator.bilinear=True is not supported; use false")
+        if self.generator.blocks <= 0:
+            raise ValueError("model.generator.blocks must be greater than 0")
+        if self.generator.architecture == "custom" and not self.generator.class_path:
+            raise ValueError("model.generator.class_path is required when architecture is 'custom'")
+        if self.discriminator.architecture not in {"patchgan", "custom"}:
+            raise ValueError("model.discriminator.architecture must be 'patchgan' or 'custom'")
+        if self.discriminator.architecture == "custom" and not self.discriminator.class_path:
+            raise ValueError(
+                "model.discriminator.class_path is required when architecture is 'custom'"
+            )
         if self.discriminator.use_sigmoid:
             raise ValueError(
                 "model.discriminator.use_sigmoid=True cannot be used with "
@@ -76,17 +107,18 @@ class ModelConfig:
             raise TypeError("model.generator and model.discriminator must be YAML mappings")
         reject_unknown_keys(generator_data, _GENERATOR_KEYS, "model.generator")
         reject_unknown_keys(discriminator_data, _DISCRIMINATOR_KEYS, "model.discriminator")
+        generator_params = generator_data.get("params", {})
+        discriminator_params = discriminator_data.get("params", {})
+        if not isinstance(generator_params, dict) or not isinstance(discriminator_params, dict):
+            raise TypeError("model component params must be YAML mappings")
         return cls(
             inputs=tuple(str(value) for value in raw_inputs),
             target=str(data["target"]),
             generator=GeneratorConfig(
-                architecture=cast(
-                    Literal["concat_unet"],
-                    _choice(
-                        generator_data.get("architecture", "concat_unet"),
-                        "model.generator.architecture",
-                        {"concat_unet"},
-                    ),
+                architecture=_choice(
+                    generator_data.get("architecture", "concat_unet"),
+                    "model.generator.architecture",
+                    {"concat_unet", "resnet", "custom"},
                 ),
                 base_channels=int(generator_data.get("base_channels", 64)),
                 norm=cast(
@@ -103,8 +135,16 @@ class ModelConfig:
                 bilinear=parse_bool_strict(
                     generator_data.get("bilinear", False), "model.generator.bilinear"
                 ),
+                blocks=int(generator_data.get("blocks", 6)),
+                class_path=generator_data.get("class_path"),
+                params=dict(generator_params),
             ),
             discriminator=DiscriminatorConfig(
+                architecture=_choice(
+                    discriminator_data.get("architecture", "patchgan"),
+                    "model.discriminator.architecture",
+                    {"patchgan", "custom"},
+                ),
                 ndf=int(discriminator_data.get("ndf", 64)),
                 norm=cast(
                     NormName,
@@ -117,6 +157,8 @@ class ModelConfig:
                 use_sigmoid=parse_bool_strict(
                     discriminator_data.get("use_sigmoid", False), "model.discriminator.use_sigmoid"
                 ),
+                class_path=discriminator_data.get("class_path"),
+                params=dict(discriminator_params),
             ),
         )
 
@@ -130,10 +172,16 @@ class ModelConfig:
                 "norm": self.generator.norm,
                 "dropout": self.generator.dropout,
                 "bilinear": self.generator.bilinear,
+                "blocks": self.generator.blocks,
+                "class_path": self.generator.class_path,
+                "params": dict(self.generator.params),
             },
             "discriminator": {
+                "architecture": self.discriminator.architecture,
                 "ndf": self.discriminator.ndf,
                 "norm": self.discriminator.norm,
                 "use_sigmoid": self.discriminator.use_sigmoid,
+                "class_path": self.discriminator.class_path,
+                "params": dict(self.discriminator.params),
             },
         }

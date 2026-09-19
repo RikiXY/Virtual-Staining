@@ -20,7 +20,7 @@ _SSIM_PARAM_KEYS: frozenset[str] = frozenset(
 _L1_PARAM_KEYS: frozenset[str] = frozenset({"reduction", "mask"})
 _ADVERSARIAL_BCE_PARAM_KEYS: frozenset[str] = frozenset()
 
-LossName = Literal["adversarial_bce", "l1", "ssim"]
+LossName = Literal["adversarial_bce", "adversarial_lsgan", "cycle_l1", "identity_l1", "l1", "ssim"]
 LossScheduleType = Literal[
     "constant",
     "linear_warmup",
@@ -154,9 +154,17 @@ class LossTermConfig:
     schedule: LossScheduleConfig = field(default_factory=LossScheduleConfig)
 
     def validate(self, role: LossRole) -> None:
-        if self.name not in {"adversarial_bce", "l1", "ssim"}:
-            raise ValueError("loss name must be one of ['adversarial_bce', 'l1', 'ssim']")
-        if self.name in {"l1", "ssim"} and role != "generator":
+        valid_names = {
+            "adversarial_bce",
+            "adversarial_lsgan",
+            "cycle_l1",
+            "identity_l1",
+            "l1",
+            "ssim",
+        }
+        if self.name not in valid_names:
+            raise ValueError(f"loss name must be one of {sorted(valid_names)}")
+        if self.name in {"cycle_l1", "identity_l1", "l1", "ssim"} and role != "generator":
             raise ValueError(f"loss '{self.name}' is supported only in losses.generator")
         if self.weight < 0:
             raise ValueError(f"loss '{self.name}' weight must be greater than or equal to 0")
@@ -258,7 +266,18 @@ def _parse_loss_term(raw: Any, context: str) -> LossTermConfig:
     if "weight" not in raw:
         raise ValueError(f"{context}.weight is required")
 
-    name = parse_choice(raw["name"], f"{context}.name", {"adversarial_bce", "l1", "ssim"})
+    name = parse_choice(
+        raw["name"],
+        f"{context}.name",
+        {
+            "adversarial_bce",
+            "adversarial_lsgan",
+            "cycle_l1",
+            "identity_l1",
+            "l1",
+            "ssim",
+        },
+    )
     params = raw.get("params", {})
     if params is None:
         params = {}

@@ -16,6 +16,7 @@ _INFERENCE_KEYS: frozenset[str] = frozenset(
         "checkpoint_metric",
         "checkpoint_rank",
         "output_dir",
+        "direction",
     }
 )
 
@@ -27,6 +28,7 @@ class InferenceConfig:
     checkpoint_metric: str | None = None
     checkpoint_rank: int | None = None
     output_dir: Path | None = None
+    direction: str | None = None
 
     def __post_init__(self) -> None:
         self.validate()
@@ -42,6 +44,7 @@ class InferenceConfig:
             if data.get("checkpoint_rank") is not None
             else None,
             output_dir=Path(data["output_dir"]) if data.get("output_dir") else None,
+            direction=str(data["direction"]) if data.get("direction") is not None else None,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -53,6 +56,7 @@ class InferenceConfig:
                 "checkpoint_metric": self.checkpoint_metric,
                 "checkpoint_rank": self.checkpoint_rank,
                 "output_dir": str(self.output_dir) if self.output_dir else None,
+                "direction": self.direction,
             }.items()
             if value is not None
         }
@@ -90,3 +94,5 @@ class InferenceConfig:
             raise ValueError(
                 "checkpoint_metric is required with checkpoint_policy 'best' or 'top_k'"
             )
+        if self.direction is not None and self.direction not in {"A_to_B", "B_to_A"}:
+            raise ValueError("inference.direction must be 'A_to_B' or 'B_to_A'")
