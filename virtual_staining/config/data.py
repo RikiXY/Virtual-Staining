@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from virtual_staining.config.validation import parse_bool_strict, reject_unknown_keys
+from virtual_staining.split_contract import DATASET_SPLITS
 from virtual_staining.utils.dimensions import parse_wh_size
 from virtual_staining.utils.image_io import SUPPORTED_IMAGE_BACKENDS
 
@@ -273,10 +274,10 @@ class PreprocessingConfig:
         split_data = _mapping(data["split"], "split")
         reject_unknown_keys(
             split_data,
-            frozenset({"unit", "train", "val", "test", "seed", "assignment_file"}),
+            frozenset({"unit", *DATASET_SPLITS, "seed", "assignment_file"}),
             "preprocessing.split",
         )
-        for required in ("unit", "train", "val", "test"):
+        for required in ("unit", *DATASET_SPLITS):
             if required not in split_data:
                 raise ValueError(f"preprocessing.split requires {required}")
         io_data = _mapping(data.get("io"), "io")

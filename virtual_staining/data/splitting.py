@@ -5,11 +5,10 @@ import hashlib
 import math
 from collections.abc import Sequence
 from pathlib import Path
+from typing import cast
 
-from virtual_staining.data.manifest import Split
 from virtual_staining.data.slide_sets import SlideSet
-
-SPLITS: tuple[Split, Split, Split] = ("train", "val", "test")
+from virtual_staining.split_contract import DATASET_SPLITS, DatasetSplit
 
 
 def assign_split_by_hash(
@@ -17,9 +16,9 @@ def assign_split_by_hash(
     seed: int,
     sample_id: str,
     ratios: Sequence[float],
-) -> Split:
-    if len(ratios) != len(SPLITS):
-        raise ValueError(f"Expected {len(SPLITS)} split ratios, got {len(ratios)}")
+) -> DatasetSplit:
+    if len(ratios) != len(DATASET_SPLITS):
+        raise ValueError(f"Expected {len(DATASET_SPLITS)} split ratios, got {len(ratios)}")
     if any(ratio < 0 for ratio in ratios):
         raise ValueError("Split ratios must be non-negative")
     ratio_sum = sum(ratios)
@@ -30,11 +29,11 @@ def assign_split_by_hash(
     value = int.from_bytes(digest[:8], byteorder="big") / 2**64
 
     cumulative = 0.0
-    for split_name, ratio in zip(SPLITS, ratios, strict=True):
+    for split_name, ratio in zip(DATASET_SPLITS, ratios, strict=True):
         cumulative += ratio
         if value < cumulative:
             return split_name
-    return SPLITS[-1]
+    return DATASET_SPLITS[-1]
 
 
 def group_id_for_set(slide_set: SlideSet, unit: str) -> str:
@@ -67,13 +66,13 @@ def _group_counts(count: int, ratios: tuple[float, float, float]) -> tuple[int, 
     return tuple(counts[index] + additions[index] for index in range(3))  # type: ignore[return-value]
 
 
-def _load_frozen_assignment(path: Path, *, unit: str, groups: set[str]) -> dict[str, Split]:
+def _load_frozen_assignment(path: Path, *, unit: str, groups: set[str]) -> dict[str, DatasetSplit]:
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         expected = ["group_id", "unit", "split"]
         if reader.fieldnames != expected:
             raise ValueError(f"Frozen split assignment must have exact columns: {expected}")
-        assignments: dict[str, Split] = {}
+        assignments: dict[str, DatasetSplit] = {}
         for row_number, row in enumerate(reader, start=2):
             group_id = row["group_id"].strip()
             if group_id in assignments:
@@ -83,9 +82,9 @@ def _load_frozen_assignment(path: Path, *, unit: str, groups: set[str]) -> dict[
                     f"Frozen split assignment row {row_number} uses unit "
                     f"{row['unit']!r}, expected {unit!r}"
                 )
-            if row["split"] not in SPLITS:
+            if row["split"] not in DATASET_SPLITS:
                 raise ValueError(f"Frozen split assignment row {row_number} has invalid split")
-            assignments[group_id] = row["split"]  # type: ignore[assignment]
+            assignments[group_id] = cast(DatasetSplit, row["split"])
     if set(assignments) != groups:
         missing = sorted(groups - set(assignments))
         unknown = sorted(set(assignments) - groups)
@@ -104,7 +103,7 @@ def assign_group_splits(
     seed: int,
     assignment_file: Path | None = None,
     dataset_root: Path | None = None,
-) -> dict[str, Split]:
+) -> dict[str, DatasetSplit]:
     if unit == "patch":
         if assignment_file is not None:
             raise ValueError("split.assignment_file is not supported for split.unit='patch'")
@@ -123,15 +122,15 @@ def assign_group_splits(
             groups, key=lambda group: (hashlib.sha256(f"{seed}:{group}".encode()).digest(), group)
         )
         counts = _group_counts(len(ordered), ratios)
-        group_assignments: dict[str, Split] = {}
+        group_assignments: dict[str, DatasetSplit] = {}
         offset = 0
-        for split, count in zip(SPLITS, counts, strict=True):
+        for split, count in zip(DATASET_SPLITS, counts, strict=True):
             group_assignments.update({group: split for group in ordered[offset : offset + count]})
             offset += count
     return {set_id: group_assignments[group] for set_id, group in groups_by_set.items()}
 
 
-def write_split_assignment(path: Path, *, unit: str, assignments: dict[str, Split]) -> None:
+def write_split_assignment(path: Path, *, unit: str, assignments: dict[str, DatasetSplit]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=["group_id", "unit", "split"])

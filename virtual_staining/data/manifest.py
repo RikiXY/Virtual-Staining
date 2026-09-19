@@ -5,15 +5,20 @@ import json
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from virtual_staining.data.layout import DatasetLayout
+from virtual_staining.split_contract import (
+    DISCARDED_SPLIT,
+    MANIFEST_SPLITS,
+)
+from virtual_staining.split_contract import (
+    ManifestSplit as Split,
+)
 
 if TYPE_CHECKING:
     from virtual_staining.config.project import ProjectConfig
 
-Split = Literal["train", "val", "test", "discarded"]
-_VALID_SPLITS: frozenset[str] = frozenset({"train", "val", "test", "discarded"})
 MANIFEST_SCHEMA_VERSION = "3.0"
 
 
@@ -23,7 +28,7 @@ def _validate_manifest_path(path: Path, field_name: str) -> None:
 
 
 def _parse_split(value: str, *, row: int | None = None, path: Path | None = None) -> Split:
-    if value not in _VALID_SPLITS:
+    if value not in MANIFEST_SPLITS:
         location = f" in {path}, row {row}" if row is not None and path is not None else ""
         raise ValueError(f"Invalid split{location}: {value!r}")
     return cast(Split, value)
@@ -113,8 +118,8 @@ class ManifestRecord:
     def __post_init__(self) -> None:
         if not self.sample_id.strip() or not self.set_id.strip():
             raise ValueError("ManifestRecord sample_id and set_id must be non-empty")
-        if self.split not in _VALID_SPLITS:
-            raise ValueError(f"ManifestRecord.split must be one of {sorted(_VALID_SPLITS)}")
+        if self.split not in MANIFEST_SPLITS:
+            raise ValueError(f"ManifestRecord.split must be one of {sorted(MANIFEST_SPLITS)}")
         if self.x < 0 or self.y < 0 or self.width <= 0 or self.height <= 0:
             raise ValueError(
                 "ManifestRecord coordinates must be nonnegative and dimensions positive"
@@ -178,12 +183,12 @@ class DatasetManifest:
         for record in self.records:
             samples[record.sample_id].append(record.split)
         if any(
-            len({split for split in splits if split != "discarded"}) > 1
+            len({split for split in splits if split != DISCARDED_SPLIT}) > 1
             for splits in samples.values()
         ):
             raise ValueError("Some sample_ids appear in multiple splits")
         if any(
-            len(splits) > 1 and not (len(splits) == 2 and "discarded" in splits)
+            len(splits) > 1 and not (len(splits) == 2 and DISCARDED_SPLIT in splits)
             for splits in samples.values()
         ):
             raise ValueError("Duplicate sample_ids in manifest")
@@ -206,7 +211,7 @@ class DatasetManifest:
                         )
         if require_splits:
             for split in require_splits:
-                if split not in _VALID_SPLITS:
+                if split not in MANIFEST_SPLITS:
                     raise ValueError(f"Invalid required split {split!r}")
                 if not any(record.split == split for record in self.records):
                     raise ValueError(f"Manifest has no records for required split {split!r}")

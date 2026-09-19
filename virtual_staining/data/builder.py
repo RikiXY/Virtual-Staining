@@ -15,7 +15,6 @@ from virtual_staining.data.manifest import (
     DatasetManifest,
     ManifestMetadata,
     ManifestRecord,
-    Split,
 )
 from virtual_staining.data.provenance import (
     build_dataset_fingerprint_metadata,
@@ -27,6 +26,14 @@ from virtual_staining.data.splitting import (
     assign_group_splits,
     group_id_for_set,
     write_split_assignment,
+)
+from virtual_staining.split_contract import (
+    DATASET_SPLITS,
+    DISCARDED_SPLIT,
+    TEST_SPLIT,
+    TRAIN_SPLIT,
+    VAL_SPLIT,
+    DatasetSplit,
 )
 
 
@@ -48,10 +55,10 @@ class DatasetBuildResult:
                     "num_sets": num_sets,
                     "num_sets_excluded": num_sets_excluded,
                     "patches": {
-                        "train": self.train_count,
-                        "val": self.val_count,
-                        "test": self.test_count,
-                        "discarded": self.skipped_count,
+                        TRAIN_SPLIT: self.train_count,
+                        VAL_SPLIT: self.val_count,
+                        TEST_SPLIT: self.test_count,
+                        DISCARDED_SPLIT: self.skipped_count,
                     },
                 },
                 indent=2,
@@ -71,7 +78,7 @@ class DatasetBuildResult:
         if not isinstance(patches, dict):
             raise ValueError(f"Invalid dataset build metadata at {path}")
         try:
-            counts = tuple(int(patches[name]) for name in ("train", "val", "test", "discarded"))
+            counts = tuple(int(patches[name]) for name in (*DATASET_SPLITS, DISCARDED_SPLIT))
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"Invalid dataset build metadata at {path}") from exc
         return cls(
@@ -113,8 +120,12 @@ class DatasetBuilder:
         layout = DatasetLayout(Path())
         records = []
         for row in rows:
-            split = "discarded" if discarded else row["split"]
-            root = layout.discarded_patches_dir if discarded else layout.split_dir(row["split"])
+            split = DISCARDED_SPLIT if discarded else cast(DatasetSplit, row["split"])
+            root = (
+                layout.discarded_patches_dir
+                if discarded
+                else layout.split_dir(cast(DatasetSplit, row["split"]))
+            )
             if discarded:
                 inputs = {
                     name: root / set_id / name / filename
@@ -155,7 +166,7 @@ class DatasetBuilder:
     def run_all(self) -> DatasetBuildResult:
         layout = DatasetLayout(self.config.dataset_root)
         root = layout.root
-        for path in (layout.split_dir(name) for name in ("train", "val", "test")):
+        for path in (layout.split_dir(name) for name in DATASET_SPLITS):
             _ensure_clean_directory(path)
         layout.manifests_dir.mkdir(parents=True, exist_ok=True)
         layout.metadata_dir.mkdir(parents=True, exist_ok=True)
@@ -201,11 +212,14 @@ class DatasetBuilder:
         self._write_set_metadata(layout, set_rows, excluded)
         self._write_provenance(layout, assignments, valid_records)
         counts = {
-            name: sum(record.split == name for record in valid_records)
-            for name in ("train", "val", "test")
+            name: sum(record.split == name for record in valid_records) for name in DATASET_SPLITS
         }
         result = DatasetBuildResult(
-            counts["train"], counts["val"], counts["test"], len(discarded_records), root
+            counts[TRAIN_SPLIT],
+            counts[VAL_SPLIT],
+            counts[TEST_SPLIT],
+            len(discarded_records),
+            root,
         )
         result.save(
             layout.dataset_build_path,
@@ -238,7 +252,7 @@ class DatasetBuilder:
             "record_count": len(valid_records),
             "splits": {
                 name: sum(record.split == name for record in valid_records)
-                for name in ("train", "val", "test")
+                for name in DATASET_SPLITS
             },
         }
         layout.manifest_metadata_path.write_text(
@@ -272,19 +286,16 @@ class DatasetBuilder:
     def _write_provenance(
         self,
         layout: DatasetLayout,
-        assignments: dict[str, Split],
+        assignments: dict[str, DatasetSplit],
         valid_records: list[ManifestRecord],
     ) -> None:
-        assignments_out: dict[str, Split] = cast(
-            dict[str, Split],
-            (
-                {record.sample_id: record.split for record in valid_records}
-                if self.config.split.unit == "patch"
-                else {
-                    group_id_for_set(item, self.config.split.unit): assignments[item.set_id]
-                    for item in self.slide_sets
-                }
-            ),
+        assignments_out: dict[str, DatasetSplit] = (
+            {record.sample_id: cast(DatasetSplit, record.split) for record in valid_records}
+            if self.config.split.unit == "patch"
+            else {
+                group_id_for_set(item, self.config.split.unit): assignments[item.set_id]
+                for item in self.slide_sets
+            }
         )
         write_split_assignment(
             layout.split_assignment_path,

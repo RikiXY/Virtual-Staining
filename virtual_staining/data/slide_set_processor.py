@@ -19,7 +19,6 @@ from virtual_staining.data.alignment import (
 )
 from virtual_staining.data.filtering import foreground_ratios, is_valid_patch_pair
 from virtual_staining.data.layout import DatasetLayout
-from virtual_staining.data.manifest import Split
 from virtual_staining.data.patching import iter_patch_origins, mask_window_for_patch
 from virtual_staining.data.preprocessing import (
     MASK_PARAMETER_GRID,
@@ -28,6 +27,7 @@ from virtual_staining.data.preprocessing import (
 )
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
 from virtual_staining.data.splitting import assign_split_by_hash
+from virtual_staining.split_contract import DATASET_SPLITS, DatasetSplit
 from virtual_staining.utils.image_io import (
     RegionImageReader,
     load_grayscale_image,
@@ -62,7 +62,7 @@ class SetBuildResult:
     """Rows and alignment metadata from one set, independent of open image resources."""
 
     set_id: str
-    split: Split | None
+    split: DatasetSplit | None
     valid_rows: tuple[dict[str, Any], ...]
     discarded_rows: tuple[dict[str, Any], ...]
     metadata: dict[str, str]
@@ -73,11 +73,14 @@ class SlideSetProcessor:
     """Mask, align and write patches for exactly one slide set."""
 
     def __init__(
-        self, config: PreprocessingConfig, slide_set: SlideSet, assigned_split: Split | None = None
+        self,
+        config: PreprocessingConfig,
+        slide_set: SlideSet,
+        assigned_split: DatasetSplit | None = None,
     ) -> None:
         self.config = config
         self.slide_set = slide_set
-        self.assigned_split: Split | None = assigned_split
+        self.assigned_split: DatasetSplit | None = assigned_split
         self.inputs = {asset.modality: AssetState(asset) for asset in slide_set.inputs}
         self.target = AssetState(slide_set.target)
         self.reference = self.inputs[slide_set.reference_modality]
@@ -219,8 +222,7 @@ class SlideSetProcessor:
         ref_h, ref_w = self.reference.shape
         layout = DatasetLayout(self.config.dataset_root)
         split_dirs = {
-            name: layout.split_dir(name) / self.slide_set.set_id
-            for name in ("train", "val", "test")
+            name: layout.split_dir(name) / self.slide_set.set_id for name in DATASET_SPLITS
         }
         for path in split_dirs.values():
             path.mkdir(parents=True, exist_ok=True)

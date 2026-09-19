@@ -16,6 +16,7 @@ from virtual_staining.experiment.snapshots import (
     save_environment_snapshot,
     save_stage_config_snapshots,
 )
+from virtual_staining.split_contract import DATASET_SPLITS
 from virtual_staining.utils.image_io import detect_openslide_format
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ def _dataset_outputs_are_complete(dataset_root: Path) -> bool:
         layout.split_assignment_path,
     )
     return all(path.is_file() for path in required) and all(
-        layout.split_dir(name).is_dir() for name in ("train", "val", "test")
+        layout.split_dir(name).is_dir() for name in DATASET_SPLITS
     )
 
 
