@@ -305,13 +305,82 @@ def load_manifest_or_raise(project: ProjectConfig) -> DatasetManifest:
     manifest_path = layout.manifest_path
     if not manifest_path.exists():
         raise FileNotFoundError(f"Manifest not found at {manifest_path}. Run 'vs prepare'.")
-    metadata_path = layout.manifest_metadata_path
+    metadata_path = manifest_path.with_name("manifest_metadata.json")
     try:
-        metadata = ManifestMetadata.from_mapping(
-            json.loads(metadata_path.read_text(encoding="utf-8"))
-        )
+        raw_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if not isinstance(raw_metadata, dict):
+            raise ValueError("Manifest metadata must be a JSON object")
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid manifest metadata at {metadata_path}") from exc
+    if str(raw_metadata.get("schema_version")) in {"1.0", "2.0"}:
+        return _load_legacy_single_input_manifest(manifest_path, project.dataset_root)
+    try:
+        metadata = ManifestMetadata.from_mapping(raw_metadata)
+    except (TypeError, ValueError) as exc:
         raise ValueError(f"Invalid manifest metadata at {metadata_path}") from exc
     return DatasetManifest.from_csv(
         manifest_path, dataset_root=project.dataset_root, metadata=metadata
     )
+
+
+def _load_legacy_single_input_manifest(path: Path, dataset_root: Path) -> DatasetManifest:
+    """Adapt the former one-input manifest contract without rewriting prepared data."""
+    expected = (
+        "sample_id",
+        "split",
+        "input_path",
+        "target_path",
+        "input_modality",
+        "target_modality",
+        "x",
+        "y",
+        "width",
+        "height",
+    )
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if tuple(reader.fieldnames or ()) != expected:
+            raise ValueError(
+                f"Legacy manifest CSV at {path} must match exact columns: {list(expected)}"
+            )
+        rows = list(reader)
+    if not rows:
+        raise ValueError(f"Legacy manifest CSV at {path} contains no records")
+
+    input_modalities = {
+        _nonempty(row["input_modality"], "input_modality", row_num, path)
+        for row_num, row in enumerate(rows, start=2)
+    }
+    target_modalities = {
+        _nonempty(row["target_modality"], "target_modality", row_num, path)
+        for row_num, row in enumerate(rows, start=2)
+    }
+    if len(input_modalities) != 1 or len(target_modalities) != 1:
+        raise ValueError("Legacy manifest must use one consistent input and target modality")
+    input_modality = next(iter(input_modalities))
+    target_modality = next(iter(target_modalities))
+    metadata = ManifestMetadata(
+        MANIFEST_SCHEMA_VERSION,
+        (input_modality,),
+        input_modality,
+        target_modality,
+    )
+    records = tuple(
+        ManifestRecord(
+            sample_id=_nonempty(row["sample_id"], "sample_id", row_num, path),
+            set_id=dataset_root.name,
+            split=_parse_split(row["split"], row=row_num, path=path),
+            input_paths={
+                input_modality: _parse_path(row["input_path"], "input_path", row_num, path)
+            },
+            target_path=_parse_path(row["target_path"], "target_path", row_num, path),
+            x=_parse_int(row["x"], "x", row_num, path),
+            y=_parse_int(row["y"], "y", row_num, path),
+            width=_parse_int(row["width"], "width", row_num, path),
+            height=_parse_int(row["height"], "height", row_num, path),
+        )
+        for row_num, row in enumerate(rows, start=2)
+    )
+    result = DatasetManifest(records, dataset_root, metadata)
+    result.validate()
+    return result

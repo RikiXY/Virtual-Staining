@@ -120,6 +120,12 @@ def _warn_image_backend(config: RunConfig, slide_sets: tuple[SlideSet, ...]) -> 
 
 
 def prepare(config: RunConfig, config_path: Path) -> DatasetBuildResult:
+    if config.data.pairing == "unpaired":
+        raise ValueError(
+            "vs prepare is the registered paired-data preparation pipeline. "
+            "For unpaired training, place independent images under each configured "
+            "data.domains root in train/val/test directories."
+        )
     if config.preprocessing is None:
         raise ValueError("RunConfig.preprocessing must be present for prepare().")
     root = config.preprocessing.dataset_root
