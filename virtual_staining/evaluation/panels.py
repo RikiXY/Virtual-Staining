@@ -148,7 +148,7 @@ def save_comparison_panel(
     return save_path
 
 
-def save_stacked_image_panel(
+def _save_stacked_image_panel(
     image_paths: list[str | Path],
     save_path: str | Path,
     row_titles: list[str] | None = None,
@@ -232,7 +232,7 @@ def save_metric_diagnostics_summary(
             )
             for entry in diagnostic_entries
         ]
-        saved_path = save_stacked_image_panel(
+        saved_path = _save_stacked_image_panel(
             image_paths=image_paths,
             save_path=metric_dir / filename,
             row_titles=row_titles,

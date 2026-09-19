@@ -426,7 +426,7 @@ def _run_one_image(
     )
 
 
-def collect_input_images(input_dir: Path, *, recursive: bool = False) -> tuple[Path, ...]:
+def _collect_input_images(input_dir: Path, *, recursive: bool = False) -> tuple[Path, ...]:
     if not input_dir.is_dir():
         raise NotADirectoryError(f"Input directory not found: {input_dir}")
 
@@ -440,7 +440,7 @@ def collect_input_images(input_dir: Path, *, recursive: bool = False) -> tuple[P
     )
 
 
-def run_single_image_inference(
+def _run_single_image_inference(
     runtime: InferenceRuntime,
     input_images: dict[str, Path],
     output_image: Path | None = None,
@@ -471,7 +471,7 @@ def run_single_image_inference(
     )
 
 
-def run_image_directory_inference(
+def _run_image_directory_inference(
     runtime_factory: RuntimeFactory,
     input_dirs: dict[str, Path],
     output_dir: Path | None = None,
@@ -487,7 +487,7 @@ def run_image_directory_inference(
     first_name = next(iter(roots))
     first_root = roots[first_name]
     images_by_name = {
-        name: collect_input_images(root, recursive=recursive) for name, root in roots.items()
+        name: _collect_input_images(root, recursive=recursive) for name, root in roots.items()
     }
     if not images_by_name[first_name]:
         raise FileNotFoundError(
@@ -575,7 +575,7 @@ def run_image_path_inference(
     if len(kinds) != 1:
         raise ValueError("All input paths must be files or all input paths must be directories.")
     if "directory" in kinds:
-        return run_image_directory_inference(
+        return _run_image_directory_inference(
             runtime_factory,
             paths,
             output_path,
@@ -585,7 +585,7 @@ def run_image_path_inference(
             output_format=output_format,
         )
     runtime = runtime_factory()
-    return run_single_image_inference(
+    return _run_single_image_inference(
         runtime,
         paths,
         output_path,

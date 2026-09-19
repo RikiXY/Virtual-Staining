@@ -73,7 +73,7 @@ def _resolve_relative_path(
     return resolved.relative_to(root)
 
 
-def load_slide_set_inventory(
+def _load_slide_set_inventory(
     path: Path,
     dataset_root: Path,
     *,
@@ -190,7 +190,7 @@ def load_slide_set_inventory(
 
 
 def resolve_slide_sets(config: PreprocessingConfig) -> tuple[SlideSet, ...]:
-    return load_slide_set_inventory(
+    return _load_slide_set_inventory(
         config.inputs.inventory,
         config.dataset_root,
         modalities=config.inputs.modalities,

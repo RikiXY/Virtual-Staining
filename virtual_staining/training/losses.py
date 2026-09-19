@@ -90,7 +90,7 @@ class ConfiguredLossEvaluator:
         total = prediction.sum() * 0.0
         results: list[LossTermResult] = []
         for term in self.generator_terms:
-            result = evaluate_generator_loss_term(
+            result = _evaluate_generator_loss_term(
                 term,
                 prediction,
                 target,
@@ -113,7 +113,7 @@ class ConfiguredLossEvaluator:
         total = discriminator_real.sum() * 0.0
         results: list[LossTermResult] = []
         for term in self.discriminator_terms:
-            result = evaluate_discriminator_loss_term(
+            result = _evaluate_discriminator_loss_term(
                 term,
                 discriminator_real,
                 discriminator_fake,
@@ -231,7 +231,7 @@ class SsimLoss(nn.Module):
         return loss
 
 
-def build_ssim_loss(params: dict[str, Any] | None = None) -> SsimLoss:
+def _build_ssim_loss(params: dict[str, Any] | None = None) -> SsimLoss:
     params = {} if params is None else params
     return SsimLoss(
         data_range=float(params.get("data_range", 1.0)),
@@ -252,7 +252,7 @@ def build_ssim_loss(params: dict[str, Any] | None = None) -> SsimLoss:
     )
 
 
-def build_l1_loss(params: dict[str, Any] | None = None) -> nn.L1Loss:
+def _build_l1_loss(params: dict[str, Any] | None = None) -> nn.L1Loss:
     params = {} if params is None else params
     reduction = cast(
         Literal["mean", "sum", "none"],
@@ -261,28 +261,7 @@ def build_l1_loss(params: dict[str, Any] | None = None) -> nn.L1Loss:
     return nn.L1Loss(reduction=reduction)
 
 
-def evaluate_loss_term(
-    term: LossTermConfig,
-    prediction: torch.Tensor,
-    target: torch.Tensor,
-    *,
-    epoch: int = 0,
-    global_step: int | None = None,
-    masks: dict[str, torch.Tensor] | None = None,
-    discriminator_fake: torch.Tensor | None = None,
-) -> LossTermResult:
-    return evaluate_generator_loss_term(
-        term,
-        prediction,
-        target,
-        discriminator_fake=discriminator_fake,
-        epoch=epoch,
-        global_step=global_step,
-        masks=masks,
-    )
-
-
-def evaluate_generator_loss_term(
+def _evaluate_generator_loss_term(
     term: LossTermConfig,
     prediction: torch.Tensor,
     target: torch.Tensor,
@@ -312,7 +291,7 @@ def evaluate_generator_loss_term(
     )
 
 
-def evaluate_discriminator_loss_term(
+def _evaluate_discriminator_loss_term(
     term: LossTermConfig,
     discriminator_real: torch.Tensor,
     discriminator_fake: torch.Tensor,
@@ -342,7 +321,7 @@ def _evaluate_ssim_term(
     *,
     masks: dict[str, torch.Tensor] | None,
 ) -> torch.Tensor:
-    loss = build_ssim_loss(term.params)
+    loss = _build_ssim_loss(term.params)
     mask_config = term.mask
     if not mask_config.enabled:
         return loss(prediction, target)
@@ -352,7 +331,7 @@ def _evaluate_ssim_term(
             "but the training batch did not provide it"
         )
     loss_map = loss.loss_map(prediction, target)
-    return reduce_masked_loss(
+    return _reduce_masked_loss(
         loss_map,
         masks[mask_config.source],
         mask_config=mask_config,
@@ -369,7 +348,7 @@ def _evaluate_l1_term(
 ) -> torch.Tensor:
     mask_config = term.mask
     if not mask_config.enabled:
-        return build_l1_loss(term.params)(prediction, target)
+        return _build_l1_loss(term.params)(prediction, target)
     if masks is None or mask_config.source not in masks:
         raise ValueError(
             f"loss '{term.name}' requires batch mask '{mask_config.source}', "
@@ -380,7 +359,7 @@ def _evaluate_l1_term(
         Literal["mean", "sum", "none"],
         _ssim_choice(term.params.get("reduction", "mean"), "reduction", {"mean", "sum", "none"}),
     )
-    return reduce_masked_loss(
+    return _reduce_masked_loss(
         loss_map,
         masks[mask_config.source],
         mask_config=mask_config,
@@ -417,7 +396,7 @@ def _aggregate_loss_results(
     )
 
 
-def reduce_masked_loss(
+def _reduce_masked_loss(
     loss_map: torch.Tensor,
     mask: torch.Tensor,
     *,

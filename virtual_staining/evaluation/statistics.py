@@ -64,13 +64,13 @@ def resolve_input_csv(path_like: str | Path) -> Path:
     raise ValueError(f"Input path does not exist: {path}")
 
 
-def load_metric_frame(csv_path: str | Path) -> pd.DataFrame:
+def _load_metric_frame(csv_path: str | Path) -> pd.DataFrame:
     resolved_csv = resolve_input_csv(csv_path)
     return pd.read_csv(resolved_csv)
 
 
 def load_metric_values(csv_path: str | Path, column: str) -> np.ndarray:
-    df = load_metric_frame(csv_path)
+    df = _load_metric_frame(csv_path)
 
     if column not in df.columns:
         raise ValueError(f"Column '{column}' not found. Available columns: {list(df.columns)}")
@@ -83,7 +83,7 @@ def load_metric_values(csv_path: str | Path, column: str) -> np.ndarray:
     return values
 
 
-def choose_threshold_favors(
+def _choose_threshold_favors(
     shares_a: dict[str, float],
     shares_b: dict[str, float],
     label_a: str,
@@ -99,7 +99,7 @@ def choose_threshold_favors(
     return "tie"
 
 
-def choose_unpaired_better_label(
+def _choose_unpaired_better_label(
     group_a: UnpairedGroupStats,
     group_b: UnpairedGroupStats,
     comparison: UnpairedComparison,
@@ -124,7 +124,7 @@ def choose_unpaired_better_label(
     return "tie"
 
 
-def choose_paired_better_label(
+def _choose_paired_better_label(
     mean_signed_delta: float,
     median_signed_delta: float,
     share_b_better: float,
@@ -225,7 +225,7 @@ def compute_unpaired_comparison(
             else "tie"
         )
 
-    threshold_favors = choose_threshold_favors(
+    threshold_favors = _choose_threshold_favors(
         group_a.threshold_shares,
         group_b.threshold_shares,
         group_a.label,
@@ -243,7 +243,7 @@ def compute_unpaired_comparison(
         mannwhitney_u=float(mann_whitney.statistic),
         mannwhitney_pvalue=float(mann_whitney.pvalue),
     )
-    comparison.better_label = choose_unpaired_better_label(group_a, group_b, comparison)
+    comparison.better_label = _choose_unpaired_better_label(group_a, group_b, comparison)
     return comparison
 
 
@@ -253,8 +253,8 @@ def align_paired_frames(
     sample_id_column: str,
     metric_column: str,
 ) -> pd.DataFrame:
-    frame_a = load_metric_frame(csv_a)
-    frame_b = load_metric_frame(csv_b)
+    frame_a = _load_metric_frame(csv_a)
+    frame_b = _load_metric_frame(csv_b)
 
     for frame_name, frame in [("A", frame_a), ("B", frame_b)]:
         if sample_id_column not in frame.columns:
@@ -313,7 +313,7 @@ def compute_paired_summary(
         share_equal=share_equal,
         wilcoxon_statistic=wilcoxon_statistic,
         wilcoxon_pvalue=wilcoxon_pvalue,
-        better_label=choose_paired_better_label(
+        better_label=_choose_paired_better_label(
             mean_signed_delta=mean_signed_delta,
             median_signed_delta=median_signed_delta,
             share_b_better=share_b_better,

@@ -12,18 +12,18 @@ from virtual_staining.metrics import DEFAULT_METRICS
 SUMMARY_METRIC_NAMES = list(DEFAULT_METRICS)
 
 
-def metric_value(row: dict[str, object], metric: str) -> float:
+def _metric_value(row: dict[str, object], metric: str) -> float:
     value = row[metric]
     if isinstance(value, str | int | float):
         return float(value)
     raise TypeError(f"Metric '{metric}' must be a scalar value, got {type(value).__name__}.")
 
 
-def build_summary_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+def _build_summary_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     summary_rows: list[dict[str, object]] = []
 
     for metric in SUMMARY_METRIC_NAMES:
-        values = [metric_value(row, metric) for row in rows]
+        values = [_metric_value(row, metric) for row in rows]
         finite = [v for v in values if math.isfinite(v)]
         non_finite_count = len(values) - len(finite)
 
@@ -65,7 +65,7 @@ def write_summary_csv(
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / filename
-    summary_rows = build_summary_rows(rows)
+    summary_rows = _build_summary_rows(rows)
     fieldnames = [
         "metric",
         "count",
@@ -190,7 +190,7 @@ def write_grouped_summaries(
                     "group_id": group_id,
                     "patch_count": len(group_rows),
                     **{
-                        metric: statistics.mean(metric_value(row, metric) for row in group_rows)
+                        metric: statistics.mean(_metric_value(row, metric) for row in group_rows)
                         for metric in SUMMARY_METRIC_NAMES
                     },
                 }

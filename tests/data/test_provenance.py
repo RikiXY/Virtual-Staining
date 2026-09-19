@@ -5,17 +5,17 @@ from pathlib import Path
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.manifest import MANIFEST_SCHEMA_VERSION
 from virtual_staining.data.provenance import (
+    _canonical_set_payload,
     build_dataset_fingerprint_metadata,
-    canonical_set_payload,
 )
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
-from virtual_staining.experiment.snapshots import save_resolved_config
+from virtual_staining.experiment.snapshots import _save_resolved_config
 from virtual_staining.utils.hashing import sha256_file, sha256_json
 
 
 def test_prepare_snapshot_paths_and_config_hash(tmp_path: Path) -> None:
     layout = DatasetLayout(tmp_path)
-    save_resolved_config({"b": 2, "a": 1}, layout.resolved_config_path)
+    _save_resolved_config({"b": 2, "a": 1}, layout.resolved_config_path)
     assert layout.resolved_config_path.exists()
     assert sha256_file(layout.resolved_config_path).startswith("sha256:")
 
@@ -61,7 +61,7 @@ def test_fingerprint_is_row_order_independent_and_schema_v3(tmp_path: Path) -> N
         {
             "dataset_root": str(tmp_path.resolve()),
             "preprocessing": first["preprocessing"],
-            "canonical_inventory": canonical_set_payload(sets),
+            "canonical_inventory": _canonical_set_payload(sets),
             "files": first["files"],
             "schema_version": MANIFEST_SCHEMA_VERSION,
         }

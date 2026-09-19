@@ -194,7 +194,7 @@ def save_paired_report_txt(
     (output_dir / "report.txt").write_text("\n".join(lines), encoding="utf-8")
 
 
-def ecdf(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _ecdf(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     x = np.sort(values)
     y = np.arange(1, values.size + 1) / values.size
     return x, y
@@ -230,8 +230,8 @@ def plot_distribution_ecdf(
     column: str,
     output_dir: Path,
 ) -> None:
-    xa, ya = ecdf(a)
-    xb, yb = ecdf(b)
+    xa, ya = _ecdf(a)
+    xb, yb = _ecdf(b)
 
     plt.figure(figsize=(9, 5))
     plt.step(xa, ya, where="post", label=label_a)

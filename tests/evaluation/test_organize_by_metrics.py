@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from virtual_staining.evaluation.ranking import organize_metric
+from virtual_staining.evaluation.ranking import _organize_metric
 
 
 def _touch(path: Path) -> None:
@@ -28,7 +28,7 @@ def test_organize_metric_exports_best_and_worst_for_higher_metric(
     )
     output_dir = tmp_path / "sorted"
 
-    result = organize_metric(
+    result = _organize_metric(
         df=df,
         metric="ssim",
         output_dir=output_dir,
@@ -62,7 +62,7 @@ def test_organize_metric_exports_best_and_worst_for_lower_metric(
     )
     output_dir = tmp_path / "sorted"
 
-    result = organize_metric(
+    result = _organize_metric(
         df=df,
         metric="mae",
         output_dir=output_dir,

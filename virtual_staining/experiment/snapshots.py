@@ -11,12 +11,12 @@ from virtual_staining.experiment.environment import collect_environment
 from virtual_staining.utils.hashing import sha256_file
 
 
-def save_input_config(src_yaml: Path, dest: Path) -> None:
+def _save_input_config(src_yaml: Path, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src_yaml, dest)
 
 
-def save_resolved_config(config_dict: dict[str, object], dest: Path) -> None:
+def _save_resolved_config(config_dict: dict[str, object], dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     with dest.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(
@@ -40,8 +40,8 @@ def save_stage_config_snapshots(
     input_dest: Path,
     resolved_dest: Path,
 ) -> str:
-    save_input_config(config_path, input_dest)
-    save_resolved_config(config.to_dict(), resolved_dest)
+    _save_input_config(config_path, input_dest)
+    _save_resolved_config(config.to_dict(), resolved_dest)
     return sha256_file(resolved_dest)
 
 

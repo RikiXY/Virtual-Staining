@@ -114,7 +114,7 @@ def metrics_fieldnames(loss_names: list[str], *, stage: str | None = None) -> li
     return fields
 
 
-def average_components(
+def _average_components(
     totals: dict[str, float],
     count: int,
     loss_names: list[str],
@@ -124,7 +124,7 @@ def average_components(
     return {name: totals.get(name, 0.0) / count for name in loss_names}
 
 
-def accumulate_components(totals: dict[str, float], values: dict[str, float] | None) -> None:
+def _accumulate_components(totals: dict[str, float], values: dict[str, float] | None) -> None:
     if values is None:
         return
     for name, value in values.items():
@@ -151,13 +151,13 @@ class LossComponentAccumulator:
         weighted: dict[str, float] | None,
         current_weight: dict[str, float] | None,
     ) -> None:
-        accumulate_components(self.raw, raw)
-        accumulate_components(self.weighted, weighted)
-        accumulate_components(self.current_weight, current_weight)
+        _accumulate_components(self.raw, raw)
+        _accumulate_components(self.weighted, weighted)
+        _accumulate_components(self.current_weight, current_weight)
 
     def average(self, count: int) -> ComponentAverages:
         return ComponentAverages(
-            raw=average_components(self.raw, count, self.loss_names),
-            weighted=average_components(self.weighted, count, self.loss_names),
-            current_weight=average_components(self.current_weight, count, self.loss_names),
+            raw=_average_components(self.raw, count, self.loss_names),
+            weighted=_average_components(self.weighted, count, self.loss_names),
+            current_weight=_average_components(self.current_weight, count, self.loss_names),
         )

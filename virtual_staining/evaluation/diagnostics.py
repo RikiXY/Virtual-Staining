@@ -26,7 +26,7 @@ def compute_absolute_difference_map(
     return np.mean(np.abs(target - generated), axis=2)
 
 
-def make_error_histogram(
+def _make_error_histogram(
     target: np.ndarray,
     generated: np.ndarray,
     output_path: str | Path,
@@ -46,7 +46,7 @@ def make_error_histogram(
     return output_path
 
 
-def make_intensity_overlay_histogram(
+def _make_intensity_overlay_histogram(
     target: np.ndarray,
     generated: np.ndarray,
     output_path: str | Path,
@@ -73,7 +73,7 @@ def make_intensity_overlay_histogram(
     return output_path
 
 
-def make_scatter_by_channel(
+def _make_scatter_by_channel(
     target: np.ndarray,
     generated: np.ndarray,
     output_path: str | Path,
@@ -125,17 +125,17 @@ def save_diagnostic_plots(
     save_dir = Path(save_dir)
 
     return [
-        make_error_histogram(
+        _make_error_histogram(
             target,
             generated,
             save_dir / f"{sample_id}_error_histogram.png",
         ),
-        make_scatter_by_channel(
+        _make_scatter_by_channel(
             target,
             generated,
             save_dir / f"{sample_id}_target_vs_generated_scatter_by_channel.png",
         ),
-        make_intensity_overlay_histogram(
+        _make_intensity_overlay_histogram(
             target,
             generated,
             save_dir / f"{sample_id}_intensity_overlay_histogram.png",

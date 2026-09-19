@@ -25,8 +25,8 @@ class ValidationImageMetricAccumulator:
 
     def add_batch(self, generated: torch.Tensor, target: torch.Tensor) -> None:
         for generated_image, target_image in zip(
-            normalized_tensor_batch_to_images(generated),
-            normalized_tensor_batch_to_images(target),
+            _normalized_tensor_batch_to_images(generated),
+            _normalized_tensor_batch_to_images(target),
             strict=True,
         ):
             metrics = compute_standard_metrics(target_image, generated_image)
@@ -40,7 +40,7 @@ class ValidationImageMetricAccumulator:
         return {name: _finite_mean(values) for name, values in self._values.items()}
 
 
-def normalized_tensor_batch_to_images(tensor: torch.Tensor) -> list[np.ndarray]:
+def _normalized_tensor_batch_to_images(tensor: torch.Tensor) -> list[np.ndarray]:
     if tensor.ndim != 4:
         raise ValueError("validation image metric tensors must be NCHW batches")
     images = denormalize_model_output(tensor.detach().to(device="cpu", dtype=torch.float32))

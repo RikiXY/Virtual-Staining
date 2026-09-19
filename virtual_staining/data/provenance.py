@@ -10,17 +10,6 @@ from virtual_staining.data.slide_sets import SlideAsset, SlideSet
 from virtual_staining.utils.hashing import sha256_file, sha256_json
 
 
-def build_file_provenance(path: Path) -> dict[str, Any]:
-    resolved = path.resolve()
-    stat = resolved.stat()
-    return {
-        "path": str(resolved),
-        "size": stat.st_size,
-        "mtime_ns": stat.st_mtime_ns,
-        "sha256": sha256_file(resolved),
-    }
-
-
 def _cached_file_provenance(
     path: Path,
     *,
@@ -60,7 +49,7 @@ def _asset_payload(asset: SlideAsset) -> dict[str, Any]:
     }
 
 
-def canonical_set_payload(slide_sets: tuple[SlideSet, ...]) -> list[dict[str, Any]]:
+def _canonical_set_payload(slide_sets: tuple[SlideSet, ...]) -> list[dict[str, Any]]:
     return [
         {
             "set_id": item.set_id,
@@ -108,7 +97,7 @@ def build_dataset_fingerprint_metadata(
     if hash_cache_path is not None:
         hash_cache_path.parent.mkdir(parents=True, exist_ok=True)
         hash_cache_path.write_text(json.dumps(cache, indent=2), encoding="utf-8")
-    canonical_sets = canonical_set_payload(slide_sets)
+    canonical_sets = _canonical_set_payload(slide_sets)
     canonical_inventory_hash = sha256_json(canonical_sets)
     raw_inventory_sha256 = sha256_file(inventory_path) if inventory_path is not None else None
     dataset_root_resolved = str(dataset_root.resolve())

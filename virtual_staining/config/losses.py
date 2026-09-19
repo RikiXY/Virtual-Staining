@@ -175,7 +175,7 @@ class LossTermConfig:
 
     @property
     def mask(self) -> LossMaskConfig:
-        return parse_loss_mask_config(self.params.get("mask"), f"loss '{self.name}' params.mask")
+        return _parse_loss_mask_config(self.params.get("mask"), f"loss '{self.name}' params.mask")
 
     @property
     def requires_mask(self) -> bool:
@@ -287,7 +287,7 @@ def _parse_loss_schedule(raw: Any, context: str) -> LossScheduleConfig:
     return config
 
 
-def parse_loss_mask_config(raw: Any, context: str = "loss mask") -> LossMaskConfig:
+def _parse_loss_mask_config(raw: Any, context: str = "loss mask") -> LossMaskConfig:
     if raw is None:
         return LossMaskConfig()
     if not isinstance(raw, dict):
@@ -334,10 +334,10 @@ def _validate_ssim_params(params: dict[str, Any]) -> None:
         raise ValueError("loss 'ssim' params.channel_mode must be one of ['gray', 'rgb']")
     if params.get("reduction", "mean") not in {"mean", "sum", "none"}:
         raise ValueError("loss 'ssim' params.reduction must be one of ['mean', 'none', 'sum']")
-    parse_loss_mask_config(params.get("mask"), "loss 'ssim' params.mask")
+    _parse_loss_mask_config(params.get("mask"), "loss 'ssim' params.mask")
 
 
 def _validate_l1_params(params: dict[str, Any]) -> None:
     if params.get("reduction", "mean") not in {"mean", "sum", "none"}:
         raise ValueError("loss 'l1' params.reduction must be one of ['mean', 'none', 'sum']")
-    parse_loss_mask_config(params.get("mask"), "loss 'l1' params.mask")
+    _parse_loss_mask_config(params.get("mask"), "loss 'l1' params.mask")

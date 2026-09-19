@@ -51,7 +51,7 @@ _VALIDATION_LOSS_MONITOR_PATTERN = re.compile(
 )
 
 
-def is_supported_early_stopping_monitor(monitor: str) -> bool:
+def _is_supported_early_stopping_monitor(monitor: str) -> bool:
     return (
         monitor in SUPPORTED_CHECKPOINT_METRICS
         or monitor == "loss_D_val"
@@ -124,7 +124,7 @@ class EarlyStoppingConfig:
     min_delta: float = 0.0
 
     def validate(self) -> None:
-        if not is_supported_early_stopping_monitor(self.monitor):
+        if not _is_supported_early_stopping_monitor(self.monitor):
             raise ValueError(
                 "training.early_stopping.monitor must be a validation CSV column "
                 "such as loss_G_val, loss_D_val, val_ssim, val_mae, or a configured "
@@ -172,7 +172,7 @@ class AugmentationConfig:
         }
 
 
-def parse_augmentation_config(raw: Any) -> AugmentationConfig:
+def _parse_augmentation_config(raw: Any) -> AugmentationConfig:
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
@@ -197,7 +197,7 @@ def parse_augmentation_config(raw: Any) -> AugmentationConfig:
     return config
 
 
-def parse_learning_rate_scheduler_config(raw: Any, *, epochs: int) -> LearningRateSchedulerConfig:
+def _parse_learning_rate_scheduler_config(raw: Any, *, epochs: int) -> LearningRateSchedulerConfig:
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
@@ -235,7 +235,7 @@ def parse_learning_rate_scheduler_config(raw: Any, *, epochs: int) -> LearningRa
     return config
 
 
-def parse_early_stopping_config(raw: Any) -> EarlyStoppingConfig | None:
+def _parse_early_stopping_config(raw: Any) -> EarlyStoppingConfig | None:
     if raw is None:
         return None
     if not isinstance(raw, dict):
@@ -244,7 +244,7 @@ def parse_early_stopping_config(raw: Any) -> EarlyStoppingConfig | None:
     monitor = raw.get("monitor", "val_ssim")
     if not isinstance(monitor, str):
         raise TypeError("training.early_stopping.monitor must be a string")
-    if not is_supported_early_stopping_monitor(monitor):
+    if not _is_supported_early_stopping_monitor(monitor):
         raise ValueError(
             "training.early_stopping.monitor must be a validation CSV column "
             "such as loss_G_val, loss_D_val, val_ssim, val_mae, or a configured "
@@ -317,11 +317,11 @@ class TrainingConfig:
             checkpoint_top_k=int(data.get("checkpoint_top_k", 3)),
             log_rate=int(data.get("log_rate", 15)),
             resume=data.get("resume"),
-            scheduler=parse_learning_rate_scheduler_config(
+            scheduler=_parse_learning_rate_scheduler_config(
                 data.get("scheduler", {}), epochs=epochs
             ),
-            early_stopping=parse_early_stopping_config(data.get("early_stopping")),
-            augmentation=parse_augmentation_config(data.get("augmentation", {})),
+            early_stopping=_parse_early_stopping_config(data.get("early_stopping")),
+            augmentation=_parse_augmentation_config(data.get("augmentation", {})),
             losses=parse_loss_config(data["losses"]),
         )
 

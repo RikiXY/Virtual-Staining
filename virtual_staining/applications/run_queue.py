@@ -105,7 +105,7 @@ def _resolve_queue_state_path(queue_path: Path, queue_name: str) -> Path:
     return queue_path.with_suffix(".state.json")
 
 
-def load_local_run_queue(queue_path: Path) -> LocalRunQueue:
+def _load_local_run_queue(queue_path: Path) -> LocalRunQueue:
     data = load_yaml_mapping(queue_path)
     reject_unknown_keys(data, _QUEUE_KEYS, "queue")
 
@@ -427,7 +427,7 @@ def run_queue(
     *,
     progress_reporter: ProgressReporter | None = None,
 ) -> QueueState:
-    queue = load_local_run_queue(queue_path.resolve())
+    queue = _load_local_run_queue(queue_path.resolve())
     state = _initial_queue_state(queue)
     state.save(queue.state_path)
     try:

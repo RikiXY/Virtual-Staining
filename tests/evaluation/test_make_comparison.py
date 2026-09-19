@@ -30,9 +30,9 @@ def test_save_diagnostic_plots_delegates_to_canonical_plotters(
 
         return save
 
-    monkeypatch.setattr(diagnostics, "make_error_histogram", _record("error"))
-    monkeypatch.setattr(diagnostics, "make_scatter_by_channel", _record("scatter"))
-    monkeypatch.setattr(diagnostics, "make_intensity_overlay_histogram", _record("intensity"))
+    monkeypatch.setattr(diagnostics, "_make_error_histogram", _record("error"))
+    monkeypatch.setattr(diagnostics, "_make_scatter_by_channel", _record("scatter"))
+    monkeypatch.setattr(diagnostics, "_make_intensity_overlay_histogram", _record("intensity"))
 
     paths = diagnostics.save_diagnostic_plots(generated, target, tmp_path / "diagnostics")
 
@@ -145,7 +145,7 @@ def test_save_metric_diagnostics_summary_labels_best_median_worst_rows(
         return save_path
 
     monkeypatch.setattr(
-        "virtual_staining.evaluation.panels.save_stacked_image_panel",
+        "virtual_staining.evaluation.panels._save_stacked_image_panel",
         _recording_save_stacked_image_panel,
     )
 

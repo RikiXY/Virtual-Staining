@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from virtual_staining.data.slide_sets import SlideAsset, SlideSet, load_slide_set_inventory
+from virtual_staining.data.slide_sets import SlideAsset, SlideSet, _load_slide_set_inventory
 from virtual_staining.data.splitting import assign_group_splits, group_id_for_set
 
 
@@ -23,7 +23,7 @@ def _inventory(root: Path) -> Path:
 
 def test_wide_inventory_is_order_independent_and_named(tmp_path: Path) -> None:
     path = _inventory(tmp_path)
-    first = load_slide_set_inventory(
+    first = _load_slide_set_inventory(
         path, tmp_path, modalities=("LF", "AF"), reference_modality="LF", target_modality="target"
     )
     path.write_text(
@@ -44,7 +44,7 @@ def test_inventory_rejects_unsafe_paths(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="relative and non-traversing"):
-        load_slide_set_inventory(
+        _load_slide_set_inventory(
             path, tmp_path, modalities=("LF",), reference_modality="LF", target_modality="target"
         )
 

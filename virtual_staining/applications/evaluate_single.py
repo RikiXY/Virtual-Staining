@@ -11,7 +11,6 @@ from virtual_staining.evaluation.reports import (
     build_metric_row,
     write_single_case_csv,
 )
-from virtual_staining.evaluation.summaries import metric_value
 from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.metrics import DEFAULT_METRICS
 
@@ -19,7 +18,6 @@ __all__ = [
     "DEFAULT_METRICS",
     "SingleEvalResult",
     "evaluate_pair",
-    "metric_value",
 ]
 
 

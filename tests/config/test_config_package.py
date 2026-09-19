@@ -8,7 +8,7 @@ import yaml
 from tests.config_helpers import write_yaml
 from virtual_staining.config import load_yaml_mapping, parse_bool_strict, reject_unknown_keys
 from virtual_staining.config.run import RunConfig
-from virtual_staining.experiment.snapshots import save_resolved_config
+from virtual_staining.experiment.snapshots import _save_resolved_config
 from virtual_staining.utils.hashing import sha256_file
 
 
@@ -72,7 +72,7 @@ def test_run_config_composes_domains_and_round_trips(tmp_path: Path) -> None:
     config = RunConfig.from_yaml(source)
     resolved = config.to_dict()
     resolved_path = tmp_path / "resolved.yaml"
-    save_resolved_config(resolved, resolved_path)
+    _save_resolved_config(resolved, resolved_path)
 
     assert config.training is not None
     assert config.training.losses.generator[0].weight == 25.0
@@ -129,7 +129,7 @@ model:
 def test_resolved_hash_is_stable_for_equivalent_mappings(tmp_path: Path) -> None:
     left = tmp_path / "left.yaml"
     right = tmp_path / "right.yaml"
-    save_resolved_config({"training": {"epochs": 10}, "run_name": "x"}, left)
-    save_resolved_config({"run_name": "x", "training": {"epochs": 10}}, right)
+    _save_resolved_config({"training": {"epochs": 10}, "run_name": "x"}, left)
+    _save_resolved_config({"run_name": "x", "training": {"epochs": 10}}, right)
     assert yaml.safe_load(left.read_text()) == yaml.safe_load(right.read_text())
     assert sha256_file(left) == sha256_file(right)

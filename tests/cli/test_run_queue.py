@@ -9,7 +9,7 @@ import pytest
 
 from tests.config_helpers import write_queue_config, write_run_config, write_yaml
 from virtual_staining import cli
-from virtual_staining.applications.run_queue import load_local_run_queue, run_queue
+from virtual_staining.applications.run_queue import _load_local_run_queue, run_queue
 
 
 def _write_config(tmp_path: Path, section_yaml: str) -> Path:
@@ -68,7 +68,7 @@ def test_load_local_run_queue_resolves_relative_job_paths(tmp_path: Path) -> Non
         """,
     )
 
-    queue = load_local_run_queue(queue_path)
+    queue = _load_local_run_queue(queue_path)
 
     assert queue.name == "nightly"
     assert queue.continue_on_failure is False
@@ -90,7 +90,7 @@ def test_load_local_run_queue_rejects_unknown_top_level_keys(tmp_path: Path) -> 
     )
 
     with pytest.raises(ValueError, match=r"Unknown key\(s\) in queue: unexpected"):
-        load_local_run_queue(queue_path)
+        _load_local_run_queue(queue_path)
 
 
 def test_load_local_run_queue_rejects_unknown_job_keys(tmp_path: Path) -> None:
@@ -106,7 +106,7 @@ def test_load_local_run_queue_rejects_unknown_job_keys(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match=r"Unknown key\(s\) in queue\.jobs\[0\]: unexpected"):
-        load_local_run_queue(queue_path)
+        _load_local_run_queue(queue_path)
 
 
 def test_load_local_run_queue_requires_yaml_boolean_for_continue_on_failure(
@@ -123,7 +123,7 @@ def test_load_local_run_queue_requires_yaml_boolean_for_continue_on_failure(
     )
 
     with pytest.raises(TypeError, match="continue_on_failure"):
-        load_local_run_queue(queue_path)
+        _load_local_run_queue(queue_path)
 
 
 def test_run_queue_executes_jobs_in_order_and_persists_state(
@@ -510,7 +510,7 @@ def test_load_local_run_queue_reads_configurable_stages(tmp_path: Path) -> None:
         continue_on_failure=False,
     )
 
-    queue = load_local_run_queue(queue_path)
+    queue = _load_local_run_queue(queue_path)
 
     assert queue.jobs[0].stages == ("train", "infer", "evaluate")
 
@@ -527,4 +527,4 @@ def test_load_local_run_queue_rejects_unknown_stage(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="unknown stage"):
-        load_local_run_queue(queue_path)
+        _load_local_run_queue(queue_path)

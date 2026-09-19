@@ -146,7 +146,7 @@ def load_best_checkpoint_record(
     )
 
 
-def resolve_best_checkpoint_path(
+def _resolve_best_checkpoint_path(
     checkpoints_dir: Path,
     *,
     policy: str,
@@ -181,7 +181,7 @@ def resolve_checkpoint_path(
             )
         return path
     if policy in RANKED_CHECKPOINT_POLICIES:
-        return resolve_best_checkpoint_path(
+        return _resolve_best_checkpoint_path(
             checkpoints_dir, policy=policy, metric=metric, rank=rank
         )
     raise ValueError(f"Unsupported checkpoint policy: {policy!r}")

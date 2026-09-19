@@ -19,8 +19,8 @@ from virtual_staining.inference.single import (
     InferenceRuntime,
     SingleInferenceResult,
     _predict_images,
+    _run_image_directory_inference,
     _run_tiled_prediction,
-    run_image_directory_inference,
     run_image_path_inference,
 )
 from virtual_staining.models.generator import ConcatUNetGenerator
@@ -163,7 +163,7 @@ def test_directory_inputs_pair_exact_relative_paths_and_preserve_subdirectories(
 
     monkeypatch.setattr(single, "_run_one_image", fake_run_one)
 
-    result = run_image_directory_inference(
+    result = _run_image_directory_inference(
         runtime_factory,
         {"LF": lf_root, "AF": af_root},
         tmp_path / "out",
@@ -190,7 +190,7 @@ def test_directory_input_set_mismatch_names_offending_modality(
         pytest.fail("checkpoint must not load for path mismatch")
 
     with pytest.raises(ValueError, match=r"Input modality AF.*missing=.*sample.*extra=.*other"):
-        run_image_directory_inference(runtime_factory, {"LF": lf_root, "AF": af_root})
+        _run_image_directory_inference(runtime_factory, {"LF": lf_root, "AF": af_root})
 
 
 def test_file_inputs_reject_unequal_dimensions_before_prediction(

@@ -10,7 +10,7 @@ import pytest
 import pyvips
 from PIL import Image
 
-from virtual_staining.inference.single import InferenceRuntime, run_single_image_inference
+from virtual_staining.inference.single import InferenceRuntime, _run_single_image_inference
 from virtual_staining.utils.image_io import (
     ImageMetadata,
     OpenSlideRegionImageReader,
@@ -90,6 +90,6 @@ def test_large_tiled_inference_requires_a_compatible_input(
     )
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 16)
     with pytest.raises(RuntimeError, match="OpenSlide-compatible and use the OpenSlide backend"):
-        run_single_image_inference(
+        _run_single_image_inference(
             runtime, {"LF": image_path}, tmp_path / "output.tif", mode="tile"
         )
