@@ -288,7 +288,6 @@ def _write_tiled_rgb(
 
 
 def _save_pyramidal_tiff(raw_path: Path, output_path: Path, metadata: ImageMetadata) -> None:
-    # Defer libvips initialization until WSI output is requested.
     try:
         import pyvips
     except OSError as exc:

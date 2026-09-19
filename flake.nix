@@ -48,6 +48,7 @@
                 export LD_LIBRARY_PATH=/usr/lib/wsl/lib:$LD_LIBRARY_PATH
               fi
             '' + ''
+              unset PYTHONPATH
               echo "Entered Nix shell"
               echo "uv: $(uv --version)"
               echo "python: $(${python}/bin/python --version)"
@@ -55,7 +56,6 @@
           } // lib.optionalAttrs pkgs.stdenv.isLinux {
             LD_LIBRARY_PATH = lib.makeLibraryPath linuxRuntimeLibs;
           } // lib.optionalAttrs pkgs.stdenv.isDarwin {
-            # Python FFI loads these libraries by name, outside Nix-linked binaries.
             DYLD_LIBRARY_PATH = lib.makeLibraryPath [ pkgs.openslide pkgs.vips pkgs.glib ];
           });
         });
