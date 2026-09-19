@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from typing import get_args
+
 import pytest
 
+from virtual_staining.config.losses import LossName
 from virtual_staining.config.training import TrainingConfig
+from virtual_staining.training.losses import LOSS_REGISTRY
 
 
 def _mapping(**overrides: object) -> dict[str, object]:
@@ -89,7 +93,11 @@ def test_training_rejects_invalid_choices(
         TrainingConfig.from_mapping(_mapping(**{section: {field: value}}))
 
 
-@pytest.mark.parametrize("name", ["adversarial_bce", "l1", "ssim"])
+def test_config_loss_names_match_runtime_registry() -> None:
+    assert set(get_args(LossName)) == set(LOSS_REGISTRY)
+
+
+@pytest.mark.parametrize("name", get_args(LossName))
 @pytest.mark.parametrize(
     "schedule_type",
     [

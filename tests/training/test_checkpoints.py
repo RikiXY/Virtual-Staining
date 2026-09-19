@@ -1,13 +1,78 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import get_args
 
 import pytest
 import torch
 
+from virtual_staining.checkpoint_selection import (
+    RANKED_CHECKPOINT_POLICIES,
+    SUPPORTED_CHECKPOINT_POLICIES,
+    CheckpointMode,
+    resolve_checkpoint_path,
+    update_checkpoint_selection,
+)
+from virtual_staining.config.inference import InferenceConfig
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.generator import ConcatUNetGenerator
 from virtual_staining.training.checkpoints import CheckpointManager
+
+
+@pytest.mark.parametrize("policy", sorted(SUPPORTED_CHECKPOINT_POLICIES))
+@pytest.mark.parametrize("mode", get_args(CheckpointMode))
+def test_checkpoint_policy_and_mode_contracts(tmp_path: Path, policy: str, mode: str) -> None:
+    config = InferenceConfig.from_mapping(
+        {"checkpoint_policy": policy, "checkpoint_metric": "val_ssim"}
+    )
+    first, latest = tmp_path / "ep001.pth", tmp_path / "ep002.pth"
+    for epoch, path, value in ((1, first, 0.1), (2, latest, 0.9)):
+        path.touch()
+        update_checkpoint_selection(
+            tmp_path,
+            metrics={"val_ssim": value},
+            modes={"val_ssim": mode},
+            top_k=2,
+            epoch=epoch,
+            checkpoint_path=path,
+        )
+    expected = latest if policy == "latest" or mode == "max" else first
+    assert config.checkpoint_policy == policy
+    assert resolve_checkpoint_path(tmp_path, policy=policy, metric="val_ssim") == expected
+
+
+@pytest.mark.parametrize("policy", sorted(RANKED_CHECKPOINT_POLICIES))
+def test_ranked_checkpoint_policies_require_metric_and_accept_rank(policy: str) -> None:
+    with pytest.raises(ValueError, match="checkpoint_metric is required"):
+        InferenceConfig.from_mapping({"checkpoint_policy": policy})
+    config = InferenceConfig.from_mapping(
+        {"checkpoint_policy": policy, "checkpoint_metric": "val_ssim", "checkpoint_rank": 2}
+    )
+    assert config.checkpoint_rank == 2
+
+
+def test_checkpoint_policy_validation_remains_strict(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="Unknown checkpoint_policy"):
+        InferenceConfig.from_mapping({"checkpoint_policy": "unknown"})
+    with pytest.raises(ValueError, match="Unsupported checkpoint policy"):
+        resolve_checkpoint_path(tmp_path, policy="unknown")
+    with pytest.raises(ValueError, match="checkpoint_rank is supported only"):
+        InferenceConfig.from_mapping({"checkpoint_policy": "latest", "checkpoint_rank": 1})
+
+
+def test_checkpoint_selection_rejects_unknown_mode_without_writing(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "ep001.pth"
+    checkpoint.touch()
+    with pytest.raises(ValueError, match="mode must be one of"):
+        update_checkpoint_selection(
+            tmp_path,
+            metrics={"val_ssim": 0.5},
+            modes={"val_ssim": "unknown"},
+            top_k=2,
+            epoch=1,
+            checkpoint_path=checkpoint,
+        )
+    assert not (tmp_path / "best.json").exists()
 
 
 def _manager(root: Path, names=("LF", "AF"), target="stained") -> CheckpointManager:
