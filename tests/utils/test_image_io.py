@@ -99,6 +99,7 @@ def test_open_image_reader_returns_default_region_reader(tmp_path: Path) -> None
 
     reader = open_image_reader(image_path)
 
+    assert isinstance(reader, PillowRegionImageReader)
     assert reader.size == (8, 6)
 
 
@@ -172,3 +173,36 @@ def test_to_float01_from_pil_image() -> None:
     assert result[0, 0, 0] == pytest.approx(1.0)
     assert result[0, 0, 1] == pytest.approx(0.0)
     assert result[0, 0, 2] == pytest.approx(128 / 255.0)
+
+
+def test_auto_reader_uses_openslide_for_recognized_formats(monkeypatch: pytest.MonkeyPatch) -> None:
+    from virtual_staining.utils import image_io
+
+    reader = object()
+    monkeypatch.setattr(image_io.openslide.OpenSlide, "detect_format", lambda path: "generic-tiff")
+    monkeypatch.setattr(image_io, "OpenSlideRegionImageReader", lambda path: reader)
+    assert open_image_reader("slide.tif") is reader
+
+
+@pytest.mark.parametrize("error_type", [ImportError, OSError, RuntimeError])
+def test_auto_reader_propagates_broken_openslide(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[Exception]
+) -> None:
+    from virtual_staining.utils import image_io
+
+    image_path = tmp_path / "image.png"
+    write_rgb_image(image_path)
+
+    def fail(path: str) -> None:
+        raise error_type("broken OpenSlide runtime")
+
+    monkeypatch.setattr(image_io.openslide.OpenSlide, "detect_format", fail)
+    with pytest.raises(error_type, match="broken OpenSlide runtime"):
+        open_image_reader(image_path)
+
+
+def test_explicit_openslide_rejects_unsupported_image(tmp_path: Path) -> None:
+    image_path = tmp_path / "image.png"
+    write_rgb_image(image_path)
+    with pytest.raises(ValueError, match="OpenSlide does not support"):
+        open_image_reader(image_path, backend="openslide")

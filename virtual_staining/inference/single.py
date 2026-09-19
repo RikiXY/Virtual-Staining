@@ -288,11 +288,12 @@ def _write_tiled_rgb(
 
 
 def _save_pyramidal_tiff(raw_path: Path, output_path: Path, metadata: ImageMetadata) -> None:
+    # Defer libvips initialization until WSI output is requested.
     try:
         import pyvips
-    except (ImportError, OSError) as exc:
+    except OSError as exc:
         raise RuntimeError(
-            "pyvips and libvips are required; install the 'wsi' extra and run inside 'nix develop'"
+            "Could not load native libvips; run inside the managed environment (nix develop)"
         ) from exc
 
     width, height = metadata.width, metadata.height
@@ -456,8 +457,8 @@ def _run_one_image(
             and first_reader.size[0] * first_reader.size[1] > 2 * pillow_limit
         ):
             raise RuntimeError(
-                "Large tiled inference requires OpenSlide; install the 'wsi' extra and "
-                "native OpenSlide, then run inside 'nix develop'"
+                "Full-resolution large-image tiled inference requires every input to be "
+                "OpenSlide-compatible and use the OpenSlide backend"
             )
         if resolved_mode == "tile" and any(
             isinstance(reader, OpenSlideRegionImageReader) for reader in readers.values()

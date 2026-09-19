@@ -8,8 +8,6 @@ from PIL import Image
 from virtual_staining.config.training import AugmentationIntensity
 from virtual_staining.training.augmentation import PairedAlbumentationsTransform
 
-pytest.importorskip("albumentations")
-
 
 @pytest.mark.parametrize("intensity", ["light", "medium", "strong"])
 def test_named_transform_preserves_shape_range_and_mask_contract(

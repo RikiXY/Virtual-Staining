@@ -5,14 +5,7 @@ from dataclasses import dataclass
 from typing import cast
 
 import numpy as np
-
-try:
-    from skimage.metrics import structural_similarity
-except ImportError as exc:
-    raise ImportError(
-        "Missing dependency: scikit-image. Install it with:\npip install scikit-image"
-    ) from exc
-
+from skimage.metrics import structural_similarity
 
 MetricEvaluator = Callable[[np.ndarray, np.ndarray], dict[str, float]]
 
@@ -118,10 +111,7 @@ def compute_psnr(target: np.ndarray, generated: np.ndarray) -> float:
 
 
 def compute_ssim(target: np.ndarray, generated: np.ndarray) -> float:
-    try:
-        result = structural_similarity(target, generated, channel_axis=2, data_range=1.0)
-    except TypeError:
-        result = structural_similarity(target, generated, multichannel=True, data_range=1.0)
+    result = structural_similarity(target, generated, channel_axis=2, data_range=1.0)
     return float(cast(float, result))
 
 

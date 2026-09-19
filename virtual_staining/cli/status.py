@@ -50,22 +50,12 @@ def _print_report(report: dict[str, Any]) -> None:
     print_section("Required dependencies")
     for package in report["packages"]:
         version = package["version"] or "not installed"
+        if package["library_version"] is not None:
+            version += f", native {package['library_version']}"
         if package["error"] is None:
             _line("OK", package["name"], version)
         else:
             _line("ERROR", package["name"], f"{version} — {package['error']}")
-
-    print_section("OpenSlide (optional)")
-    openslide = report["openslide"]
-    if openslide["usable"]:
-        _line(
-            "OK",
-            "OpenSlide",
-            f"Python {openslide['version']}, native {openslide['library_version'] or 'unknown'}",
-        )
-    else:
-        version = openslide["version"] or "not installed"
-        _line("WARN", "OpenSlide", f"Python {version} — {openslide['error']}")
 
     print_section("GPU and drivers (optional)")
     nvidia = report["nvidia"]
@@ -98,7 +88,7 @@ def _print_report(report: dict[str, Any]) -> None:
 
     print_section("Result")
     if report["healthy"]:
-        _line("OK", "Runtime", "required CPU pipeline dependencies are usable")
+        _line("OK", "Runtime", "required Python dependencies and native WSI libraries are usable")
     else:
         _line("ERROR", "Runtime", "one or more required dependencies are unusable")
 

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
+import openslide
 from PIL import Image
 
 VALID_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
@@ -124,7 +125,7 @@ class PillowRegionImageReader:
 
 
 class OpenSlideRegionImageReader:
-    """Optional OpenSlide-backed level-0 region reader."""
+    """OpenSlide-backed level-0 region reader."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -132,8 +133,6 @@ class OpenSlideRegionImageReader:
             raise FileNotFoundError(f"Image not found: {self.path}")
         if detect_openslide_format(self.path) is None:
             raise ValueError(f"OpenSlide does not support: {self.path}")
-        import openslide
-
         self._slide: Any = openslide.OpenSlide(str(self.path))
 
     @property
@@ -195,22 +194,13 @@ def open_image_reader(path: str | Path, backend: str = "auto") -> RegionImageRea
         return PillowRegionImageReader(path)
     if backend == "openslide":
         return OpenSlideRegionImageReader(path)
-    try:
-        detected = detect_openslide_format(path)
-    except RuntimeError:
-        return PillowRegionImageReader(path)
+    detected = detect_openslide_format(path)
     if detected is not None:
         return OpenSlideRegionImageReader(path)
     return PillowRegionImageReader(path)
 
 
 def detect_openslide_format(path: str | Path) -> str | None:
-    try:
-        import openslide
-    except ImportError as exc:
-        raise RuntimeError(
-            "OpenSlide is unavailable; install the 'wsi' extra and native OpenSlide"
-        ) from exc
     return openslide.OpenSlide.detect_format(str(path))
 
 

@@ -36,6 +36,7 @@
               pkgs.gnumake
               pkgs.git
               pkgs.pre-commit
+              pkgs.openslide
               pkgs.vips
             ];
 
@@ -53,6 +54,9 @@
             '';
           } // lib.optionalAttrs pkgs.stdenv.isLinux {
             LD_LIBRARY_PATH = lib.makeLibraryPath linuxRuntimeLibs;
+          } // lib.optionalAttrs pkgs.stdenv.isDarwin {
+            # Python FFI loads these libraries by name, outside Nix-linked binaries.
+            DYLD_LIBRARY_PATH = lib.makeLibraryPath [ pkgs.openslide pkgs.vips pkgs.glib ];
           });
         });
     };

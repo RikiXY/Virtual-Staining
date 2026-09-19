@@ -34,7 +34,11 @@ helpers. Dataset fingerprint construction and source-file hashing belong to
 `data/provenance.py`; `DatasetLayout` owns dataset-local provenance paths,
 `RunLayout` owns run-local stage paths, and `ResultsLayout` owns shared comparison
 paths. The shared `RuntimeInfo` collector supplies the same runtime facts to
-environment snapshots and status diagnostics.
+environment snapshots and status diagnostics. Environment snapshots include
+OpenSlide Python and pyvips versions alongside PyTorch, NumPy, OpenCV, and
+Albumentations. Version recording remains best-effort provenance; `vs status`
+checks whether required packages and native WSI libraries are actually usable.
+CUDA and GPU metadata describe optional hardware availability.
 
 See [Run Output Format](run_format.md) and [Dataset Format](dataset_format.md)
 for artifact locations and schemas.

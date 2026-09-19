@@ -37,7 +37,9 @@ class RuntimeInfo:
 
 
 def collect_environment() -> dict[str, object]:
-    runtime = RuntimeInfo.collect(("torch", "numpy", "cv2", "albumentations"))
+    runtime = RuntimeInfo.collect(
+        ("torch", "numpy", "cv2", "albumentations", "openslide", "pyvips")
+    )
     return {
         "git_commit": runtime.git_commit,
         "python": runtime.python,
@@ -46,6 +48,8 @@ def collect_environment() -> dict[str, object]:
         "numpy": runtime.packages.get("numpy"),
         "opencv": runtime.packages.get("cv2"),
         "albumentations": runtime.packages.get("albumentations"),
+        "openslide": runtime.packages.get("openslide"),
+        "pyvips": runtime.packages.get("pyvips"),
         "cuda_available": runtime.cuda_available,
         "cuda_version": runtime.cuda_version,
         "gpu_name": runtime.gpu_names[0] if runtime.gpu_names else None,
@@ -70,7 +74,7 @@ def _git_state() -> tuple[str | None, bool | None]:
 def _pkg_version(name: str) -> str | None:
     try:
         return getattr(importlib.import_module(name), "__version__", None)
-    except (ImportError, AttributeError):
+    except (ImportError, AttributeError, OSError):
         return None
 
 

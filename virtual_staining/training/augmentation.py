@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+import albumentations as A
+import cv2
 import numpy as np
 import torch
 from PIL import Image
@@ -20,7 +22,6 @@ class PairedAlbumentationsTransform:
         input_names: tuple[str, ...],
         reference_modality: str,
     ) -> None:
-        A, cv2 = _import_albumentations()
         if not input_names or len(set(input_names)) != len(input_names):
             raise ValueError("input_names must be non-empty and unique")
         self.input_names = input_names
@@ -29,11 +30,11 @@ class PairedAlbumentationsTransform:
         additional_targets = {"target": "image", "mask__foreground_mask": "mask"}
         additional_targets.update({f"input__{name}": "image" for name in input_names[1:]})
         self._geometry = A.Compose(
-            _geometry_transforms(A, cv2, width=width, height=height, intensity=intensity),
+            _geometry_transforms(width=width, height=height, intensity=intensity),
             additional_targets=additional_targets,
             seed=seed,
         )
-        photometric = _photometric_transforms(A, intensity)
+        photometric = _photometric_transforms(intensity)
         self._photometric = (
             A.Compose(photometric, seed=None if seed is None else seed + 1) if photometric else None
         )
@@ -88,20 +89,7 @@ def build_training_paired_transform(
     )
 
 
-def _import_albumentations() -> tuple[Any, Any]:
-    try:
-        import albumentations as A
-        import cv2
-    except ImportError as exc:
-        raise RuntimeError(
-            "augmentation.enabled=true requires the 'albumentations' dependency."
-        ) from exc
-    return A, cv2
-
-
-def _geometry_transforms(
-    A: Any, cv2: Any, *, width: int, height: int, intensity: AugmentationIntensity
-) -> list[Any]:
+def _geometry_transforms(*, width: int, height: int, intensity: AugmentationIntensity) -> list[Any]:
     affine_by_intensity = {
         "light": {"scale": (0.98, 1.02), "translate": 0.01, "rotate": 3, "p": 0.25},
         "medium": {"scale": (0.95, 1.05), "translate": 0.03, "rotate": 7, "p": 0.40},
@@ -137,7 +125,7 @@ def _geometry_transforms(
     ]
 
 
-def _photometric_transforms(A: Any, intensity: AugmentationIntensity) -> list[Any]:
+def _photometric_transforms(intensity: AugmentationIntensity) -> list[Any]:
     if intensity == "light":
         return []
     limits = {

@@ -102,16 +102,7 @@ def _warn_image_backend(config: RunConfig, slide_sets: tuple[SlideSet, ...]) -> 
     )
     if not paths:
         return
-    try:
-        incompatible = tuple(path for path in paths if detect_openslide_format(path) is None)
-    except RuntimeError:
-        message = (
-            "OpenSlide is unavailable, so tiled preparation cannot start."
-            if preprocessing.io.backend == "openslide"
-            else "Tiled preparation is using Pillow because OpenSlide is unavailable."
-        )
-        logger.warning(message)
-        return
+    incompatible = tuple(path for path in paths if detect_openslide_format(path) is None)
     if incompatible and preprocessing.io.backend == "openslide":
         logger.warning(
             "Configured slides are not OpenSlide-compatible; tiled preparation "
