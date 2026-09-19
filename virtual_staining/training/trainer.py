@@ -23,7 +23,7 @@ from virtual_staining.config.losses import LossConfig
 from virtual_staining.config.training import TrainingConfig
 from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.experiment.session import ExperimentSession
-from virtual_staining.training.checkpoints import CheckpointManager
+from virtual_staining.training.checkpoints import CheckpointManager, MethodCheckpointManager
 from virtual_staining.training.helpers import (
     LossComponentAccumulator,
     configured_loss_names,
@@ -41,6 +41,7 @@ from virtual_staining.training.progress import (
     format_progress_log,
 )
 from virtual_staining.training.results import EpochMetrics, TrainingResult
+from virtual_staining.training.runtime import TrainingMethodRuntime
 from virtual_staining.training.steps import Pix2PixTrainingStep
 from virtual_staining.training.validator import validate_epoch
 
@@ -101,6 +102,8 @@ class Trainer:
         experiment_session: ExperimentSession,
         config_hash: str,
         progress_reporter: ProgressReporter | None = None,
+        method_runtime: TrainingMethodRuntime | None = None,
+        resolved_config: dict[str, object] | None = None,
     ) -> None:
         self.config = config
         self.progress_reporter = progress_reporter
@@ -115,20 +118,26 @@ class Trainer:
         self._train_dir = train_dir
         self._val_dir = val_dir
         self.losses = losses
+        self._method_runtime = method_runtime
+        self._method_name = method_runtime.name if method_runtime is not None else "pix2pix"
         self._target_modality = target_modality
-        self._input_names = cast(tuple[str, ...], generator.input_names)
+        self._input_names = cast(tuple[str, ...], getattr(generator, "input_names", ()))
 
         self._amp_enabled = is_amp_enabled(device)
 
-        self._opt_G = optim.Adam(
-            generator.parameters(),
-            lr=config.lr_g,
-            betas=(config.beta1, config.beta2),
+        self._opt_G = (
+            method_runtime.optimizers[0]
+            if method_runtime is not None
+            else optim.Adam(
+                generator.parameters(), lr=config.lr_g, betas=(config.beta1, config.beta2)
+            )
         )
-        self._opt_D = optim.Adam(
-            discriminator.parameters(),
-            lr=config.lr_d,
-            betas=(config.beta1, config.beta2),
+        self._opt_D = (
+            method_runtime.optimizers[1]
+            if method_runtime is not None
+            else optim.Adam(
+                discriminator.parameters(), lr=config.lr_d, betas=(config.beta1, config.beta2)
+            )
         )
         self._scaler_G = GradScaler(enabled=self._amp_enabled)
         self._scaler_D = GradScaler(enabled=self._amp_enabled)
@@ -138,47 +147,61 @@ class Trainer:
         self._scheduler_D = (
             self._build_scheduler(self._opt_D) if self._has_active_discriminator() else None
         )
-        self._loss_evaluator = ConfiguredLossEvaluator(
-            generator_terms=generator_loss_terms,
-            discriminator_terms=discriminator_loss_terms,
-        )
-        self._step = Pix2PixTrainingStep(
-            generator=generator,
-            discriminator=discriminator,
-            opt_G=self._opt_G,
-            opt_D=self._opt_D,
-            scaler_G=self._scaler_G,
-            scaler_D=self._scaler_D,
-            device=device,
-            amp_enabled=self._amp_enabled,
-            generator_loss_terms=generator_loss_terms,
-            discriminator_loss_terms=discriminator_loss_terms,
-        )
+        self._loss_evaluator: ConfiguredLossEvaluator | None = None
+        self._step: Pix2PixTrainingStep | None = None
+        if method_runtime is None:
+            self._loss_evaluator = ConfiguredLossEvaluator(
+                generator_terms=generator_loss_terms,
+                discriminator_terms=discriminator_loss_terms,
+            )
+            self._step = Pix2PixTrainingStep(
+                generator=generator,
+                discriminator=discriminator,
+                opt_G=self._opt_G,
+                opt_D=self._opt_D,
+                scaler_G=self._scaler_G,
+                scaler_D=self._scaler_D,
+                device=device,
+                amp_enabled=self._amp_enabled,
+                generator_loss_terms=generator_loss_terms,
+                discriminator_loss_terms=discriminator_loss_terms,
+            )
 
         self._logs_dir = run_paths.logs_dir
         self._checkpoints_dir = run_paths.checkpoints_dir
         self._output_val_dir = run_paths.output_val_dir
         self._output_train_dir = run_paths.output_train_dir
-        self._checkpoint_manager = CheckpointManager(
-            checkpoints_dir=self._checkpoints_dir,
-            generator=generator,
-            discriminator=discriminator,
-            opt_G=self._opt_G,
-            opt_D=self._opt_D,
-            scaler_G=self._scaler_G,
-            scaler_D=self._scaler_D,
-            scheduler_G=self._scheduler_G,
-            scheduler_D=self._scheduler_D,
-            image_size=image_size,
-            device=device,
-            lr_g=config.lr_g,
-            lr_d=config.lr_d,
-            beta1=config.beta1,
-            beta2=config.beta2,
-            batch_size=config.batch_size,
-            num_workers=config.num_workers,
-            target_modality=target_modality,
-        )
+        self._checkpoint_manager: CheckpointManager | MethodCheckpointManager
+        if method_runtime is None:
+            self._checkpoint_manager = CheckpointManager(
+                checkpoints_dir=self._checkpoints_dir,
+                generator=generator,
+                discriminator=discriminator,
+                opt_G=self._opt_G,
+                opt_D=self._opt_D,
+                scaler_G=self._scaler_G,
+                scaler_D=self._scaler_D,
+                scheduler_G=self._scheduler_G,
+                scheduler_D=self._scheduler_D,
+                image_size=image_size,
+                device=device,
+                lr_g=config.lr_g,
+                lr_d=config.lr_d,
+                beta1=config.beta1,
+                beta2=config.beta2,
+                batch_size=config.batch_size,
+                num_workers=config.num_workers,
+                target_modality=target_modality,
+            )
+        else:
+            self._checkpoint_manager = MethodCheckpointManager(
+                checkpoints_dir=self._checkpoints_dir,
+                runtime=method_runtime,
+                schedulers=(self._scheduler_G, self._scheduler_D),
+                image_size=image_size,
+                device=device,
+                resolved_config=resolved_config or {},
+            )
 
     # ------------------------------------------------------------------
     # Public API
@@ -274,7 +297,7 @@ class Trainer:
         else:
             logger.debug("Training started from scratch")
 
-        logger.info("=== Pix2Pix training ===")
+        logger.info("=== %s training ===", self._method_name)
         logger.info("Run root: %s", self._run_paths.root)
         logger.info("Train dir: %s", self._train_dir)
         logger.info("Validation dir: %s", self._val_dir)
@@ -344,7 +367,11 @@ class Trainer:
         start_epoch: int,
         start_time: float,
     ) -> _TrainingSession:
-        loss_names = configured_loss_names(self.losses)
+        loss_names = (
+            list(self._method_runtime.loss_names)
+            if self._method_runtime is not None
+            else configured_loss_names(self.losses)
+        )
         progress_tracker = self._start_progress_tracker(start_epoch)
 
         with TrainingHistory(
@@ -477,6 +504,11 @@ class Trainer:
         return val_metrics, ranked_checkpoint_path
 
     def _validate(self, epoch: int) -> EpochMetrics:
+        if self._method_runtime is not None:
+            return self._method_runtime.validate(
+                self.val_loader, epoch=epoch, output_dir=self._output_val_dir
+            )
+        assert self._loss_evaluator is not None
         return validate_epoch(
             epoch=epoch,
             generator=self.generator,
@@ -732,23 +764,39 @@ class Trainer:
         epoch: int,
         session: _TrainingSession,
     ) -> EpochMetrics:
-        self.generator.train()
-        self.discriminator.train()
+        if self._method_runtime is not None:
+            self._method_runtime.train_mode()
+        else:
+            self.generator.train()
+            self.discriminator.train()
 
         total_loss_G = 0.0
         total_loss_D = 0.0
-        component_totals = LossComponentAccumulator(configured_loss_names(self.losses))
+        loss_names = (
+            list(self._method_runtime.loss_names)
+            if self._method_runtime is not None
+            else configured_loss_names(self.losses)
+        )
+        component_totals = LossComponentAccumulator(loss_names)
         num_batches = 0
 
         for i, batch in enumerate(self.train_loader):
-            inputs, target, masks = unpack_batch(batch, self.device, self._input_names)
-            step_losses = self._step.step(
-                inputs,
-                target,
-                epoch=epoch,
-                global_step=epoch * len(self.train_loader) + i,
-                masks=masks,
-            )
+            if self._method_runtime is not None:
+                step_losses = self._method_runtime.step(
+                    batch,
+                    epoch=epoch,
+                    global_step=epoch * len(self.train_loader) + i,
+                )
+            else:
+                inputs, target, masks = unpack_batch(batch, self.device, self._input_names)
+                assert self._step is not None
+                step_losses = self._step.step(
+                    inputs,
+                    target,
+                    epoch=epoch,
+                    global_step=epoch * len(self.train_loader) + i,
+                    masks=masks,
+                )
             total_loss_G += step_losses.loss_G
             total_loss_D += step_losses.loss_D
             component_totals.add(

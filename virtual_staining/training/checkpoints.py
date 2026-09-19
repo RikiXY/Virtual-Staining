@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -17,8 +18,93 @@ from virtual_staining.checkpoint_contract import (
     validate_checkpoint_metadata,
 )
 from virtual_staining.checkpoint_selection import latest_checkpoint_path
+from virtual_staining.training.runtime import TrainingMethodRuntime
 
 logger = logging.getLogger(__name__)
+
+METHOD_CHECKPOINT_FORMAT_VERSION = 4
+
+
+class MethodCheckpointManager:
+    """Persists a method-owned state mapping without knowing its model topology."""
+
+    def __init__(
+        self,
+        checkpoints_dir: Path,
+        runtime: TrainingMethodRuntime,
+        schedulers: tuple[Any | None, ...],
+        *,
+        image_size: tuple[int, int],
+        device: torch.device,
+        resolved_config: dict[str, object],
+    ) -> None:
+        self.checkpoints_dir = checkpoints_dir
+        self.runtime = runtime
+        self.schedulers = schedulers
+        self.image_size = image_size
+        self.device = device
+        self.resolved_config = resolved_config
+
+    def save(self, epoch: int) -> Path:
+        self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
+        path = self.checkpoints_dir / f"ep{epoch:03d}.pth"
+        runtime = self.runtime
+        checkpoint = {
+            "format_version": METHOD_CHECKPOINT_FORMAT_VERSION,
+            "epoch": epoch,
+            "method": {
+                "name": runtime.name,
+                "pairing": runtime.pairing,
+                "components": dict(runtime.component_metadata()),
+            },
+            "normalization_contract": NORMALIZATION_CONTRACT,
+            "image_size": self.image_size,
+            "resolved_config": self.resolved_config,
+            "method_state": runtime.state_dict(),
+            "scheduler_state_dicts": [
+                scheduler.state_dict() if scheduler is not None else None
+                for scheduler in self.schedulers
+            ],
+        }
+        torch.save(checkpoint, path)
+        logger.info("Checkpoint saved: %s", path)
+        return path
+
+    def load(self, path: Path) -> int:
+        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+        stored_size = checkpoint.get("image_size")
+        if stored_size is not None and tuple(stored_size) != tuple(self.image_size):
+            raise ValueError(
+                "Image size mismatch between checkpoint and resumed training. "
+                f"Checkpoint image_size={tuple(stored_size)}, current image_size={self.image_size}."
+            )
+        version = checkpoint.get("format_version")
+        if version == CHECKPOINT_FORMAT_VERSION and self.runtime.name == "pix2pix":
+            validate_checkpoint_metadata(checkpoint, path)
+            self.runtime.load_legacy_v3(checkpoint)
+            return int(checkpoint["epoch"]) + 1
+        if version != METHOD_CHECKPOINT_FORMAT_VERSION:
+            raise ValueError(
+                f"Unsupported checkpoint format version {version!r}; expected v4 method checkpoint"
+            )
+        method = checkpoint.get("method")
+        if not isinstance(method, dict) or method.get("name") != self.runtime.name:
+            raise ValueError(
+                f"Checkpoint method {getattr(method, 'get', lambda *_: None)('name')!r} "
+                f"does not match configured method {self.runtime.name!r}"
+            )
+        state = checkpoint.get("method_state")
+        if not isinstance(state, dict):
+            raise ValueError("Checkpoint method_state must be a mapping")
+        self.runtime.load_state_dict(state)
+        scheduler_states = checkpoint.get("scheduler_state_dicts", [])
+        for scheduler, scheduler_state in zip(self.schedulers, scheduler_states, strict=False):
+            if scheduler is not None and scheduler_state is not None:
+                scheduler.load_state_dict(scheduler_state)
+        return int(checkpoint["epoch"]) + 1
+
+    def latest(self) -> Path | None:
+        return latest_checkpoint_path(self.checkpoints_dir)
 
 
 class CheckpointManager:
