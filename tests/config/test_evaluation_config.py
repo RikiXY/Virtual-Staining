@@ -113,6 +113,8 @@ def test_evaluation_config_defaults_to_run_dirs(tmp_path: Path) -> None:
     assert run_config.evaluation.save_graphs is False
     assert run_config.evaluation.generated_dir is None
     assert run_config.evaluation.output_dir is None
+    assert run_config.evaluation.protocol == "auto"
+    assert run_config.evaluation.real_target is None
 
 
 def test_evaluation_config_accepts_explicit_dirs(tmp_path: Path) -> None:
@@ -125,6 +127,8 @@ def test_evaluation_config_accepts_explicit_dirs(tmp_path: Path) -> None:
         evaluation:
           generated_dir: /custom/generated
           output_dir: /custom/evaluation
+          protocol: unpaired
+          real_target: domains/real_target
         """,
         dataset_root=Path("/data"),
         results_path=Path("/results"),
@@ -136,6 +140,24 @@ def test_evaluation_config_accepts_explicit_dirs(tmp_path: Path) -> None:
 
     assert run_config.evaluation.generated_dir == Path("/custom/generated")
     assert run_config.evaluation.output_dir == Path("/custom/evaluation")
+    assert run_config.evaluation.protocol == "unpaired"
+    assert run_config.evaluation.real_target == Path("domains/real_target")
+
+
+def test_evaluation_config_rejects_invalid_protocol(tmp_path: Path) -> None:
+    yaml_file = write_run_config(
+        tmp_path,
+        """\
+        model:
+          inputs: [label_free]
+          target: stained
+        evaluation:
+          protocol: guessed
+        """,
+    )
+
+    with pytest.raises(ValueError, match="evaluation.protocol"):
+        RunConfig.from_yaml(yaml_file)
 
 
 def test_evaluation_from_yaml_unknown_section_key_raises(tmp_path: Path) -> None:
@@ -347,6 +369,8 @@ def test_evaluate_records_from_manifest_test_split(tmp_path: Path) -> None:
     )
 
     run_config = RunConfig.from_yaml(yaml_file)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "unpaired_evaluation.json").write_text("{}", encoding="utf-8")
     evaluate(run_config, yaml_file)
 
     per_image_metrics = output_dir / "per_image_metrics.csv"
@@ -354,6 +378,7 @@ def test_evaluate_records_from_manifest_test_split(tmp_path: Path) -> None:
     assert len(rows) == 3
     assert "99999_99999" not in per_image_metrics.read_text(encoding="utf-8")
     assert not (output_dir / "skipped.csv").exists()
+    assert not (output_dir / "unpaired_evaluation.json").exists()
 
 
 def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
