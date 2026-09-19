@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import logging
-import subprocess
 import uuid
 from pathlib import Path
 
-from virtual_staining.utils.image_io import OpenSlideRegionImageReader, PillowRegionImageReader
+from virtual_staining.utils.image_io import convert_to_pyramidal_tiff
 
 logger = logging.getLogger(__name__)
 
@@ -57,42 +56,7 @@ def convert_images(inputs: tuple[Path, ...], output_dir: Path) -> tuple[Path, ..
         temporary = destination.parent / f".{destination.stem}.{uuid.uuid4().hex}.tmp.tif"
         logger.info("[%d/%d] Converting %s -> %s", index, total, source, destination)
         try:
-            try:
-                subprocess.run(
-                    [
-                        "vips",
-                        "tiffsave",
-                        str(source),
-                        str(temporary),
-                        "--tile",
-                        "--pyramid",
-                        "--bigtiff",
-                        "--compression=lzw",
-                        "--tile-width=256",
-                        "--tile-height=256",
-                    ],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-            except FileNotFoundError as exc:
-                raise RuntimeError(
-                    "libvips is required; run this command inside 'nix develop'"
-                ) from exc
-            except subprocess.CalledProcessError as exc:
-                detail = (exc.stderr or "").strip() or (exc.stdout or "").strip() or str(exc)
-                raise RuntimeError(f"Could not convert {source}: {detail}") from exc
-
-            expected_size = PillowRegionImageReader(source).size
-            reader = OpenSlideRegionImageReader(temporary)
-            try:
-                if reader.size != expected_size:
-                    raise RuntimeError(
-                        f"Converted dimensions differ for {source}: "
-                        f"expected {expected_size}, got {reader.size}"
-                    )
-            finally:
-                reader.close()
+            convert_to_pyramidal_tiff(source, temporary)
             temporary.replace(destination)
             completed.append(destination)
             logger.info("[%d/%d] Converted %s", index, total, destination)

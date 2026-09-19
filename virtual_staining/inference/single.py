@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import math
 import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -22,11 +21,11 @@ from virtual_staining.models.io_contract import build_model_input_transform
 from virtual_staining.utils.artifacts import generated_filename
 from virtual_staining.utils.image_io import (
     VALID_IMAGE_EXTENSIONS,
-    ImageMetadata,
     OpenSlideRegionImageReader,
     RegionImageReader,
     open_image_reader,
     open_rgb,
+    write_pyramidal_tiff_from_raw_rgb,
 )
 
 logger = logging.getLogger(__name__)
@@ -287,95 +286,6 @@ def _write_tiled_rgb(
         accumulator_path.unlink(missing_ok=True)
 
 
-def _save_pyramidal_tiff(raw_path: Path, output_path: Path, metadata: ImageMetadata) -> None:
-    try:
-        import pyvips
-    except OSError as exc:
-        raise RuntimeError(
-            "Could not load native libvips; run inside the managed environment (nix develop)"
-        ) from exc
-
-    width, height = metadata.width, metadata.height
-    generated_path = raw_path.with_suffix(".tif")
-    resolution = {
-        **({"xres": 1000.0 / metadata.mpp_x} if metadata.mpp_x is not None else {}),
-        **({"yres": 1000.0 / metadata.mpp_y} if metadata.mpp_y is not None else {}),
-    }
-    try:
-        image = pyvips.Image.rawload(
-            str(raw_path),
-            width,
-            height,
-            3,
-            format="uchar",
-            interpretation="srgb",
-        )
-        image.tiffsave(
-            str(generated_path),
-            tile=True,
-            tile_width=256,
-            tile_height=256,
-            pyramid=True,
-            bigtiff=True,
-            compression="lzw",
-            **resolution,
-        )
-    except pyvips.Error as exc:
-        raise RuntimeError(f"Could not write pyramidal TIFF: {exc}") from exc
-
-    generated = OpenSlideRegionImageReader(generated_path)
-    raw: np.memmap | None = None
-    try:
-        raw = np.memmap(raw_path, mode="r", dtype=np.uint8, shape=(height, width, 3))
-        expected_size = (width, height)
-        if generated.size != expected_size:
-            raise RuntimeError(
-                f"Generated dimensions differ: expected {expected_size}, got {generated.size}"
-            )
-
-        generated_metadata = generated.metadata
-        if width > 256 or height > 256:
-            downsamples = generated_metadata.level_downsamples
-            if (
-                generated_metadata.level_count <= 1
-                or not downsamples
-                or not math.isclose(downsamples[0], 1.0)
-                or any(
-                    current <= previous
-                    for previous, current in zip(downsamples, downsamples[1:], strict=False)
-                )
-            ):
-                raise RuntimeError("Generated TIFF failed the pyramidal level contract")
-
-        for axis in ("x", "y"):
-            expected_mpp = getattr(metadata, f"mpp_{axis}")
-            if expected_mpp is None:
-                continue
-            actual_mpp = getattr(generated_metadata, f"mpp_{axis}")
-            if actual_mpp is None or not math.isclose(actual_mpp, expected_mpp, rel_tol=1e-3):
-                raise RuntimeError(
-                    f"Generated mpp_{axis} differs: expected {expected_mpp}, got {actual_mpp}"
-                )
-
-        coordinates = {
-            (0, 0),
-            (width // 2, height // 2),
-            (width - 1, height - 1),
-        }
-        for x, y in coordinates:
-            actual = generated.read_region(x, y, 1, 1)[0, 0, ::-1]
-            if not np.array_equal(actual, raw[y, x]):
-                raise RuntimeError(
-                    f"Generated pixel differs at ({x}, {y}): "
-                    f"expected {raw[y, x].tolist()}, got {actual.tolist()}"
-                )
-    finally:
-        if raw is not None:
-            del raw
-        generated.close()
-    generated_path.replace(output_path)
-
-
 def _run_wsi_prediction(
     readers: dict[str, OpenSlideRegionImageReader],
     output_path: Path,
@@ -392,7 +302,7 @@ def _run_wsi_prediction(
     with tempfile.TemporaryDirectory(prefix=f".{output_path.stem}.", dir=output_path.parent) as tmp:
         raw_path = Path(tmp) / "generated.rgb"
         _write_tiled_rgb(readers, raw_path, generator, device, image_size, tile_overlap)
-        _save_pyramidal_tiff(raw_path, output_path, first_reader.metadata)
+        write_pyramidal_tiff_from_raw_rgb(raw_path, output_path, first_reader.metadata)
 
 
 def _resolve_output_path(

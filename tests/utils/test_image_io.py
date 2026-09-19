@@ -10,10 +10,15 @@ from tests.image_helpers import make_rgb_image, write_rgb_image
 from virtual_staining.utils.image_io import (
     SUPPORTED_IMAGE_BACKENDS,
     VALID_IMAGE_EXTENSIONS,
+    ImageMetadata,
     PillowRegionImageReader,
+    convert_to_pyramidal_tiff,
+    load_grayscale_image,
     load_rgb_image,
     open_image_reader,
     open_rgb,
+    read_full_image,
+    read_image_metadata,
     to_float01,
 )
 
@@ -150,6 +155,46 @@ def test_region_image_reader_reads_scaled_preview(tmp_path: Path) -> None:
     preview = reader.read_preview(0.5)
 
     assert preview.shape == (3, 4, 3)
+
+
+def test_image_io_metadata_and_full_read_use_reader_contract(tmp_path: Path) -> None:
+    image_path = tmp_path / "img.png"
+    write_rgb_image(image_path, size=(8, 6), color=(10, 20, 30))
+
+    metadata = read_image_metadata(image_path, backend="pillow")
+    image = read_full_image(image_path, backend="pillow")
+
+    assert metadata == ImageMetadata(
+        width=8,
+        height=6,
+        level_dimensions=((8, 6),),
+        level_downsamples=(1.0,),
+    )
+    assert image.shape == (6, 8, 3)
+    np.testing.assert_array_equal(image[0, 0], np.array([30, 20, 10], dtype=np.uint8))
+
+
+def test_load_grayscale_image_returns_uint8(tmp_path: Path) -> None:
+    image_path = tmp_path / "mask.png"
+    Image.new("L", (4, 3), color=127).save(image_path)
+
+    image = load_grayscale_image(image_path)
+
+    assert image.dtype == np.uint8
+    assert image.shape == (3, 4)
+    assert image[0, 0] == 127
+
+
+def test_convert_to_pyramidal_tiff_preserves_dimensions(tmp_path: Path) -> None:
+    source = tmp_path / "source.tif"
+    output = tmp_path / "output.tif"
+    write_rgb_image(source, size=(320, 288), color=(10, 20, 30))
+
+    convert_to_pyramidal_tiff(source, output)
+
+    metadata = read_image_metadata(output, backend="openslide")
+    assert (metadata.width, metadata.height) == (320, 288)
+    assert metadata.level_count > 1
 
 
 # ---------------------------------------------------------------------------

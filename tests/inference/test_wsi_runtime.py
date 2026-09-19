@@ -10,15 +10,12 @@ import pytest
 import pyvips
 from PIL import Image
 
-from virtual_staining.inference.single import (
-    InferenceRuntime,
-    _save_pyramidal_tiff,
-    run_single_image_inference,
-)
+from virtual_staining.inference.single import InferenceRuntime, run_single_image_inference
 from virtual_staining.utils.image_io import (
     ImageMetadata,
     OpenSlideRegionImageReader,
     open_image_reader,
+    write_pyramidal_tiff_from_raw_rgb,
 )
 
 
@@ -27,7 +24,9 @@ def test_pyramidal_tiff_round_trip_uses_required_native_libraries(tmp_path: Path
     output_path = tmp_path / "output.tif"
     pixels = np.arange(512 * 512 * 3, dtype=np.uint8).reshape(512, 512, 3)
     pixels.tofile(raw_path)
-    _save_pyramidal_tiff(raw_path, output_path, ImageMetadata(512, 512, mpp_x=0.5, mpp_y=0.5))
+    write_pyramidal_tiff_from_raw_rgb(
+        raw_path, output_path, ImageMetadata(512, 512, mpp_x=0.5, mpp_y=0.5)
+    )
     reader = open_image_reader(output_path)
     try:
         assert isinstance(reader, OpenSlideRegionImageReader)
@@ -55,7 +54,9 @@ def test_pyvips_load_failure_is_not_an_optional_feature(
         "broken pyvips runtime" if error_type is ImportError else "Could not load native libvips"
     )
     with pytest.raises(expected, match=message):
-        _save_pyramidal_tiff(tmp_path / "raw.rgb", tmp_path / "output.tif", ImageMetadata(1, 1))
+        write_pyramidal_tiff_from_raw_rgb(
+            tmp_path / "raw.rgb", tmp_path / "output.tif", ImageMetadata(1, 1)
+        )
 
 
 def test_native_write_error_keeps_context_and_existing_output(
@@ -70,7 +71,7 @@ def test_native_write_error_keeps_context_and_existing_output(
 
     monkeypatch.setattr(pyvips.Image, "rawload", fail)
     with pytest.raises(RuntimeError, match="Could not write pyramidal TIFF"):
-        _save_pyramidal_tiff(tmp_path / "raw.rgb", output_path, ImageMetadata(1, 1))
+        write_pyramidal_tiff_from_raw_rgb(tmp_path / "raw.rgb", output_path, ImageMetadata(1, 1))
     assert output_path.read_bytes() == b"existing output"
 
 

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+import cv2
 import numpy as np
 import openslide
 from PIL import Image
@@ -204,6 +205,22 @@ def detect_openslide_format(path: str | Path) -> str | None:
     return openslide.OpenSlide.detect_format(str(path))
 
 
+def read_image_metadata(path: str | Path, backend: str = "auto") -> ImageMetadata:
+    reader = open_image_reader(path, backend=backend)
+    try:
+        return reader.metadata
+    finally:
+        reader.close()
+
+
+def read_full_image(path: str | Path, backend: str = "auto") -> np.ndarray:
+    reader = open_image_reader(path, backend=backend)
+    try:
+        return reader.read_full()
+    finally:
+        reader.close()
+
+
 def open_rgb(path: str | Path) -> Image.Image:
     image_path = Path(path)
 
@@ -229,6 +246,133 @@ def load_rgb_image(path: str | Path) -> np.ndarray:
         raise RuntimeError(f"Could not open image: {image_path}") from exc
 
     return np.array(image)
+
+
+def load_grayscale_image(path: str | Path) -> np.ndarray:
+    image_path = Path(path)
+    if not image_path.is_file():
+        raise FileNotFoundError(f"Image not found: {image_path}")
+    image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        raise RuntimeError(f"Could not open image: {image_path}")
+    return image
+
+
+def _load_pyvips() -> Any:
+    try:
+        import pyvips
+    except OSError as exc:
+        raise RuntimeError(
+            "Could not load native libvips; run inside the managed environment (nix develop)"
+        ) from exc
+    return pyvips
+
+
+def _pyramid_options(metadata: ImageMetadata | None = None) -> dict[str, object]:
+    options: dict[str, object] = {
+        "tile": True,
+        "tile_width": 256,
+        "tile_height": 256,
+        "pyramid": True,
+        "bigtiff": True,
+        "compression": "lzw",
+    }
+    if metadata is not None:
+        if metadata.mpp_x is not None:
+            options["xres"] = 1000.0 / metadata.mpp_x
+        if metadata.mpp_y is not None:
+            options["yres"] = 1000.0 / metadata.mpp_y
+    return options
+
+
+def convert_to_pyramidal_tiff(source_path: str | Path, output_path: str | Path) -> None:
+    source = Path(source_path)
+    output = Path(output_path)
+    expected = read_image_metadata(source, backend="pillow")
+    pyvips = _load_pyvips()
+    try:
+        image = pyvips.Image.new_from_file(str(source), access="sequential")
+        image.tiffsave(str(output), **_pyramid_options())
+    except pyvips.Error as exc:
+        raise RuntimeError(f"Could not convert {source}: {exc}") from exc
+
+    actual = read_image_metadata(output, backend="openslide")
+    expected_size = (expected.width, expected.height)
+    actual_size = (actual.width, actual.height)
+    if actual_size != expected_size:
+        raise RuntimeError(
+            f"Converted dimensions differ for {source}: expected {expected_size}, got {actual_size}"
+        )
+
+
+def write_pyramidal_tiff_from_raw_rgb(
+    raw_path: str | Path, output_path: str | Path, metadata: ImageMetadata
+) -> None:
+    raw = Path(raw_path)
+    output = Path(output_path)
+    pyvips = _load_pyvips()
+    width, height = metadata.width, metadata.height
+    generated_path = raw.with_suffix(".tif")
+    try:
+        image = pyvips.Image.rawload(
+            str(raw),
+            width,
+            height,
+            3,
+            format="uchar",
+            interpretation="srgb",
+        )
+        image.tiffsave(str(generated_path), **_pyramid_options(metadata))
+    except pyvips.Error as exc:
+        raise RuntimeError(f"Could not write pyramidal TIFF: {exc}") from exc
+
+    generated = OpenSlideRegionImageReader(generated_path)
+    raw_pixels: np.memmap | None = None
+    try:
+        raw_pixels = np.memmap(raw, mode="r", dtype=np.uint8, shape=(height, width, 3))
+        expected_size = (width, height)
+        if generated.size != expected_size:
+            raise RuntimeError(
+                f"Generated dimensions differ: expected {expected_size}, got {generated.size}"
+            )
+
+        generated_metadata = generated.metadata
+        if width > 256 or height > 256:
+            downsamples = generated_metadata.level_downsamples
+            if (
+                generated_metadata.level_count <= 1
+                or not downsamples
+                or not math.isclose(downsamples[0], 1.0)
+                or any(
+                    current <= previous
+                    for previous, current in zip(downsamples, downsamples[1:], strict=False)
+                )
+            ):
+                raise RuntimeError("Generated TIFF failed the pyramidal level contract")
+
+        for axis in ("x", "y"):
+            expected_mpp = getattr(metadata, f"mpp_{axis}")
+            if expected_mpp is None:
+                continue
+            actual_mpp = getattr(generated_metadata, f"mpp_{axis}")
+            if actual_mpp is None or not math.isclose(actual_mpp, expected_mpp, rel_tol=1e-3):
+                raise RuntimeError(
+                    f"Generated mpp_{axis} differs: expected {expected_mpp}, got {actual_mpp}"
+                )
+
+        coordinates = {(0, 0), (width // 2, height // 2), (width - 1, height - 1)}
+        for x, y in coordinates:
+            actual = generated.read_region(x, y, 1, 1)[0, 0, ::-1]
+            if not np.array_equal(actual, raw_pixels[y, x]):
+                raise RuntimeError(
+                    f"Generated pixel differs at ({x}, {y}): "
+                    f"expected {raw_pixels[y, x].tolist()}, got {actual.tolist()}"
+                )
+    finally:
+        if raw_pixels is not None:
+            del raw_pixels
+        generated.close()
+    generated_path.replace(output)
 
 
 def to_float01(image: np.ndarray | Image.Image) -> np.ndarray:

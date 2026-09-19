@@ -7,7 +7,6 @@ from typing import Any, cast
 
 import cv2
 import numpy as np
-from PIL import Image
 
 from virtual_staining.config.data import PreprocessingConfig
 from virtual_staining.data.alignment import (
@@ -29,7 +28,11 @@ from virtual_staining.data.preprocessing import (
     mask_window_for_patch,
 )
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
-from virtual_staining.utils.image_io import RegionImageReader, open_image_reader
+from virtual_staining.utils.image_io import (
+    RegionImageReader,
+    load_grayscale_image,
+    open_image_reader,
+)
 
 
 @dataclass
@@ -64,16 +67,6 @@ class SetBuildResult:
     discarded_rows: tuple[dict[str, Any], ...]
     metadata: dict[str, str]
     error: str | None = None
-
-
-def _read_image_size(path: Path) -> tuple[int, int]:
-    original = Image.MAX_IMAGE_PIXELS
-    try:
-        Image.MAX_IMAGE_PIXELS = None
-        with Image.open(path) as image:
-            return image.size[1], image.size[0]
-    finally:
-        Image.MAX_IMAGE_PIXELS = original
 
 
 class SlideSetProcessor:
@@ -148,15 +141,18 @@ class SlideSetProcessor:
                 state.shape = (height, width)
                 state.preview = state.reader.read_preview(self.config.masks.scale)
             else:
-                state.shape = _read_image_size(path)
-                state.preview = cv2.imread(str(path))
-                if state.preview is None:
-                    raise FileNotFoundError(f"Image not found: {path}")
+                reader = open_image_reader(path, backend="pillow")
+                try:
+                    metadata = reader.metadata
+                    state.shape = (metadata.height, metadata.width)
+                    state.preview = reader.read_full()
+                finally:
+                    reader.close()
             if state.asset.mask_path is not None:
-                supplied = cv2.imread(str(root / state.asset.mask_path), cv2.IMREAD_GRAYSCALE)
-                if supplied is None:
-                    raise ValueError(f"Could not read mask {state.asset.mask_path}")
-                state.mask = supplied
+                try:
+                    state.mask = load_grayscale_image(root / state.asset.mask_path)
+                except (FileNotFoundError, RuntimeError) as exc:
+                    raise ValueError(f"Could not read mask {state.asset.mask_path}") from exc
             elif self.config.masks.generation == "never":
                 if self.config.filtering.foreground.enabled:
                     raise ValueError("maskless processing requires foreground.enabled=false")

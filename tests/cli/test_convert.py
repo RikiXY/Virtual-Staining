@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import logging
-import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -19,7 +17,7 @@ class _Reader:
         pass
 
 
-def test_convert_images_uses_lossless_pyramidal_tiff_and_validates_output(
+def test_convert_images_delegates_pyramidal_writing_to_image_io(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -27,17 +25,13 @@ def test_convert_images_uses_lossless_pyramidal_tiff_and_validates_output(
     source = tmp_path / "source.tif"
     source.write_bytes(b"input")
     output_dir = tmp_path / "converted"
-    calls: list[list[str]] = []
+    calls: list[tuple[Path, Path]] = []
 
-    def run(command: list[str], **_: object) -> None:
-        calls.append(command)
-        Path(command[3]).write_bytes(b"converted")
+    def convert(source_path: Path, output_path: Path) -> None:
+        calls.append((source_path, output_path))
+        output_path.write_bytes(b"converted")
 
-    monkeypatch.setattr(convert_app.subprocess, "run", run)
-    monkeypatch.setattr(
-        convert_app, "PillowRegionImageReader", lambda path: SimpleNamespace(size=(20, 10))
-    )
-    monkeypatch.setattr(convert_app, "OpenSlideRegionImageReader", _Reader)
+    monkeypatch.setattr(convert_app, "convert_to_pyramidal_tiff", convert)
 
     with caplog.at_level(logging.INFO, logger="virtual_staining.applications.convert"):
         result = convert_app.convert_images((source,), output_dir)
@@ -45,15 +39,11 @@ def test_convert_images_uses_lossless_pyramidal_tiff_and_validates_output(
     destination = output_dir / source.name
     assert result == (destination,)
     assert destination.read_bytes() == b"converted"
-    assert calls[0][:3] == ["vips", "tiffsave", str(source.resolve())]
-    assert calls[0][4:] == [
-        "--tile",
-        "--pyramid",
-        "--bigtiff",
-        "--compression=lzw",
-        "--tile-width=256",
-        "--tile-height=256",
-    ]
+    assert len(calls) == 1
+    assert calls[0][0] == source.resolve()
+    assert calls[0][1].parent == output_dir
+    assert calls[0][1].name.startswith(".source.")
+    assert calls[0][1].name.endswith(".tmp.tif")
     assert caplog.messages == [
         f"[1/1] Converting {source.resolve()} -> {destination}",
         f"[1/1] Converted {destination}",
@@ -88,18 +78,11 @@ def test_convert_images_removes_temporary_output_on_validation_failure(
     source.write_bytes(b"input")
     output = tmp_path / "output"
 
-    def run(command: list[str], **_: object) -> None:
-        Path(command[3]).write_bytes(b"invalid")
+    def fail(source_path: Path, output_path: Path) -> None:
+        output_path.write_bytes(b"invalid")
+        raise ValueError("unsupported")
 
-    monkeypatch.setattr(convert_app.subprocess, "run", run)
-    monkeypatch.setattr(
-        convert_app, "PillowRegionImageReader", lambda path: SimpleNamespace(size=(20, 10))
-    )
-    monkeypatch.setattr(
-        convert_app,
-        "OpenSlideRegionImageReader",
-        lambda path: (_ for _ in ()).throw(ValueError("unsupported")),
-    )
+    monkeypatch.setattr(convert_app, "convert_to_pyramidal_tiff", fail)
 
     with pytest.raises(ValueError, match="unsupported"):
         convert_app.convert_images((source,), output)
@@ -125,35 +108,18 @@ def test_convert_cli_resolves_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert levels == ["INFO"]
 
 
-def test_convert_images_reports_missing_vips(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = tmp_path / "source.tif"
-    source.write_bytes(b"input")
-    monkeypatch.setattr(
-        convert_app.subprocess,
-        "run",
-        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError()),
-    )
-
-    with pytest.raises(RuntimeError, match="libvips"):
-        convert_app.convert_images((source,), tmp_path / "output")
-
-
-def test_convert_images_reports_vips_failure(
+def test_convert_images_propagates_writer_failures(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     source = tmp_path / "source.tif"
     source.write_bytes(b"input")
-    monkeypatch.setattr(
-        convert_app.subprocess,
-        "run",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            subprocess.CalledProcessError(1, "vips", stderr="bad TIFF")
-        ),
-    )
+
+    def fail(source_path: Path, output_path: Path) -> None:
+        raise RuntimeError("Could not convert source: bad TIFF")
+
+    monkeypatch.setattr(convert_app, "convert_to_pyramidal_tiff", fail)
 
     with (
         caplog.at_level(logging.INFO, logger="virtual_staining.applications.convert"),
@@ -174,25 +140,6 @@ def test_convert_images_rejects_invalid_inputs(tmp_path: Path, kind: str) -> Non
 
     with pytest.raises((FileNotFoundError, ValueError)):
         convert_app.convert_images(inputs, tmp_path / "output")
-
-
-def test_convert_images_rejects_changed_dimensions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = tmp_path / "source.tif"
-    source.write_bytes(b"input")
-
-    def run(command: list[str], **_: object) -> None:
-        Path(command[3]).write_bytes(b"converted")
-
-    monkeypatch.setattr(convert_app.subprocess, "run", run)
-    monkeypatch.setattr(
-        convert_app, "PillowRegionImageReader", lambda path: SimpleNamespace(size=(21, 10))
-    )
-    monkeypatch.setattr(convert_app, "OpenSlideRegionImageReader", _Reader)
-
-    with pytest.raises(RuntimeError, match="dimensions differ"):
-        convert_app.convert_images((source,), tmp_path / "output")
 
 
 def test_directory_inputs_are_recursive_and_preserve_relative_paths(tmp_path: Path) -> None:
