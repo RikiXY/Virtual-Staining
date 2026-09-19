@@ -1,9 +1,10 @@
 # Virtual Staining
 
-Research portfolio project for virtual staining of histopathology images using a Pix2Pix conditional GAN.
+Configurable image-translation experimentation framework for virtual staining of histopathology
+images. It includes paired Pix2Pix and a minimal unpaired CycleGAN baseline.
 
-The pipeline trains a paired image-to-image translation model on aligned histology patch pairs, enabling
-generation of virtually stained images from label-free microscopy inputs (and vice versa).
+The normal interface is one YAML experiment configuration. Shared lifecycle, provenance,
+checkpoint, inference, and reporting code is separated from method-specific training behavior.
 
 ## CLI Commands
 
@@ -11,7 +12,7 @@ generation of virtually stained images from label-free microscopy inputs (and vi
 |---|---|
 | `vs prepare` | Build the patch dataset from full-size slide sets |
 | `vs run` | Run the complete pipeline or selected stages |
-| `vs train` | Train the Pix2Pix model |
+| `vs train` | Train the configured translation method |
 | `vs infer` | Run inference on the test split |
 | `vs infer-images` | Run inference on one image file or a directory of images |
 | `vs evaluate` | Evaluate a configured run or one image pair |
@@ -151,6 +152,9 @@ results_path: local_workspace/results
 run_name: your_run_name
 image_size: [256, 256]
 
+method: {name: pix2pix}
+data: {pairing: paired}
+
 model:
   inputs: [autofluorescence, label_free]
   target: H&E
@@ -189,8 +193,26 @@ inference:
   checkpoint_policy: latest   # or: checkpoint_path: checkpoints/ep099.pth
 
 evaluation:
+  # auto (default), paired, or unpaired. This is independent from training data.pairing.
+  protocol: paired
   save_graphs: true
 ```
+
+Existing Pix2Pix YAML remains valid when `method` and `data` are omitted. For unpaired
+CycleGAN, use [`config/runs/cyclegan.example.yaml`](config/runs/cyclegan.example.yaml); its two
+domain roots contain independent `train/val/test` directories and may have unequal sample
+counts. Select inference direction with `inference.direction: A_to_B` or `B_to_A`.
+
+Evaluation pairing is configured separately from training. Use `evaluation.protocol: paired`
+when held-out aligned references exist, even for a model trained unpaired. This reuses the
+standard per-image metrics and plots. Use `evaluation.protocol: unpaired` for independent test
+pools; it writes preliminary RGB/luminance distribution diagnostics and comparison plots without
+inventing image pairs. `auto` preserves the training pairing.
+
+See [`docs/methods.md`](docs/methods.md) for paired/unpaired semantics, custom component and
+method contracts, evaluation limits, and checkpoint compatibility.
+Maintainers rebasing the separate UI branch should also read
+[`docs/ui-integration.md`](docs/ui-integration.md).
 
 Experiment commands accept YAML configuration directly through `--config`.
 
@@ -214,7 +236,8 @@ From H&E staining to label-free:
 - `utils/` - shared primitives: dimensions and image I/O
 - `config/` - YAML loading, validation, typed config sections
 - `experiment/` - run paths, metadata, stage lifecycle, and environment snapshots
-- `models/` - UNetGenerator, PatchGANDiscriminator, model config
+- `models/` - reusable UNet/ResNet generators and PatchGAN discriminator
+- `methods/` - Pix2Pix and CycleGAN model/loss/training behavior
 - `data/` - dataset, manifest, builder, preprocessing pipeline
 - `training/` - training mechanics: Trainer, steps, losses, validation, checkpoints
 - `inference/` - reusable model loading, prediction, single-image workflows, output naming

@@ -22,6 +22,7 @@ upper layers may import from lower layers, never the reverse.
 | `config/` | Sole owner of YAML-facing dataclasses and strict parsers for every config section |
 | `experiment/` | Canonical `RunLayout` for one run, `ResultsLayout` for shared comparisons, stage snapshots, run metadata, manifest/config hashing, and environment snapshots |
 | `models/` | Model factory, model-I/O normalization contract, and generator/discriminator implementations |
+| `methods/` | Small translation-method boundary with Pix2Pix, CycleGAN, and direct custom imports |
 | `data/` | Canonical `DatasetLayout`, slide sets, manifests, dataset building, and dataset-owned provenance/fingerprints |
 | `training/` | Training mechanics, validation, history, losses, resume state, and callback-driven progress events |
 | `inference/` | Reusable checkpoint loading and runtime inference; application code owns runtime composition |
@@ -60,7 +61,7 @@ environment snapshots through the generic experiment snapshot helpers. Preparati
 is dataset-owned, writes dataset fingerprints and source hashes, and emits no
 experiment run events. Dataset provenance lives in `data/provenance.py`; run
 provenance lives in `experiment/snapshots.py`.
-Training model construction and dataset wiring terminate in the reusable `Trainer`;
+Training model construction and dataset wiring resolve a method runtime, then terminate in the reusable `Trainer`;
 its `ProgressUpdate` callback is silent unless an adapter supplies a reporter.
 The CLI supplies terminal rendering, while application/library callers remain
 presentation-neutral. Infer-images runtime creation belongs to `applications/`;
@@ -72,6 +73,11 @@ state, `checkpoint_contract.py` owns the neutral v3 contract, and
 `checkpoint_selection.py` owns `best.json` ranking and resolution. Evaluation keeps
 plot primitives in `diagnostics.py`, representative-row policy in `selection.py`,
 and composed image layouts in `panels.py`.
+
+Method runtimes own model topology, optimizer groups, batch interpretation, losses, validation
+semantics, and method state. Paired Pix2Pix uses manifest rows; unpaired CycleGAN samples two
+independent domain directories. The shared pipeline does not branch on individual model or loss
+operations. See [`methods.md`](methods.md) for the supported extension contract.
 
 ## Architectural Rules
 

@@ -1,0 +1,77 @@
+# Unpaired baseline over the same inv_256 train/val/test pools.
+# The filename patterns separate the already-prepared domains without copying data.
+dataset_root: local_workspace/datasets/inv_256
+results_path: local_workspace/results
+run_name: inv_256_cyclegan_30ep
+image_size: [256, 256]
+
+method:
+  # Translation/training algorithm: two G, two unconditional D, cycle consistency.
+  name: cyclegan
+
+data:
+  pairing: unpaired
+  domains:
+    stained: "splits/{split}/*_source.tif"
+    label_free: "splits/{split}/*_target.tif"
+
+model:
+  # One component blueprint; CycleGAN instantiates it once per direction/domain.
+  inputs: [stained]
+  target: label_free
+  generator:
+    architecture: resnet
+    base_channels: 64
+    blocks: 6
+    norm: instance
+  discriminator:
+    architecture: patchgan
+    ndf: 64
+    norm: instance
+    use_sigmoid: false
+
+training:
+  batch_size: 1
+  epochs: 30
+  lr_g: 0.0002
+  lr_d: 0.0002
+  beta1: 0.5
+  beta2: 0.999
+  seed: 42
+  num_workers: 4
+  validate_rate: 5
+  checkpoint_rate: 5
+  checkpoint_top_k: 3
+  log_rate: 25
+  scheduler:
+    name: linear_decay
+    decay_start_epoch: 15
+  augmentation:
+    enabled: false
+    expansion_factor: 1
+    intensity: light
+  losses:
+    generator:
+      - name: adversarial_lsgan
+        weight: 1.0
+      - name: cycle_l1
+        weight: 10.0
+      - name: identity_l1
+        weight: 5.0
+        enabled: true
+    discriminator:
+      - name: adversarial_lsgan
+        weight: 1.0
+
+inference:
+  checkpoint_policy: best
+  checkpoint_metric: loss_G_val
+  direction: A_to_B
+
+# Training is unpaired, but inv_256 retains aligned test references. Using the paired
+# evaluation protocol makes the Pix2Pix/CycleGAN preliminary comparison directly comparable.
+evaluation:
+  protocol: paired
+  save_graphs: true
+  bootstrap_iterations: 1000
+  bootstrap_seed: 42

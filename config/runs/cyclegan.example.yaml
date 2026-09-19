@@ -1,0 +1,51 @@
+dataset_root: local_workspace/datasets/unpaired_sample
+results_path: local_workspace/results
+run_name: cyclegan_baseline
+image_size: [256, 256]
+
+method:
+  name: cyclegan
+
+data:
+  pairing: unpaired
+  domains:
+    label_free: label_free
+    stained: stained
+
+model:
+  inputs: [label_free]
+  target: stained
+  generator:
+    architecture: resnet
+    base_channels: 64
+    blocks: 6
+    norm: instance
+  discriminator:
+    architecture: patchgan
+    ndf: 64
+    norm: instance
+
+training:
+  batch_size: 1
+  epochs: 100
+  lr_g: 0.0002
+  lr_d: 0.0002
+  beta1: 0.5
+  beta2: 0.999
+  seed: 42
+  losses:
+    generator:
+      - {name: adversarial_lsgan, weight: 1.0}
+      - {name: cycle_l1, weight: 10.0}
+      - {name: identity_l1, weight: 5.0, enabled: true}
+    discriminator:
+      - {name: adversarial_lsgan, weight: 1.0}
+
+inference:
+  checkpoint_policy: latest
+  direction: A_to_B
+
+evaluation:
+  # auto follows the training pairing. Select paired when a held-out aligned manifest exists.
+  protocol: unpaired
+  save_graphs: true

@@ -1,0 +1,13 @@
+name: inv_256_methods_30ep
+continue_on_failure: false
+
+jobs:
+  - config_path: ../../runs/local/inv_256_pix2pix_30ep.yaml
+    label: Pix2Pix paired baseline, 30 epochs
+    stages: [train, infer, evaluate]
+    notes: Uses the existing inv_256 manifest; no dataset preparation.
+
+  - config_path: ../../runs/local/inv_256_cyclegan_30ep.yaml
+    label: CycleGAN unpaired baseline, 30 epochs
+    stages: [train, infer, evaluate]
+    notes: Trains unpaired, then uses the aligned inv_256 test references for evaluation.
