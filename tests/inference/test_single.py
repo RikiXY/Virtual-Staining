@@ -16,10 +16,10 @@ from virtual_staining.data.manifest import (
 from virtual_staining.inference.outputs import generated_path_for_record
 from virtual_staining.inference.runner import predict_batch
 from virtual_staining.inference.single import (
+    DirectoryInferenceResult,
     InferenceRuntime,
     SingleInferenceResult,
     _predict_images,
-    _run_image_directory_inference,
     _run_tiled_prediction,
     run_image_path_inference,
 )
@@ -163,12 +163,13 @@ def test_directory_inputs_pair_exact_relative_paths_and_preserve_subdirectories(
 
     monkeypatch.setattr(single, "_run_one_image", fake_run_one)
 
-    result = _run_image_directory_inference(
+    result = run_image_path_inference(
         runtime_factory,
         {"LF": lf_root, "AF": af_root},
         tmp_path / "out",
         recursive=True,
     )
+    assert isinstance(result, DirectoryInferenceResult)
 
     assert result.input_dirs == {"LF": lf_root, "AF": af_root}
     assert [item.output_path.relative_to(tmp_path / "out").as_posix() for item in results] == [
@@ -190,7 +191,7 @@ def test_directory_input_set_mismatch_names_offending_modality(
         pytest.fail("checkpoint must not load for path mismatch")
 
     with pytest.raises(ValueError, match=r"Input modality AF.*missing=.*sample.*extra=.*other"):
-        _run_image_directory_inference(runtime_factory, {"LF": lf_root, "AF": af_root})
+        run_image_path_inference(runtime_factory, {"LF": lf_root, "AF": af_root})
 
 
 def test_file_inputs_reject_unequal_dimensions_before_prediction(

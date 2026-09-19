@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.manifest import MANIFEST_SCHEMA_VERSION
 from virtual_staining.data.provenance import (
@@ -9,13 +11,15 @@ from virtual_staining.data.provenance import (
     build_dataset_fingerprint_metadata,
 )
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
-from virtual_staining.experiment.snapshots import _save_resolved_config
 from virtual_staining.utils.hashing import sha256_file, sha256_json
 
 
 def test_prepare_snapshot_paths_and_config_hash(tmp_path: Path) -> None:
     layout = DatasetLayout(tmp_path)
-    _save_resolved_config({"b": 2, "a": 1}, layout.resolved_config_path)
+    layout.resolved_config_path.parent.mkdir(parents=True, exist_ok=True)
+    layout.resolved_config_path.write_text(
+        yaml.safe_dump({"b": 2, "a": 1}, sort_keys=False), encoding="utf-8"
+    )
     assert layout.resolved_config_path.exists()
     assert sha256_file(layout.resolved_config_path).startswith("sha256:")
 

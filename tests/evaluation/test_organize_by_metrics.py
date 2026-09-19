@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from virtual_staining.evaluation.ranking import _organize_metric
+from virtual_staining.evaluation.ranking import organize_by_metrics
 
 
 def _touch(path: Path) -> None:
@@ -28,20 +28,20 @@ def test_organize_metric_exports_best_and_worst_for_higher_metric(
     )
     output_dir = tmp_path / "sorted"
 
-    result = _organize_metric(
-        df=df,
-        metric="ssim",
-        output_dir=output_dir,
-        image_columns=["generated_path"],
-        top_k=1,
+    csv_path = tmp_path / "metrics.csv"
+    df.to_csv(csv_path, index=False)
+    results, summary_path, image_columns = organize_by_metrics(
+        csv_path,
+        output_dir,
+        top_n=1,
+        metrics=["ssim"],
         mode="copy",
-        overwrite=False,
-        include_all_ranked=False,
     )
 
-    assert result is not None
-    assert result["best_files"] == 1
-    assert result["worst_files"] == 1
+    assert results[0]["best_files"] == 1
+    assert results[0]["worst_files"] == 1
+    assert summary_path is not None and summary_path.exists()
+    assert image_columns == ("generated_path",)
     assert (output_dir / "ssim" / "best" / "0001_high_generated.png").exists()
     assert (output_dir / "ssim" / "worst" / "0001_low_generated.png").exists()
 
@@ -62,19 +62,19 @@ def test_organize_metric_exports_best_and_worst_for_lower_metric(
     )
     output_dir = tmp_path / "sorted"
 
-    result = _organize_metric(
-        df=df,
-        metric="mae",
-        output_dir=output_dir,
-        image_columns=["generated_path"],
-        top_k=1,
+    csv_path = tmp_path / "metrics.csv"
+    df.to_csv(csv_path, index=False)
+    results, summary_path, image_columns = organize_by_metrics(
+        csv_path,
+        output_dir,
+        top_n=1,
+        metrics=["mae"],
         mode="copy",
-        overwrite=False,
-        include_all_ranked=False,
     )
 
-    assert result is not None
-    assert result["best_files"] == 1
-    assert result["worst_files"] == 1
+    assert results[0]["best_files"] == 1
+    assert results[0]["worst_files"] == 1
+    assert summary_path is not None and summary_path.exists()
+    assert image_columns == ("generated_path",)
     assert (output_dir / "mae" / "best" / "0001_low_generated.png").exists()
     assert (output_dir / "mae" / "worst" / "0001_high_generated.png").exists()

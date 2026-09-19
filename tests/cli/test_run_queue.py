@@ -11,6 +11,10 @@ from tests.config_helpers import write_queue_config, write_run_config, write_yam
 from virtual_staining import cli
 from virtual_staining.applications.run_queue import _load_local_run_queue, run_queue
 
+MINIMAL_TRAINING_YAML = (
+    "training:\n  epochs: 1\n  losses:\n    generator: []\n    discriminator: []\n"
+)
+
 
 def _write_config(tmp_path: Path, section_yaml: str) -> Path:
     return write_run_config(tmp_path, section_yaml)
@@ -129,8 +133,8 @@ def test_load_local_run_queue_requires_yaml_boolean_for_continue_on_failure(
 def test_run_queue_executes_jobs_in_order_and_persists_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config_a = _write_config(tmp_path / "a", "training:\n  epochs: 1\n")
-    config_b = _write_config(tmp_path / "b", "training:\n  epochs: 1\n")
+    config_a = _write_config(tmp_path / "a", MINIMAL_TRAINING_YAML)
+    config_b = _write_config(tmp_path / "b", MINIMAL_TRAINING_YAML)
     queue_path = _write_queue(
         tmp_path,
         f"""\
@@ -177,15 +181,15 @@ def test_run_queue_ablation_validation_passes_and_writes_summary(
         """
         training:
           epochs: 1
-        losses:
-          generator:
-            - name: adversarial_bce
-              weight: 1.0
-            - name: l1
-              weight: 25.0
-          discriminator:
-            - name: adversarial_bce
-              weight: 1.0
+          losses:
+            generator:
+              - name: adversarial_bce
+                weight: 1.0
+              - name: l1
+                weight: 25.0
+            discriminator:
+              - name: adversarial_bce
+                weight: 1.0
         """,
         filename="baseline.yaml",
         dataset_root=dataset_root,
@@ -197,13 +201,13 @@ def test_run_queue_ablation_validation_passes_and_writes_summary(
         """
         training:
           epochs: 1
-        losses:
-          generator:
-            - name: ssim
-              weight: 1.0
-              params:
-                window_size: 3
-          discriminator: []
+          losses:
+            generator:
+              - name: ssim
+                weight: 1.0
+                params:
+                  window_size: 3
+            discriminator: []
         """,
         filename="ssim_only.yaml",
         dataset_root=dataset_root,
@@ -269,7 +273,13 @@ def test_run_queue_ablation_validation_fails_on_undeclared_difference(
     results_path = tmp_path / "results"
     config_a = write_run_config(
         tmp_path / "configs",
-        "training:\n  epochs: 1\n  lr_g: 0.0002\n",
+        """        training:
+          epochs: 1
+          lr_g: 0.0002
+          losses:
+            generator: []
+            discriminator: []
+        """,
         filename="a.yaml",
         dataset_root=dataset_root,
         results_path=results_path,
@@ -277,7 +287,13 @@ def test_run_queue_ablation_validation_fails_on_undeclared_difference(
     )
     config_b = write_run_config(
         tmp_path / "configs",
-        "training:\n  epochs: 1\n  lr_g: 0.0001\n",
+        """        training:
+          epochs: 1
+          lr_g: 0.0001
+          losses:
+            generator: []
+            discriminator: []
+        """,
         filename="b.yaml",
         dataset_root=dataset_root,
         results_path=results_path,
@@ -327,12 +343,12 @@ def test_run_queue_ablation_canonicalizes_loss_list_order(
         """
         training:
           epochs: 1
-        losses:
-          generator:
-            - name: adversarial_bce
-              weight: 1.0
-            - name: l1
-              weight: 25.0
+          losses:
+            generator:
+              - name: adversarial_bce
+                weight: 1.0
+              - name: l1
+                weight: 25.0
         """,
         filename="a.yaml",
         dataset_root=dataset_root,
@@ -344,12 +360,12 @@ def test_run_queue_ablation_canonicalizes_loss_list_order(
         """
         training:
           epochs: 1
-        losses:
-          generator:
-            - name: l1
-              weight: 25.0
-            - name: adversarial_bce
-              weight: 1.0
+          losses:
+            generator:
+              - name: l1
+                weight: 25.0
+              - name: adversarial_bce
+                weight: 1.0
         """,
         filename="b.yaml",
         dataset_root=dataset_root,
@@ -382,8 +398,8 @@ def test_run_queue_ablation_canonicalizes_loss_list_order(
 def test_run_queue_stops_on_failure_when_continue_on_failure_is_false(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config_a = _write_config(tmp_path / "a", "training:\n  epochs: 1\n")
-    config_b = _write_config(tmp_path / "b", "training:\n  epochs: 1\n")
+    config_a = _write_config(tmp_path / "a", MINIMAL_TRAINING_YAML)
+    config_b = _write_config(tmp_path / "b", MINIMAL_TRAINING_YAML)
     queue_path = _write_queue(
         tmp_path,
         f"""\
@@ -418,8 +434,8 @@ def test_run_queue_stops_on_failure_when_continue_on_failure_is_false(
 def test_run_queue_continues_after_failure_when_configured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config_a = _write_config(tmp_path / "a", "training:\n  epochs: 1\n")
-    config_b = _write_config(tmp_path / "b", "training:\n  epochs: 1\n")
+    config_a = _write_config(tmp_path / "a", MINIMAL_TRAINING_YAML)
+    config_b = _write_config(tmp_path / "b", MINIMAL_TRAINING_YAML)
     queue_path = _write_queue(
         tmp_path,
         f"""\
@@ -455,7 +471,7 @@ def test_run_queue_continues_after_failure_when_configured(
 def test_run_queue_preflights_configs_before_running_any_job(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config_a = _write_config(tmp_path / "a", "training:\n  epochs: 1\n")
+    config_a = _write_config(tmp_path / "a", MINIMAL_TRAINING_YAML)
     invalid_config = write_yaml(
         tmp_path / "b" / "run.yaml",
         """
@@ -464,6 +480,9 @@ def test_run_queue_preflights_configs_before_running_any_job(
         run_name: invalid
         training:
           epochs: 1
+          losses:
+            generator: []
+            discriminator: []
         unexpected: true
         """,
     )
@@ -499,7 +518,7 @@ def test_run_queue_preflights_configs_before_running_any_job(
 
 
 def test_load_local_run_queue_reads_configurable_stages(tmp_path: Path) -> None:
-    config = _write_config(tmp_path / "a", "training:\n  epochs: 1\n")
+    config = _write_config(tmp_path / "a", MINIMAL_TRAINING_YAML)
     queue_path = _write_queue(
         tmp_path,
         f"""\
@@ -516,7 +535,7 @@ def test_load_local_run_queue_reads_configurable_stages(tmp_path: Path) -> None:
 
 
 def test_load_local_run_queue_rejects_unknown_stage(tmp_path: Path) -> None:
-    config = _write_config(tmp_path / "a", "training:\n  epochs: 1\n")
+    config = _write_config(tmp_path / "a", MINIMAL_TRAINING_YAML)
     queue_path = _write_queue(
         tmp_path,
         f"""\

@@ -121,3 +121,28 @@ def test_read_summary_csv_roundtrip_with_preamble(tmp_path: Path) -> None:
     assert psnr["std"] == pytest.approx(math.sqrt(0.5))
     assert psnr["min"] == pytest.approx(30.0)
     assert psnr["max"] == pytest.approx(31.0)
+
+
+def test_write_summary_csv_tracks_non_finite_count(tmp_path: Path) -> None:
+    rows = _make_rows(2)
+    rows[0]["psnr"] = float("inf")
+
+    path = write_summary_csv(rows, tmp_path)
+    with path.open() as handle:
+        summary = {row["metric"]: row for row in csv.DictReader(handle)}
+
+    assert summary["psnr"]["non_finite_count"] == "1"
+    assert summary["psnr"]["finite_count"] == "1"
+    assert float(summary["psnr"]["mean"]) == pytest.approx(31.0)
+
+
+def test_write_summary_csv_all_non_finite_returns_nan_stats(tmp_path: Path) -> None:
+    rows: list[dict[str, object]] = [{metric: float("nan") for metric in SUMMARY_METRIC_NAMES}]
+
+    path = write_summary_csv(rows, tmp_path)
+    with path.open() as handle:
+        summary = {row["metric"]: row for row in csv.DictReader(handle)}
+
+    assert summary["pcc_gray"]["non_finite_count"] == "1"
+    assert summary["pcc_gray"]["finite_count"] == "0"
+    assert math.isnan(float(summary["pcc_gray"]["mean"]))

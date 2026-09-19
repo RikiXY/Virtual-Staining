@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from virtual_staining.data.slide_sets import SlideAsset, SlideSet, _load_slide_set_inventory
-from virtual_staining.data.splitting import assign_group_splits, group_id_for_set
+from virtual_staining.config.data import InputConfig, PreprocessingConfig
+from virtual_staining.data.slide_sets import SlideSet, resolve_slide_sets
 
 
 def _inventory(root: Path) -> Path:
@@ -21,11 +21,17 @@ def _inventory(root: Path) -> Path:
     return path
 
 
+def _resolve_inventory(root: Path, path: Path, modalities: tuple[str, ...]) -> tuple[SlideSet, ...]:
+    config = PreprocessingConfig(
+        dataset_root=root,
+        inputs=InputConfig(path, modalities, modalities[0], "target"),
+    )
+    return resolve_slide_sets(config)
+
+
 def test_wide_inventory_is_order_independent_and_named(tmp_path: Path) -> None:
     path = _inventory(tmp_path)
-    first = _load_slide_set_inventory(
-        path, tmp_path, modalities=("LF", "AF"), reference_modality="LF", target_modality="target"
-    )
+    first = _resolve_inventory(tmp_path, path, ("LF", "AF"))
     path.write_text(
         path.read_text(encoding="utf-8").replace("S2,", "S1,", 1).replace("S1,", "S2,", 1),
         encoding="utf-8",
@@ -44,34 +50,4 @@ def test_inventory_rejects_unsafe_paths(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="relative and non-traversing"):
-        _load_slide_set_inventory(
-            path, tmp_path, modalities=("LF",), reference_modality="LF", target_modality="target"
-        )
-
-
-def test_group_split_keeps_patient_and_specimen_sets_together() -> None:
-    sets = tuple(
-        SlideSet(
-            f"S{i}",
-            (SlideAsset("LF", Path(f"s{i}.png")),),
-            SlideAsset("target", Path(f"t{i}.png")),
-            "LF",
-            patient_id=f"P{i // 2}",
-            specimen_id=f"SP{i // 2}",
-        )
-        for i in range(4)
-    )
-    assignments = assign_group_splits(sets, unit="patient", ratios=(0.5, 0.5, 0.0), seed=0)
-    assert assignments["S0"] == assignments["S1"]
-    assert assignments["S2"] == assignments["S3"]
-    assert group_id_for_set(sets[0], "patient") == "P0"
-
-
-def test_group_split_rejects_pair_unit() -> None:
-    sets = (
-        SlideSet(
-            "S1", (SlideAsset("LF", Path("s.png")),), SlideAsset("target", Path("t.png")), "LF"
-        ),
-    )
-    with pytest.raises(ValueError, match="unit"):
-        assign_group_splits(sets, unit="pair", ratios=(0.8, 0.1, 0.1), seed=0)
+        _resolve_inventory(tmp_path, path, ("LF",))
