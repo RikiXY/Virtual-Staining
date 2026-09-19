@@ -6,16 +6,17 @@ import logging
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
-from virtual_staining.applications.pipeline import VALID_STAGES
-from virtual_staining.applications.train import ProgressReporter
 from virtual_staining.cli._common import (
     add_config_argument,
     add_log_level_argument,
     configure_logging,
 )
 from virtual_staining.cli._progress import render_training_progress
+
+if TYPE_CHECKING:
+    from virtual_staining.applications.train import ProgressReporter
 
 Command = Callable[[list[str] | None], None]
 
@@ -102,6 +103,8 @@ def _run_stage_command(stage: str, argv: list[str] | None) -> None:
 
 
 def _run_pipeline(argv: list[str] | None) -> None:
+    from virtual_staining.applications.pipeline import VALID_STAGES
+
     parser = argparse.ArgumentParser(prog="vs run", description=_COMMAND_HELP["run"])
     add_config_argument(parser)
     parser.add_argument(

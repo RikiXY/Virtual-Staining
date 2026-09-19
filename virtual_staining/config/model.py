@@ -1,22 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal, cast, get_args
 
-from virtual_staining.config.validation import parse_bool_strict, reject_unknown_keys
+from virtual_staining.config.validation import parse_bool_strict, parse_choice, reject_unknown_keys
 
 NormName = Literal["batch", "instance"]
 _MODEL_KEYS = frozenset({"inputs", "target", "generator", "discriminator"})
 _GENERATOR_KEYS = frozenset({"architecture", "base_channels", "norm", "dropout", "bilinear"})
 _DISCRIMINATOR_KEYS = frozenset({"ndf", "norm", "use_sigmoid"})
-
-
-def _choice(value: Any, field_name: str, choices: set[str]) -> str:
-    if not isinstance(value, str):
-        raise TypeError(f"{field_name} must be a string. Supported values: {sorted(choices)}.")
-    if value not in choices:
-        raise ValueError(f"{field_name} must be one of {sorted(choices)}. Got {value!r}.")
-    return value
 
 
 @dataclass(frozen=True)
@@ -82,7 +74,7 @@ class ModelConfig:
             generator=GeneratorConfig(
                 architecture=cast(
                     Literal["concat_unet"],
-                    _choice(
+                    parse_choice(
                         generator_data.get("architecture", "concat_unet"),
                         "model.generator.architecture",
                         {"concat_unet"},
@@ -91,10 +83,10 @@ class ModelConfig:
                 base_channels=int(generator_data.get("base_channels", 64)),
                 norm=cast(
                     NormName,
-                    _choice(
+                    parse_choice(
                         generator_data.get("norm", "batch"),
                         "model.generator.norm",
-                        {"batch", "instance"},
+                        set(get_args(NormName)),
                     ),
                 ),
                 dropout=parse_bool_strict(
@@ -108,10 +100,10 @@ class ModelConfig:
                 ndf=int(discriminator_data.get("ndf", 64)),
                 norm=cast(
                     NormName,
-                    _choice(
+                    parse_choice(
                         discriminator_data.get("norm", "instance"),
                         "model.discriminator.norm",
-                        {"batch", "instance"},
+                        set(get_args(NormName)),
                     ),
                 ),
                 use_sigmoid=parse_bool_strict(

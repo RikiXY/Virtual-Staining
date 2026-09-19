@@ -4,7 +4,6 @@ from typing import Any
 import torch
 import torch.nn as nn
 
-# Fixed conv-block hyperparameters for the standard UNet architecture.
 _CONV_KERNEL = 3
 _CONV_PADDING = 1
 _POOL_KERNEL = 2
@@ -131,16 +130,6 @@ class UNetGenerator(nn.Module):
         dropout: bool = False,
         bilinear: bool = False,
     ) -> None:
-        """
-        Args:
-            in_channels (int): Number of input channels.
-            out_channels (int): Number of output channels.
-            base_channels (int): Number of filters in the first encoder block;
-                doubles at each depth level.
-            norm (str): Normalization family used throughout the generator.
-            dropout (bool): Whether to apply decoder dropout in the deepest three up blocks.
-            bilinear (bool): Whether to use bilinear upsampling or transposed convolution.
-        """
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels

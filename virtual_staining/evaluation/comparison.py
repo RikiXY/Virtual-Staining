@@ -21,7 +21,6 @@ def save_unpaired_group_statistics(
     group_b: UnpairedGroupStats,
     output_dir: Path,
 ) -> None:
-    """Save group_statistics.csv with one row per group."""
     rows = [
         flatten_unpaired_group_stats(group_a),
         flatten_unpaired_group_stats(group_b),
@@ -37,7 +36,6 @@ def save_unpaired_comparison_summary(
     higher_is_better: bool,
     output_dir: Path,
 ) -> None:
-    """Save comparison_summary.csv for the unpaired comparison."""
     row = {
         "mode": "unpaired",
         "metric": column,
@@ -71,7 +69,6 @@ def save_unpaired_summary_json(
     comparison: UnpairedComparison,
     output_dir: Path,
 ) -> None:
-    """Save a JSON summary of the unpaired comparison."""
     payload = {
         "group_a": asdict(group_a),
         "group_b": asdict(group_b),
@@ -81,7 +78,6 @@ def save_unpaired_summary_json(
 
 
 def save_paired_summary_json(summary: PairedSummary, output_dir: Path) -> None:
-    """Save a JSON summary of the paired comparison."""
     (output_dir / "summary.json").write_text(
         json.dumps(asdict(summary), indent=2), encoding="utf-8"
     )
@@ -93,7 +89,6 @@ def save_paired_comparison_summary(
     higher_is_better: bool,
     output_dir: Path,
 ) -> None:
-    """Save comparison_summary.csv for the paired comparison."""
     row = {
         "mode": "paired",
         "metric": column,
@@ -122,7 +117,6 @@ def save_paired_sample_deltas(
     label_b: str,
     output_dir: Path,
 ) -> None:
-    """Save a sample-by-sample paired comparison CSV."""
     raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(dtype=float)
     signed_delta = raw_delta if higher_is_better else -raw_delta
     result = merged.copy()
@@ -148,7 +142,6 @@ def save_unpaired_report_txt(
     higher_is_better: bool,
     output_dir: Path,
 ) -> None:
-    """Save report.txt for the unpaired comparison."""
     lines = [
         f"Metric: {column}",
         f"Direction: {'higher is better' if higher_is_better else 'lower is better'}",
@@ -182,7 +175,6 @@ def save_paired_report_txt(
     higher_is_better: bool,
     output_dir: Path,
 ) -> None:
-    """Save report.txt for the paired comparison."""
     lines = [
         f"Metric: {column}",
         f"Direction: {'higher is better' if higher_is_better else 'lower is better'}",
@@ -202,8 +194,7 @@ def save_paired_report_txt(
     (output_dir / "report.txt").write_text("\n".join(lines), encoding="utf-8")
 
 
-def ecdf(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Build the empirical cumulative distribution function of the sample."""
+def _ecdf(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     x = np.sort(values)
     y = np.arange(1, values.size + 1) / values.size
     return x, y
@@ -218,7 +209,6 @@ def plot_distribution_histogram(
     column: str,
     output_dir: Path,
 ) -> None:
-    """Save the comparison histogram between two distributions."""
     plt.figure(figsize=(9, 5))
     bins = edges.tolist()
     plt.hist(a, bins=bins, density=True, alpha=0.45, label=label_a)
@@ -240,9 +230,8 @@ def plot_distribution_ecdf(
     column: str,
     output_dir: Path,
 ) -> None:
-    """Save the comparison between the empirical cumulative distributions."""
-    xa, ya = ecdf(a)
-    xb, yb = ecdf(b)
+    xa, ya = _ecdf(a)
+    xb, yb = _ecdf(b)
 
     plt.figure(figsize=(9, 5))
     plt.step(xa, ya, where="post", label=label_a)
@@ -257,7 +246,6 @@ def plot_distribution_ecdf(
 
 
 def plot_paired_delta_histogram(signed_delta: np.ndarray, column: str, output_dir: Path) -> None:
-    """Save the histogram of signed deltas for the paired comparison."""
     plt.figure(figsize=(9, 5))
     plt.hist(signed_delta, bins=30)
     plt.axvline(0.0, linestyle="--", linewidth=1)
@@ -276,7 +264,6 @@ def plot_paired_scatter(
     column: str,
     output_dir: Path,
 ) -> None:
-    """Save the paired scatter plot A vs B with a parity diagonal."""
     values_a = merged["value_a"].to_numpy(dtype=float)
     values_b = merged["value_b"].to_numpy(dtype=float)
     min_value = min(float(values_a.min()), float(values_b.min()))

@@ -38,13 +38,6 @@ def write_run_config(
     data = yaml.safe_load(content)
     if "model" not in data:
         data["model"] = {"inputs": ["label_free"], "target": "stained"}
-    training = data.get("training")
-    if isinstance(training, dict):
-        training["augmentation"] = data.pop("augmentation", training.get("augmentation", {}))
-        training["losses"] = data.pop("losses", training.get("losses", {}))
-    preprocessing = data.get("preprocessing")
-    if isinstance(preprocessing, dict) and "image_size" in preprocessing:
-        preprocessing["patch_size"] = preprocessing.pop("image_size")
     content = yaml.safe_dump(data, sort_keys=False)
     return write_yaml(tmp_path / filename, content)
 

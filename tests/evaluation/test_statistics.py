@@ -8,8 +8,8 @@ import pytest
 
 from virtual_staining.evaluation.statistics import (
     UnpairedGroupStats,
+    _choose_paired_better_label,
     align_paired_frames,
-    choose_paired_better_label,
     compute_paired_summary,
     compute_unpaired_comparison,
     compute_unpaired_group_stats,
@@ -75,24 +75,24 @@ def test_unpaired_comparison_returns_statistics() -> None:
 
 
 # ---------------------------------------------------------------------------
-# choose_paired_better_label
+# _choose_paired_better_label
 # ---------------------------------------------------------------------------
 
 
 def test_paired_better_label_positive_delta() -> None:
-    assert choose_paired_better_label(0.05, 0.04, 0.8, 0.2, "A", "B") == "B"
+    assert _choose_paired_better_label(0.05, 0.04, 0.8, 0.2, "A", "B") == "B"
 
 
 def test_paired_better_label_negative_delta() -> None:
-    assert choose_paired_better_label(-0.05, -0.04, 0.2, 0.8, "A", "B") == "A"
+    assert _choose_paired_better_label(-0.05, -0.04, 0.2, 0.8, "A", "B") == "A"
 
 
 def test_paired_better_label_zero() -> None:
-    assert choose_paired_better_label(0.0, 0.0, 0.4, 0.4, "A", "B") == "tie"
+    assert _choose_paired_better_label(0.0, 0.0, 0.4, 0.4, "A", "B") == "tie"
 
 
 def test_paired_better_label_uses_majority_of_signals() -> None:
-    assert choose_paired_better_label(-0.01, 0.03, 0.75, 0.25, "A", "B") == "B"
+    assert _choose_paired_better_label(-0.01, 0.03, 0.75, 0.25, "A", "B") == "B"
 
 
 # ---------------------------------------------------------------------------

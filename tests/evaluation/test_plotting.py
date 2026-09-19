@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
-import pytest
-
 from virtual_staining.evaluation.plotting import METRIC_NAMES, save_dataset_plots
-from virtual_staining.evaluation.summaries import build_summary_rows
 
 
 def _row(value: float) -> dict[str, object]:
@@ -52,36 +48,3 @@ def test_save_dataset_plots_all_non_finite_without_crashing(tmp_path: Path) -> N
     rows: list[dict[str, object]] = [{metric: float("inf") for metric in METRIC_NAMES}]
     saved_paths = save_dataset_plots(rows, tmp_path / "all_nonfinite")
     assert all(p.is_file() for p in saved_paths)
-
-
-# ---------------------------------------------------------------------------
-# build_summary_rows: non-finite count tracking
-# ---------------------------------------------------------------------------
-
-
-def test_build_summary_rows_tracks_non_finite_count() -> None:
-    """build_summary_rows must count non-finite values and compute stats over finite ones."""
-    rows = [_row(0.5), _row(0.6)]
-    rows_with_inf = [dict(rows[0]), rows[1]]
-    rows_with_inf[0]["psnr"] = float("inf")
-
-    summary = build_summary_rows(rows_with_inf)
-    psnr_row = next(r for r in summary if r["metric"] == "psnr")
-
-    assert psnr_row["non_finite_count"] == 1
-    assert psnr_row["finite_count"] == 1
-    assert psnr_row["mean"] == pytest.approx(0.6)
-
-
-def test_build_summary_rows_all_non_finite_returns_nan_stats() -> None:
-    """build_summary_rows must return nan for stats when all values are non-finite."""
-    rows: list[dict[str, object]] = [{metric: float("nan") for metric in METRIC_NAMES}]
-
-    summary = build_summary_rows(rows)
-    pcc_row = next(r for r in summary if r["metric"] == "pcc_gray")
-
-    assert pcc_row["non_finite_count"] == 1
-    assert pcc_row["finite_count"] == 0
-    mean_val = pcc_row["mean"]
-    assert isinstance(mean_val, float)
-    assert math.isnan(mean_val)

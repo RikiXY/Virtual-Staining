@@ -21,7 +21,7 @@ SELECTION_SUMMARY_FIELDNAMES = [
 ]
 
 
-def find_existing_image(base_dir: str | Path, sample_id: str, suffix: str) -> Path:
+def _find_existing_image(base_dir: str | Path, sample_id: str, suffix: str) -> Path:
     directory = Path(base_dir)
     for ext in sorted(VALID_IMAGE_EXTENSIONS):
         candidate = directory / f"{sample_id}{suffix}{ext}"
@@ -41,14 +41,14 @@ def infer_source_path_from_row(row: dict[str, str]) -> Path:
 
     if row.get("target_path"):
         try:
-            return find_existing_image(Path(row["target_path"]).parent, sample_id, "_source")
+            return _find_existing_image(Path(row["target_path"]).parent, sample_id, "_source")
         except FileNotFoundError:
             pass
 
     if row.get("generated_path"):
         generated_path = Path(row["generated_path"])
         try:
-            return find_existing_image(
+            return _find_existing_image(
                 generated_path.parents[1] / "splits" / "test", sample_id, "_source"
             )
         except FileNotFoundError:

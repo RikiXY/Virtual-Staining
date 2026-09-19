@@ -6,6 +6,7 @@ from typing import cast
 import pytest
 
 from virtual_staining.config.data import PreprocessingConfig
+from virtual_staining.utils.image_io import SUPPORTED_IMAGE_BACKENDS
 
 
 def _mapping(**overrides: object) -> dict[str, object]:
@@ -29,6 +30,25 @@ def test_from_mapping_uses_explicit_project_context() -> None:
     assert config.dataset_root == Path("/data")
     assert config.patching.patch_size == (320, 256)
     assert config.inputs.modalities == ("LF", "AF")
+
+
+@pytest.mark.parametrize("backend", sorted(SUPPORTED_IMAGE_BACKENDS))
+def test_config_accepts_image_io_backends(backend: str) -> None:
+    config = PreprocessingConfig.from_mapping(
+        _mapping(io={"backend": backend}),
+        dataset_root=Path("/data"),
+        default_image_size=(256, 256),
+    )
+    assert config.io.backend == backend
+
+
+def test_config_rejects_unknown_image_io_backend() -> None:
+    with pytest.raises(ValueError, match="io.backend must be auto, pillow, or openslide"):
+        PreprocessingConfig.from_mapping(
+            _mapping(io={"backend": "unknown"}),
+            dataset_root=Path("/data"),
+            default_image_size=(256, 256),
+        )
 
 
 def test_patch_size_overrides_shared_image_size() -> None:

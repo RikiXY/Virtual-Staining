@@ -70,11 +70,6 @@ class _TrainingSession:
     final_metrics: EpochMetrics | None = None
 
 
-# ---------------------------------------------------------------------------
-# Trainer
-# ---------------------------------------------------------------------------
-
-
 class Trainer:
     """
     Owns the training loop, validation, checkpoint save/load, and progress
@@ -180,12 +175,7 @@ class Trainer:
             target_modality=target_modality,
         )
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def resume(self, checkpoint: str | Path) -> int:
-        """Load a checkpoint and return the next epoch to train."""
         if checkpoint == "latest":
             checkpoint_path = self._checkpoint_manager.latest()
             if checkpoint_path is None:
@@ -211,7 +201,6 @@ class Trainer:
         seed: int,
         start_epoch: int = 0,
     ) -> TrainingResult:
-        """Run the full training loop."""
         start_time = time.time()
         self._prepare_run_directories()
         self._clear_training_outputs()
@@ -243,10 +232,6 @@ class Trainer:
             early_stopping_best_epoch=session.early_stopping_best_epoch,
             early_stopping_best_value=session.early_stopping_best_value,
         )
-
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
 
     def _prepare_run_directories(self) -> None:
         for directory in [

@@ -10,13 +10,13 @@ from virtual_staining.utils.artifacts import (
 from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS
 
 
-def extract_sample_id(path: str | Path, suffix: str, label: str = "File") -> str:
+def _extract_sample_id(path: str | Path, suffix: str, label: str = "File") -> str:
     return sample_id_for_suffix(path, suffix, label)
 
 
 def extract_single_sample_id(target_path: str | Path, generated_path: str | Path) -> str:
-    target_id = extract_sample_id(target_path, TARGET_SUFFIX, "Target")
-    generated_id = extract_sample_id(generated_path, GENERATED_SUFFIX, "Generated")
+    target_id = _extract_sample_id(target_path, TARGET_SUFFIX, "Target")
+    generated_id = _extract_sample_id(generated_path, GENERATED_SUFFIX, "Generated")
     if target_id != generated_id:
         raise ValueError(
             "Target and generated files refer to different sample ids. "
@@ -36,5 +36,5 @@ def collect_image_files(directory_path: str | Path, suffix: str, label: str) -> 
             and path.suffix.lower() in VALID_IMAGE_EXTENSIONS
             and path.stem.endswith(suffix)
         ):
-            files[extract_sample_id(path, suffix, label)] = path
+            files[_extract_sample_id(path, suffix, label)] = path
     return files

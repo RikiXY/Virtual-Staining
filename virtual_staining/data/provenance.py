@@ -5,20 +5,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from virtual_staining.data.manifest import MANIFEST_SCHEMA_VERSION
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
 from virtual_staining.utils.hashing import sha256_file, sha256_json
-
-
-def build_file_provenance(path: Path) -> dict[str, Any]:
-    """Return canonical provenance for one source dataset file."""
-    resolved = path.resolve()
-    stat = resolved.stat()
-    return {
-        "path": str(resolved),
-        "size": stat.st_size,
-        "mtime_ns": stat.st_mtime_ns,
-        "sha256": sha256_file(resolved),
-    }
 
 
 def _cached_file_provenance(
@@ -60,7 +49,7 @@ def _asset_payload(asset: SlideAsset) -> dict[str, Any]:
     }
 
 
-def canonical_set_payload(slide_sets: tuple[SlideSet, ...]) -> list[dict[str, Any]]:
+def _canonical_set_payload(slide_sets: tuple[SlideSet, ...]) -> list[dict[str, Any]]:
     return [
         {
             "set_id": item.set_id,
@@ -108,7 +97,7 @@ def build_dataset_fingerprint_metadata(
     if hash_cache_path is not None:
         hash_cache_path.parent.mkdir(parents=True, exist_ok=True)
         hash_cache_path.write_text(json.dumps(cache, indent=2), encoding="utf-8")
-    canonical_sets = canonical_set_payload(slide_sets)
+    canonical_sets = _canonical_set_payload(slide_sets)
     canonical_inventory_hash = sha256_json(canonical_sets)
     raw_inventory_sha256 = sha256_file(inventory_path) if inventory_path is not None else None
     dataset_root_resolved = str(dataset_root.resolve())
@@ -119,10 +108,10 @@ def build_dataset_fingerprint_metadata(
         "preprocessing": semantic_config,
         "canonical_inventory": canonical_sets,
         "files": files,
-        "schema_version": "3.0",
+        "schema_version": MANIFEST_SCHEMA_VERSION,
     }
     return {
-        "schema_version": "3.0",
+        "schema_version": MANIFEST_SCHEMA_VERSION,
         "fingerprint": sha256_json(fingerprint_payload),
         "prepared_at": prepared_at or datetime.now(UTC).isoformat(),
         "dataset_root": dataset_root_resolved,
@@ -135,7 +124,6 @@ def build_dataset_fingerprint_metadata(
 
 
 def save_dataset_fingerprint(metadata: dict[str, Any], dest: Path) -> None:
-    """Persist dataset fingerprint metadata as canonical JSON."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     with dest.open("w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2)

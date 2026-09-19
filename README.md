@@ -20,7 +20,7 @@ generation of virtually stained images from label-free microscopy inputs (and vi
 | `vs panels` | Build source / generated / target comparison panels |
 | `vs organize` | Organise run outputs |
 | `vs queue` | Execute full or staged runs sequentially from a queue file |
-| `vs status` | Check dependencies, system memory, OpenSlide, and GPU support |
+| `vs status` | Check required Python/native dependencies, system memory, and GPU support |
 
 ## Quick Start
 
@@ -28,7 +28,7 @@ generation of virtually stained images from label-free microscopy inputs (and vi
 # 1. Enter the Nix environment
 nix develop
 
-# 2. Install dependencies
+# 2. Install the mandatory Python dependencies
 uv sync --frozen
 
 # 3. Copy and edit the example run config
@@ -37,6 +37,16 @@ cp config/runs/example.yaml config/runs/local/my_run.yaml
 # 4. Run the full pipeline
 vs run --config config/runs/local/my_run.yaml
 ```
+
+The supported runtime is the Nix development shell. `uv sync --frozen` installs
+all mandatory Python dependencies, including OpenSlide Python and pyvips; no WSI
+extra is needed. The shell supplies native OpenSlide and libvips on Linux and
+macOS, including library search paths for Python FFI loading. Run pipeline and
+development commands inside this shell (or with `nix develop -c ...`).
+
+`uv run vs status` checks required Python imports and native WSI library usability.
+A missing or broken required dependency produces a failing status. NVIDIA drivers,
+CUDA devices, and GPU availability are optional; a CPU-only runtime can be healthy.
 
 ### Development commands
 

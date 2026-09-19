@@ -4,10 +4,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from virtual_staining.checkpoint_selection import SUPPORTED_CHECKPOINT_METRICS
+from virtual_staining.checkpoint_selection import (
+    RANKED_CHECKPOINT_POLICIES,
+    SUPPORTED_CHECKPOINT_METRICS,
+    SUPPORTED_CHECKPOINT_POLICIES,
+)
 from virtual_staining.config.validation import reject_unknown_keys
-
-SUPPORTED_CHECKPOINT_POLICIES: frozenset[str] = frozenset({"latest", "best", "top_k"})
 
 _INFERENCE_KEYS: frozenset[str] = frozenset(
     {
@@ -82,11 +84,14 @@ class InferenceConfig:
             )
         if self.checkpoint_rank is not None and self.checkpoint_rank <= 0:
             raise ValueError("checkpoint_rank must be greater than 0")
-        if self.checkpoint_rank is not None and self.checkpoint_policy not in {"best", "top_k"}:
+        if (
+            self.checkpoint_rank is not None
+            and self.checkpoint_policy not in RANKED_CHECKPOINT_POLICIES
+        ):
             raise ValueError(
                 "checkpoint_rank is supported only with checkpoint_policy 'best' or 'top_k'"
             )
-        if self.checkpoint_policy in {"best", "top_k"} and self.checkpoint_metric is None:
+        if self.checkpoint_policy in RANKED_CHECKPOINT_POLICIES and self.checkpoint_metric is None:
             raise ValueError(
                 "checkpoint_metric is required with checkpoint_policy 'best' or 'top_k'"
             )

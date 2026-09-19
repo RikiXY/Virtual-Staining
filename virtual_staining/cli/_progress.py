@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import TextIO
+from typing import TYPE_CHECKING, TextIO
 
-from virtual_staining.applications.train import ProgressUpdate, format_progress_log
 from virtual_staining.cli._output import style, use_color
+
+if TYPE_CHECKING:
+    from virtual_staining.applications.train import ProgressUpdate
 
 
 def render_training_progress(update: ProgressUpdate, stream: TextIO = sys.stderr) -> None:
+    from virtual_staining.applications.train import format_progress_log
+
     if not stream.isatty():
         stream.write(format_progress_log(update) + "\n")
         stream.flush()

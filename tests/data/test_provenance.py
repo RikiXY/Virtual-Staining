@@ -2,16 +2,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 from virtual_staining.data.layout import DatasetLayout
-from virtual_staining.data.provenance import build_dataset_fingerprint_metadata
+from virtual_staining.data.manifest import MANIFEST_SCHEMA_VERSION
+from virtual_staining.data.provenance import (
+    _canonical_set_payload,
+    build_dataset_fingerprint_metadata,
+)
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
-from virtual_staining.experiment.snapshots import save_resolved_config
-from virtual_staining.utils.hashing import sha256_file
+from virtual_staining.utils.hashing import sha256_file, sha256_json
 
 
 def test_prepare_snapshot_paths_and_config_hash(tmp_path: Path) -> None:
     layout = DatasetLayout(tmp_path)
-    save_resolved_config({"b": 2, "a": 1}, layout.resolved_config_path)
+    layout.resolved_config_path.parent.mkdir(parents=True, exist_ok=True)
+    layout.resolved_config_path.write_text(
+        yaml.safe_dump({"b": 2, "a": 1}, sort_keys=False), encoding="utf-8"
+    )
     assert layout.resolved_config_path.exists()
     assert sha256_file(layout.resolved_config_path).startswith("sha256:")
 
@@ -51,8 +59,17 @@ def test_fingerprint_is_row_order_independent_and_schema_v3(tmp_path: Path) -> N
         slide_sets=sets,
     )
     reordered = _fingerprint(tmp_path, tuple(reversed(sets)))
-    assert first["schema_version"] == "3.0"
+    assert first["schema_version"] == MANIFEST_SCHEMA_VERSION
     assert first["fingerprint"] == reordered
+    assert first["fingerprint"] == sha256_json(
+        {
+            "dataset_root": str(tmp_path.resolve()),
+            "preprocessing": first["preprocessing"],
+            "canonical_inventory": _canonical_set_payload(sets),
+            "files": first["files"],
+            "schema_version": MANIFEST_SCHEMA_VERSION,
+        }
+    )
 
 
 def test_each_asset_and_mask_changes_fingerprint(tmp_path: Path) -> None:

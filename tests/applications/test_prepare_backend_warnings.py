@@ -43,21 +43,19 @@ def _sets(root: Path) -> tuple[SlideSet, ...]:
     )
 
 
-def test_auto_backend_warns_when_openslide_is_unavailable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize("backend", ["auto", "openslide"])
+@pytest.mark.parametrize("error_type", [ImportError, OSError, RuntimeError])
+def test_backend_check_propagates_broken_openslide(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: str, error_type: type[Exception]
 ) -> None:
     slide_sets = _sets(tmp_path)
-    monkeypatch.setattr(
-        prepare_app,
-        "detect_openslide_format",
-        lambda path: (_ for _ in ()).throw(RuntimeError("missing")),
-    )
 
-    with caplog.at_level(logging.WARNING, logger="virtual_staining.applications.prepare"):
-        prepare_app._warn_image_backend(_config(tmp_path), slide_sets)
+    def fail(path: Path) -> None:
+        raise error_type("broken OpenSlide runtime")
 
-    assert not caplog.messages[-1].startswith("\x1b")
-    assert "Pillow because OpenSlide is unavailable" in caplog.messages[-1]
+    monkeypatch.setattr(prepare_app, "detect_openslide_format", fail)
+    with pytest.raises(error_type, match="broken OpenSlide runtime"):
+        prepare_app._warn_image_backend(_config(tmp_path, backend), slide_sets)
 
 
 def test_forced_openslide_warns_for_incompatible_images(
@@ -77,7 +75,7 @@ def test_forced_openslide_warns_for_incompatible_images(
     ("backend", "tiled"),
     [("auto", False), ("auto", True)],
 )
-def test_backend_warning_is_suppressed_when_no_fallback_is_needed(
+def test_backend_warning_is_suppressed_for_compatible_images(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -90,4 +88,14 @@ def test_backend_warning_is_suppressed_when_no_fallback_is_needed(
     with caplog.at_level(logging.WARNING, logger="virtual_staining.applications.prepare"):
         prepare_app._warn_image_backend(_config(tmp_path, backend, tiled=tiled), slide_sets)
 
+    assert not caplog.messages
+
+
+def test_auto_backend_accepts_unsupported_formats_without_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    slide_sets = _sets(tmp_path)
+    monkeypatch.setattr(prepare_app, "detect_openslide_format", lambda path: None)
+    with caplog.at_level(logging.WARNING, logger="virtual_staining.applications.prepare"):
+        prepare_app._warn_image_backend(_config(tmp_path), slide_sets)
     assert not caplog.messages

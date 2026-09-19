@@ -50,7 +50,6 @@ class PairedSummary:
 
 
 def resolve_input_csv(path_like: str | Path) -> Path:
-    """Resolves a direct CSV path or a directory containing per_image_metrics.csv."""
     path = Path(path_like)
 
     if path.is_dir():
@@ -65,15 +64,13 @@ def resolve_input_csv(path_like: str | Path) -> Path:
     raise ValueError(f"Input path does not exist: {path}")
 
 
-def load_metric_frame(csv_path: str | Path) -> pd.DataFrame:
-    """Loads a metrics CSV as a DataFrame."""
+def _load_metric_frame(csv_path: str | Path) -> pd.DataFrame:
     resolved_csv = resolve_input_csv(csv_path)
     return pd.read_csv(resolved_csv)
 
 
 def load_metric_values(csv_path: str | Path, column: str) -> np.ndarray:
-    """Loads a numeric column from a CSV, discarding missing or invalid values."""
-    df = load_metric_frame(csv_path)
+    df = _load_metric_frame(csv_path)
 
     if column not in df.columns:
         raise ValueError(f"Column '{column}' not found. Available columns: {list(df.columns)}")
@@ -86,13 +83,12 @@ def load_metric_values(csv_path: str | Path, column: str) -> np.ndarray:
     return values
 
 
-def choose_threshold_favors(
+def _choose_threshold_favors(
     shares_a: dict[str, float],
     shares_b: dict[str, float],
     label_a: str,
     label_b: str,
 ) -> str:
-    """Chooses the favoured group by comparing the mean of the above/below-threshold shares."""
     mean_a = float(np.mean(list(shares_a.values()))) if shares_a else 0.0
     mean_b = float(np.mean(list(shares_b.values()))) if shares_b else 0.0
 
@@ -103,12 +99,11 @@ def choose_threshold_favors(
     return "tie"
 
 
-def choose_unpaired_better_label(
+def _choose_unpaired_better_label(
     group_a: UnpairedGroupStats,
     group_b: UnpairedGroupStats,
     comparison: UnpairedComparison,
 ) -> str:
-    """Chooses the better group by combining the main signals from the comparison."""
     score_a = 0
     score_b = 0
 
@@ -129,7 +124,7 @@ def choose_unpaired_better_label(
     return "tie"
 
 
-def choose_paired_better_label(
+def _choose_paired_better_label(
     mean_signed_delta: float,
     median_signed_delta: float,
     share_b_better: float,
@@ -137,7 +132,6 @@ def choose_paired_better_label(
     label_a: str,
     label_b: str,
 ) -> str:
-    """Chooses the better group in a paired comparison from the main signals."""
     score_a = 0
     score_b = 0
 
@@ -169,7 +163,6 @@ def compute_unpaired_group_stats(
     thresholds: Iterable[float],
     higher_is_better: bool,
 ) -> UnpairedGroupStats:
-    """Computes the essential descriptive statistics of an unpaired group."""
     p25, p75 = np.percentile(values, [25, 75])
 
     if higher_is_better:
@@ -198,7 +191,6 @@ def compute_unpaired_comparison(
     group_b: UnpairedGroupStats,
     higher_is_better: bool,
 ) -> UnpairedComparison:
-    """Computes the main comparisons between two unpaired distributions."""
     mann_whitney = mannwhitneyu(a, b, alternative="two-sided")
     ks = ks_2samp(a, b, alternative="two-sided")
 
@@ -233,7 +225,7 @@ def compute_unpaired_comparison(
             else "tie"
         )
 
-    threshold_favors = choose_threshold_favors(
+    threshold_favors = _choose_threshold_favors(
         group_a.threshold_shares,
         group_b.threshold_shares,
         group_a.label,
@@ -251,7 +243,7 @@ def compute_unpaired_comparison(
         mannwhitney_u=float(mann_whitney.statistic),
         mannwhitney_pvalue=float(mann_whitney.pvalue),
     )
-    comparison.better_label = choose_unpaired_better_label(group_a, group_b, comparison)
+    comparison.better_label = _choose_unpaired_better_label(group_a, group_b, comparison)
     return comparison
 
 
@@ -261,9 +253,8 @@ def align_paired_frames(
     sample_id_column: str,
     metric_column: str,
 ) -> pd.DataFrame:
-    """Aligns two CSVs on the same sample_id for the paired comparison."""
-    frame_a = load_metric_frame(csv_a)
-    frame_b = load_metric_frame(csv_b)
+    frame_a = _load_metric_frame(csv_a)
+    frame_b = _load_metric_frame(csv_b)
 
     for frame_name, frame in [("A", frame_a), ("B", frame_b)]:
         if sample_id_column not in frame.columns:
@@ -291,7 +282,6 @@ def compute_paired_summary(
     tolerance: float,
     higher_is_better: bool,
 ) -> PairedSummary:
-    """Computes the main summary for the paired comparison."""
     raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(dtype=float)
     signed_delta = raw_delta if higher_is_better else -raw_delta
 
@@ -323,7 +313,7 @@ def compute_paired_summary(
         share_equal=share_equal,
         wilcoxon_statistic=wilcoxon_statistic,
         wilcoxon_pvalue=wilcoxon_pvalue,
-        better_label=choose_paired_better_label(
+        better_label=_choose_paired_better_label(
             mean_signed_delta=mean_signed_delta,
             median_signed_delta=median_signed_delta,
             share_b_better=share_b_better,
@@ -335,7 +325,6 @@ def compute_paired_summary(
 
 
 def flatten_unpaired_group_stats(group: UnpairedGroupStats) -> dict[str, Any]:
-    """Converts grouped unpaired stats into a flat CSV row."""
     row: dict[str, Any] = {
         "label": group.label,
         "n": group.n,

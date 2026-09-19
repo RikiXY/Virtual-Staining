@@ -4,7 +4,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from virtual_staining.metrics import VALIDATION_IMAGE_METRIC_NAMES, is_higher_better_metric
 
@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 CheckpointMetric = str
 CheckpointMode = Literal["min", "max"]
 SUPPORTED_CHECKPOINT_METRICS = frozenset(("loss_G_val", *VALIDATION_IMAGE_METRIC_NAMES))
+RANKED_CHECKPOINT_POLICIES = frozenset({"best", "top_k"})
+SUPPORTED_CHECKPOINT_POLICIES = frozenset({"latest"}) | RANKED_CHECKPOINT_POLICIES
 
 
 def default_checkpoint_mode(metric: str) -> CheckpointMode:
@@ -63,7 +65,7 @@ def update_checkpoint_selection(
 
     for metric, metric_value in sorted(metrics.items()):
         mode = modes[metric]
-        if mode not in {"min", "max"}:
+        if mode not in set(get_args(CheckpointMode)):
             raise ValueError("mode must be one of ['max', 'min']")
         metric_payload = payload["metrics"].get(metric)
         if not isinstance(metric_payload, dict) or metric_payload.get("mode") != mode:
@@ -144,7 +146,7 @@ def load_best_checkpoint_record(
     )
 
 
-def resolve_best_checkpoint_path(
+def _resolve_best_checkpoint_path(
     checkpoints_dir: Path,
     *,
     policy: str,
@@ -178,8 +180,8 @@ def resolve_checkpoint_path(
                 f"checkpoint_policy='latest' but no checkpoints found in {checkpoints_dir}"
             )
         return path
-    if policy in {"best", "top_k"}:
-        return resolve_best_checkpoint_path(
+    if policy in RANKED_CHECKPOINT_POLICIES:
+        return _resolve_best_checkpoint_path(
             checkpoints_dir, policy=policy, metric=metric, rank=rank
         )
     raise ValueError(f"Unsupported checkpoint policy: {policy!r}")

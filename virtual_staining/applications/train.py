@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 __all__ = ["ProgressReporter", "ProgressUpdate", "format_progress_log", "train"]
 
 
-def set_seed(seed: int) -> None:
+def _set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
@@ -47,14 +47,13 @@ def train(
     *,
     progress_reporter: ProgressReporter | None = None,
 ) -> TrainingResult:
-    """Build training components, persist provenance, and execute training."""
     if config.training is None:
         raise ValueError("RunConfig.training must be present for train().")
     training = config.training
 
     with ExperimentSession.open(config=config, config_path=config_path, stage="train") as session:
         seed = training.seed if training.seed is not None else random.randint(0, 2**32 - 1)
-        set_seed(seed)
+        _set_seed(seed)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info("Device: %s", device)
         dataset_layout = DatasetLayout.from_project(config.project)

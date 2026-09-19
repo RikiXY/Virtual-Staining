@@ -20,7 +20,6 @@ def run_stage(
     *,
     progress_reporter: ProgressReporter | None = None,
 ) -> object:
-    """Run one user-visible experiment stage."""
     return run_stages(config_path, (stage,), progress_reporter=progress_reporter)[
         cast(StageName, stage)
     ]
@@ -32,7 +31,6 @@ def run_stages(
     *,
     progress_reporter: ProgressReporter | None = None,
 ) -> dict[StageName, object]:
-    """Load one run config and execute selected stages in order."""
     unknown = [stage for stage in stages if stage not in VALID_STAGES]
     if unknown:
         raise ValueError(

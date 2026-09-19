@@ -4,11 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from virtual_staining.data.manifest import DatasetManifest, ManifestMetadata, ManifestRecord
+from virtual_staining.data.manifest import (
+    MANIFEST_SCHEMA_VERSION,
+    DatasetManifest,
+    ManifestMetadata,
+    ManifestRecord,
+)
 
 
 def _manifest(tmp_path: Path, *, modalities: tuple[str, ...] = ("LF", "AF")) -> DatasetManifest:
-    metadata = ManifestMetadata("3.0", modalities, modalities[0], "target")
+    metadata = ManifestMetadata(MANIFEST_SCHEMA_VERSION, modalities, modalities[0], "target")
     inputs = {name: Path(f"splits/train/a__input__{name}.png") for name in modalities}
     return DatasetManifest(
         (
@@ -23,6 +28,9 @@ def _manifest(tmp_path: Path, *, modalities: tuple[str, ...] = ("LF", "AF")) -> 
 
 def test_v3_dynamic_columns_round_trip(tmp_path: Path) -> None:
     manifest = _manifest(tmp_path)
+    assert MANIFEST_SCHEMA_VERSION == "3.0"
+    assert manifest.SCHEMA_VERSION == MANIFEST_SCHEMA_VERSION
+    assert manifest.metadata.to_dict()["schema_version"] == MANIFEST_SCHEMA_VERSION
     path = tmp_path / "manifest.csv"
     manifest.to_csv(path)
     assert manifest.fieldnames == (
@@ -50,7 +58,9 @@ def test_manifest_requires_metadata_and_exact_columns(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="required|exact v3 columns"):
         DatasetManifest.from_csv(path, tmp_path)
     with pytest.raises(ValueError, match="exact v3 columns"):
-        DatasetManifest.from_csv(path, tmp_path, ManifestMetadata("3.0", ("LF",), "LF", "target"))
+        DatasetManifest.from_csv(
+            path, tmp_path, ManifestMetadata(MANIFEST_SCHEMA_VERSION, ("LF",), "LF", "target")
+        )
 
 
 @pytest.mark.parametrize("bad_path", ["/absolute.png", "../outside.png", ""])
@@ -61,7 +71,7 @@ def test_manifest_rejects_unsafe_or_blank_paths(tmp_path: Path, bad_path: str) -
                 "a", "s", "train", {"LF": Path(bad_path)}, Path("target.png"), 0, 0, 1, 1
             )
         return
-    metadata = ManifestMetadata("3.0", ("LF",), "LF", "target")
+    metadata = ManifestMetadata(MANIFEST_SCHEMA_VERSION, ("LF",), "LF", "target")
     path = tmp_path / "manifest.csv"
     path.write_text(
         "sample_id,set_id,split,input__LF,target_path,foreground_mask_path,x,y,width,height\na,s,train,,target.png,,0,0,1,1\n",
@@ -85,7 +95,7 @@ def test_manifest_validates_files_and_required_splits(tmp_path: Path) -> None:
 
 
 def test_manifest_metadata_is_strict() -> None:
-    with pytest.raises(ValueError, match="exactly 3.0"):
+    with pytest.raises(ValueError, match=f"exactly {MANIFEST_SCHEMA_VERSION}"):
         ManifestMetadata("2.0", ("LF",), "LF", "target")
     with pytest.raises(ValueError, match="differ"):
-        ManifestMetadata("3.0", ("LF",), "LF", "LF")
+        ManifestMetadata(MANIFEST_SCHEMA_VERSION, ("LF",), "LF", "LF")

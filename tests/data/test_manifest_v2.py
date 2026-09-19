@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from virtual_staining.data.manifest import DatasetManifest, ManifestMetadata
+from virtual_staining.data.manifest import (
+    MANIFEST_SCHEMA_VERSION,
+    DatasetManifest,
+    ManifestMetadata,
+)
 
 
 def test_v2_columns_fail_under_v3_contract(tmp_path: Path) -> None:
@@ -14,7 +18,7 @@ def test_v2_columns_fail_under_v3_contract(tmp_path: Path) -> None:
         "P1__x00000001_y00000002,train,splits/train/source.png,splits/train/target.png,AF,H&E,1,2,16,16\n",
         encoding="utf-8",
     )
-    metadata = ManifestMetadata("3.0", ("AF",), "AF", "H&E")
+    metadata = ManifestMetadata(MANIFEST_SCHEMA_VERSION, ("AF",), "AF", "H&E")
     with pytest.raises(ValueError, match="exact v3 columns"):
         DatasetManifest.from_csv(path, tmp_path, metadata)
 

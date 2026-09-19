@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 from virtual_staining.config.project import ProjectConfig
-
-DatasetSplit = Literal["train", "val", "test"]
+from virtual_staining.split_contract import DatasetSplit
 
 
 @dataclass(frozen=True)

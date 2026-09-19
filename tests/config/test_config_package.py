@@ -8,7 +8,6 @@ import yaml
 from tests.config_helpers import write_yaml
 from virtual_staining.config import load_yaml_mapping, parse_bool_strict, reject_unknown_keys
 from virtual_staining.config.run import RunConfig
-from virtual_staining.experiment.snapshots import save_resolved_config
 from virtual_staining.utils.hashing import sha256_file
 
 
@@ -72,7 +71,7 @@ def test_run_config_composes_domains_and_round_trips(tmp_path: Path) -> None:
     config = RunConfig.from_yaml(source)
     resolved = config.to_dict()
     resolved_path = tmp_path / "resolved.yaml"
-    save_resolved_config(resolved, resolved_path)
+    write_yaml(resolved_path, yaml.safe_dump(resolved, sort_keys=False))
 
     assert config.training is not None
     assert config.training.losses.generator[0].weight == 25.0
@@ -80,6 +79,12 @@ def test_run_config_composes_domains_and_round_trips(tmp_path: Path) -> None:
     assert config.preprocessing is not None
     assert config.preprocessing.dataset_root == config.project.dataset_root
     assert RunConfig.from_yaml(resolved_path) == config
+
+
+def test_run_config_rejects_arbitrary_unknown_top_level_key(tmp_path: Path) -> None:
+    path = write_yaml(tmp_path / "run.yaml", _canonical_yaml() + "\nunexpected_option: true\n")
+    with pytest.raises(ValueError, match=r"^Unknown key\(s\) in top level: unexpected_option$"):
+        RunConfig.from_yaml(path)
 
 
 @pytest.mark.parametrize(
@@ -123,7 +128,13 @@ model:
 def test_resolved_hash_is_stable_for_equivalent_mappings(tmp_path: Path) -> None:
     left = tmp_path / "left.yaml"
     right = tmp_path / "right.yaml"
-    save_resolved_config({"training": {"epochs": 10}, "run_name": "x"}, left)
-    save_resolved_config({"run_name": "x", "training": {"epochs": 10}}, right)
+    left.write_text(
+        yaml.safe_dump({"training": {"epochs": 10}, "run_name": "x"}, sort_keys=True),
+        encoding="utf-8",
+    )
+    right.write_text(
+        yaml.safe_dump({"run_name": "x", "training": {"epochs": 10}}, sort_keys=True),
+        encoding="utf-8",
+    )
     assert yaml.safe_load(left.read_text()) == yaml.safe_load(right.read_text())
     assert sha256_file(left) == sha256_file(right)

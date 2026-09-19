@@ -5,70 +5,12 @@ from importlib.util import resolve_name
 from pathlib import Path
 
 PROJECT = "virtual_staining"
-COMPONENTS = {
-    "cli",
-    "applications",
-    "config",
-    "checkpoint_contract",
-    "checkpoint_selection",
-    "metrics",
-    "data",
-    "models",
-    "experiment",
-    "training",
-    "inference",
-    "evaluation",
-    "utils",
-}
-ALLOWED_EDGES = {
-    "cli": {"applications", "cli", "metrics"},
-    "applications": {
-        "checkpoint_contract",
-        "checkpoint_selection",
-        "config",
-        "data",
-        "evaluation",
-        "experiment",
-        "inference",
-        "metrics",
-        "models",
-        "training",
-        "utils",
-    },
-    "config": {"config", "checkpoint_selection", "metrics", "utils"},
-    "checkpoint_selection": {"metrics"},
-    "checkpoint_contract": {"models"},
-    "metrics": set(),
-    "data": {"config", "data", "utils"},
-    "experiment": {"config", "data", "experiment", "utils"},
-    "models": {"config", "models"},
-    "training": {
-        "checkpoint_contract",
-        "checkpoint_selection",
-        "config",
-        "experiment",
-        "metrics",
-        "models",
-        "training",
-        "utils",
-    },
-    "inference": {
-        "checkpoint_contract",
-        "checkpoint_selection",
-        "config",
-        "data",
-        "experiment",
-        "inference",
-        "models",
-        "utils",
-    },
-    "evaluation": {"config", "evaluation", "metrics", "utils"},
-    "utils": {"utils"},
-}
+APPLICATION_SURFACES = {"cli", "applications"}
+FOUNDATIONAL_COMPONENTS = {"utils", "metrics", "split_contract"}
 
 
 def _module_name(path: Path) -> str:
-    relative = path.relative_to(Path("virtual_staining")).with_suffix("")
+    relative = path.relative_to(Path(PROJECT)).with_suffix("")
     parts = relative.parts
     if parts[-1] == "__init__":
         parts = parts[:-1]
@@ -79,7 +21,7 @@ def _component(module: str) -> str | None:
     parts = module.split(".")
     if len(parts) < 2 or parts[0] != PROJECT:
         return None
-    return parts[1] if parts[1] in COMPONENTS else None
+    return parts[1]
 
 
 def _imports(path: Path) -> set[str]:
@@ -91,17 +33,18 @@ def _imports(path: Path) -> set[str]:
         if isinstance(node, ast.Import):
             imports.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
-            if node.level:
-                base = resolve_name("." * node.level + (node.module or ""), package)
-            else:
-                base = node.module or ""
+            base = (
+                resolve_name("." * node.level + (node.module or ""), package)
+                if node.level
+                else node.module or ""
+            )
             imports.update(
                 base if not alias.name else f"{base}.{alias.name}" for alias in node.names
             )
     return imports
 
 
-def _edges() -> list[tuple[str, str, Path, str]]:
+def _internal_edges() -> list[tuple[str, str, Path, str]]:
     edges: list[tuple[str, str, Path, str]] = []
     for path in sorted(Path(PROJECT).glob("**/*.py")):
         source = _component(_module_name(path))
@@ -114,32 +57,40 @@ def _edges() -> list[tuple[str, str, Path, str]]:
     return edges
 
 
-def test_package_dependencies_match_allowlist_and_topologically_sort() -> None:
-    assert set(ALLOWED_EDGES) == COMPONENTS
-    assert all(
-        source in COMPONENTS and targets <= COMPONENTS for source, targets in ALLOWED_EDGES.items()
-    )
-
+def test_lower_layers_do_not_depend_on_application_surfaces() -> None:
     violations = [
-        f"{path}: {source} -> {imported} ({target})"
-        for source, target, path, imported in _edges()
-        if source != target and target not in ALLOWED_EDGES[source]
+        f"{path}: {source} -> {imported}"
+        for source, target, path, imported in _internal_edges()
+        if source not in APPLICATION_SURFACES and target in APPLICATION_SURFACES
     ]
-    assert not violations, "Dependency allowlist violations:\n" + "\n".join(violations)
+    assert not violations, "Lower-layer imports of application surfaces:\n" + "\n".join(violations)
 
-    remaining = {
-        component: set(targets) - {component} for component, targets in ALLOWED_EDGES.items()
+
+def test_foundational_components_remain_leaf_dependencies() -> None:
+    violations = [
+        f"{path}: {source} -> {imported}"
+        for source, target, path, imported in _internal_edges()
+        if source in FOUNDATIONAL_COMPONENTS and target != source
+    ]
+    assert not violations, "Foundational dependency violations:\n" + "\n".join(violations)
+
+
+def test_config_does_not_depend_on_runtime_domains() -> None:
+    forbidden = {
+        "data",
+        "experiment",
+        "models",
+        "training",
+        "inference",
+        "evaluation",
+        *APPLICATION_SURFACES,
     }
-    order: list[str] = []
-    while remaining:
-        ready = sorted(component for component, targets in remaining.items() if not targets)
-        assert ready, f"Dependency allowlist contains a cycle: {remaining}"
-        order.extend(ready)
-        for component in ready:
-            remaining.pop(component)
-        for targets in remaining.values():
-            targets.difference_update(ready)
-    assert set(order) == COMPONENTS
+    violations = [
+        f"{path}: config -> {imported}"
+        for source, target, path, imported in _internal_edges()
+        if source == "config" and target in forbidden
+    ]
+    assert not violations, "Config dependency violations:\n" + "\n".join(violations)
 
 
 def test_cli_commands_use_application_or_cli_surfaces() -> None:

@@ -22,12 +22,10 @@ ANSI = {
 
 
 def use_color(stream: TextIO = sys.stdout) -> bool:
-    """Return True if using ANSI colours in the console makes sense."""
     return os.environ.get("NO_COLOR") is None and stream.isatty()
 
 
 def style(text: str, *names: str, stream: TextIO = sys.stdout) -> str:
-    """Apply ANSI styles to text when colour output is enabled."""
     if not use_color(stream):
         return text
     prefix = "".join(ANSI[name] for name in names if name in ANSI)
@@ -35,13 +33,11 @@ def style(text: str, *names: str, stream: TextIO = sys.stdout) -> str:
 
 
 def print_section(title: str) -> None:
-    """Print a human-readable section header in the CLI."""
     print()
     print(style(f"=== {title} ===", "bold", "cyan"))
 
 
 def print_info(label: str, value: str) -> None:
-    """Print a single label-value line."""
     print(f"{style(label + ':', 'bold', 'blue')} {value}")
 
 
@@ -61,7 +57,6 @@ _FORMATS = {
 
 
 def color_for_metric(metric_name: str, value: float) -> str:
-    """Return the ANSI color name for a metric value. Fallback: 'cyan'."""
     from virtual_staining.metrics import METRIC_SPECS
 
     spec = METRIC_SPECS.get(metric_name)
@@ -76,7 +71,6 @@ def color_for_metric(metric_name: str, value: float) -> str:
 
 
 def color_metric(metric_name: str, value: float) -> str:
-    """Return a metric value as a colour-coded formatted string."""
     formatted = f"{value:{_FORMATS.get(metric_name, '.6f')}}"
     return style(formatted, color_for_metric(metric_name, value))
 

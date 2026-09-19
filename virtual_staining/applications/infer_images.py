@@ -92,7 +92,6 @@ def infer_images(
     tile_overlap: int = DEFAULT_TILE_OVERLAP,
     output_format: str = "same",
 ) -> SingleInferenceResult | DirectoryInferenceResult:
-    """Application-level image inference entry point for files or directories."""
     config = RunConfig.from_yaml(config_path.resolve())
     input_paths = _resolve_input_specs(input_specs, tuple(config.model.inputs))
     return run_image_path_inference(

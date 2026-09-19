@@ -23,8 +23,10 @@ REQUIRED_PACKAGES = (
     ("Matplotlib", "matplotlib", "matplotlib.pyplot"),
     ("NumPy", "numpy", "numpy"),
     ("OpenCV", "opencv-python-headless", "cv2"),
+    ("OpenSlide", "openslide-python", "openslide"),
     ("pandas", "pandas", "pandas"),
     ("Pillow", "pillow", "PIL.Image"),
+    ("pyvips", "pyvips", "pyvips"),
     ("PyYAML", "pyyaml", "yaml"),
     ("scikit-image", "scikit-image", "skimage.metrics"),
     ("SciPy", "scipy", "scipy.stats"),
@@ -53,15 +55,28 @@ def _required_packages() -> tuple[list[dict[str, Any]], dict[str, ModuleType]]:
     for label, distribution, module_name in REQUIRED_PACKAGES:
         version = _distribution_version(distribution)
         captured = io.StringIO()
+        library_version = None
         try:
             with contextlib.redirect_stdout(captured), contextlib.redirect_stderr(captured):
                 module = importlib.import_module(module_name)
+                if module_name == "openslide":
+                    library_version = module.__library_version__
+                    module.OpenSlide.detect_format(str(Path(__file__)))
+                elif module_name == "pyvips":
+                    library_version = ".".join(str(module.version(index)) for index in range(3))
+                    module.Image.black(1, 1).avg()
             modules[module_name] = module
             error = None if version is not None else "Distribution metadata not found"
         except Exception as exc:
             error = _error_text(exc, captured.getvalue())
         results.append(
-            {"name": label, "distribution": distribution, "version": version, "error": error}
+            {
+                "name": label,
+                "distribution": distribution,
+                "version": version,
+                "library_version": library_version,
+                "error": error,
+            }
         )
     return results, modules
 
@@ -167,23 +182,6 @@ def _memory_status() -> dict[str, int | float] | None:
     }
 
 
-def _openslide_status() -> dict[str, Any]:
-    result: dict[str, Any] = {
-        "version": _distribution_version("openslide-python"),
-        "library_version": None,
-        "usable": False,
-        "error": None,
-    }
-    try:
-        openslide = importlib.import_module("openslide")
-        result["library_version"] = getattr(openslide, "__library_version__", None)
-        openslide.OpenSlide.detect_format(str(Path(__file__)))
-        result["usable"] = True
-    except Exception as exc:
-        result["error"] = _error_text(exc)
-    return result
-
-
 def _nvidia_status() -> dict[str, Any]:
     executable = shutil.which("nvidia-smi")
     result: dict[str, Any] = {"executable": executable, "usable": False, "gpus": [], "error": None}
@@ -251,19 +249,8 @@ def _cuda_status(torch: Any | None, import_error: str | None) -> dict[str, Any]:
 
 
 def collect_status() -> dict[str, Any]:
-    """Collect a complete, non-mutating health report for the active runtime."""
-    runtime = RuntimeInfo.collect(("torch", "numpy", "cv2", "albumentations"))
+    runtime = RuntimeInfo.collect(())
     packages, modules = _required_packages()
-    package_modules = {
-        "torch": "torch",
-        "numpy": "numpy",
-        "opencv-python-headless": "cv2",
-        "albumentations": "albumentations",
-    }
-    for item in packages:
-        module_name = package_modules.get(item["distribution"])
-        if module_name is not None and module_name in runtime.packages:
-            item["version"] = runtime.packages[module_name]
     torch_error = next(item["error"] for item in packages if item["distribution"] == "torch")
     try:
         package_version = metadata.version("virtual-staining")
@@ -282,7 +269,6 @@ def collect_status() -> dict[str, Any]:
         "memory": _memory_status(),
         "git": {"commit": runtime.git_commit, "dirty": runtime.git_dirty},
         "packages": packages,
-        "openslide": _openslide_status(),
         "nvidia": _nvidia_status(),
         "cuda": cuda,
     }

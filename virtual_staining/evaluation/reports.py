@@ -25,7 +25,6 @@ def build_metric_row(
     metrics: dict[str, float],
     set_id: str,
 ) -> dict[str, object]:
-    """Builds a standard row for per_image_metrics.csv."""
     height, width, channels = shape
     return {
         "sample_id": sample_id,
@@ -40,7 +39,6 @@ def build_metric_row(
 
 
 def write_per_image_metrics_csv(rows: list[dict[str, object]], output_path: str | Path) -> Path:
-    """Writes the CSV with one row per evaluated pair."""
     path = Path(output_path)
     with path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=METRIC_FIELDNAMES)
@@ -50,7 +48,6 @@ def write_per_image_metrics_csv(rows: list[dict[str, object]], output_path: str 
 
 
 def write_skipped_csv(rows: list[dict[str, str]], output_path: str | Path) -> Path:
-    """Writes the CSV of skipped samples with the corresponding reason."""
     path = Path(output_path)
     fieldnames = ["sample_id", "reason", "target_path", "generated_path"]
 
@@ -63,7 +60,6 @@ def write_skipped_csv(rows: list[dict[str, str]], output_path: str | Path) -> Pa
 
 
 def write_single_case_csv(row: dict[str, object], output_path: str | Path) -> Path:
-    """Writes the CSV produced by the single mode."""
     path = Path(output_path)
     with path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=METRIC_FIELDNAMES)

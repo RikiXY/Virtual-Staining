@@ -6,7 +6,7 @@ from typing import Any
 
 from virtual_staining.utils.dimensions import parse_wh_size
 
-_PROJECT_KEYS = frozenset(
+PROJECT_KEYS = frozenset(
     {"dataset_root", "results_path", "run_name", "image_size", "manifest_path"}
 )
 
@@ -24,7 +24,7 @@ class ProjectConfig:
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any]) -> ProjectConfig:
-        project_data = {key: value for key, value in data.items() if key in _PROJECT_KEYS}
+        project_data = {key: value for key, value in data.items() if key in PROJECT_KEYS}
         manifest_path = project_data.get("manifest_path")
         return cls(
             dataset_root=Path(project_data["dataset_root"]),

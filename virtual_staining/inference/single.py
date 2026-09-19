@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import math
 import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -22,11 +21,11 @@ from virtual_staining.models.io_contract import build_model_input_transform
 from virtual_staining.utils.artifacts import generated_filename
 from virtual_staining.utils.image_io import (
     VALID_IMAGE_EXTENSIONS,
-    ImageMetadata,
     OpenSlideRegionImageReader,
     RegionImageReader,
     open_image_reader,
     open_rgb,
+    write_pyramidal_tiff_from_raw_rgb,
 )
 
 logger = logging.getLogger(__name__)
@@ -232,7 +231,6 @@ def _write_tiled_rgb(
     image_size: tuple[int, int],
     tile_overlap: int,
 ) -> None:
-    """Run tiled inference into a disk-backed RGB byte buffer."""
     _validate_tile_overlap(image_size, tile_overlap)
 
     image_w, image_h = readers[_generator_input_names(generator)[0]].size
@@ -288,96 +286,6 @@ def _write_tiled_rgb(
         accumulator_path.unlink(missing_ok=True)
 
 
-def _save_pyramidal_tiff(raw_path: Path, output_path: Path, metadata: ImageMetadata) -> None:
-    """Encode a raw RGB buffer as an OpenSlide-readable pyramidal BigTIFF."""
-    try:
-        import pyvips  # pyright: ignore[reportMissingImports]
-    except (ImportError, OSError) as exc:
-        raise RuntimeError(
-            "pyvips and libvips are required; install the 'wsi' extra and run inside 'nix develop'"
-        ) from exc
-
-    width, height = metadata.width, metadata.height
-    generated_path = raw_path.with_suffix(".tif")
-    resolution = {
-        **({"xres": 1000.0 / metadata.mpp_x} if metadata.mpp_x is not None else {}),
-        **({"yres": 1000.0 / metadata.mpp_y} if metadata.mpp_y is not None else {}),
-    }
-    try:
-        image = pyvips.Image.rawload(
-            str(raw_path),
-            width,
-            height,
-            3,
-            format="uchar",
-            interpretation="srgb",
-        )
-        image.tiffsave(
-            str(generated_path),
-            tile=True,
-            tile_width=256,
-            tile_height=256,
-            pyramid=True,
-            bigtiff=True,
-            compression="lzw",
-            **resolution,
-        )
-    except pyvips.Error as exc:
-        raise RuntimeError(f"Could not write pyramidal TIFF: {exc}") from exc
-
-    generated = OpenSlideRegionImageReader(generated_path)
-    raw: np.memmap | None = None
-    try:
-        raw = np.memmap(raw_path, mode="r", dtype=np.uint8, shape=(height, width, 3))
-        expected_size = (width, height)
-        if generated.size != expected_size:
-            raise RuntimeError(
-                f"Generated dimensions differ: expected {expected_size}, got {generated.size}"
-            )
-
-        generated_metadata = generated.metadata
-        if width > 256 or height > 256:
-            downsamples = generated_metadata.level_downsamples
-            if (
-                generated_metadata.level_count <= 1
-                or not downsamples
-                or not math.isclose(downsamples[0], 1.0)
-                or any(
-                    current <= previous
-                    for previous, current in zip(downsamples, downsamples[1:], strict=False)
-                )
-            ):
-                raise RuntimeError("Generated TIFF failed the pyramidal level contract")
-
-        for axis in ("x", "y"):
-            expected_mpp = getattr(metadata, f"mpp_{axis}")
-            if expected_mpp is None:
-                continue
-            actual_mpp = getattr(generated_metadata, f"mpp_{axis}")
-            if actual_mpp is None or not math.isclose(actual_mpp, expected_mpp, rel_tol=1e-3):
-                raise RuntimeError(
-                    f"Generated mpp_{axis} differs: expected {expected_mpp}, got {actual_mpp}"
-                )
-
-        coordinates = {
-            (0, 0),
-            (width // 2, height // 2),
-            (width - 1, height - 1),
-        }
-        for x, y in coordinates:
-            actual = generated.read_region(x, y, 1, 1)[0, 0, ::-1]
-            if not np.array_equal(actual, raw[y, x]):
-                raise RuntimeError(
-                    f"Generated pixel differs at ({x}, {y}): "
-                    f"expected {raw[y, x].tolist()}, got {actual.tolist()}"
-                )
-    finally:
-        if raw is not None:
-            del raw
-        generated.close()
-    generated_path.replace(output_path)
-
-
 def _run_wsi_prediction(
     readers: dict[str, OpenSlideRegionImageReader],
     output_path: Path,
@@ -394,7 +302,7 @@ def _run_wsi_prediction(
     with tempfile.TemporaryDirectory(prefix=f".{output_path.stem}.", dir=output_path.parent) as tmp:
         raw_path = Path(tmp) / "generated.rgb"
         _write_tiled_rgb(readers, raw_path, generator, device, image_size, tile_overlap)
-        _save_pyramidal_tiff(raw_path, output_path, first_reader.metadata)
+        write_pyramidal_tiff_from_raw_rgb(raw_path, output_path, first_reader.metadata)
 
 
 def _resolve_output_path(
@@ -458,8 +366,8 @@ def _run_one_image(
             and first_reader.size[0] * first_reader.size[1] > 2 * pillow_limit
         ):
             raise RuntimeError(
-                "Large tiled inference requires OpenSlide; install the 'wsi' extra and "
-                "native OpenSlide, then run inside 'nix develop'"
+                "Full-resolution large-image tiled inference requires every input to be "
+                "OpenSlide-compatible and use the OpenSlide backend"
             )
         if resolved_mode == "tile" and any(
             isinstance(reader, OpenSlideRegionImageReader) for reader in readers.values()
@@ -518,8 +426,7 @@ def _run_one_image(
     )
 
 
-def collect_input_images(input_dir: Path, *, recursive: bool = False) -> tuple[Path, ...]:
-    """Return supported image files from a directory in deterministic order."""
+def _collect_input_images(input_dir: Path, *, recursive: bool = False) -> tuple[Path, ...]:
     if not input_dir.is_dir():
         raise NotADirectoryError(f"Input directory not found: {input_dir}")
 
@@ -533,7 +440,7 @@ def collect_input_images(input_dir: Path, *, recursive: bool = False) -> tuple[P
     )
 
 
-def run_single_image_inference(
+def _run_single_image_inference(
     runtime: InferenceRuntime,
     input_images: dict[str, Path],
     output_image: Path | None = None,
@@ -542,7 +449,6 @@ def run_single_image_inference(
     tile_overlap: int = DEFAULT_TILE_OVERLAP,
     output_format: str = "same",
 ) -> SingleInferenceResult:
-    """Run the generator on one image."""
     input_names = _generator_input_names(runtime.generator)
     if set(input_images) != set(input_names):
         raise ValueError(
@@ -565,7 +471,7 @@ def run_single_image_inference(
     )
 
 
-def run_image_directory_inference(
+def _run_image_directory_inference(
     runtime_factory: RuntimeFactory,
     input_dirs: dict[str, Path],
     output_dir: Path | None = None,
@@ -575,14 +481,13 @@ def run_image_directory_inference(
     tile_overlap: int = DEFAULT_TILE_OVERLAP,
     output_format: str = "same",
 ) -> DirectoryInferenceResult:
-    """Run image inference for all supported image files in named directories."""
     if not input_dirs:
         raise ValueError("At least one input directory is required.")
     roots = {name: Path(path) for name, path in input_dirs.items()}
     first_name = next(iter(roots))
     first_root = roots[first_name]
     images_by_name = {
-        name: collect_input_images(root, recursive=recursive) for name, root in roots.items()
+        name: _collect_input_images(root, recursive=recursive) for name, root in roots.items()
     }
     if not images_by_name[first_name]:
         raise FileNotFoundError(
@@ -654,7 +559,6 @@ def run_image_path_inference(
     tile_overlap: int = DEFAULT_TILE_OVERLAP,
     output_format: str = "same",
 ) -> SingleInferenceResult | DirectoryInferenceResult:
-    """Run image inference on named files or named directories."""
     paths = {name: Path(path) for name, path in input_paths.items()}
     if not paths:
         raise ValueError("At least one input path is required.")
@@ -671,7 +575,7 @@ def run_image_path_inference(
     if len(kinds) != 1:
         raise ValueError("All input paths must be files or all input paths must be directories.")
     if "directory" in kinds:
-        return run_image_directory_inference(
+        return _run_image_directory_inference(
             runtime_factory,
             paths,
             output_path,
@@ -681,7 +585,7 @@ def run_image_path_inference(
             output_format=output_format,
         )
     runtime = runtime_factory()
-    return run_single_image_inference(
+    return _run_single_image_inference(
         runtime,
         paths,
         output_path,
