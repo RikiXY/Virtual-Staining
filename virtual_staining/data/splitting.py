@@ -3,12 +3,38 @@ from __future__ import annotations
 import csv
 import hashlib
 import math
+from collections.abc import Sequence
 from pathlib import Path
 
 from virtual_staining.data.manifest import Split
 from virtual_staining.data.slide_sets import SlideSet
 
 SPLITS: tuple[Split, Split, Split] = ("train", "val", "test")
+
+
+def assign_split_by_hash(
+    *,
+    seed: int,
+    sample_id: str,
+    ratios: Sequence[float],
+) -> Split:
+    if len(ratios) != len(SPLITS):
+        raise ValueError(f"Expected {len(SPLITS)} split ratios, got {len(ratios)}")
+    if any(ratio < 0 for ratio in ratios):
+        raise ValueError("Split ratios must be non-negative")
+    ratio_sum = sum(ratios)
+    if not math.isclose(ratio_sum, 1.0, rel_tol=1e-5, abs_tol=1e-8):
+        raise ValueError(f"Split ratios must sum to 1.0, got {ratio_sum}")
+
+    digest = hashlib.sha256(f"{seed}:{sample_id}".encode()).digest()
+    value = int.from_bytes(digest[:8], byteorder="big") / 2**64
+
+    cumulative = 0.0
+    for split_name, ratio in zip(SPLITS, ratios, strict=True):
+        cumulative += ratio
+        if value < cumulative:
+            return split_name
+    return SPLITS[-1]
 
 
 def group_id_for_set(slide_set: SlideSet, unit: str) -> str:

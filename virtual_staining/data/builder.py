@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import datetime
 import json
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -16,7 +17,6 @@ from virtual_staining.data.manifest import (
     ManifestRecord,
     Split,
 )
-from virtual_staining.data.preprocessing import ensure_clean_directory
 from virtual_staining.data.provenance import (
     build_dataset_fingerprint_metadata,
     save_dataset_fingerprint,
@@ -82,6 +82,12 @@ class DatasetBuildResult:
             output_root,
             reused,
         )
+
+
+def _ensure_clean_directory(directory: Path) -> None:
+    if directory.exists():
+        shutil.rmtree(directory)
+    directory.mkdir(parents=True, exist_ok=True)
 
 
 class DatasetBuilder:
@@ -150,7 +156,7 @@ class DatasetBuilder:
         layout = DatasetLayout(self.config.dataset_root)
         root = layout.root
         for path in (layout.split_dir(name) for name in ("train", "val", "test")):
-            ensure_clean_directory(path)
+            _ensure_clean_directory(path)
         layout.manifests_dir.mkdir(parents=True, exist_ok=True)
         layout.metadata_dir.mkdir(parents=True, exist_ok=True)
         assignments = assign_group_splits(

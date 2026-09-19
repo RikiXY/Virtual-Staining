@@ -17,17 +17,17 @@ from virtual_staining.data.alignment import (
     warp_aligned_mask_patch,
     warp_aligned_patch,
 )
+from virtual_staining.data.filtering import foreground_ratios, is_valid_patch_pair
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.manifest import Split
+from virtual_staining.data.patching import iter_patch_origins, mask_window_for_patch
 from virtual_staining.data.preprocessing import (
     MASK_PARAMETER_GRID,
-    assign_split_by_hash,
     calculate_mask_by_strategy,
     calculate_mask_with_multiple_parameters,
-    is_valid_patch_pair,
-    mask_window_for_patch,
 )
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
+from virtual_staining.data.splitting import assign_split_by_hash
 from virtual_staining.utils.image_io import (
     RegionImageReader,
     load_grayscale_image,
@@ -210,20 +210,6 @@ class SlideSetProcessor:
             )
         return image, mask
 
-    def _foreground_ratios(self, masks: dict[str, np.ndarray]) -> dict[str, float]:
-        ratios = {name: float(cv2.countNonZero(mask) / mask.size) for name, mask in masks.items()}
-        ratios["all"] = min(ratios.values())
-        combined_intersection = masks[next(iter(masks))]
-        combined_union = masks[next(iter(masks))]
-        for mask in list(masks.values())[1:]:
-            combined_intersection = cv2.bitwise_and(combined_intersection, mask)
-            combined_union = cv2.bitwise_or(combined_union, mask)
-        ratios["intersection"] = float(
-            cv2.countNonZero(combined_intersection) / combined_intersection.size
-        )
-        ratios["union"] = float(cv2.countNonZero(combined_union) / combined_union.size)
-        return ratios
-
     def stream_patches(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         if self.reference.shape is None or self.reference.alignment is None:
             raise RuntimeError("align() must be called before stream_patches()")
@@ -253,75 +239,75 @@ class SlideSetProcessor:
             if foreground.policy == "reference"
             else foreground.policy
         )
-        for x in range(margin, max(margin, ref_w - margin - patch_w + 1), step_x):
-            for y in range(margin, max(margin, ref_h - margin - patch_h + 1), step_y):
-                patches, masks = {}, {}
-                for name, state in (*self.inputs.items(), ("target", self.target)):
-                    patches[name], masks[name] = self.extract_asset_patch(
-                        state, x=x, y=y, width=patch_w, height=patch_h
-                    )
-                ratios = self._foreground_ratios(masks)
-                source = patches[self.slide_set.reference_modality]
-                target = patches["target"]
-                is_valid, debug = is_valid_patch_pair(
-                    source_img=source,
-                    target_img=target,
-                    source_mask=masks[self.slide_set.reference_modality],
-                    target_mask=masks["target"],
-                    min_foreground_ratio=0.0,
-                    max_white_ratio=self.config.filtering.max_white_ratio,
-                    white_threshold=self.config.filtering.white_threshold,
-                    max_largest_white_component_ratio=self.config.filtering.max_largest_white_component_ratio,
+        for x, y in iter_patch_origins(
+            image_size=(ref_w, ref_h),
+            patch_size=(patch_w, patch_h),
+            grid_movement=(step_x, step_y),
+            margin=margin,
+        ):
+            patches, masks = {}, {}
+            for name, state in (*self.inputs.items(), ("target", self.target)):
+                patches[name], masks[name] = self.extract_asset_patch(
+                    state, x=x, y=y, width=patch_w, height=patch_h
                 )
-                if foreground.enabled and ratios[foreground_policy] < foreground.min_ratio:
-                    is_valid = False
-                    cast(list[str], debug["reasons"]).append(f"foreground_{foreground.policy}")
-                sample_id = f"{self.slide_set.set_id}__x{x:08}_y{y:08}"
-                suffixes = {
-                    name: Path(state.asset.path).suffix.lower()
-                    for name, state in (*self.inputs.items(), ("target", self.target))
-                }
-                names = {
-                    name: f"{sample_id}__input__{name}{suffixes[name]}" for name in self.inputs
-                }
-                names["target"] = f"{sample_id}__target{suffixes['target']}"
-                names["foreground_mask"] = f"{sample_id}__foreground_mask{suffixes['target']}"
-                row = {
-                    "sample_id": sample_id,
-                    "x": x,
-                    "y": y,
-                    "inputs": names,
-                    "target": names["target"],
-                    "foreground_mask": names["foreground_mask"],
-                }
-                if is_valid:
-                    split = self.assigned_split or assign_split_by_hash(
-                        seed=self.config.split.seed,
-                        sample_id=sample_id,
-                        ratios=(
-                            self.config.split.train,
-                            self.config.split.val,
-                            self.config.split.test,
-                        ),
-                    )
+            ratios = foreground_ratios(masks)
+            source = patches[self.slide_set.reference_modality]
+            target = patches["target"]
+            is_valid, debug = is_valid_patch_pair(
+                source_img=source,
+                target_img=target,
+                source_mask=masks[self.slide_set.reference_modality],
+                target_mask=masks["target"],
+                min_foreground_ratio=0.0,
+                max_white_ratio=self.config.filtering.max_white_ratio,
+                white_threshold=self.config.filtering.white_threshold,
+                max_largest_white_component_ratio=self.config.filtering.max_largest_white_component_ratio,
+            )
+            if foreground.enabled and ratios[foreground_policy] < foreground.min_ratio:
+                is_valid = False
+                cast(list[str], debug["reasons"]).append(f"foreground_{foreground.policy}")
+            sample_id = f"{self.slide_set.set_id}__x{x:08}_y{y:08}"
+            suffixes = {
+                name: Path(state.asset.path).suffix.lower()
+                for name, state in (*self.inputs.items(), ("target", self.target))
+            }
+            names = {name: f"{sample_id}__input__{name}{suffixes[name]}" for name in self.inputs}
+            names["target"] = f"{sample_id}__target{suffixes['target']}"
+            names["foreground_mask"] = f"{sample_id}__foreground_mask{suffixes['target']}"
+            row = {
+                "sample_id": sample_id,
+                "x": x,
+                "y": y,
+                "inputs": names,
+                "target": names["target"],
+                "foreground_mask": names["foreground_mask"],
+            }
+            if is_valid:
+                split = self.assigned_split or assign_split_by_hash(
+                    seed=self.config.split.seed,
+                    sample_id=sample_id,
+                    ratios=(
+                        self.config.split.train,
+                        self.config.split.val,
+                        self.config.split.test,
+                    ),
+                )
+                for modality, image in patches.items():
+                    cv2.imwrite(str(split_dirs[split] / names[modality]), image)
+                if self.config.masks.save_patch_masks and not self._maskless:
+                    cv2.imwrite(str(split_dirs[split] / names["foreground_mask"]), masks["target"])
+                valid.append({**row, "split": split})
+            else:
+                if self.config.patching.save_discarded_patches:
                     for modality, image in patches.items():
-                        cv2.imwrite(str(split_dirs[split] / names[modality]), image)
-                    if self.config.masks.save_patch_masks and not self._maskless:
-                        cv2.imwrite(
-                            str(split_dirs[split] / names["foreground_mask"]), masks["target"]
-                        )
-                    valid.append({**row, "split": split})
-                else:
-                    if self.config.patching.save_discarded_patches:
-                        for modality, image in patches.items():
-                            cv2.imwrite(str(discarded_dirs[modality] / names[modality]), image)
-                    discarded.append(
-                        {
-                            **row,
-                            "ratios": ratios,
-                            "reasons": ";".join(cast(list[str], debug["reasons"])),
-                        }
-                    )
+                        cv2.imwrite(str(discarded_dirs[modality] / names[modality]), image)
+                discarded.append(
+                    {
+                        **row,
+                        "ratios": ratios,
+                        "reasons": ";".join(cast(list[str], debug["reasons"])),
+                    }
+                )
         return valid, discarded
 
     def close(self) -> None:
