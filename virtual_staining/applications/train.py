@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import random
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -19,6 +20,9 @@ from virtual_staining.training.augmentation import build_training_paired_transfo
 from virtual_staining.training.progress import ProgressReporter, ProgressUpdate, format_progress_log
 from virtual_staining.training.results import TrainingResult
 from virtual_staining.training.trainer import Trainer
+
+if TYPE_CHECKING:
+    from virtual_staining.training.benchmarking import TrainingBenchmarkRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +50,7 @@ def train(
     config_path: Path,
     *,
     progress_reporter: ProgressReporter | None = None,
+    benchmark_recorder: TrainingBenchmarkRecorder | None = None,
 ) -> TrainingResult:
     if config.training is None:
         raise ValueError("RunConfig.training must be present for train().")
@@ -83,6 +88,8 @@ def train(
             "val_sample_count": len(val_manifest),
         }
         session.result(**train_details)
+        if benchmark_recorder is not None:
+            benchmark_recorder.set_workload(**train_details, batch_size=training.batch_size)
 
         transform = build_model_input_transform(config.project.image_size)
         train_paired_transform = build_training_paired_transform(
@@ -155,9 +162,16 @@ def train(
             target_modality=config.model.target,
             experiment_session=session,
             config_hash=session.config_hash,
+            benchmark_recorder=benchmark_recorder,
         )
-        start_epoch = trainer.resume(training.resume) if training.resume is not None else 0
-        result = trainer.train(seed=seed, start_epoch=start_epoch)
+        if benchmark_recorder is not None:
+            benchmark_recorder.start_run()
+        try:
+            start_epoch = trainer.resume(training.resume) if training.resume is not None else 0
+            result = trainer.train(seed=seed, start_epoch=start_epoch)
+        finally:
+            if benchmark_recorder is not None:
+                benchmark_recorder.finish_run()
         session.result(
             final_epoch=result.final_epoch,
             stopped_early=result.stopped_early,

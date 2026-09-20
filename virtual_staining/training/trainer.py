@@ -6,7 +6,7 @@ import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import torch
 import torch.nn as nn
@@ -43,6 +43,9 @@ from virtual_staining.training.progress import (
 from virtual_staining.training.results import EpochMetrics, TrainingResult
 from virtual_staining.training.steps import Pix2PixTrainingStep
 from virtual_staining.training.validator import validate_epoch
+
+if TYPE_CHECKING:
+    from virtual_staining.training.benchmarking import TrainingBenchmarkRecorder
 
 logger = logging.getLogger(__name__)
 checkpoint_logger = logging.getLogger("virtual_staining.training.checkpoints")
@@ -96,9 +99,11 @@ class Trainer:
         experiment_session: ExperimentSession,
         config_hash: str,
         progress_reporter: ProgressReporter | None = None,
+        benchmark_recorder: TrainingBenchmarkRecorder | None = None,
     ) -> None:
         self.config = config
         self.progress_reporter = progress_reporter
+        self._benchmark_recorder = benchmark_recorder
         self._run_paths = run_paths
         self._experiment_session = experiment_session
         self._config_hash = config_hash
@@ -148,6 +153,7 @@ class Trainer:
             amp_enabled=self._amp_enabled,
             generator_loss_terms=generator_loss_terms,
             discriminator_loss_terms=discriminator_loss_terms,
+            benchmark_recorder=benchmark_recorder,
         )
 
         self._logs_dir = run_paths.logs_dir
@@ -363,30 +369,37 @@ class Trainer:
         epoch: int,
         session: _TrainingSession,
     ) -> EpochMetrics:
-        logger.debug("Starting epoch %s", epoch)
-        epoch_metrics = self._train_epoch(epoch, session)
-        logger.debug("Finished epoch %s", epoch)
+        recorder = self._benchmark_recorder
+        if recorder is not None:
+            recorder.start_epoch(epoch)
+        try:
+            logger.debug("Starting epoch %s", epoch)
+            epoch_metrics = self._train_epoch(epoch, session)
+            logger.debug("Finished epoch %s", epoch)
 
-        val_metrics, validation_checkpoint_path = self._validate_and_update_best(
-            epoch=epoch,
-            epoch_metrics=epoch_metrics,
-            session=session,
-        )
-        if val_metrics is None:
-            self._step_lr_schedulers(epoch=epoch, val_metrics=None)
+            val_metrics, validation_checkpoint_path = self._validate_and_update_best(
+                epoch=epoch,
+                epoch_metrics=epoch_metrics,
+                session=session,
+            )
+            if val_metrics is None:
+                self._step_lr_schedulers(epoch=epoch, val_metrics=None)
 
-        self._save_scheduled_checkpoint(
-            epoch=epoch,
-            epoch_metrics=epoch_metrics,
-            session=session,
-            existing_checkpoint_path=validation_checkpoint_path,
-        )
+            self._save_scheduled_checkpoint(
+                epoch=epoch,
+                epoch_metrics=epoch_metrics,
+                session=session,
+                existing_checkpoint_path=validation_checkpoint_path,
+            )
 
-        reported = session.history.write_epoch(epoch, epoch_metrics, val_metrics)
-        self._experiment_session.log_metrics(reported, step=epoch)
-        if val_metrics is not None and self.config.early_stopping is not None:
-            self._update_early_stopping(epoch=epoch, val_metrics=val_metrics, session=session)
-        return epoch_metrics
+            reported = session.history.write_epoch(epoch, epoch_metrics, val_metrics)
+            self._experiment_session.log_metrics(reported, step=epoch)
+            if val_metrics is not None and self.config.early_stopping is not None:
+                self._update_early_stopping(epoch=epoch, val_metrics=val_metrics, session=session)
+            return epoch_metrics
+        finally:
+            if recorder is not None:
+                recorder.finish_epoch(epoch)
 
     def _save_scheduled_checkpoint(
         self,
@@ -401,7 +414,7 @@ class Trainer:
 
         checkpoint_path = existing_checkpoint_path
         if checkpoint_path is None:
-            checkpoint_path = self._checkpoint_manager.save(epoch)
+            checkpoint_path = self._save_checkpoint(epoch)
             session.last_checkpoint = checkpoint_path.name
             logger.info("Checkpoint saved to %s at epoch %s", checkpoint_path, epoch)
         self._emit_epoch_progress(
@@ -462,6 +475,13 @@ class Trainer:
         return val_metrics, ranked_checkpoint_path
 
     def _validate(self, epoch: int) -> EpochMetrics:
+        recorder = self._benchmark_recorder
+        if recorder is None:
+            return self._validate_impl(epoch)
+        with recorder.phase("validation"):
+            return self._validate_impl(epoch)
+
+    def _validate_impl(self, epoch: int) -> EpochMetrics:
         return validate_epoch(
             epoch=epoch,
             generator=self.generator,
@@ -472,6 +492,7 @@ class Trainer:
             device=self.device,
             amp_enabled=self._amp_enabled,
             output_dir=self._output_val_dir,
+            benchmark_recorder=self._benchmark_recorder,
         )
 
     def _step_lr_schedulers(
@@ -645,7 +666,7 @@ class Trainer:
         if checkpoint_path is not None:
             return checkpoint_path
 
-        checkpoint_path = self._checkpoint_manager.save(epoch)
+        checkpoint_path = self._save_checkpoint(epoch)
         session.last_checkpoint = checkpoint_path.name
         logger.info(
             "Checkpoint saved to %s at epoch %s for checkpoint selection",
@@ -661,7 +682,7 @@ class Trainer:
         if (session.final_epoch + 1) % self.config.checkpoint_rate == 0:
             return
 
-        checkpoint_path = self._checkpoint_manager.save(session.final_epoch)
+        checkpoint_path = self._save_checkpoint(session.final_epoch)
         session.last_checkpoint = checkpoint_path.name
         logger.info("Final checkpoint saved to %s (epoch %s)", checkpoint_path, session.final_epoch)
         if session.best_checkpoint_path is None:
@@ -674,6 +695,13 @@ class Trainer:
             progress=1.0,
             eta_str="0s",
         )
+
+    def _save_checkpoint(self, epoch: int) -> Path:
+        recorder = self._benchmark_recorder
+        if recorder is None:
+            return self._checkpoint_manager.save(epoch)
+        with recorder.phase("checkpoint"):
+            return self._checkpoint_manager.save(epoch)
 
     def _emit_epoch_progress(
         self,
@@ -725,8 +753,24 @@ class Trainer:
         component_totals = LossComponentAccumulator(configured_loss_names(self.losses))
         num_batches = 0
 
+        recorder = self._benchmark_recorder
+        batch_cycle_started = time.perf_counter() if recorder is not None else 0.0
         for i, batch in enumerate(self.train_loader):
-            inputs, target, masks = unpack_batch(batch, self.device, self._input_names)
+            if recorder is not None:
+                batch_received_at = time.perf_counter()
+                raw_target = batch.get("target") if isinstance(batch, dict) else None
+                samples = int(raw_target.shape[0]) if isinstance(raw_target, torch.Tensor) else 0
+                recorder.batch_received(
+                    epoch=epoch,
+                    batch_index=i,
+                    samples=samples,
+                    data_wait_seconds=batch_received_at - batch_cycle_started,
+                    cycle_started_at=batch_cycle_started,
+                )
+                with recorder.phase("h2d"):
+                    inputs, target, masks = unpack_batch(batch, self.device, self._input_names)
+            else:
+                inputs, target, masks = unpack_batch(batch, self.device, self._input_names)
             step_losses = self._step.step(
                 inputs,
                 target,
@@ -777,6 +821,10 @@ class Trainer:
                 if self.progress_reporter is not None:
                     self.progress_reporter(update)
                 logger.debug("%s", format_progress_log(update))
+
+            if recorder is not None:
+                recorder.finish_batch()
+                batch_cycle_started = time.perf_counter()
 
         if num_batches == 0:
             raise RuntimeError("Training loader was empty; cannot compute epoch metrics.")

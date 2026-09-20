@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import cast
+from contextlib import nullcontext
+from typing import TYPE_CHECKING, cast
 
 import torch
 import torch.nn as nn
@@ -15,6 +16,9 @@ from virtual_staining.training.losses import (
     LossEvaluationContext,
     StepLosses,
 )
+
+if TYPE_CHECKING:
+    from virtual_staining.training.benchmarking import TrainingBenchmarkRecorder
 
 
 class Pix2PixTrainingStep:
@@ -32,6 +36,7 @@ class Pix2PixTrainingStep:
         amp_enabled: bool,
         generator_loss_terms: tuple[LossTermConfig, ...] = (),
         discriminator_loss_terms: tuple[LossTermConfig, ...] = (),
+        benchmark_recorder: TrainingBenchmarkRecorder | None = None,
     ) -> None:
         self.generator = generator
         self.discriminator = discriminator
@@ -43,6 +48,7 @@ class Pix2PixTrainingStep:
         self.amp_enabled = amp_enabled
         self.generator_loss_terms = generator_loss_terms
         self.discriminator_loss_terms = discriminator_loss_terms
+        self.benchmark_recorder = benchmark_recorder
         self.loss_evaluator = ConfiguredLossEvaluator(
             generator_terms=generator_loss_terms,
             discriminator_terms=discriminator_loss_terms,
@@ -59,45 +65,57 @@ class Pix2PixTrainingStep:
     ) -> StepLosses:
         input_names = cast(tuple[str, ...], self.generator.input_names)
         condition = concat_inputs(inputs, input_names)
-        with autocast(device_type=self.device.type, enabled=self.amp_enabled):
-            fake = self.generator(inputs).detach()
-            D_real = self.discriminator(condition, target)
-            D_fake = self.discriminator(condition, fake)
-            context = LossEvaluationContext(epoch=epoch, global_step=global_step)
-            discriminator_loss = self.loss_evaluator.discriminator_total(
-                discriminator_real=D_real,
-                discriminator_fake=D_fake,
-                context=context,
-            )
-            loss_D = discriminator_loss.total
-            component_raw = dict(discriminator_loss.raw)
-            component_weighted = dict(discriminator_loss.weighted)
-            component_current_weight = dict(discriminator_loss.current_weight)
+        discriminator_phase = (
+            self.benchmark_recorder.phase("discriminator_update")
+            if self.benchmark_recorder is not None
+            else nullcontext()
+        )
+        with discriminator_phase:
+            with autocast(device_type=self.device.type, enabled=self.amp_enabled):
+                fake = self.generator(inputs).detach()
+                D_real = self.discriminator(condition, target)
+                D_fake = self.discriminator(condition, fake)
+                context = LossEvaluationContext(epoch=epoch, global_step=global_step)
+                discriminator_loss = self.loss_evaluator.discriminator_total(
+                    discriminator_real=D_real,
+                    discriminator_fake=D_fake,
+                    context=context,
+                )
+                loss_D = discriminator_loss.total
+                component_raw = dict(discriminator_loss.raw)
+                component_weighted = dict(discriminator_loss.weighted)
+                component_current_weight = dict(discriminator_loss.current_weight)
 
-        self.opt_D.zero_grad()
-        self.scaler_D.scale(loss_D).backward()
-        self.scaler_D.step(self.opt_D)
-        self.scaler_D.update()
+            self.opt_D.zero_grad()
+            self.scaler_D.scale(loss_D).backward()
+            self.scaler_D.step(self.opt_D)
+            self.scaler_D.update()
 
-        with autocast(device_type=self.device.type, enabled=self.amp_enabled):
-            fake = self.generator(inputs)
-            D_fake = self.discriminator(condition, fake)
-            context = LossEvaluationContext(epoch=epoch, global_step=global_step, masks=masks)
-            generator_loss = self.loss_evaluator.generator_total(
-                prediction=fake,
-                target=target,
-                discriminator_fake=D_fake,
-                context=context,
-            )
-            loss_G = generator_loss.total
-            component_raw.update(generator_loss.raw)
-            component_weighted.update(generator_loss.weighted)
-            component_current_weight.update(generator_loss.current_weight)
+        generator_phase = (
+            self.benchmark_recorder.phase("generator_update")
+            if self.benchmark_recorder is not None
+            else nullcontext()
+        )
+        with generator_phase:
+            with autocast(device_type=self.device.type, enabled=self.amp_enabled):
+                fake = self.generator(inputs)
+                D_fake = self.discriminator(condition, fake)
+                context = LossEvaluationContext(epoch=epoch, global_step=global_step, masks=masks)
+                generator_loss = self.loss_evaluator.generator_total(
+                    prediction=fake,
+                    target=target,
+                    discriminator_fake=D_fake,
+                    context=context,
+                )
+                loss_G = generator_loss.total
+                component_raw.update(generator_loss.raw)
+                component_weighted.update(generator_loss.weighted)
+                component_current_weight.update(generator_loss.current_weight)
 
-        self.opt_G.zero_grad()
-        self.scaler_G.scale(loss_G).backward()
-        self.scaler_G.step(self.opt_G)
-        self.scaler_G.update()
+            self.opt_G.zero_grad()
+            self.scaler_G.scale(loss_G).backward()
+            self.scaler_G.step(self.opt_G)
+            self.scaler_G.update()
 
         return StepLosses(
             loss_G=loss_G.item(),

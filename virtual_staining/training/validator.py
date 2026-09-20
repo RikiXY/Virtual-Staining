@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import torch
 import torch.nn as nn
@@ -20,6 +20,9 @@ from virtual_staining.training.losses import ConfiguredLossEvaluator, LossEvalua
 from virtual_staining.training.results import EpochMetrics
 from virtual_staining.training.validation_metrics import ValidationImageMetricAccumulator
 
+if TYPE_CHECKING:
+    from virtual_staining.training.benchmarking import TrainingBenchmarkRecorder
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,6 +37,7 @@ def validate_epoch(
     device: torch.device,
     amp_enabled: bool,
     output_dir: Path,
+    benchmark_recorder: TrainingBenchmarkRecorder | None = None,
 ) -> EpochMetrics:
     generator_was_training = generator.training
     discriminator_was_training = discriminator.training
@@ -94,14 +98,25 @@ def validate_epoch(
                 image_metric_totals.add_batch(generated, target)
                 count += 1
                 if batch_index < 5:
-                    save_images(
-                        output_dir,
-                        inputs[next(iter(inputs))][0],
-                        generated[0],
-                        target[0],
-                        epoch,
-                        batch_index,
-                    )
+                    if benchmark_recorder is None:
+                        save_images(
+                            output_dir,
+                            inputs[next(iter(inputs))][0],
+                            generated[0],
+                            target[0],
+                            epoch,
+                            batch_index,
+                        )
+                    else:
+                        with benchmark_recorder.phase("preview_io"):
+                            save_images(
+                                output_dir,
+                                inputs[next(iter(inputs))][0],
+                                generated[0],
+                                target[0],
+                                epoch,
+                                batch_index,
+                            )
 
         averages = component_totals.average(count)
         loss_G = total_loss_G / count if count else 0.0
