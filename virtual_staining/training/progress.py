@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TypeAlias
-
-from virtual_staining.training.steps import StepLosses
 
 
 def format_duration(seconds: float | None) -> str:
@@ -32,49 +30,51 @@ class ProgressUpdate:
     batch_index: int
     total_epochs: int
     total_batches: int
-    step_losses: StepLosses
-    eval_losses: StepLosses | None
+    step_metrics: Mapping[str, float]
+    eval_metrics: Mapping[str, float] | None
     eval_epoch: int | None
     elapsed_str: str
     eta_str: str
     end_time_str: str
     last_checkpoint_name: str
     best_checkpoint_name: str
-    best_checkpoint_loss_G_val: float | None
+    best_checkpoint_metric_name: str
+    best_checkpoint_metric_value: float | None
 
 
 ProgressReporter: TypeAlias = Callable[[ProgressUpdate], None]
 
 
+def _format_metrics(metrics: Mapping[str, float]) -> str:
+    return " | ".join(f"{name} {value:.4f}" for name, value in metrics.items()) or "metrics --"
+
+
 def format_progress_log(update: ProgressUpdate) -> str:
-    step_losses = update.step_losses
     first_line = (
         f"ep {update.epoch + 1}/{update.total_epochs} "
         f"({update.progress:.2%}) | "
         f"b {update.batch_index + 1}/{update.total_batches} "
         f"({update.epoch_progress:.0%}) | "
-        f"loss_G {step_losses.loss_G:.4f} | loss_D {step_losses.loss_D:.4f} | "
+        f"{_format_metrics(update.step_metrics)} | "
         f"elapsed {update.elapsed_str} | "
         f"ETA {update.eta_str} | "
         f"end {update.end_time_str} | "
         f"last ckpt {update.last_checkpoint_name.strip()}"
     )
-    if update.eval_losses is None:
+    if update.eval_metrics is None:
         eval_parts = "eval --"
     else:
         eval_epoch = f"ep {update.eval_epoch + 1} | " if update.eval_epoch is not None else ""
-        eval_parts = (
-            f"eval {eval_epoch}loss_G {update.eval_losses.loss_G:.4f} | "
-            f"loss_D {update.eval_losses.loss_D:.4f}"
-        )
-    best_loss = (
+        eval_parts = f"eval {eval_epoch}{_format_metrics(update.eval_metrics)}"
+    best_value = (
         "--"
-        if update.best_checkpoint_loss_G_val is None
-        else f"{update.best_checkpoint_loss_G_val:.4f}"
+        if update.best_checkpoint_metric_value is None
+        else f"{update.best_checkpoint_metric_value:.4f}"
     )
     return (
         f"{first_line}\n"
-        f"{eval_parts} | best ckpt {update.best_checkpoint_name.strip()} ({best_loss})"
+        f"{eval_parts} | best ckpt {update.best_checkpoint_name.strip()} "
+        f"({update.best_checkpoint_metric_name} {best_value})"
     )
 
 

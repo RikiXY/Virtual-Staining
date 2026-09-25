@@ -14,7 +14,7 @@ from virtual_staining.data.dataset import PairedManifestDataset
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.manifest import load_manifest_or_raise
 from virtual_staining.experiment.session import ExperimentSession
-from virtual_staining.models.factory import build_discriminator, build_generator
+from virtual_staining.methods.registry import resolve_training_method
 from virtual_staining.models.io_contract import build_model_input_transform
 from virtual_staining.training.augmentation import build_training_paired_transform
 from virtual_staining.training.progress import ProgressReporter, ProgressUpdate, format_progress_log
@@ -143,23 +143,22 @@ def train(
             generator=val_loader_generator,
         )
 
-        generator = build_generator(config.model).to(device)
-        discriminator = build_discriminator(config.model).to(device)
-
+        method = resolve_training_method(
+            config,
+            session.paths,
+            device,
+            benchmark_recorder=benchmark_recorder,
+        )
         trainer = Trainer(
             config=training,
             run_paths=session.paths,
-            generator=generator,
-            discriminator=discriminator,
+            method=method,
             train_loader=train_loader,
             val_loader=val_loader,
             device=device,
-            image_size=config.project.image_size,
             train_dir=dataset_layout.split_dir("train"),
             progress_reporter=progress_reporter,
             val_dir=dataset_layout.split_dir("val"),
-            losses=training.losses,
-            target_modality=config.model.target,
             experiment_session=session,
             config_hash=session.config_hash,
             benchmark_recorder=benchmark_recorder,

@@ -7,20 +7,23 @@ import pytest
 
 from virtual_staining.training.helpers import metrics_fieldnames
 from virtual_staining.training.history import TrainingHistory
-from virtual_staining.training.results import EpochMetrics
+from virtual_staining.training.runtime import MethodMetrics
 from virtual_staining.training.validation_metrics import VALIDATION_IMAGE_METRIC_NAMES
 
 
-def _metrics(epoch: int, *, validation: bool = True) -> tuple[EpochMetrics, EpochMetrics | None]:
-    train = EpochMetrics(
-        1.0 + epoch,
-        2.0 + epoch,
+def _metrics(epoch: int, *, validation: bool = True) -> tuple[MethodMetrics, MethodMetrics | None]:
+    train = MethodMetrics(
+        losses={"loss_G": 1.0 + epoch, "loss_D": 2.0 + epoch},
+        component_totals={"generator": 1.0 + epoch, "discriminator": 2.0 + epoch},
         raw={"generator_l1": 3.0 + epoch},
         weighted={"generator_l1": 4.0 + epoch},
         current_weight={"generator_l1": 1.0},
     )
     val = (
-        EpochMetrics(5.0 + epoch, 6.0 + epoch, image={"val_ssim": 0.5 + epoch})
+        MethodMetrics(
+            losses={"loss_G": 5.0 + epoch, "loss_D": 6.0 + epoch},
+            image={"val_ssim": 0.5 + epoch},
+        )
         if validation
         else None
     )
@@ -29,7 +32,13 @@ def _metrics(epoch: int, *, validation: bool = True) -> tuple[EpochMetrics, Epoc
 
 def test_history_writes_one_union_csv_and_flushes(tmp_path: Path) -> None:
     path = tmp_path / "metrics" / "epochs.csv"
-    with TrainingHistory(path, ["generator_l1"], resume_at=0) as history:
+    with TrainingHistory(
+        path,
+        ["generator_l1"],
+        resume_at=0,
+        metric_names=("loss_G", "loss_D"),
+        component_total_names=("generator", "discriminator"),
+    ) as history:
         reported = history.write_epoch(0, *_metrics(0))
         assert path.read_text(encoding="utf-8").count("\n") == 2
     with path.open(newline="", encoding="utf-8") as handle:
@@ -44,7 +53,13 @@ def test_history_writes_one_union_csv_and_flushes(tmp_path: Path) -> None:
 
 def test_history_blanks_validation_columns_when_validation_does_not_run(tmp_path: Path) -> None:
     path = tmp_path / "epochs.csv"
-    with TrainingHistory(path, [], resume_at=0) as history:
+    with TrainingHistory(
+        path,
+        [],
+        resume_at=0,
+        metric_names=("loss_G", "loss_D"),
+        component_total_names=("generator", "discriminator"),
+    ) as history:
         history.write_epoch(0, *_metrics(0, validation=False))
     row = next(csv.DictReader(path.open(newline="", encoding="utf-8")))
     assert row["loss_G_val"] == ""
@@ -53,11 +68,23 @@ def test_history_blanks_validation_columns_when_validation_does_not_run(tmp_path
 
 def test_resume_reconciles_epoch_history(tmp_path: Path) -> None:
     path = tmp_path / "epochs.csv"
-    with TrainingHistory(path, [], resume_at=0) as history:
+    with TrainingHistory(
+        path,
+        [],
+        resume_at=0,
+        metric_names=("loss_G", "loss_D"),
+        component_total_names=("generator", "discriminator"),
+    ) as history:
         for epoch in range(3):
             history.write_epoch(epoch, *_metrics(epoch))
     original = path.read_text(encoding="utf-8").splitlines()
-    with TrainingHistory(path, [], resume_at=2) as history:
+    with TrainingHistory(
+        path,
+        [],
+        resume_at=2,
+        metric_names=("loss_G", "loss_D"),
+        component_total_names=("generator", "discriminator"),
+    ) as history:
         history.write_epoch(2, *_metrics(9))
     rows = list(csv.DictReader(path.open(newline="", encoding="utf-8")))
     assert [int(row["epoch"]) for row in rows] == [0, 1, 2]
@@ -68,17 +95,51 @@ def test_resume_reconciles_epoch_history(tmp_path: Path) -> None:
 
 def test_resume_rejects_missing_gapped_duplicate_and_mismatched_history(tmp_path: Path) -> None:
     path = tmp_path / "epochs.csv"
-    with pytest.raises(FileNotFoundError), TrainingHistory(path, [], resume_at=1):
+    with (
+        pytest.raises(FileNotFoundError),
+        TrainingHistory(
+            path,
+            [],
+            resume_at=1,
+            metric_names=("loss_G", "loss_D"),
+            component_total_names=("generator", "discriminator"),
+        ),
+    ):
         pass
     path.write_text("epoch,wrong\n0,x\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="header"), TrainingHistory(path, [], resume_at=1):
+    with (
+        pytest.raises(ValueError, match="header"),
+        TrainingHistory(
+            path,
+            [],
+            resume_at=1,
+            metric_names=("loss_G", "loss_D"),
+            component_total_names=("generator", "discriminator"),
+        ),
+    ):
         pass
 
-    fields = metrics_fieldnames([]) + VALIDATION_IMAGE_METRIC_NAMES
+    fields = (
+        metrics_fieldnames(
+            [],
+            metric_names=("loss_G", "loss_D"),
+            component_total_names=("generator", "discriminator"),
+        )
+        + VALIDATION_IMAGE_METRIC_NAMES
+    )
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerow({name: ("0" if name == "epoch" else "") for name in fields})
         writer.writerow({name: ("2" if name == "epoch" else "") for name in fields})
-    with pytest.raises(ValueError, match="0..1"), TrainingHistory(path, [], resume_at=2):
+    with (
+        pytest.raises(ValueError, match="0..1"),
+        TrainingHistory(
+            path,
+            [],
+            resume_at=2,
+            metric_names=("loss_G", "loss_D"),
+            component_total_names=("generator", "discriminator"),
+        ),
+    ):
         pass

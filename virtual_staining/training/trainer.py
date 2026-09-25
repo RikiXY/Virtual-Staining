@@ -4,35 +4,22 @@ import datetime
 import logging
 import math
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.amp import GradScaler
 
 from virtual_staining.checkpoint_selection import (
-    SUPPORTED_CHECKPOINT_METRICS,
-    default_checkpoint_mode,
     load_best_checkpoint_record,
     update_checkpoint_selection,
 )
-from virtual_staining.config.losses import LossConfig
 from virtual_staining.config.training import TrainingConfig
 from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.experiment.session import ExperimentSession
-from virtual_staining.training.checkpoints import CheckpointManager
-from virtual_staining.training.helpers import (
-    LossComponentAccumulator,
-    configured_loss_names,
-    dataset_len,
-    is_amp_enabled,
-    unpack_batch,
-)
+from virtual_staining.training.helpers import LossComponentAccumulator, dataset_len
 from virtual_staining.training.history import TrainingHistory
-from virtual_staining.training.losses import ConfiguredLossEvaluator, StepLosses
 from virtual_staining.training.progress import (
     ProgressReporter,
     ProgressTracker,
@@ -40,9 +27,8 @@ from virtual_staining.training.progress import (
     format_duration,
     format_progress_log,
 )
-from virtual_staining.training.results import EpochMetrics, TrainingResult
-from virtual_staining.training.steps import Pix2PixTrainingStep
-from virtual_staining.training.validator import validate_epoch
+from virtual_staining.training.results import TrainingResult
+from virtual_staining.training.runtime import MethodMetrics, TrainingMethodRuntime
 
 if TYPE_CHECKING:
     from virtual_staining.training.benchmarking import TrainingBenchmarkRecorder
@@ -60,8 +46,8 @@ class _TrainingSession:
     last_checkpoint: str
     best_checkpoint: str = "none"
     best_checkpoint_path: Path | None = None
-    best_loss_G_val: float | None = None
-    latest_eval_losses: StepLosses | None = None
+    best_checkpoint_metric_value: float | None = None
+    latest_eval_metrics: MethodMetrics | None = None
     latest_eval_epoch: int | None = None
     early_stopping_best_value: float | None = None
     early_stopping_best_epoch: int | None = None
@@ -70,120 +56,49 @@ class _TrainingSession:
     stop_epoch: int | None = None
     stop_reason: str | None = None
     final_epoch: int = -1
-    final_metrics: EpochMetrics | None = None
+    final_metrics: MethodMetrics | None = None
 
 
 class Trainer:
-    """
-    Owns the training loop, validation, checkpoint save/load, and progress
-    display. Models and data loaders are constructed outside and injected -
-    Trainer does not hardcode architecture choices; the active session owns
-    canonical history and reporter dispatch.
-    """
+    """Orchestrate method-independent training lifecycle and run services."""
 
     def __init__(
         self,
         config: TrainingConfig,
         run_paths: RunLayout,
-        generator: nn.Module,
-        discriminator: nn.Module,
+        method: TrainingMethodRuntime,
         train_loader: torch.utils.data.DataLoader,
         val_loader: torch.utils.data.DataLoader,
         device: torch.device,
         *,
-        image_size: tuple[int, int],
         train_dir: Path,
         val_dir: Path,
-        losses: LossConfig | None = None,
-        target_modality: str | None = None,
         experiment_session: ExperimentSession,
         config_hash: str,
         progress_reporter: ProgressReporter | None = None,
         benchmark_recorder: TrainingBenchmarkRecorder | None = None,
     ) -> None:
         self.config = config
+        self.method = method
         self.progress_reporter = progress_reporter
         self._benchmark_recorder = benchmark_recorder
         self._run_paths = run_paths
         self._experiment_session = experiment_session
         self._config_hash = config_hash
-        self.generator = generator
-        self.discriminator = discriminator
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
         self._train_dir = train_dir
         self._val_dir = val_dir
-        self.losses = losses
-        self._target_modality = target_modality
-        self._input_names = cast(tuple[str, ...], generator.input_names)
-
-        self._amp_enabled = is_amp_enabled(device)
-
-        self._opt_G = optim.Adam(
-            generator.parameters(),
-            lr=config.lr_g,
-            betas=(config.beta1, config.beta2),
-        )
-        self._opt_D = optim.Adam(
-            discriminator.parameters(),
-            lr=config.lr_d,
-            betas=(config.beta1, config.beta2),
-        )
-        self._scaler_G = GradScaler(enabled=self._amp_enabled)
-        self._scaler_D = GradScaler(enabled=self._amp_enabled)
-        generator_loss_terms = losses.generator if losses is not None else ()
-        discriminator_loss_terms = losses.discriminator if losses is not None else ()
-        self._scheduler_G = self._build_scheduler(self._opt_G)
-        self._scheduler_D = (
-            self._build_scheduler(self._opt_D) if self._has_active_discriminator() else None
-        )
-        self._loss_evaluator = ConfiguredLossEvaluator(
-            generator_terms=generator_loss_terms,
-            discriminator_terms=discriminator_loss_terms,
-        )
-        self._step = Pix2PixTrainingStep(
-            generator=generator,
-            discriminator=discriminator,
-            opt_G=self._opt_G,
-            opt_D=self._opt_D,
-            scaler_G=self._scaler_G,
-            scaler_D=self._scaler_D,
-            device=device,
-            amp_enabled=self._amp_enabled,
-            generator_loss_terms=generator_loss_terms,
-            discriminator_loss_terms=discriminator_loss_terms,
-            benchmark_recorder=benchmark_recorder,
-        )
-
+        self.losses = method.loss_config
         self._logs_dir = run_paths.logs_dir
         self._checkpoints_dir = run_paths.checkpoints_dir
         self._output_val_dir = run_paths.output_val_dir
         self._output_train_dir = run_paths.output_train_dir
-        self._checkpoint_manager = CheckpointManager(
-            checkpoints_dir=self._checkpoints_dir,
-            generator=generator,
-            discriminator=discriminator,
-            opt_G=self._opt_G,
-            opt_D=self._opt_D,
-            scaler_G=self._scaler_G,
-            scaler_D=self._scaler_D,
-            scheduler_G=self._scheduler_G,
-            scheduler_D=self._scheduler_D,
-            image_size=image_size,
-            device=device,
-            lr_g=config.lr_g,
-            lr_d=config.lr_d,
-            beta1=config.beta1,
-            beta2=config.beta2,
-            batch_size=config.batch_size,
-            num_workers=config.num_workers,
-            target_modality=target_modality,
-        )
 
     def resume(self, checkpoint: str | Path) -> int:
         if checkpoint == "latest":
-            checkpoint_path = self._checkpoint_manager.latest()
+            checkpoint_path = self.method.latest_checkpoint()
             if checkpoint_path is None:
                 raise FileNotFoundError(
                     f"resume='latest' but no checkpoints found in {self._checkpoints_dir}"
@@ -200,7 +115,7 @@ class Trainer:
             if not checkpoint_path.is_file():
                 raise FileNotFoundError(f"resume checkpoint not found: {checkpoint_path}")
 
-        return self._checkpoint_manager.load(checkpoint_path)
+        return self.method.load_checkpoint(checkpoint_path)
 
     def train(
         self,
@@ -215,7 +130,7 @@ class Trainer:
         session = self._run_training_epochs(start_epoch=start_epoch, start_time=start_time)
 
         if session.best_checkpoint_path is None:
-            session.best_checkpoint_path = self._checkpoint_manager.latest()
+            session.best_checkpoint_path = self.method.latest_checkpoint()
             if session.best_checkpoint_path is not None:
                 session.best_checkpoint = session.best_checkpoint_path.name
 
@@ -265,7 +180,7 @@ class Trainer:
         else:
             logger.debug("Training started from scratch")
 
-        logger.info("=== Pix2Pix training ===")
+        logger.info("=== %s training ===", self.method.name)
         logger.info("Run root: %s", self._run_paths.root)
         logger.info("Train dir: %s", self._train_dir)
         logger.info("Validation dir: %s", self._val_dir)
@@ -276,48 +191,15 @@ class Trainer:
         logger.info("Validation samples: %s", dataset_len(self.val_loader))
         logger.info("Train batches/epoch: %s", len(self.train_loader))
         logger.info("Validation batches: %s", len(self.val_loader))
+        learning_rates = " | ".join(
+            f"{name}={value}" for name, value in self.method.learning_rates().items()
+        )
         logger.info(
-            "Hyperparameters | lr_g=%s | lr_d=%s | beta1=%s | beta2=%s | scheduler=%s",
-            self.config.lr_g,
-            self.config.lr_d,
-            self.config.beta1,
-            self.config.beta2,
+            "Optimization | %s | scheduler=%s",
+            learning_rates or "no optimizer learning rates",
             self.config.scheduler.to_dict(),
         )
         logger.info("Training started")
-
-    def _build_scheduler(
-        self,
-        optimizer: optim.Optimizer,
-    ) -> optim.lr_scheduler.LRScheduler | optim.lr_scheduler.ReduceLROnPlateau | None:
-        scheduler_config = self.config.scheduler
-        if scheduler_config.name == "none":
-            return None
-        if scheduler_config.name == "linear_decay":
-            assert scheduler_config.decay_start_epoch is not None
-            decay_start_epoch = scheduler_config.decay_start_epoch
-            decay_span = max(1, self.config.epochs - decay_start_epoch)
-
-            def lr_lambda(epoch: int) -> float:
-                if epoch <= decay_start_epoch:
-                    return 1.0
-                return max(0.0, 1.0 - (epoch - decay_start_epoch) / decay_span)
-
-            return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
-        if scheduler_config.name == "reduce_on_plateau":
-            return optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer,
-                mode=scheduler_config.mode,
-                factor=scheduler_config.factor,
-                patience=scheduler_config.patience,
-                min_lr=scheduler_config.min_lr,
-            )
-        raise AssertionError(f"Unsupported scheduler {scheduler_config.name!r}")
-
-    def _has_active_discriminator(self) -> bool:
-        if self.losses is None:
-            return True
-        return bool(self.losses.active_discriminator)
 
     def _start_progress_tracker(self, start_epoch: int) -> ProgressTracker:
         progress_tracker = ProgressTracker(
@@ -335,13 +217,15 @@ class Trainer:
         start_epoch: int,
         start_time: float,
     ) -> _TrainingSession:
-        loss_names = configured_loss_names(self.losses)
+        loss_names = list(self.method.loss_names)
         progress_tracker = self._start_progress_tracker(start_epoch)
 
         with TrainingHistory(
             self._run_paths.epochs_csv,
             loss_names,
             resume_at=start_epoch,
+            metric_names=self.method.metric_names,
+            component_total_names=self.method.component_total_names,
         ) as history:
             session = _TrainingSession(
                 start_epoch=start_epoch,
@@ -368,7 +252,7 @@ class Trainer:
         *,
         epoch: int,
         session: _TrainingSession,
-    ) -> EpochMetrics:
+    ) -> MethodMetrics:
         recorder = self._benchmark_recorder
         if recorder is not None:
             recorder.start_epoch(epoch)
@@ -405,7 +289,7 @@ class Trainer:
         self,
         *,
         epoch: int,
-        epoch_metrics: EpochMetrics,
+        epoch_metrics: MethodMetrics,
         session: _TrainingSession,
         existing_checkpoint_path: Path | None = None,
     ) -> Path | None:
@@ -429,17 +313,14 @@ class Trainer:
         self,
         *,
         epoch: int,
-        epoch_metrics: EpochMetrics,
+        epoch_metrics: MethodMetrics,
         session: _TrainingSession,
-    ) -> tuple[EpochMetrics | None, Path | None]:
+    ) -> tuple[MethodMetrics | None, Path | None]:
         if (epoch + 1) % self.config.validate_rate != 0:
             return None, None
 
         val_metrics = self._validate(epoch)
-        session.latest_eval_losses = StepLosses(
-            loss_G=val_metrics.loss_G,
-            loss_D=val_metrics.loss_D,
-        )
+        session.latest_eval_metrics = val_metrics
         session.latest_eval_epoch = epoch
         self._step_lr_schedulers(epoch=epoch, val_metrics=val_metrics)
         checkpoint_metrics = self._checkpoint_selection_metrics(val_metrics)
@@ -474,77 +355,37 @@ class Trainer:
         )
         return val_metrics, ranked_checkpoint_path
 
-    def _validate(self, epoch: int) -> EpochMetrics:
+    def _validate(self, epoch: int) -> MethodMetrics:
         recorder = self._benchmark_recorder
         if recorder is None:
             return self._validate_impl(epoch)
         with recorder.phase("validation"):
             return self._validate_impl(epoch)
 
-    def _validate_impl(self, epoch: int) -> EpochMetrics:
-        return validate_epoch(
+    def _validate_impl(self, epoch: int) -> MethodMetrics:
+        return self.method.validate(
+            self.val_loader,
             epoch=epoch,
-            generator=self.generator,
-            discriminator=self.discriminator,
-            val_loader=self.val_loader,
-            loss_evaluator=self._loss_evaluator,
-            losses=self.losses,
-            device=self.device,
-            amp_enabled=self._amp_enabled,
             output_dir=self._output_val_dir,
-            benchmark_recorder=self._benchmark_recorder,
         )
 
     def _step_lr_schedulers(
         self,
         *,
         epoch: int,
-        val_metrics: EpochMetrics | None,
+        val_metrics: MethodMetrics | None,
     ) -> None:
-        scheduler_config = self.config.scheduler
-        if scheduler_config.name == "none":
-            return
-
-        if scheduler_config.name == "linear_decay":
-            for scheduler in (self._scheduler_G, self._scheduler_D):
-                if scheduler is not None and not isinstance(
-                    scheduler,
-                    optim.lr_scheduler.ReduceLROnPlateau,
-                ):
-                    scheduler.step()
+        if self.method.step_schedulers(
+            epoch=epoch,
+            validation_metrics=val_metrics,
+        ):
             self._log_learning_rates(epoch)
-            return
-
-        if scheduler_config.name == "reduce_on_plateau":
-            if val_metrics is None:
-                return
-            metric_value = self._scheduler_monitor_value(val_metrics)
-            if metric_value is None or not math.isfinite(metric_value):
-                logger.warning(
-                    "Skipping learning-rate scheduler step at epoch %s because %s is unavailable",
-                    epoch,
-                    scheduler_config.monitor,
-                )
-                return
-            for scheduler in (self._scheduler_G, self._scheduler_D):
-                if isinstance(scheduler, optim.lr_scheduler.ReduceLROnPlateau):
-                    scheduler.step(metric_value)
-            self._log_learning_rates(epoch)
-            return
-
-        raise AssertionError(f"Unsupported scheduler {scheduler_config.name!r}")
-
-    def _scheduler_monitor_value(self, val_metrics: EpochMetrics) -> float | None:
-        monitor = self.config.scheduler.monitor
-        if monitor == "loss_G_val":
-            return val_metrics.loss_G
-        return val_metrics.image.get(monitor)
 
     def _update_early_stopping(
         self,
         *,
         epoch: int,
-        val_metrics: EpochMetrics,
+        val_metrics: MethodMetrics,
         session: _TrainingSession,
     ) -> bool:
         early_config = self.config.early_stopping
@@ -580,30 +421,11 @@ class Trainer:
             return True
         return False
 
-    def _early_stopping_monitor_value(self, val_metrics: EpochMetrics) -> float | None:
+    def _early_stopping_monitor_value(self, val_metrics: MethodMetrics) -> float | None:
         early_config = self.config.early_stopping
         if early_config is None:
             return None
-        monitor = early_config.monitor
-        if monitor == "loss_G_val":
-            return val_metrics.loss_G
-        if monitor == "loss_D_val":
-            return val_metrics.loss_D
-        if monitor in val_metrics.image:
-            return val_metrics.image[monitor]
-        if monitor == "loss_val_total_generator":
-            return val_metrics.loss_G
-        if monitor == "loss_val_total_discriminator":
-            return val_metrics.loss_D
-        prefix_maps = (
-            ("loss_val_raw_", val_metrics.raw),
-            ("loss_val_weighted_", val_metrics.weighted),
-            ("loss_val_current_weight_", val_metrics.current_weight),
-        )
-        for prefix, values in prefix_maps:
-            if monitor.startswith(prefix):
-                return values.get(monitor.removeprefix(prefix))
-        return None
+        return self.method.validation_metric(val_metrics, early_config.monitor)
 
     def _is_early_stopping_improvement(
         self,
@@ -618,43 +440,29 @@ class Trainer:
         return value < best_value - early_config.min_delta
 
     def _log_learning_rates(self, epoch: int) -> None:
-        logger.info(
-            "Learning rates | epoch=%s | lr_g=%s | lr_d=%s",
-            epoch,
-            self._optimizer_lr(self._opt_G),
-            self._optimizer_lr(self._opt_D),
+        values = " | ".join(
+            f"{name}={value}" for name, value in self.method.learning_rates().items()
         )
+        logger.info("Learning rates | epoch=%s | %s", epoch, values or "none")
 
-    @staticmethod
-    def _optimizer_lr(optimizer: optim.Optimizer) -> float:
-        return float(optimizer.param_groups[0]["lr"])
-
-    def _checkpoint_selection_metrics(self, val_metrics: EpochMetrics) -> dict[str, float]:
-        metrics = {"loss_G_val": val_metrics.loss_G}
-        metrics.update(
-            {
-                metric: value
-                for metric, value in val_metrics.image.items()
-                if metric in SUPPORTED_CHECKPOINT_METRICS
-            }
-        )
-        return {metric: value for metric, value in metrics.items() if math.isfinite(value)}
+    def _checkpoint_selection_metrics(self, val_metrics: MethodMetrics) -> dict[str, float]:
+        return self.method.checkpoint_selection_metrics(val_metrics)
 
     def _checkpoint_selection_modes(self) -> dict[str, str]:
-        return {metric: default_checkpoint_mode(metric) for metric in SUPPORTED_CHECKPOINT_METRICS}
+        return self.method.checkpoint_selection_modes()
 
     def _sync_best_checkpoint(self, session: _TrainingSession) -> None:
         try:
             record = load_best_checkpoint_record(
                 self._checkpoints_dir,
                 policy="best",
-                metric="loss_G_val",
+                metric=self.method.default_checkpoint_metric,
             )
         except FileNotFoundError:
             return
         session.best_checkpoint_path = record.checkpoint_path
         session.best_checkpoint = record.checkpoint_path.name
-        session.best_loss_G_val = record.metric_value
+        session.best_checkpoint_metric_value = record.metric_value
 
     def _ensure_best_checkpoint_path(
         self,
@@ -699,15 +507,15 @@ class Trainer:
     def _save_checkpoint(self, epoch: int) -> Path:
         recorder = self._benchmark_recorder
         if recorder is None:
-            return self._checkpoint_manager.save(epoch)
+            return self.method.save_checkpoint(epoch)
         with recorder.phase("checkpoint"):
-            return self._checkpoint_manager.save(epoch)
+            return self.method.save_checkpoint(epoch)
 
     def _emit_epoch_progress(
         self,
         *,
         epoch: int,
-        epoch_metrics: EpochMetrics,
+        epoch_metrics: MethodMetrics,
         session: _TrainingSession,
         eta_str: str,
         progress: float | None = None,
@@ -723,17 +531,19 @@ class Trainer:
             batch_index=len(self.train_loader) - 1,
             total_epochs=session.progress_tracker.total_epochs,
             total_batches=session.progress_tracker.total_batches,
-            step_losses=StepLosses(
-                loss_G=epoch_metrics.loss_G,
-                loss_D=epoch_metrics.loss_D,
-            ),
+            step_metrics=epoch_metrics.losses,
             elapsed_str=format_duration(time.time() - session.start_time),
             eta_str=eta_str,
             end_time_str=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             last_checkpoint_name=session.last_checkpoint,
             best_checkpoint_name=session.best_checkpoint,
-            best_checkpoint_loss_G_val=session.best_loss_G_val,
-            eval_losses=session.latest_eval_losses,
+            best_checkpoint_metric_name=self.method.default_checkpoint_metric,
+            best_checkpoint_metric_value=session.best_checkpoint_metric_value,
+            eval_metrics=(
+                session.latest_eval_metrics.losses
+                if session.latest_eval_metrics is not None
+                else None
+            ),
             eval_epoch=session.latest_eval_epoch,
         )
         if self.progress_reporter is not None:
@@ -744,13 +554,12 @@ class Trainer:
         self,
         epoch: int,
         session: _TrainingSession,
-    ) -> EpochMetrics:
-        self.generator.train()
-        self.discriminator.train()
+    ) -> MethodMetrics:
+        self.method.train_mode()
 
-        total_loss_G = 0.0
-        total_loss_D = 0.0
-        component_totals = LossComponentAccumulator(configured_loss_names(self.losses))
+        loss_totals: dict[str, float] = {}
+        method_component_totals: dict[str, float] = {}
+        component_totals = LossComponentAccumulator(list(self.method.loss_names))
         num_batches = 0
 
         recorder = self._benchmark_recorder
@@ -758,32 +567,26 @@ class Trainer:
         for i, batch in enumerate(self.train_loader):
             if recorder is not None:
                 batch_received_at = time.perf_counter()
-                raw_target = batch.get("target") if isinstance(batch, dict) else None
-                samples = int(raw_target.shape[0]) if isinstance(raw_target, torch.Tensor) else 0
                 recorder.batch_received(
                     epoch=epoch,
                     batch_index=i,
-                    samples=samples,
+                    samples=self.method.batch_size(batch),
                     data_wait_seconds=batch_received_at - batch_cycle_started,
                     cycle_started_at=batch_cycle_started,
                 )
-                with recorder.phase("h2d"):
-                    inputs, target, masks = unpack_batch(batch, self.device, self._input_names)
-            else:
-                inputs, target, masks = unpack_batch(batch, self.device, self._input_names)
-            step_losses = self._step.step(
-                inputs,
-                target,
+
+            step_metrics = self.method.step(
+                batch,
                 epoch=epoch,
                 global_step=epoch * len(self.train_loader) + i,
-                masks=masks,
             )
-            total_loss_G += step_losses.loss_G
-            total_loss_D += step_losses.loss_D
+            self._validate_method_metric_names(step_metrics)
+            _accumulate_values(loss_totals, step_metrics.losses)
+            _accumulate_values(method_component_totals, step_metrics.component_totals)
             component_totals.add(
-                raw=step_losses.raw,
-                weighted=step_losses.weighted,
-                current_weight=step_losses.current_weight,
+                raw=step_metrics.raw,
+                weighted=step_metrics.weighted,
+                current_weight=step_metrics.current_weight,
             )
             num_batches += 1
 
@@ -808,14 +611,19 @@ class Trainer:
                     batch_index=i,
                     total_epochs=session.progress_tracker.total_epochs,
                     total_batches=session.progress_tracker.total_batches,
-                    step_losses=step_losses,
+                    step_metrics=step_metrics.losses,
                     elapsed_str=elapsed_str,
                     eta_str=eta_str,
                     end_time_str=end_time_str,
                     last_checkpoint_name=session.last_checkpoint,
                     best_checkpoint_name=session.best_checkpoint,
-                    best_checkpoint_loss_G_val=session.best_loss_G_val,
-                    eval_losses=session.latest_eval_losses,
+                    best_checkpoint_metric_name=self.method.default_checkpoint_metric,
+                    best_checkpoint_metric_value=session.best_checkpoint_metric_value,
+                    eval_metrics=(
+                        session.latest_eval_metrics.losses
+                        if session.latest_eval_metrics is not None
+                        else None
+                    ),
                     eval_epoch=session.latest_eval_epoch,
                 )
                 if self.progress_reporter is not None:
@@ -828,11 +636,30 @@ class Trainer:
 
         if num_batches == 0:
             raise RuntimeError("Training loader was empty; cannot compute epoch metrics.")
+
         component_averages = component_totals.average(num_batches)
-        return EpochMetrics(
-            loss_G=total_loss_G / num_batches,
-            loss_D=total_loss_D / num_batches,
+        return MethodMetrics(
+            losses={name: loss_totals[name] / num_batches for name in self.method.metric_names},
+            component_totals={
+                name: method_component_totals[name] / num_batches
+                for name in self.method.component_total_names
+                if name in method_component_totals
+            },
             raw=component_averages.raw,
             weighted=component_averages.weighted,
             current_weight=component_averages.current_weight,
         )
+
+    def _validate_method_metric_names(self, metrics: MethodMetrics) -> None:
+        expected = tuple(self.method.metric_names)
+        actual = tuple(metrics.losses)
+        if actual != expected:
+            raise ValueError(
+                f"Method {self.method.name!r} returned training metrics {actual}; "
+                f"expected {expected}"
+            )
+
+
+def _accumulate_values(totals: dict[str, float], values: Mapping[str, float]) -> None:
+    for name, value in values.items():
+        totals[name] = totals.get(name, 0.0) + value

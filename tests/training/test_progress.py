@@ -4,7 +4,6 @@ import os
 from io import StringIO
 
 from virtual_staining.cli._progress import render_training_progress
-from virtual_staining.training.losses import StepLosses
 from virtual_staining.training.progress import ProgressUpdate, format_progress_log
 
 
@@ -16,15 +15,16 @@ def _update(*, progress: float = 0.5) -> ProgressUpdate:
         batch_index=2,
         total_epochs=4,
         total_batches=6,
-        step_losses=StepLosses(1.25, 2.5),
-        eval_losses=StepLosses(1.0, 2.0),
+        step_metrics={"loss_G": 1.25, "loss_D": 2.5},
+        eval_metrics={"loss_G": 1.0, "loss_D": 2.0},
         eval_epoch=0,
         elapsed_str="3s",
         eta_str="4s",
         end_time_str="now",
         last_checkpoint_name="ep001.pth",
         best_checkpoint_name="ep001.pth",
-        best_checkpoint_loss_G_val=1.0,
+        best_checkpoint_metric_name="loss_G_val",
+        best_checkpoint_metric_value=1.0,
     )
 
 

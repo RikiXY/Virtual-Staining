@@ -7,12 +7,14 @@ from typing import cast
 import torch
 from torch.utils.data import DataLoader
 
+from virtual_staining.config.method import MethodConfig
+from virtual_staining.config.model import ModelConfig
 from virtual_staining.config.project import ProjectConfig
+from virtual_staining.config.run import RunConfig
 from virtual_staining.config.training import TrainingConfig
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.experiment.session import ExperimentSession
-from virtual_staining.models.discriminator import PatchGANDiscriminator
-from virtual_staining.models.generator import ConcatUNetGenerator
+from virtual_staining.methods.pix2pix import Pix2PixMethod
 from virtual_staining.training.helpers import unpack_batch
 from virtual_staining.training.trainer import Trainer
 
@@ -42,8 +44,35 @@ def test_trainer_requires_named_generator_and_keeps_validation_dir(tmp_path: Pat
     )
     paths = RunLayout.from_project(project)
     ensure_run_directories(paths)
-    generator = ConcatUNetGenerator(("LF", "AF"), base_channels=4)
-    discriminator = PatchGANDiscriminator(in_channels=9, ndf=4)
+    training = TrainingConfig(
+        batch_size=1,
+        epochs=1,
+        lr_g=2e-4,
+        lr_d=2e-4,
+        beta1=0.5,
+        beta2=0.999,
+        seed=0,
+        num_workers=0,
+        validate_rate=1,
+        checkpoint_rate=1,
+    )
+    run_config = RunConfig(
+        project=project,
+        method=MethodConfig(),
+        model=ModelConfig.from_mapping(
+            {
+                "inputs": ["LF", "AF"],
+                "target": "stained",
+                "generator": {"base_channels": 4},
+                "discriminator": {"ndf": 4},
+            }
+        ),
+        training=training,
+        inference=None,
+        preprocessing=None,
+        evaluation=None,
+    )
+    method = Pix2PixMethod(run_config, paths, torch.device("cpu"))
     sample = {
         "inputs": {"LF": torch.zeros(1, 3, 8, 8), "AF": torch.zeros(1, 3, 8, 8)},
         "target": torch.zeros(1, 3, 8, 8),
@@ -51,29 +80,17 @@ def test_trainer_requires_named_generator_and_keeps_validation_dir(tmp_path: Pat
     }
     loader = DataLoader([sample], batch_size=1)  # pyright: ignore[reportArgumentType]
     trainer = Trainer(
-        TrainingConfig(
-            batch_size=1,
-            epochs=1,
-            lr_g=2e-4,
-            lr_d=2e-4,
-            beta1=0.5,
-            beta2=0.999,
-            seed=0,
-            num_workers=0,
-            validate_rate=1,
-            checkpoint_rate=1,
-        ),
+        training,
         paths,
-        generator,
-        discriminator,
+        method,
         loader,
         loader,
         torch.device("cpu"),
         experiment_session=_session(),
         config_hash="sha256:test",
-        image_size=(8, 8),
         train_dir=tmp_path / "train",
         val_dir=tmp_path / "val",
     )
-    assert trainer._input_names == ("LF", "AF")
+    assert trainer.method.name == "pix2pix"
+    assert method.generator.input_names == ("LF", "AF")
     assert trainer._val_dir == tmp_path / "val"

@@ -8,13 +8,14 @@ from virtual_staining.config.data import PreprocessingConfig
 from virtual_staining.config.evaluation import EvaluationConfig
 from virtual_staining.config.inference import InferenceConfig
 from virtual_staining.config.loader import load_yaml_mapping
+from virtual_staining.config.method import MethodConfig
 from virtual_staining.config.model import ModelConfig
 from virtual_staining.config.project import PROJECT_KEYS, ProjectConfig
 from virtual_staining.config.training import TrainingConfig
 from virtual_staining.config.validation import reject_unknown_keys
 
 _TOP_LEVEL_KEYS = PROJECT_KEYS | frozenset(
-    {"preprocessing", "training", "inference", "evaluation", "model"}
+    {"preprocessing", "training", "inference", "evaluation", "method", "model"}
 )
 
 
@@ -28,6 +29,7 @@ def _section(raw: dict[str, Any], name: str) -> dict[str, Any]:
 @dataclass(frozen=True)
 class RunConfig:
     project: ProjectConfig
+    method: MethodConfig
     model: ModelConfig
     training: TrainingConfig | None
     inference: InferenceConfig | None
@@ -51,6 +53,7 @@ class RunConfig:
         project = ProjectConfig.from_mapping(raw)
         config = cls(
             project=project,
+            method=MethodConfig.from_mapping(_section(raw, "method")),
             model=ModelConfig.from_mapping(_section(raw, "model")),
             preprocessing=(
                 PreprocessingConfig.from_mapping(
@@ -81,6 +84,7 @@ class RunConfig:
 
     def to_dict(self) -> dict[str, Any]:
         data = self.project.to_dict()
+        data["method"] = self.method.to_dict()
         data["model"] = self.model.to_dict()
         if self.preprocessing is not None:
             data["preprocessing"] = self.preprocessing.to_dict()

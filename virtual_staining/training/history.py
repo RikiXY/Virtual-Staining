@@ -3,27 +3,42 @@ from __future__ import annotations
 import csv
 import math
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
 from types import TracebackType
 from typing import TextIO
 
 from virtual_staining.metrics import VALIDATION_IMAGE_METRIC_NAMES
 from virtual_staining.training.helpers import metrics_fieldnames
-from virtual_staining.training.results import EpochMetrics
+from virtual_staining.training.runtime import MethodMetrics
 
 
 class TrainingHistory:
     """Own the canonical one-row-per-epoch CSV history."""
 
-    def __init__(self, path: Path, loss_names: list[str], *, resume_at: int) -> None:
+    def __init__(
+        self,
+        path: Path,
+        loss_names: list[str],
+        *,
+        resume_at: int,
+        metric_names: Sequence[str],
+        component_total_names: Sequence[str],
+    ) -> None:
         self._path = path
         self._loss_names = loss_names
+        self._metric_names = tuple(metric_names)
+        self._component_total_names = tuple(component_total_names)
         self._resume_at = resume_at
         if resume_at < 0:
             raise ValueError("resume_at must be non-negative")
         self._file: TextIO | None = None
         self._writer: csv.DictWriter[str] | None = None
-        self._fieldnames = metrics_fieldnames(loss_names) + list(VALIDATION_IMAGE_METRIC_NAMES)
+        self._fieldnames = metrics_fieldnames(
+            loss_names,
+            metric_names=self._metric_names,
+            component_total_names=self._component_total_names,
+        ) + list(VALIDATION_IMAGE_METRIC_NAMES)
 
     def __enter__(self) -> TrainingHistory:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -66,8 +81,8 @@ class TrainingHistory:
     def write_epoch(
         self,
         epoch: int,
-        train_metrics: EpochMetrics,
-        val_metrics: EpochMetrics | None,
+        train_metrics: MethodMetrics,
+        val_metrics: MethodMetrics | None,
     ) -> dict[str, float]:
         if self._writer is None or self._file is None:
             raise RuntimeError("TrainingHistory must be entered before writing epochs")
@@ -112,16 +127,13 @@ class TrainingHistory:
 
 
 def _flat_metrics(
-    train_metrics: EpochMetrics,
-    val_metrics: EpochMetrics | None,
+    train_metrics: MethodMetrics,
+    val_metrics: MethodMetrics | None,
 ) -> dict[str, float]:
-    metrics: dict[str, float] = {
-        "loss_G_train": train_metrics.loss_G,
-        "loss_D_train": train_metrics.loss_D,
-    }
+    metrics = {f"{name}_train": value for name, value in train_metrics.losses.items()}
     _add_components(metrics, "train", train_metrics)
     if val_metrics is not None:
-        metrics.update({"loss_G_val": val_metrics.loss_G, "loss_D_val": val_metrics.loss_D})
+        metrics.update({f"{name}_val": value for name, value in val_metrics.losses.items()})
         _add_components(metrics, "val", val_metrics)
         metrics.update(
             {
@@ -132,10 +144,9 @@ def _flat_metrics(
     return metrics
 
 
-def _add_components(metrics: dict[str, float], stage: str, values: EpochMetrics) -> None:
-    if values.raw or values.weighted or values.current_weight:
-        metrics[f"loss_{stage}_total_generator"] = values.loss_G
-        metrics[f"loss_{stage}_total_discriminator"] = values.loss_D
+def _add_components(metrics: dict[str, float], stage: str, values: MethodMetrics) -> None:
+    for name, value in values.component_totals.items():
+        metrics[f"loss_{stage}_total_{name}"] = value
     for name, value in values.raw.items():
         metrics[f"loss_{stage}_raw_{name}"] = value
     for name, value in values.weighted.items():
