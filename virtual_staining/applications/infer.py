@@ -10,14 +10,15 @@ from virtual_staining.data.dataset import PairedManifestDataset
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.manifest import load_manifest_or_raise
 from virtual_staining.experiment.session import ExperimentSession
+from virtual_staining.inference.outputs import generated_path_for_record
 from virtual_staining.inference.runner import (
     InferenceResult,
     build_inference_transform,
+    inference_direction,
     load_inference_generator,
     predict_batch,
     resolve_inference_device,
 )
-from virtual_staining.utils.artifacts import generated_filename
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
         generator, checkpoint_path = load_inference_generator(config, session.paths, device)
         transform = build_inference_transform(config.project.image_size)
         output_dir = config.inference.output_dir or session.paths.output_test_dir
+        direction = inference_direction(config)
 
         manifest = load_manifest_or_raise(config.project)
         if not set(config.model.inputs).issubset(manifest.metadata.input_modalities):
@@ -63,10 +65,14 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
 
         for idx in range(len(dataset)):
             sample = dataset[idx]
-            inputs = {name: tensor.unsqueeze(0) for name, tensor in sample["inputs"].items()}
+            if direction == "B_to_A":
+                # The aligned test target is only a convenient held-out domain-B source here.
+                inputs = {config.model.target: sample["target"].unsqueeze(0)}
+            else:
+                inputs = {name: tensor.unsqueeze(0) for name, tensor in sample["inputs"].items()}
             record = test_manifest.records[idx]
             output = predict_batch(generator, inputs, device)[0]
-            out_path = output_dir / generated_filename(record.sample_id, record.target_path.suffix)
+            out_path = generated_path_for_record(record, output_dir, direction)
             save_image(output, out_path)
             result.generated_paths.append(out_path)
             result.num_samples += 1

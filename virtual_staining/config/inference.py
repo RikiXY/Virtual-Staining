@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from virtual_staining.checkpoint_selection import (
     RANKED_CHECKPOINT_POLICIES,
     SUPPORTED_CHECKPOINT_METRICS,
     SUPPORTED_CHECKPOINT_POLICIES,
 )
-from virtual_staining.config.validation import reject_unknown_keys
+from virtual_staining.config.validation import parse_choice, reject_unknown_keys
+
+InferenceDirection = Literal["A_to_B", "B_to_A"]
 
 _INFERENCE_KEYS: frozenset[str] = frozenset(
     {
@@ -18,6 +20,7 @@ _INFERENCE_KEYS: frozenset[str] = frozenset(
         "checkpoint_metric",
         "checkpoint_rank",
         "output_dir",
+        "direction",
     }
 )
 
@@ -29,6 +32,7 @@ class InferenceConfig:
     checkpoint_metric: str | None = None
     checkpoint_rank: int | None = None
     output_dir: Path | None = None
+    direction: InferenceDirection | None = None
 
     def __post_init__(self) -> None:
         self.validate()
@@ -44,6 +48,14 @@ class InferenceConfig:
             if data.get("checkpoint_rank") is not None
             else None,
             output_dir=Path(data["output_dir"]) if data.get("output_dir") else None,
+            direction=(
+                cast(
+                    InferenceDirection,
+                    parse_choice(data["direction"], "inference.direction", {"A_to_B", "B_to_A"}),
+                )
+                if data.get("direction") is not None
+                else None
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -55,6 +67,7 @@ class InferenceConfig:
                 "checkpoint_metric": self.checkpoint_metric,
                 "checkpoint_rank": self.checkpoint_rank,
                 "output_dir": str(self.output_dir) if self.output_dir else None,
+                "direction": self.direction,
             }.items()
             if value is not None
         }

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import random
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -13,9 +14,11 @@ from virtual_staining.config.run import RunConfig
 from virtual_staining.data.dataset import PairedManifestDataset
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.manifest import load_manifest_or_raise
+from virtual_staining.data.unpaired import UnpairedImageDataset, resolve_domain_images
 from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.methods.registry import resolve_training_method
 from virtual_staining.models.io_contract import build_model_input_transform
+from virtual_staining.split_contract import TRAIN_SPLIT, VAL_SPLIT, DatasetSplit
 from virtual_staining.training.augmentation import build_training_paired_transform
 from virtual_staining.training.progress import ProgressReporter, ProgressUpdate, format_progress_log
 from virtual_staining.training.results import TrainingResult
@@ -45,6 +48,86 @@ def _requires_foreground_masks(config: RunConfig) -> bool:
     return any(term.requires_mask for term in config.training.losses.generator)
 
 
+def _paired_datasets(
+    config: RunConfig,
+    transform: Callable[[Any], Any],
+    seed: int,
+) -> tuple[PairedManifestDataset, PairedManifestDataset, dict[str, object]]:
+    assert config.training is not None
+    training = config.training
+    manifest = load_manifest_or_raise(config.project)
+    if not set(config.model.inputs).issubset(manifest.metadata.input_modalities):
+        raise ValueError("model.inputs must be a subset of manifest input modalities")
+    if config.model.target != manifest.metadata.target_modality:
+        raise ValueError("model.target must equal manifest target modality")
+    manifest.validate(check_files_exist=True, require_splits={"train", "val"})
+    train_manifest = manifest.filter_split("train")
+    val_manifest = manifest.filter_split("val")
+
+    train_paired_transform = build_training_paired_transform(
+        training.augmentation,
+        image_size=config.project.image_size,
+        seed=seed,
+        input_names=config.model.inputs,
+        reference_modality=config.preprocessing.inputs.reference
+        if config.preprocessing
+        else config.model.inputs[0],
+    )
+    train_dataset = PairedManifestDataset(
+        train_manifest,
+        input_names=config.model.inputs,
+        transform=None if train_paired_transform is not None else transform,
+        paired_transform=train_paired_transform,
+        include_foreground_mask=_requires_foreground_masks(config),
+        virtual_expansion_factor=training.augmentation.effective_expansion_factor,
+    )
+    val_dataset = PairedManifestDataset(
+        val_manifest,
+        input_names=config.model.inputs,
+        transform=transform,
+        include_foreground_mask=_requires_foreground_masks(config),
+    )
+    logger.info(
+        "Loaded manifest: %s train samples (%s effective), %s val samples",
+        len(train_manifest),
+        len(train_dataset),
+        len(val_dataset),
+    )
+    details: dict[str, object] = {
+        "train_sample_count": len(train_manifest),
+        "effective_train_sample_count": (
+            len(train_manifest) * training.augmentation.effective_expansion_factor
+        ),
+    }
+    return train_dataset, val_dataset, details
+
+
+def _unpaired_datasets(
+    config: RunConfig,
+    transform: Callable[[Any], Any],
+    seed: int,
+) -> tuple[UnpairedImageDataset, UnpairedImageDataset]:
+    domain_a, domain_b = config.model.inputs[0], config.model.target
+    root = config.project.dataset_root
+    datasets = []
+    splits: tuple[tuple[DatasetSplit, int | None], ...] = ((TRAIN_SPLIT, seed), (VAL_SPLIT, None))
+    for split, pairing_seed in splits:
+        paths_a = resolve_domain_images(config.data.domains[domain_a], split, root)
+        paths_b = resolve_domain_images(config.data.domains[domain_b], split, root)
+        logger.info(
+            "Unpaired %s split: %s %s images, %s %s images",
+            split,
+            len(paths_a),
+            domain_a,
+            len(paths_b),
+            domain_b,
+        )
+        datasets.append(
+            UnpairedImageDataset(paths_a, paths_b, transform=transform, pairing_seed=pairing_seed)
+        )
+    return datasets[0], datasets[1]
+
+
 def train(
     config: RunConfig,
     config_path: Path,
@@ -62,65 +145,30 @@ def train(
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info("Device: %s", device)
         dataset_layout = DatasetLayout.from_project(config.project)
-        manifest = load_manifest_or_raise(config.project)
-        if not set(config.model.inputs).issubset(manifest.metadata.input_modalities):
-            raise ValueError("model.inputs must be a subset of manifest input modalities")
-        if config.model.target != manifest.metadata.target_modality:
-            raise ValueError("model.target must equal manifest target modality")
-        manifest.validate(check_files_exist=True, require_splits={"train", "val"})
-        train_manifest = manifest.filter_split("train")
-        val_manifest = manifest.filter_split("val")
-
-        effective_train_sample_count = (
-            len(train_manifest) * training.augmentation.effective_expansion_factor
-        )
+        transform = build_model_input_transform(config.project.image_size)
+        if config.data.pairing == "unpaired":
+            train_dataset, val_dataset = _unpaired_datasets(config, transform, seed)
+            dataset_details: dict[str, object] = {
+                "train_sample_count": len(train_dataset),
+                "effective_train_sample_count": len(train_dataset),
+            }
+        else:
+            train_dataset, val_dataset, dataset_details = _paired_datasets(config, transform, seed)
         train_details = {
             "seed": seed,
             "device": str(device),
             "cuda_device_name": (
                 torch.cuda.get_device_name(device) if device.type == "cuda" else None
             ),
-            "train_sample_count": len(train_manifest),
-            "effective_train_sample_count": effective_train_sample_count,
+            **dataset_details,
             "augmentation_enabled": training.augmentation.enabled,
             "augmentation_intensity": training.augmentation.intensity,
             "augmentation_expansion_factor": training.augmentation.effective_expansion_factor,
-            "val_sample_count": len(val_manifest),
+            "val_sample_count": len(val_dataset),
         }
         session.result(**train_details)
         if benchmark_recorder is not None:
             benchmark_recorder.set_workload(**train_details, batch_size=training.batch_size)
-
-        transform = build_model_input_transform(config.project.image_size)
-        train_paired_transform = build_training_paired_transform(
-            training.augmentation,
-            image_size=config.project.image_size,
-            seed=seed,
-            input_names=config.model.inputs,
-            reference_modality=config.preprocessing.inputs.reference
-            if config.preprocessing
-            else config.model.inputs[0],
-        )
-        train_dataset = PairedManifestDataset(
-            train_manifest,
-            input_names=config.model.inputs,
-            transform=None if train_paired_transform is not None else transform,
-            paired_transform=train_paired_transform,
-            include_foreground_mask=_requires_foreground_masks(config),
-            virtual_expansion_factor=training.augmentation.effective_expansion_factor,
-        )
-        val_dataset = PairedManifestDataset(
-            val_manifest,
-            input_names=config.model.inputs,
-            transform=transform,
-            include_foreground_mask=_requires_foreground_masks(config),
-        )
-        logger.info(
-            "Loaded manifest: %s train samples (%s effective), %s val samples",
-            len(train_manifest),
-            len(train_dataset),
-            len(val_dataset),
-        )
 
         train_loader_generator = torch.Generator()
         train_loader_generator.manual_seed(seed)
@@ -146,6 +194,7 @@ def train(
         method = resolve_training_method(
             config,
             device,
+            seed=seed,
             benchmark_recorder=benchmark_recorder,
         )
         trainer = Trainer(

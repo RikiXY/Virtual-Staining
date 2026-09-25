@@ -134,6 +134,7 @@ def test_directory_inputs_pair_exact_relative_paths_and_preserve_subdirectories(
         device=torch.device("cpu"),
         default_single_output_dir=tmp_path / "artifacts" / "output_single",
         default_directory_output_dir=tmp_path / "artifacts" / "output_images",
+        artifact_direction=None,
     )
     results: list[SingleInferenceResult] = []
 
@@ -208,6 +209,7 @@ def test_file_inputs_reject_unequal_dimensions_before_prediction(
         device=torch.device("cpu"),
         default_single_output_dir=tmp_path / "artifacts" / "output_single",
         default_directory_output_dir=tmp_path / "artifacts" / "output_images",
+        artifact_direction=None,
     )
 
     def runtime_factory() -> InferenceRuntime:

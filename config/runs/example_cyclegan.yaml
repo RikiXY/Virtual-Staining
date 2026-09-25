@@ -1,0 +1,77 @@
+# Unpaired CycleGAN example. Copy this file for a new experiment.
+# Run with: make <target> CONFIG=config/runs/local/my_cyclegan_run.yaml
+
+dataset_root: local_workspace/datasets/your_sample
+results_path: local_workspace/results
+run_name: example_cyclegan_run
+
+# [width, height]; the ResNet generator requires multiples of 4.
+image_size: [256, 256]
+
+method:
+  name: cyclegan
+  # Per-domain history of generated images shown to the discriminators (0 disables).
+  replay_buffer_size: 50
+
+# Unpaired training reads each domain directly; no paired manifest is required.
+# Each domain is either a directory holding train/, val/, and test/ subdirectories,
+# or a path/glob containing the literal {split}. Relative paths resolve from dataset_root.
+data:
+  pairing: unpaired
+  domains:
+    label_free: domains/label_free
+    stained: "prepared/{split}/stained/**/*.tif"
+
+# Domain A is model.inputs[0]; domain B is model.target.
+model:
+  inputs: [label_free]
+  target: stained
+  generator:
+    architecture: resnet
+    base_channels: 64
+    blocks: 9
+    norm: instance
+  discriminator:
+    ndf: 64
+    norm: instance
+    use_sigmoid: false
+
+training:
+  batch_size: 1
+  epochs: 200
+  lr_g: 0.0002
+  lr_d: 0.0002
+  beta1: 0.5
+  beta2: 0.999
+  seed: 42
+  num_workers: 4
+  validate_rate: 10
+  checkpoint_rate: 10
+  checkpoint_top_k: 3
+  log_rate: 15
+  resume: null
+  scheduler:
+    name: linear_decay
+    decay_start_epoch: 100
+  # CycleGAN currently requires augmentation to stay disabled.
+  augmentation:
+    enabled: false
+  losses:
+    generator:
+      - name: adversarial_lsgan
+        weight: 1.0
+      - name: cycle_l1
+        weight: 10.0
+      # Optional; set enabled: false to drop the identity passes.
+      - name: identity_l1
+        weight: 5.0
+    discriminator:
+      - name: adversarial_lsgan
+        weight: 1.0
+
+inference:
+  # CycleGAN validation reports training-objective losses only; rank by loss_G_val.
+  checkpoint_policy: best
+  checkpoint_metric: loss_G_val
+  # A_to_B translates label_free -> stained; B_to_A translates stained -> label_free.
+  direction: A_to_B

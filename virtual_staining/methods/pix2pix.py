@@ -25,7 +25,14 @@ from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.factory import build_discriminator, build_generator
 from virtual_staining.models.generator import ConcatUNetGenerator
 from virtual_staining.models.io_contract import GENERATOR_OUTPUT_ACTIVATION
-from virtual_staining.training.helpers import configured_loss_names, is_amp_enabled, unpack_batch
+from virtual_staining.training.helpers import (
+    build_lr_scheduler,
+    configured_loss_names,
+    is_amp_enabled,
+    loss_validation_metric,
+    step_lr_schedulers,
+    unpack_batch,
+)
 from virtual_staining.training.losses import ConfiguredLossEvaluator
 from virtual_staining.training.runtime import MethodMetrics
 from virtual_staining.training.steps import Pix2PixTrainingStep
@@ -35,8 +42,6 @@ if TYPE_CHECKING:
     from virtual_staining.training.benchmarking import TrainingBenchmarkRecorder
 
 logger = logging.getLogger(__name__)
-
-Scheduler = optim.lr_scheduler.LRScheduler | optim.lr_scheduler.ReduceLROnPlateau
 
 
 def pix2pix_component_metadata(model: ModelConfig) -> dict[str, object]:
@@ -132,9 +137,11 @@ class Pix2PixMethod:
 
         self._scaler_G = GradScaler(enabled=self._amp_enabled)
         self._scaler_D = GradScaler(enabled=self._amp_enabled)
-        self._scheduler_G = self._build_scheduler(self._opt_G)
+        self._scheduler_G = build_lr_scheduler(self.training, self._opt_G)
         self._scheduler_D = (
-            self._build_scheduler(self._opt_D) if self.loss_config.active_discriminator else None
+            build_lr_scheduler(self.training, self._opt_D)
+            if self.loss_config.active_discriminator
+            else None
         )
         self._step = Pix2PixTrainingStep(
             generator=self.generator,
@@ -233,25 +240,9 @@ class Pix2PixMethod:
         )
 
     def validation_metric(self, metrics: MethodMetrics, name: str) -> float | None:
-        if name == "loss_G_val":
-            return metrics.losses.get("loss_G")
-        if name == "loss_D_val":
-            return metrics.losses.get("loss_D")
         if name in metrics.image:
             return metrics.image[name]
-        if name == "loss_val_total_generator":
-            return metrics.component_totals.get("generator")
-        if name == "loss_val_total_discriminator":
-            return metrics.component_totals.get("discriminator")
-        prefix_maps = (
-            ("loss_val_raw_", metrics.raw),
-            ("loss_val_weighted_", metrics.weighted),
-            ("loss_val_current_weight_", metrics.current_weight),
-        )
-        for prefix, values in prefix_maps:
-            if name.startswith(prefix):
-                return values.get(name.removeprefix(prefix))
-        return None
+        return loss_validation_metric(metrics, name)
 
     def checkpoint_selection_metrics(self, metrics: MethodMetrics) -> dict[str, float]:
         values = {"loss_G_val": metrics.losses["loss_G"]}
@@ -273,39 +264,18 @@ class Pix2PixMethod:
         epoch: int,
         validation_metrics: MethodMetrics | None,
     ) -> bool:
-        scheduler_config = self.training.scheduler
-        if scheduler_config.name == "none":
-            return False
-
-        if scheduler_config.name == "linear_decay":
-            for scheduler in (self._scheduler_G, self._scheduler_D):
-                if scheduler is not None and not isinstance(
-                    scheduler,
-                    optim.lr_scheduler.ReduceLROnPlateau,
-                ):
-                    scheduler.step()
-            return True
-
-        if scheduler_config.name == "reduce_on_plateau":
-            if validation_metrics is None:
-                return False
-            metric_value = self.validation_metric(
-                validation_metrics,
-                scheduler_config.monitor,
-            )
-            if metric_value is None or not math.isfinite(metric_value):
-                logger.warning(
-                    "Skipping learning-rate scheduler step at epoch %s because %s is unavailable",
-                    epoch,
-                    scheduler_config.monitor,
+        return step_lr_schedulers(
+            self.training.scheduler,
+            (self._scheduler_G, self._scheduler_D),
+            epoch=epoch,
+            monitor_value=(
+                None
+                if validation_metrics is None
+                else lambda: self.validation_metric(
+                    validation_metrics, self.training.scheduler.monitor
                 )
-                return False
-            for scheduler in (self._scheduler_G, self._scheduler_D):
-                if isinstance(scheduler, optim.lr_scheduler.ReduceLROnPlateau):
-                    scheduler.step(metric_value)
-            return True
-
-        raise AssertionError(f"Unsupported scheduler {scheduler_config.name!r}")
+            ),
+        )
 
     def learning_rates(self) -> Mapping[str, float]:
         return {
@@ -356,28 +326,3 @@ class Pix2PixMethod:
             self._scheduler_G.load_state_dict(schedulers["generator"])
         if self._scheduler_D is not None and schedulers.get("discriminator") is not None:
             self._scheduler_D.load_state_dict(schedulers["discriminator"])
-
-    def _build_scheduler(self, optimizer: optim.Optimizer) -> Scheduler | None:
-        scheduler_config = self.training.scheduler
-        if scheduler_config.name == "none":
-            return None
-        if scheduler_config.name == "linear_decay":
-            assert scheduler_config.decay_start_epoch is not None
-            decay_start_epoch = scheduler_config.decay_start_epoch
-            decay_span = max(1, self.training.epochs - decay_start_epoch)
-
-            def lr_lambda(epoch: int) -> float:
-                if epoch <= decay_start_epoch:
-                    return 1.0
-                return max(0.0, 1.0 - (epoch - decay_start_epoch) / decay_span)
-
-            return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
-        if scheduler_config.name == "reduce_on_plateau":
-            return optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer,
-                mode=scheduler_config.mode,
-                factor=scheduler_config.factor,
-                patience=scheduler_config.patience,
-                min_lr=scheduler_config.min_lr,
-            )
-        raise AssertionError(f"Unsupported scheduler {scheduler_config.name!r}")

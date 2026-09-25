@@ -5,8 +5,9 @@ from types import SimpleNamespace
 from typing import cast
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 
+from tests.config_helpers import cyclegan_config_data, write_config_data
 from virtual_staining.config.method import MethodConfig
 from virtual_staining.config.model import ModelConfig
 from virtual_staining.config.project import ProjectConfig
@@ -14,6 +15,7 @@ from virtual_staining.config.run import RunConfig
 from virtual_staining.config.training import TrainingConfig
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.experiment.session import ExperimentSession
+from virtual_staining.methods.cyclegan import CycleGANMethod
 from virtual_staining.methods.pix2pix import Pix2PixMethod
 from virtual_staining.training.helpers import unpack_batch
 from virtual_staining.training.trainer import Trainer
@@ -149,3 +151,45 @@ def test_trainer_resumes_from_v4_checkpoint_at_next_epoch(tmp_path: Path) -> Non
     build()._checkpoints.save(2)
     assert build().resume("latest") == 3
     assert build().resume("ep002.pth") == 3
+
+
+class _EpochRecordingDataset(Dataset):
+    def __init__(self) -> None:
+        self.epochs: list[int] = []
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epochs.append(epoch)
+
+    def __len__(self) -> int:
+        return 1
+
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        return {"domain_a": torch.zeros(3, 32, 32), "domain_b": torch.zeros(3, 32, 32)}
+
+
+def test_trainer_calls_optional_dataset_epoch_hook(tmp_path: Path) -> None:
+    config = RunConfig.from_yaml(
+        write_config_data(tmp_path / "run.yaml", cyclegan_config_data(tmp_path))
+    )
+    assert config.training is not None
+    paths = RunLayout.from_project(config.project)
+    ensure_run_directories(paths)
+    dataset = _EpochRecordingDataset()
+    loader = DataLoader(dataset, batch_size=1)
+    trainer = Trainer(
+        config.training,
+        paths,
+        CycleGANMethod(config, torch.device("cpu"), seed=0),
+        loader,
+        loader,
+        torch.device("cpu"),
+        experiment_session=_session(),
+        config_hash="sha256:test",
+        image_size=config.project.image_size,
+        train_dir=tmp_path / "train",
+        val_dir=tmp_path / "val",
+    )
+
+    trainer.train(seed=0)
+
+    assert dataset.epochs == [0, 1]

@@ -9,8 +9,10 @@ from torch.amp import autocast
 from torchvision import transforms
 
 from virtual_staining.checkpoint_selection import resolve_checkpoint_path
+from virtual_staining.config.inference import InferenceDirection
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.run_layout import RunLayout
+from virtual_staining.methods.cyclegan import load_cyclegan_inference_generator
 from virtual_staining.methods.pix2pix import load_pix2pix_inference_generator
 from virtual_staining.models.io_contract import (
     build_model_input_transform,
@@ -65,15 +67,31 @@ def _resolve_checkpoint(config: RunConfig, paths: RunLayout) -> Path:
     )
 
 
+def inference_direction(config: RunConfig) -> InferenceDirection | None:
+    """Return the CycleGAN translation direction (default A_to_B), or None for Pix2Pix."""
+    if config.method.name != "cyclegan":
+        return None
+    configured = config.inference.direction if config.inference is not None else None
+    return configured or "A_to_B"
+
+
+def inference_input_names(config: RunConfig) -> tuple[str, ...]:
+    """Return the named inputs the configured inference direction consumes."""
+    direction = inference_direction(config)
+    if direction is None:
+        return tuple(config.model.inputs)
+    return (config.model.inputs[0],) if direction == "A_to_B" else (config.model.target,)
+
+
 def load_inference_generator(
     config: RunConfig,
     paths: RunLayout,
     device: torch.device,
 ) -> tuple[nn.Module, Path]:
-    if config.method.name != "pix2pix":
-        raise NotImplementedError(
-            f"Inference is implemented only for method.name='pix2pix'; got {config.method.name!r}"
-        )
     checkpoint_path = _resolve_checkpoint(config, paths)
-    generator = load_pix2pix_inference_generator(checkpoint_path, config, device)
+    direction = inference_direction(config)
+    if direction is None:
+        generator = load_pix2pix_inference_generator(checkpoint_path, config, device)
+    else:
+        generator = load_cyclegan_inference_generator(checkpoint_path, config, direction, device)
     return generator, checkpoint_path

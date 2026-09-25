@@ -27,6 +27,13 @@ LOSS_REGISTRY: dict[str, LossRegistryEntry] = {
     ),
     "l1": LossRegistryEntry(name="l1", roles=("generator",), targets=("image",)),
     "ssim": LossRegistryEntry(name="ssim", roles=("generator",), targets=("image",)),
+    "adversarial_lsgan": LossRegistryEntry(
+        name="adversarial_lsgan",
+        roles=("generator", "discriminator"),
+        targets=("discriminator_logits",),
+    ),
+    "cycle_l1": LossRegistryEntry(name="cycle_l1", roles=("generator",), targets=("image",)),
+    "identity_l1": LossRegistryEntry(name="identity_l1", roles=("generator",), targets=("image",)),
 }
 
 

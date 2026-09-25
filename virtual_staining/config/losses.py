@@ -18,9 +18,10 @@ _SSIM_PARAM_KEYS: frozenset[str] = frozenset(
     {"data_range", "window_size", "sigma", "channel_mode", "reduction", "mask"}
 )
 _L1_PARAM_KEYS: frozenset[str] = frozenset({"reduction", "mask"})
-_ADVERSARIAL_BCE_PARAM_KEYS: frozenset[str] = frozenset()
+_NO_PARAM_KEYS: frozenset[str] = frozenset()
+_GENERATOR_ONLY_LOSSES: frozenset[str] = frozenset({"l1", "ssim", "cycle_l1", "identity_l1"})
 
-LossName = Literal["adversarial_bce", "l1", "ssim"]
+LossName = Literal["adversarial_bce", "l1", "ssim", "adversarial_lsgan", "cycle_l1", "identity_l1"]
 LossScheduleType = Literal[
     "constant",
     "linear_warmup",
@@ -148,7 +149,7 @@ class LossTermConfig:
     def validate(self, role: LossRole) -> None:
         if self.name not in set(get_args(LossName)):
             raise ValueError(f"loss name must be one of {sorted(get_args(LossName))}")
-        if self.name in {"l1", "ssim"} and role != "generator":
+        if self.name in _GENERATOR_ONLY_LOSSES and role != "generator":
             raise ValueError(f"loss '{self.name}' is supported only in losses.generator")
         if self.weight < 0:
             raise ValueError(f"loss '{self.name}' weight must be greater than or equal to 0")
@@ -160,9 +161,7 @@ class LossTermConfig:
             reject_unknown_keys(self.params, _L1_PARAM_KEYS, f"loss '{self.name}' params")
             _validate_l1_params(self.params)
         else:
-            reject_unknown_keys(
-                self.params, _ADVERSARIAL_BCE_PARAM_KEYS, f"loss '{self.name}' params"
-            )
+            reject_unknown_keys(self.params, _NO_PARAM_KEYS, f"loss '{self.name}' params")
 
     @property
     def is_active(self) -> bool:

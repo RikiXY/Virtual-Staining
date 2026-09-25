@@ -9,5 +9,7 @@ if TYPE_CHECKING:
     from virtual_staining.data.manifest import ManifestRecord
 
 
-def generated_path_for_record(record: ManifestRecord, output_dir: Path) -> Path:
-    return output_dir / generated_filename(record.sample_id, record.target_path.suffix)
+def generated_path_for_record(
+    record: ManifestRecord, output_dir: Path, direction: str | None = None
+) -> Path:
+    return output_dir / generated_filename(record.sample_id, record.target_path.suffix, direction)

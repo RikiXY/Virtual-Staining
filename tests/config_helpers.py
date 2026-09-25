@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -58,3 +59,49 @@ def write_queue_config(
         f"{jobs}\n"
     )
     return write_yaml(tmp_path / "config" / "queues" / f"{name}.yaml", content)
+
+
+def cyclegan_config_data(tmp_path: Path) -> dict[str, Any]:
+    """Return a canonical tiny CycleGAN run configuration mapping for tests to adjust."""
+    return {
+        "dataset_root": str(tmp_path / "dataset"),
+        "results_path": str(tmp_path / "results"),
+        "run_name": "cyclegan_run",
+        "image_size": [32, 32],
+        "method": {"name": "cyclegan"},
+        "data": {
+            "pairing": "unpaired",
+            "domains": {"label_free": "domains/label_free", "stained": "domains/stained"},
+        },
+        "model": {
+            "inputs": ["label_free"],
+            "target": "stained",
+            "generator": {"architecture": "resnet", "base_channels": 4, "blocks": 1},
+            "discriminator": {"ndf": 4},
+        },
+        "training": {
+            "batch_size": 2,
+            "epochs": 2,
+            "seed": 7,
+            "num_workers": 0,
+            "validate_rate": 1,
+            "checkpoint_rate": 1,
+            "log_rate": 1,
+            "losses": {
+                "generator": [
+                    {"name": "adversarial_lsgan", "weight": 1.0},
+                    {"name": "cycle_l1", "weight": 10.0},
+                    {"name": "identity_l1", "weight": 5.0},
+                ],
+                "discriminator": [{"name": "adversarial_lsgan", "weight": 1.0}],
+            },
+        },
+        "inference": {"checkpoint_policy": "latest"},
+    }
+
+
+def write_config_data(path: Path, data: dict[str, Any]) -> Path:
+    """Write a run configuration mapping as YAML and return its path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return path

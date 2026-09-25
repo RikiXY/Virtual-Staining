@@ -62,5 +62,6 @@ class PatchGANDiscriminator(nn.Module):
 
         self.model = nn.Sequential(*layers)
 
-    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        return self.model(torch.cat([x, y], dim=1))
+    def forward(self, x: torch.Tensor, y: torch.Tensor | None = None) -> torch.Tensor:
+        """Score ``y`` conditioned on ``x``, or score ``x`` alone when unconditional."""
+        return self.model(x if y is None else torch.cat([x, y], dim=1))

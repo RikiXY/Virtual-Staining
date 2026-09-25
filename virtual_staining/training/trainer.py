@@ -565,6 +565,9 @@ class Trainer:
         session: _TrainingSession,
     ) -> MethodMetrics:
         self.method.train_mode()
+        set_epoch = getattr(self.train_loader.dataset, "set_epoch", None)
+        if callable(set_epoch):
+            set_epoch(epoch)
 
         loss_totals: dict[str, float] = {}
         method_component_totals: dict[str, float] = {}

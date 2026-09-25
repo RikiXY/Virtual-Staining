@@ -49,12 +49,6 @@ def test_method_defaults_to_pix2pix_and_is_persisted_in_resolved_config(tmp_path
     assert config.to_dict()["method"] == {"name": "pix2pix"}
 
 
-def test_method_config_recognizes_cyclegan(tmp_path: Path) -> None:
-    config = RunConfig.from_yaml(_yaml(tmp_path, method="cyclegan"))
-    assert config.method.name == "cyclegan"
-    assert config.to_dict()["method"] == {"name": "cyclegan"}
-
-
 def test_method_config_rejects_unknown_method(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="method.name must be one of"):
         RunConfig.from_yaml(_yaml(tmp_path, method="stylegan"))
@@ -86,13 +80,6 @@ def test_resolver_builds_pix2pix_runtime_without_exposing_optimizer_count(
     assert method.input_names == ("source",)
     assert method.output_names == ("target",)
     assert set(method.component_metadata()) == {"generator", "discriminator"}
-
-
-def test_resolver_reports_cyclegan_runtime_as_pending(tmp_path: Path) -> None:
-    config = RunConfig.from_yaml(_yaml(tmp_path, method="cyclegan"))
-
-    with pytest.raises(NotImplementedError, match="cyclegan.*not implemented"):
-        resolve_training_method(config, torch.device("cpu"))
 
 
 def test_pix2pix_method_state_round_trip(tmp_path: Path) -> None:

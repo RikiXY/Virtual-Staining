@@ -190,3 +190,83 @@ class ConcatUNetGenerator(nn.Module):
 
     def forward(self, inputs: Mapping[str, torch.Tensor]) -> torch.Tensor:
         return self.unet(concat_inputs(inputs, self.input_names))
+
+
+RESNET_SIZE_MULTIPLE = 4
+
+
+class ResnetBlock(nn.Module):
+    def __init__(self, channels: int) -> None:
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.ReflectionPad2d(1),
+            nn.Conv2d(channels, channels, kernel_size=3),
+            nn.InstanceNorm2d(channels),
+            nn.ReLU(inplace=True),
+            nn.ReflectionPad2d(1),
+            nn.Conv2d(channels, channels, kernel_size=3),
+            nn.InstanceNorm2d(channels),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + self.block(x)
+
+
+class ResnetGenerator(nn.Module):
+    """CycleGAN ResNet generator mapping one RGB tensor to one RGB tensor."""
+
+    def __init__(
+        self,
+        in_channels: int = 3,
+        out_channels: int = 3,
+        base_channels: int = 64,
+        blocks: int = 9,
+    ) -> None:
+        super().__init__()
+        if blocks < 1:
+            raise ValueError("ResnetGenerator requires at least one residual block")
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.base_channels = base_channels
+        self.blocks = blocks
+        b = base_channels
+        layers: list[nn.Module] = [
+            nn.ReflectionPad2d(3),
+            nn.Conv2d(in_channels, b, kernel_size=7),
+            nn.InstanceNorm2d(b),
+            nn.ReLU(inplace=True),
+        ]
+        for mult in (1, 2):
+            layers += [
+                nn.Conv2d(b * mult, b * mult * 2, kernel_size=3, stride=2, padding=1),
+                nn.InstanceNorm2d(b * mult * 2),
+                nn.ReLU(inplace=True),
+            ]
+        layers += [ResnetBlock(b * 4) for _ in range(blocks)]
+        for mult in (4, 2):
+            layers += [
+                nn.ConvTranspose2d(
+                    b * mult, b * mult // 2, kernel_size=3, stride=2, padding=1, output_padding=1
+                ),
+                nn.InstanceNorm2d(b * mult // 2),
+                nn.ReLU(inplace=True),
+            ]
+        layers += [
+            nn.ReflectionPad2d(3),
+            nn.Conv2d(b, out_channels, kernel_size=7),
+            nn.Tanh(),
+        ]
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim != 4 or x.shape[1] != self.in_channels:
+            raise ValueError(
+                f"ResnetGenerator expects NCHW input with {self.in_channels} channels, "
+                f"got shape {tuple(x.shape)}"
+            )
+        if x.shape[-2] % RESNET_SIZE_MULTIPLE or x.shape[-1] % RESNET_SIZE_MULTIPLE:
+            raise ValueError(
+                f"ResnetGenerator spatial dimensions must be multiples of {RESNET_SIZE_MULTIPLE}, "
+                f"got {tuple(x.shape[-2:])}"
+            )
+        return self.model(x)

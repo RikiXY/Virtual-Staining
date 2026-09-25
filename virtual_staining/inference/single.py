@@ -64,6 +64,7 @@ class InferenceRuntime:
     device: torch.device
     default_single_output_dir: Path
     default_directory_output_dir: Path
+    artifact_direction: str | None = None
 
 
 RuntimeFactory: TypeAlias = Callable[[], InferenceRuntime]
@@ -83,8 +84,10 @@ def _sample_id_from_input_path(input_path: Path) -> str:
     return stem
 
 
-def _generated_filename_for_input(input_path: Path, output_suffix: str) -> str:
-    return generated_filename(_sample_id_from_input_path(input_path), output_suffix)
+def _generated_filename_for_input(
+    input_path: Path, output_suffix: str, direction: str | None
+) -> str:
+    return generated_filename(_sample_id_from_input_path(input_path), output_suffix, direction)
 
 
 def _validate_supported_image_path(path: Path, *, label: str) -> None:
@@ -322,7 +325,9 @@ def _resolve_output_path(
         else runtime.default_directory_output_dir
     )
     output_suffix = _output_suffix_for_input(input_path, output_format)
-    return output_dir / _generated_filename_for_input(input_path, output_suffix)
+    return output_dir / _generated_filename_for_input(
+        input_path, output_suffix, runtime.artifact_direction
+    )
 
 
 def _run_one_image(
@@ -528,7 +533,9 @@ def _run_image_directory_inference(
         output_path = (
             resolved_output_dir
             / relative_parent
-            / _generated_filename_for_input(source_paths[ordered_names[0]], output_suffix)
+            / _generated_filename_for_input(
+                source_paths[ordered_names[0]], output_suffix, runtime.artifact_direction
+            )
         )
         results.append(
             _run_one_image(

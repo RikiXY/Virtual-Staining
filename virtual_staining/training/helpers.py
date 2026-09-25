@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import logging
+import math
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
 import torch
+import torch.optim as optim
 from torchvision.utils import save_image
 
 from virtual_staining.config.losses import LossConfig
+from virtual_staining.config.training import LearningRateSchedulerConfig, TrainingConfig
 from virtual_staining.models.io_contract import denormalize_model_output
+from virtual_staining.training.runtime import MethodMetrics
+
+logger = logging.getLogger(__name__)
 
 
 def is_amp_enabled(device: torch.device) -> bool:
@@ -151,3 +159,92 @@ class LossComponentAccumulator:
             weighted=_average_components(self.weighted, count, self.loss_names),
             current_weight=_average_components(self.current_weight, count, self.loss_names),
         )
+
+
+Scheduler = optim.lr_scheduler.LRScheduler | optim.lr_scheduler.ReduceLROnPlateau
+
+
+def build_lr_scheduler(training: TrainingConfig, optimizer: optim.Optimizer) -> Scheduler | None:
+    scheduler_config = training.scheduler
+    if scheduler_config.name == "none":
+        return None
+    if scheduler_config.name == "linear_decay":
+        assert scheduler_config.decay_start_epoch is not None
+        decay_start_epoch = scheduler_config.decay_start_epoch
+        decay_span = max(1, training.epochs - decay_start_epoch)
+
+        def lr_lambda(epoch: int) -> float:
+            if epoch <= decay_start_epoch:
+                return 1.0
+            return max(0.0, 1.0 - (epoch - decay_start_epoch) / decay_span)
+
+        return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+    if scheduler_config.name == "reduce_on_plateau":
+        return optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode=scheduler_config.mode,
+            factor=scheduler_config.factor,
+            patience=scheduler_config.patience,
+            min_lr=scheduler_config.min_lr,
+        )
+    raise AssertionError(f"Unsupported scheduler {scheduler_config.name!r}")
+
+
+def step_lr_schedulers(
+    scheduler_config: LearningRateSchedulerConfig,
+    schedulers: Sequence[Scheduler | None],
+    *,
+    epoch: int,
+    monitor_value: Callable[[], float | None] | None,
+) -> bool:
+    """Step method-owned schedulers; ``monitor_value`` is None when validation did not run."""
+    if scheduler_config.name == "none":
+        return False
+
+    if scheduler_config.name == "linear_decay":
+        for scheduler in schedulers:
+            if scheduler is not None and not isinstance(
+                scheduler,
+                optim.lr_scheduler.ReduceLROnPlateau,
+            ):
+                scheduler.step()
+        return True
+
+    if scheduler_config.name == "reduce_on_plateau":
+        if monitor_value is None:
+            return False
+        metric_value = monitor_value()
+        if metric_value is None or not math.isfinite(metric_value):
+            logger.warning(
+                "Skipping learning-rate scheduler step at epoch %s because %s is unavailable",
+                epoch,
+                scheduler_config.monitor,
+            )
+            return False
+        for scheduler in schedulers:
+            if isinstance(scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(metric_value)
+        return True
+
+    raise AssertionError(f"Unsupported scheduler {scheduler_config.name!r}")
+
+
+def loss_validation_metric(metrics: MethodMetrics, name: str) -> float | None:
+    """Resolve the loss-derived validation CSV column ``name`` from method metrics."""
+    if name == "loss_G_val":
+        return metrics.losses.get("loss_G")
+    if name == "loss_D_val":
+        return metrics.losses.get("loss_D")
+    if name == "loss_val_total_generator":
+        return metrics.component_totals.get("generator")
+    if name == "loss_val_total_discriminator":
+        return metrics.component_totals.get("discriminator")
+    prefix_maps = (
+        ("loss_val_raw_", metrics.raw),
+        ("loss_val_weighted_", metrics.weighted),
+        ("loss_val_current_weight_", metrics.current_weight),
+    )
+    for prefix, values in prefix_maps:
+        if name.startswith(prefix):
+            return values.get(name.removeprefix(prefix))
+    return None

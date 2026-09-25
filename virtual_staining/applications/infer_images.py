@@ -4,7 +4,12 @@ from pathlib import Path
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
-from virtual_staining.inference.runner import load_inference_generator, resolve_inference_device
+from virtual_staining.inference.runner import (
+    inference_direction,
+    inference_input_names,
+    load_inference_generator,
+    resolve_inference_device,
+)
 from virtual_staining.inference.single import (
     DEFAULT_TILE_OVERLAP,
     SUPPORTED_OUTPUT_FORMATS,
@@ -79,6 +84,7 @@ def _create_runtime(config: RunConfig) -> InferenceRuntime:
         device=device,
         default_single_output_dir=output_dir or layout.artifacts_dir / "output_single",
         default_directory_output_dir=output_dir or layout.artifacts_dir / "output_images",
+        artifact_direction=inference_direction(config),
     )
 
 
@@ -93,7 +99,7 @@ def infer_images(
     output_format: str = "same",
 ) -> SingleInferenceResult | DirectoryInferenceResult:
     config = RunConfig.from_yaml(config_path.resolve())
-    input_paths = _resolve_input_specs(input_specs, tuple(config.model.inputs))
+    input_paths = _resolve_input_specs(input_specs, inference_input_names(config))
     return run_image_path_inference(
         lambda: _create_runtime(config),
         input_paths,

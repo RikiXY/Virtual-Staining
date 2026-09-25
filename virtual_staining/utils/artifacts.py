@@ -6,8 +6,10 @@ TARGET_SUFFIX = "_target"
 GENERATED_SUFFIX = "_target_generated"
 
 
-def generated_filename(sample_id: str, suffix: str) -> str:
-    return f"{sample_id}{GENERATED_SUFFIX}{suffix.lower()}"
+def generated_filename(sample_id: str, suffix: str, direction: str | None = None) -> str:
+    """Name a generated artifact; CycleGAN passes its direction so directions never collide."""
+    label = GENERATED_SUFFIX if direction is None else f"_{direction}_generated"
+    return f"{sample_id}{label}{suffix.lower()}"
 
 
 def generated_sample_id(path: str | Path) -> str:

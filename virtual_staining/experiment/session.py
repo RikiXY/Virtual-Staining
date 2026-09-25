@@ -235,9 +235,11 @@ class ExperimentSession:
             )
             save_environment_snapshot(stage_layout.environment)
             manifest_path = dataset_layout.manifest_path
-            if not manifest_path.is_file():
+            if manifest_path.is_file():
+                self.manifest_hash = sha256_file(manifest_path)
+            # Unpaired training reads data.domains directly; every other stage needs the manifest.
+            elif self.stage != "train" or self.config.data.pairing == "paired":
                 raise FileNotFoundError(f"Manifest not found at {manifest_path}. Run 'vs prepare'.")
-            self.manifest_hash = sha256_file(manifest_path)
             self.dataset_fingerprint = _load_dataset_fingerprint(
                 dataset_layout.dataset_fingerprint_path
             )
