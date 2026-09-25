@@ -75,3 +75,11 @@ inference:
   checkpoint_metric: loss_G_val
   # A_to_B translates label_free -> stained; B_to_A translates stained -> label_free.
   direction: A_to_B
+
+evaluation:
+  # unpaired (default for cyclegan): compares per-image color/luminance feature
+  # distributions of generated vs real test images from data.domains; no pairwise metrics.
+  # paired: per-image fidelity metrics against an aligned held-out test manifest
+  # (required; data.domains images are never treated as pairs).
+  protocol: unpaired
+  save_graphs: true

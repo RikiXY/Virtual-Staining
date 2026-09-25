@@ -2,9 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
-from virtual_staining.config.validation import parse_bool_strict, reject_unknown_keys
+from virtual_staining.config.validation import (
+    parse_bool_strict,
+    parse_choice,
+    reject_unknown_keys,
+)
+
+EvaluationProtocol = Literal["paired", "unpaired"]
 
 _EVALUATION_KEYS: frozenset[str] = frozenset(
     {
@@ -13,6 +19,7 @@ _EVALUATION_KEYS: frozenset[str] = frozenset(
         "output_dir",
         "bootstrap_iterations",
         "bootstrap_seed",
+        "protocol",
     }
 )
 
@@ -24,6 +31,8 @@ class EvaluationConfig:
     output_dir: Path | None = None
     bootstrap_iterations: int = 10_000
     bootstrap_seed: int = 0
+    # None resolves per method: pix2pix -> paired, cyclegan -> unpaired.
+    protocol: EvaluationProtocol | None = None
 
     def __post_init__(self) -> None:
         if self.bootstrap_iterations < 0:
@@ -38,6 +47,14 @@ class EvaluationConfig:
             output_dir=Path(data["output_dir"]) if data.get("output_dir") else None,
             bootstrap_iterations=int(data.get("bootstrap_iterations", 10_000)),
             bootstrap_seed=int(data.get("bootstrap_seed", 0)),
+            protocol=(
+                cast(
+                    EvaluationProtocol,
+                    parse_choice(data["protocol"], "evaluation.protocol", {"paired", "unpaired"}),
+                )
+                if data.get("protocol") is not None
+                else None
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -49,6 +66,7 @@ class EvaluationConfig:
                 "output_dir": str(self.output_dir) if self.output_dir else None,
                 "bootstrap_iterations": self.bootstrap_iterations,
                 "bootstrap_seed": self.bootstrap_seed,
+                "protocol": self.protocol,
             }.items()
             if value is not None
         }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -85,3 +86,30 @@ def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) ->
 
     saved_paths.append(boxplot_path)
     return saved_paths
+
+
+def save_unpaired_feature_plot(
+    generated: Mapping[str, Sequence[float]],
+    reference: Mapping[str, Sequence[float]],
+    path: Path,
+) -> Path:
+    """Overlay generated vs reference per-image feature histograms; diagnostic only."""
+    features = list(generated)
+    columns = 4
+    rows = math.ceil(len(features) / columns)
+    fig, axes = plt.subplots(rows, columns, figsize=(4 * columns, 3 * rows), squeeze=False)
+    for ax, feature in zip(axes.flat, features, strict=False):
+        bins = np.histogram_bin_edges([*generated[feature], *reference[feature]], bins=30)
+        for label, values in (("generated", generated[feature]), ("reference", reference[feature])):
+            weights = np.ones(len(values), dtype=float) / len(values)
+            ax.hist(values, bins=bins.tolist(), weights=weights, alpha=0.5, label=label)
+        ax.set_title(feature)
+        ax.set_ylabel("Share of images")
+    for ax in axes.flat[len(features) :]:
+        ax.axis("off")
+    axes.flat[0].legend()
+    fig.suptitle("Per-image feature distributions: generated vs reference (not paired)")
+    fig.tight_layout()
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return path

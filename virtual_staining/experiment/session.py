@@ -237,8 +237,9 @@ class ExperimentSession:
             manifest_path = dataset_layout.manifest_path
             if manifest_path.is_file():
                 self.manifest_hash = sha256_file(manifest_path)
-            # Unpaired training reads data.domains directly; every other stage needs the manifest.
-            elif self.stage != "train" or self.config.data.pairing == "paired":
+            # Unpaired training and evaluation may read data.domains directly; the evaluate
+            # application itself requires the manifest when the paired protocol is selected.
+            elif self.stage not in {"train", "evaluate"} or self.config.data.pairing == "paired":
                 raise FileNotFoundError(f"Manifest not found at {manifest_path}. Run 'vs prepare'.")
             self.dataset_fingerprint = _load_dataset_fingerprint(
                 dataset_layout.dataset_fingerprint_path

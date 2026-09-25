@@ -67,6 +67,11 @@ class RunConfig:
                 )
             if self.inference is not None and self.inference.direction is not None:
                 raise ValueError("inference.direction is supported only for method.name='cyclegan'")
+            if self.evaluation is not None and self.evaluation.protocol == "unpaired":
+                raise ValueError(
+                    "evaluation.protocol='unpaired' requires method.name='cyclegan' "
+                    "(pix2pix has no independent data.domains collections)"
+                )
         else:
             self._validate_cyclegan()
         if self.training is not None:

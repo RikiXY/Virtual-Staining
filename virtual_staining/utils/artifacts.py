@@ -2,14 +2,31 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS
+
 TARGET_SUFFIX = "_target"
 GENERATED_SUFFIX = "_target_generated"
 
 
+def generated_suffix(direction: str | None = None) -> str:
+    """Return the stem suffix of a generated artifact; CycleGAN directions never collide."""
+    return GENERATED_SUFFIX if direction is None else f"_{direction}_generated"
+
+
 def generated_filename(sample_id: str, suffix: str, direction: str | None = None) -> str:
-    """Name a generated artifact; CycleGAN passes its direction so directions never collide."""
-    label = GENERATED_SUFFIX if direction is None else f"_{direction}_generated"
-    return f"{sample_id}{label}{suffix.lower()}"
+    return f"{sample_id}{generated_suffix(direction)}{suffix.lower()}"
+
+
+def collect_generated_artifacts(root: Path, direction: str | None = None) -> tuple[Path, ...]:
+    """Recursively list the sorted generated images under ``root`` for one direction."""
+    label = generated_suffix(direction)
+    return tuple(
+        path
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+        and path.suffix.lower() in VALID_IMAGE_EXTENSIONS
+        and path.stem.endswith(label)
+    )
 
 
 def generated_sample_id(path: str | Path) -> str:
