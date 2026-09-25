@@ -18,6 +18,7 @@ from virtual_staining.checkpoint_selection import (
 from virtual_staining.config.training import TrainingConfig
 from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.experiment.session import ExperimentSession
+from virtual_staining.training.checkpoints import MethodCheckpointManager
 from virtual_staining.training.helpers import LossComponentAccumulator, dataset_len
 from virtual_staining.training.history import TrainingHistory
 from virtual_staining.training.progress import (
@@ -75,6 +76,7 @@ class Trainer:
         val_dir: Path,
         experiment_session: ExperimentSession,
         config_hash: str,
+        image_size: tuple[int, int],
         progress_reporter: ProgressReporter | None = None,
         benchmark_recorder: TrainingBenchmarkRecorder | None = None,
     ) -> None:
@@ -95,10 +97,17 @@ class Trainer:
         self._checkpoints_dir = run_paths.checkpoints_dir
         self._output_val_dir = run_paths.output_val_dir
         self._output_train_dir = run_paths.output_train_dir
+        self._checkpoints = MethodCheckpointManager(
+            method,
+            run_paths.checkpoints_dir,
+            image_size=image_size,
+            device=device,
+            config_hash=config_hash,
+        )
 
     def resume(self, checkpoint: str | Path) -> int:
         if checkpoint == "latest":
-            checkpoint_path = self.method.latest_checkpoint()
+            checkpoint_path = self._checkpoints.latest()
             if checkpoint_path is None:
                 raise FileNotFoundError(
                     f"resume='latest' but no checkpoints found in {self._checkpoints_dir}"
@@ -115,7 +124,7 @@ class Trainer:
             if not checkpoint_path.is_file():
                 raise FileNotFoundError(f"resume checkpoint not found: {checkpoint_path}")
 
-        return self.method.load_checkpoint(checkpoint_path)
+        return self._checkpoints.load(checkpoint_path)
 
     def train(
         self,
@@ -130,7 +139,7 @@ class Trainer:
         session = self._run_training_epochs(start_epoch=start_epoch, start_time=start_time)
 
         if session.best_checkpoint_path is None:
-            session.best_checkpoint_path = self.method.latest_checkpoint()
+            session.best_checkpoint_path = self._checkpoints.latest()
             if session.best_checkpoint_path is not None:
                 session.best_checkpoint = session.best_checkpoint_path.name
 
@@ -507,9 +516,9 @@ class Trainer:
     def _save_checkpoint(self, epoch: int) -> Path:
         recorder = self._benchmark_recorder
         if recorder is None:
-            return self.method.save_checkpoint(epoch)
+            return self._checkpoints.save(epoch)
         with recorder.phase("checkpoint"):
-            return self.method.save_checkpoint(epoch)
+            return self._checkpoints.save(epoch)
 
     def _emit_epoch_progress(
         self,

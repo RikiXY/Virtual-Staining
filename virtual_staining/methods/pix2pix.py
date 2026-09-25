@@ -10,14 +10,21 @@ import torch
 import torch.optim as optim
 from torch.amp import GradScaler
 
+from virtual_staining.checkpoint_contract import (
+    CheckpointIdentity,
+    read_checkpoint,
+    validate_checkpoint,
+)
 from virtual_staining.checkpoint_selection import (
     SUPPORTED_CHECKPOINT_METRICS,
     default_checkpoint_mode,
 )
+from virtual_staining.config.model import ModelConfig
 from virtual_staining.config.run import RunConfig
-from virtual_staining.experiment.run_layout import RunLayout
+from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.factory import build_discriminator, build_generator
-from virtual_staining.training.checkpoints import CheckpointManager
+from virtual_staining.models.generator import ConcatUNetGenerator
+from virtual_staining.models.io_contract import GENERATOR_OUTPUT_ACTIVATION
 from virtual_staining.training.helpers import configured_loss_names, is_amp_enabled, unpack_batch
 from virtual_staining.training.losses import ConfiguredLossEvaluator
 from virtual_staining.training.runtime import MethodMetrics
@@ -30,6 +37,55 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 Scheduler = optim.lr_scheduler.LRScheduler | optim.lr_scheduler.ReduceLROnPlateau
+
+
+def pix2pix_component_metadata(model: ModelConfig) -> dict[str, object]:
+    """Describe the reconstruction-relevant Pix2Pix components built from ``model``."""
+    resolved = model.to_dict()
+    return {
+        "generator": {
+            "class": ConcatUNetGenerator.__name__,
+            "output_activation": GENERATOR_OUTPUT_ACTIVATION,
+            **resolved["generator"],
+        },
+        "discriminator": {
+            "class": PatchGANDiscriminator.__name__,
+            "architecture": "patchgan",
+            **resolved["discriminator"],
+        },
+    }
+
+
+def pix2pix_checkpoint_identity(
+    model: ModelConfig,
+    image_size: tuple[int, int],
+) -> CheckpointIdentity:
+    return CheckpointIdentity(
+        method=Pix2PixMethod.name,
+        pairing=Pix2PixMethod.pairing,
+        inputs=tuple(model.inputs),
+        outputs=(model.target,),
+        prediction_directions=Pix2PixMethod.prediction_directions,
+        components=pix2pix_component_metadata(model),
+        image_size=image_size,
+    )
+
+
+def load_pix2pix_inference_generator(
+    checkpoint_path: Path,
+    config: RunConfig,
+    device: torch.device,
+) -> ConcatUNetGenerator:
+    """Validate a v4 Pix2Pix checkpoint and restore its forward generator for inference."""
+    checkpoint = validate_checkpoint(
+        read_checkpoint(checkpoint_path, device),
+        pix2pix_checkpoint_identity(config.model, config.project.image_size),
+        checkpoint_path,
+    )
+    generator = build_generator(config.model).to(device)
+    generator.load_state_dict(checkpoint.state["models"]["generator"])
+    generator.eval()
+    return generator
 
 
 class Pix2PixMethod:
@@ -45,7 +101,6 @@ class Pix2PixMethod:
     def __init__(
         self,
         config: RunConfig,
-        run_paths: RunLayout,
         device: torch.device,
         *,
         benchmark_recorder: TrainingBenchmarkRecorder | None = None,
@@ -57,6 +112,8 @@ class Pix2PixMethod:
         self.device = device
         self._benchmark_recorder = benchmark_recorder
         self._amp_enabled = is_amp_enabled(device)
+        self.input_names = tuple(config.model.inputs)
+        self.output_names = (config.model.target,)
         self.loss_config = self.training.losses
         self.loss_names = tuple(configured_loss_names(self.loss_config))
 
@@ -95,26 +152,6 @@ class Pix2PixMethod:
         self._loss_evaluator = ConfiguredLossEvaluator(
             generator_terms=self.loss_config.generator,
             discriminator_terms=self.loss_config.discriminator,
-        )
-        self._checkpoint_manager = CheckpointManager(
-            checkpoints_dir=run_paths.checkpoints_dir,
-            generator=self.generator,
-            discriminator=self.discriminator,
-            opt_G=self._opt_G,
-            opt_D=self._opt_D,
-            scaler_G=self._scaler_G,
-            scaler_D=self._scaler_D,
-            scheduler_G=self._scheduler_G,
-            scheduler_D=self._scheduler_D,
-            image_size=config.project.image_size,
-            device=device,
-            lr_g=self.training.lr_g,
-            lr_d=self.training.lr_d,
-            beta1=self.training.beta1,
-            beta2=self.training.beta2,
-            batch_size=self.training.batch_size,
-            num_workers=self.training.num_workers,
-            target_modality=config.model.target,
         )
 
     def train_mode(self) -> None:
@@ -277,22 +314,7 @@ class Pix2PixMethod:
         }
 
     def component_metadata(self) -> Mapping[str, object]:
-        model_config = self.config.model.to_dict()
-        return {
-            "inputs": list(self.config.model.inputs),
-            "outputs": [self.config.model.target],
-            "generator": {
-                "architecture": self.config.model.generator.architecture,
-                "class": type(self.generator).__name__,
-                "resolved": model_config["generator"],
-            },
-            "discriminator": {
-                "architecture": "patchgan",
-                "class": type(self.discriminator).__name__,
-                "resolved": model_config["discriminator"],
-            },
-            "directions": list(self.prediction_directions),
-        }
+        return pix2pix_component_metadata(self.config.model)
 
     def state_dict(self) -> dict[str, Any]:
         return {
@@ -321,31 +343,19 @@ class Pix2PixMethod:
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
         models = state["models"]
         optimizers = state["optimizers"]
-        scalers = state.get("scalers", {})
-        schedulers = state.get("schedulers", {})
+        scalers = state["scalers"]
+        schedulers = state["schedulers"]
 
         self.generator.load_state_dict(models["generator"])
         self.discriminator.load_state_dict(models["discriminator"])
         self._opt_G.load_state_dict(optimizers["generator"])
         self._opt_D.load_state_dict(optimizers["discriminator"])
-
-        if "generator" in scalers:
-            self._scaler_G.load_state_dict(scalers["generator"])
-        if "discriminator" in scalers:
-            self._scaler_D.load_state_dict(scalers["discriminator"])
+        self._scaler_G.load_state_dict(scalers["generator"])
+        self._scaler_D.load_state_dict(scalers["discriminator"])
         if self._scheduler_G is not None and schedulers.get("generator") is not None:
             self._scheduler_G.load_state_dict(schedulers["generator"])
         if self._scheduler_D is not None and schedulers.get("discriminator") is not None:
             self._scheduler_D.load_state_dict(schedulers["discriminator"])
-
-    def save_checkpoint(self, epoch: int) -> Path:
-        return self._checkpoint_manager.save(epoch)
-
-    def load_checkpoint(self, path: Path) -> int:
-        return self._checkpoint_manager.load(path)
-
-    def latest_checkpoint(self) -> Path | None:
-        return self._checkpoint_manager.latest()
 
     def _build_scheduler(self, optimizer: optim.Optimizer) -> Scheduler | None:
         scheduler_config = self.training.scheduler

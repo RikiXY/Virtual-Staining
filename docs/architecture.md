@@ -16,13 +16,14 @@ upper layers may import from lower layers, never the reverse.
 | Package | Responsibility |
 |---|---|
 | `metrics.py` | Image metric computations, directions, quality thresholds, and validation image metric names |
-| `checkpoint_contract.py` | Neutral v3 checkpoint format, model-I/O normalization, and generator/discriminator metadata validation |
+| `checkpoint_contract.py` | Topology-neutral v4 checkpoint payload and strict method-aware compatibility validation |
 | `checkpoint_selection.py` | Neutral `best.json` ranking, policy, and metric-direction selection |
 | `utils/` | Shared primitives: artifact naming, image dimensions, and image I/O helpers |
 | `config/` | Sole owner of YAML-facing dataclasses and strict parsers for every config section |
 | `experiment/` | Canonical `RunLayout` for one run, `ResultsLayout` for shared comparisons, stage snapshots, run metadata, manifest/config hashing, and environment snapshots |
 | `models/` | Model factory, model-I/O normalization contract, and generator/discriminator implementations |
 | `data/` | Canonical `DatasetLayout`, slide sets, manifests, dataset building, and dataset-owned provenance/fingerprints |
+| `methods/` | Built-in translation-method runtimes owning topology, state, and component metadata |
 | `training/` | Training mechanics, validation, history, losses, resume state, and callback-driven progress events |
 | `inference/` | Reusable checkpoint loading and runtime inference; application code owns runtime composition |
 | `evaluation/` | Set evaluation, diagnostic plots, representative selection, comparison panels, and summaries |
@@ -69,8 +70,9 @@ presentation-neutral. Infer-images runtime creation belongs to `applications/`;
 `inference/single.py` accepts an already-loaded `InferenceRuntime`.
 
 Within training, `trainer.py` owns epoch orchestration, `validator.py` owns validation
-inference, `history.py` owns metric CSV persistence, `checkpoints.py` owns model/training
-state, `checkpoint_contract.py` owns the neutral v3 contract, and
+inference, `history.py` owns metric CSV persistence, `checkpoints.py` persists opaque
+method-owned state through the generic `MethodCheckpointManager`,
+`checkpoint_contract.py` owns the topology-neutral v4 contract, and
 `checkpoint_selection.py` owns `best.json` ranking and resolution. Evaluation keeps
 plot primitives in `diagnostics.py`, representative-row policy in `selection.py`,
 and composed image layouts in `panels.py`.
@@ -91,16 +93,17 @@ The library graph is an enforced direct-edge DAG:
 ```text
 cli -> applications, cli, metrics
 applications -> checkpoint_contract, checkpoint_selection, config, data, evaluation,
-                experiment, inference, metrics, models, training, utils
+                experiment, inference, methods, metrics, models, training, utils
 config -> config, checkpoint_selection, metrics, utils
 checkpoint_contract -> models
+methods -> checkpoint_contract, checkpoint_selection, config, methods, models, training
 data -> config, data, utils
 models -> config, models
 experiment -> config, data, experiment
 training -> checkpoint_contract, checkpoint_selection, config, experiment, metrics,
             models, training, utils
 inference -> checkpoint_contract, checkpoint_selection, config, data, experiment,
-             inference, models, utils
+             inference, methods, models, utils
 evaluation -> config, evaluation, metrics, utils
 utils -> utils
 ```

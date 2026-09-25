@@ -1,124 +1,184 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import torch.nn as nn
+import torch
 
-from virtual_staining.models.io_contract import GENERATOR_OUTPUT_ACTIVATION, NORMALIZATION_CONTRACT
+from virtual_staining.models.io_contract import NORMALIZATION_CONTRACT
 
-CHECKPOINT_FORMAT_VERSION: int = 3
+CHECKPOINT_FORMAT_VERSION: int = 4
 
 
-def make_arch_metadata(
-    generator: nn.Module,
-    discriminator: nn.Module,
+class CheckpointCompatibilityError(ValueError):
+    """Raised when a checkpoint is malformed or semantically incompatible."""
+
+
+def _canonical(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _canonical(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_canonical(item) for item in value]
+    return value
+
+
+_MISSING = "<missing>"
+
+
+def _first_difference(stored: Any, current: Any, path: str) -> tuple[str, Any, Any] | None:
+    if isinstance(stored, dict) and isinstance(current, dict):
+        for key in sorted(set(stored) | set(current)):
+            difference = _first_difference(
+                stored.get(key, _MISSING), current.get(key, _MISSING), f"{path}.{key}"
+            )
+            if difference is not None:
+                return difference
+        return None
+    if isinstance(stored, list) and isinstance(current, list) and len(stored) == len(current):
+        for index, (stored_item, current_item) in enumerate(zip(stored, current, strict=True)):
+            difference = _first_difference(stored_item, current_item, f"{path}[{index}]")
+            if difference is not None:
+                return difference
+        return None
+    if type(stored) is not type(current) or stored != current:
+        return path, stored, current
+    return None
+
+
+@dataclass(frozen=True)
+class CheckpointIdentity:
+    """Semantic identity a checkpoint must match before method state is loaded."""
+
+    method: str
+    pairing: str
+    inputs: tuple[str, ...]
+    outputs: tuple[str, ...]
+    prediction_directions: tuple[str, ...]
+    components: Mapping[str, object]
+    image_size: tuple[int, int]
+    normalization: Mapping[str, object] = field(default_factory=lambda: NORMALIZATION_CONTRACT)
+
+    def method_metadata(self) -> dict[str, Any]:
+        return _canonical(
+            {
+                "name": self.method,
+                "pairing": self.pairing,
+                "inputs": self.inputs,
+                "outputs": self.outputs,
+                "prediction_directions": self.prediction_directions,
+                "components": self.components,
+            }
+        )
+
+
+@dataclass(frozen=True)
+class ValidatedCheckpoint:
+    epoch: int
+    state: Mapping[str, Any]
+    config_hash: str | None
+
+
+def build_checkpoint_payload(
+    identity: CheckpointIdentity,
     *,
-    target_modality: str | None = None,
+    epoch: int,
+    state: Mapping[str, Any],
+    config_hash: str | None = None,
 ) -> dict[str, Any]:
-    input_names = tuple(getattr(generator, "input_names", ()))
     return {
-        "generator": {
-            "class": type(generator).__name__,
-            "architecture": "concat_unet",
-            "input_names": list(input_names),
-            "target_modality": target_modality,
-            "in_channels": getattr(getattr(generator, "unet", generator), "in_channels", None),
-            "out_channels": getattr(getattr(generator, "unet", generator), "out_channels", 3),
-            "base_channels": getattr(getattr(generator, "unet", generator), "base_channels", None),
-            "norm": getattr(getattr(generator, "unet", generator), "norm", None),
-            "dropout": getattr(getattr(generator, "unet", generator), "dropout", None),
-            "bilinear": getattr(getattr(generator, "unet", generator), "bilinear", None),
-            "output_activation": GENERATOR_OUTPUT_ACTIVATION,
-        },
-        "discriminator": {
-            "class": type(discriminator).__name__,
-            "in_channels": getattr(discriminator, "in_channels", None),
-            "ndf": getattr(discriminator, "ndf", None),
-            "norm": getattr(discriminator, "norm", None),
-            "use_sigmoid": getattr(discriminator, "use_sigmoid", None),
-        },
+        "format_version": CHECKPOINT_FORMAT_VERSION,
+        "epoch": epoch,
+        "method": identity.method_metadata(),
+        "image_size": list(identity.image_size),
+        "normalization": _canonical(identity.normalization),
+        "config_hash": config_hash or None,
+        "state": dict(state),
     }
 
 
-def validate_checkpoint_metadata(checkpoint: dict[str, Any], path: Path) -> dict[str, Any]:
-    if checkpoint.get("format_version") != CHECKPOINT_FORMAT_VERSION:
-        raise ValueError(
-            f"Checkpoint format version {checkpoint.get('format_version')!r} does not "
-            f"match current version {CHECKPOINT_FORMAT_VERSION}. Re-train from scratch "
-            "with the current code."
-        )
-    arch = checkpoint.get("architecture")
-    if not isinstance(arch, dict):
-        raise ValueError(
-            f"Checkpoint '{path}' has no architecture metadata. "
-            "Only current checkpoints are supported."
-        )
-    generator_arch = arch.get("generator")
-    if not isinstance(generator_arch, dict):
-        raise ValueError("Checkpoint generator architecture metadata must be a mapping.")
-    if (
-        generator_arch.get("architecture") != "concat_unet"
-        or not isinstance(generator_arch.get("input_names"), list)
-        or not generator_arch.get("target_modality")
-    ):
-        raise ValueError(
-            "Checkpoint is missing current named-generator metadata; retrain from scratch."
-        )
-    if generator_arch.get("output_activation") != GENERATOR_OUTPUT_ACTIVATION:
-        raise ValueError("Checkpoint output activation does not match current code.")
-    if checkpoint.get("normalization_contract") != NORMALIZATION_CONTRACT:
-        raise ValueError("Checkpoint normalization contract does not match current code.")
-    return arch
+def read_checkpoint(path: Path, device: torch.device) -> object:
+    return torch.load(path, map_location=device, weights_only=False)
 
 
-def check_generator_arch(
-    checkpoint_arch: dict[str, Any],
-    generator: nn.Module,
-    *,
-    target_modality: str | None = None,
-) -> None:
-    if (
-        target_modality is not None
-        and checkpoint_arch.get("generator", {}).get("target_modality") != target_modality
-    ):
-        raise ValueError("Checkpoint target modality does not match current model.")
-    current = getattr(generator, "unet", generator)
-    gen_arch = checkpoint_arch.get("generator", {})
-    for key in (
-        "class",
-        "architecture",
-        "input_names",
-        "in_channels",
-        "out_channels",
-        "base_channels",
-        "norm",
-        "dropout",
-        "bilinear",
-    ):
-        if key == "class":
-            curr_val = type(generator).__name__
-        elif key == "architecture":
-            curr_val = "concat_unet"
-        elif key == "input_names":
-            curr_val = list(getattr(generator, "input_names", ()))
-        else:
-            curr_val = getattr(current, key, 3 if key == "out_channels" else None)
-        if gen_arch.get(key) != curr_val:
-            raise ValueError(
-                f"Architecture mismatch for generator.{key}: checkpoint has "
-                f"{gen_arch.get(key)!r}, inference model has {curr_val!r}."
+def _require_mapping(payload: Mapping[str, Any], key: str, path: Path) -> dict[str, Any]:
+    value = payload.get(key)
+    if not isinstance(value, Mapping):
+        raise CheckpointCompatibilityError(
+            f"Checkpoint '{path}' has missing or malformed '{key}' metadata."
+        )
+    return _canonical(value)
+
+
+def _check_equal(name: str, stored: Any, current: Any, path: Path) -> None:
+    difference = _first_difference(stored, current, name)
+    if difference is not None:
+        field_name, stored_value, current_value = difference
+        raise CheckpointCompatibilityError(
+            f"Checkpoint '{path}' is incompatible: {field_name} is {stored_value!r} in the "
+            f"checkpoint but {current_value!r} in the current run."
+        )
+
+
+def validate_checkpoint(
+    payload: object,
+    expected: CheckpointIdentity,
+    path: Path,
+) -> ValidatedCheckpoint:
+    """Validate a v4 payload against ``expected`` without touching method state."""
+    if not isinstance(payload, Mapping):
+        raise CheckpointCompatibilityError(
+            f"Checkpoint '{path}' is not a mapping; only format version "
+            f"{CHECKPOINT_FORMAT_VERSION} checkpoints are supported."
+        )
+    if "format_version" not in payload:
+        raise CheckpointCompatibilityError(
+            f"Checkpoint '{path}' is unversioned and unsupported; only format version "
+            f"{CHECKPOINT_FORMAT_VERSION} checkpoints are supported. Retrain with current code."
+        )
+    version = payload["format_version"]
+    if type(version) is not int or version != CHECKPOINT_FORMAT_VERSION:
+        raise CheckpointCompatibilityError(
+            f"Checkpoint '{path}' has unsupported format version {version!r}; only format "
+            f"version {CHECKPOINT_FORMAT_VERSION} is supported. Retrain with current code."
+        )
+    epoch = payload.get("epoch")
+    if type(epoch) is not int or epoch < 0:
+        raise CheckpointCompatibilityError(f"Checkpoint '{path}' has malformed epoch {epoch!r}.")
+
+    stored_method = _require_mapping(payload, "method", path)
+    current_method = expected.method_metadata()
+    for key in ("name", "pairing", "inputs", "outputs", "prediction_directions", "components"):
+        if key not in stored_method:
+            raise CheckpointCompatibilityError(
+                f"Checkpoint '{path}' is missing method.{key} metadata."
             )
-
-
-def check_discriminator_arch(checkpoint_arch: dict[str, Any], discriminator: nn.Module) -> None:
-    disc_arch = checkpoint_arch.get("discriminator", {})
-    for key in ("class", "in_channels", "ndf", "norm", "use_sigmoid"):
-        current = (
-            type(discriminator).__name__ if key == "class" else getattr(discriminator, key, None)
+        _check_equal(f"method.{key}", stored_method[key], current_method[key], path)
+    if set(stored_method) != set(current_method):
+        raise CheckpointCompatibilityError(
+            f"Checkpoint '{path}' has unexpected method metadata keys: "
+            f"{sorted(set(stored_method) - set(current_method))}."
         )
-        if disc_arch.get(key) != current:
-            raise ValueError(
-                f"Architecture mismatch for discriminator.{key}: checkpoint has "
-                f"{disc_arch.get(key)!r}, current model has {current!r}."
-            )
+
+    stored_size = payload.get("image_size")
+    if not isinstance(stored_size, Sequence) or isinstance(stored_size, str):
+        raise CheckpointCompatibilityError(f"Checkpoint '{path}' has malformed image_size.")
+    _check_equal("image_size", _canonical(stored_size), list(expected.image_size), path)
+
+    stored_normalization = _require_mapping(payload, "normalization", path)
+    _check_equal("normalization", stored_normalization, _canonical(expected.normalization), path)
+
+    config_hash = payload.get("config_hash")
+    if config_hash is not None and not isinstance(config_hash, str):
+        raise CheckpointCompatibilityError(f"Checkpoint '{path}' has malformed config_hash.")
+
+    if "state" not in payload:
+        raise CheckpointCompatibilityError(f"Checkpoint '{path}' has no method state.")
+    state = payload["state"]
+    if not isinstance(state, Mapping) or not state or not all(isinstance(k, str) for k in state):
+        raise CheckpointCompatibilityError(
+            f"Checkpoint '{path}' has malformed method state; expected a non-empty mapping "
+            "with string keys."
+        )
+    return ValidatedCheckpoint(epoch=epoch, state=state, config_hash=config_hash)

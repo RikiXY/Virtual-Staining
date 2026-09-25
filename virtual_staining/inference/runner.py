@@ -8,14 +8,10 @@ import torch.nn as nn
 from torch.amp import autocast
 from torchvision import transforms
 
-from virtual_staining.checkpoint_contract import (
-    check_generator_arch,
-    validate_checkpoint_metadata,
-)
 from virtual_staining.checkpoint_selection import resolve_checkpoint_path
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.run_layout import RunLayout
-from virtual_staining.models.factory import build_generator
+from virtual_staining.methods.pix2pix import load_pix2pix_inference_generator
 from virtual_staining.models.io_contract import (
     build_model_input_transform,
     denormalize_model_output,
@@ -74,21 +70,10 @@ def load_inference_generator(
     paths: RunLayout,
     device: torch.device,
 ) -> tuple[nn.Module, Path]:
-    checkpoint_path = _resolve_checkpoint(config, paths)
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-
-    stored_size = checkpoint.get("image_size")
-    if stored_size is not None and tuple(stored_size) != tuple(config.project.image_size):
-        raise ValueError(
-            "Image size mismatch between checkpoint and inference config. "
-            f"Checkpoint image_size={tuple(stored_size)}, "
-            f"config image_size={tuple(config.project.image_size)}."
+    if config.method.name != "pix2pix":
+        raise NotImplementedError(
+            f"Inference is implemented only for method.name='pix2pix'; got {config.method.name!r}"
         )
-
-    checkpoint_arch = validate_checkpoint_metadata(checkpoint, checkpoint_path)
-
-    generator = build_generator(config.model).to(device)
-    check_generator_arch(checkpoint_arch, generator, target_modality=config.model.target)
-    generator.load_state_dict(checkpoint["generator_state_dict"])
-    generator.eval()
+    checkpoint_path = _resolve_checkpoint(config, paths)
+    generator = load_pix2pix_inference_generator(checkpoint_path, config, device)
     return generator, checkpoint_path

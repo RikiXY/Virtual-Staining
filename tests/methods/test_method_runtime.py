@@ -7,7 +7,6 @@ import torch
 
 from tests.config_helpers import write_yaml
 from virtual_staining.config.run import RunConfig
-from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.methods.pix2pix import Pix2PixMethod
 from virtual_staining.methods.registry import resolve_training_method
 
@@ -76,34 +75,30 @@ def test_resolver_builds_pix2pix_runtime_without_exposing_optimizer_count(
     tmp_path: Path,
 ) -> None:
     config = RunConfig.from_yaml(_yaml(tmp_path))
-    paths = RunLayout.from_project(config.project)
-    ensure_run_directories(paths)
 
-    method = resolve_training_method(config, paths, torch.device("cpu"))
+    method = resolve_training_method(config, torch.device("cpu"))
 
     assert isinstance(method, Pix2PixMethod)
     assert method.name == "pix2pix"
     assert method.pairing == "paired"
     assert method.prediction_directions == ("forward",)
     assert not hasattr(method, "optimizers")
-    assert method.component_metadata()["outputs"] == ["target"]
+    assert method.input_names == ("source",)
+    assert method.output_names == ("target",)
+    assert set(method.component_metadata()) == {"generator", "discriminator"}
 
 
 def test_resolver_reports_cyclegan_runtime_as_pending(tmp_path: Path) -> None:
     config = RunConfig.from_yaml(_yaml(tmp_path, method="cyclegan"))
-    paths = RunLayout.from_project(config.project)
-    ensure_run_directories(paths)
 
     with pytest.raises(NotImplementedError, match="cyclegan.*not implemented"):
-        resolve_training_method(config, paths, torch.device("cpu"))
+        resolve_training_method(config, torch.device("cpu"))
 
 
 def test_pix2pix_method_state_round_trip(tmp_path: Path) -> None:
     config = RunConfig.from_yaml(_yaml(tmp_path))
-    paths = RunLayout.from_project(config.project)
-    ensure_run_directories(paths)
-    first = Pix2PixMethod(config, paths, torch.device("cpu"))
-    second = Pix2PixMethod(config, paths, torch.device("cpu"))
+    first = Pix2PixMethod(config, torch.device("cpu"))
+    second = Pix2PixMethod(config, torch.device("cpu"))
 
     state = first.state_dict()
     second.load_state_dict(state)

@@ -129,9 +129,9 @@ through the generic experiment snapshot helpers. `data/provenance.py` owns datas
 fingerprints and source-file hashing. Preparation does not write experiment
 `run.json`, `events.jsonl`, or `metadata/stages/prepare.json`.
 
-Run checkpoint metadata uses the neutral `checkpoint_contract.py` and
-`checkpoint_selection.py` modules; optimizer, scaler, scheduler, and resume
-state remain training-owned. Training progress is a callback event rendered by
+Run checkpoints use the method-aware v4 `checkpoint_contract.py` and
+`checkpoint_selection.py` modules; model, optimizer, scaler, and scheduler state
+are method-owned and persisted opaquely through `state_dict()`. Training progress is a callback event rendered by
 the CLI, not terminal output from library code.
 
 ## File Descriptions
@@ -356,9 +356,23 @@ fails instead of silently truncating it.
 
 PyTorch checkpoint saved every `training.checkpoint_rate` epochs.
 `NNN` is zero-padded to three digits (e.g. `ep010.pth`).
-The checkpoint contains generator and discriminator state dicts plus the epoch
-number. Use `inference.checkpoint_policy: latest` to load the most recent one
-automatically.
+Checkpoints use format version 4, the only supported format; v3, earlier and
+unversioned checkpoints are rejected (retrain with current code). The payload is
+topology-neutral:
+
+| Key | Content |
+|---|---|
+| `format_version` | `4` |
+| `epoch` | Completed epoch; resume starts at `epoch + 1` |
+| `method` | `name`, `pairing`, ordered `inputs`, ordered `outputs`, `prediction_directions`, and method-owned `components` metadata |
+| `image_size` | `[width, height]` |
+| `normalization` | Model-I/O normalization contract |
+| `config_hash` | Resolved-config hash of the writing stage, or `null` (provenance only) |
+| `state` | Opaque method-owned state from `state_dict()` |
+
+Resume and inference validate every semantic field before the method's
+`load_state_dict()` runs. Use `inference.checkpoint_policy: latest` to load the
+most recent one automatically.
 
 ### `checkpoints/best.json`
 

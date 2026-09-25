@@ -145,7 +145,6 @@ def train(
 
         method = resolve_training_method(
             config,
-            session.paths,
             device,
             benchmark_recorder=benchmark_recorder,
         )
@@ -161,6 +160,7 @@ def train(
             val_dir=dataset_layout.split_dir("val"),
             experiment_session=session,
             config_hash=session.config_hash,
+            image_size=config.project.image_size,
             benchmark_recorder=benchmark_recorder,
         )
         if benchmark_recorder is not None:

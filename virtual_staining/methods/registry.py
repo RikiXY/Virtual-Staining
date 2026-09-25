@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 import torch
 
 from virtual_staining.config.run import RunConfig
-from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.methods.pix2pix import Pix2PixMethod
 from virtual_staining.training.runtime import TrainingMethodRuntime
 
@@ -15,7 +14,6 @@ if TYPE_CHECKING:
 
 def resolve_training_method(
     config: RunConfig,
-    run_paths: RunLayout,
     device: torch.device,
     *,
     benchmark_recorder: TrainingBenchmarkRecorder | None = None,
@@ -24,7 +22,6 @@ def resolve_training_method(
     if config.method.name == "pix2pix":
         return Pix2PixMethod(
             config,
-            run_paths,
             device,
             benchmark_recorder=benchmark_recorder,
         )
