@@ -15,7 +15,12 @@ from tests.config_helpers import (
     yaml_section,
 )
 from tests.image_helpers import write_rgb_image, write_rgb_pair
-from tests.manifest_helpers import make_manifest_record, manifest_metadata, write_manifest_csv
+from tests.manifest_helpers import (
+    make_manifest_record,
+    manifest_metadata,
+    write_aligned_test_manifest,
+    write_manifest_csv,
+)
 from virtual_staining.applications.evaluate import (
     EVALUATION_METADATA_JSON,
     evaluate,
@@ -30,54 +35,6 @@ from virtual_staining.evaluation.unpaired import (
 )
 from virtual_staining.metrics import METRIC_SPECS
 from virtual_staining.utils.artifacts import generated_filename
-
-
-def _write_test_manifest(dataset_root: Path, sample_ids: list[str]) -> None:
-    records = tuple(
-        make_manifest_record(
-            sample_id,
-            "test",
-            input_paths={"label_free": Path(f"splits/test/{sample_id}_source.png")},
-            ext=".png",
-            target_path=Path(f"splits/test/{sample_id}_target.png"),
-        )
-        for sample_id in sample_ids
-    )
-    write_manifest_csv(dataset_root, records)
-    with (dataset_root / "manifests" / "slide_sets.csv").open(
-        "w", newline="", encoding="utf-8"
-    ) as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=[
-                "set_id",
-                "split",
-                "patient_id",
-                "specimen_id",
-                "status",
-                "label_free__alignment_method",
-                "target__alignment_method",
-                "label_free__alignment_metadata",
-                "target__alignment_metadata",
-            ],
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "set_id": "P1",
-                "split": "test",
-                "patient_id": "patient-1",
-                "specimen_id": "specimen-1",
-                "status": "processed",
-                "label_free__alignment_method": "identity",
-                "target__alignment_method": "identity",
-                "label_free__alignment_metadata": "{}",
-                "target__alignment_metadata": "{}",
-            }
-        )
-    (dataset_root / "manifests" / "manifest_metadata.json").write_text(
-        json.dumps(manifest_metadata().to_dict()), encoding="utf-8"
-    )
 
 
 def _write_evaluate_config(
@@ -110,7 +67,7 @@ def test_evaluate_writes_stage_scoped_snapshot_files(tmp_path: Path) -> None:
     generated_dir = tmp_path / "generated"
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
-    _write_test_manifest(dataset_root, ["00000_00000"])
+    write_aligned_test_manifest(dataset_root, ["00000_00000"])
 
     write_rgb_pair(target_dir, "00000_00000")
     write_rgb_image(generated_dir / "00000_00000_target_generated.png")
@@ -142,7 +99,7 @@ def test_evaluate_preserves_existing_training_snapshot_files(tmp_path: Path) -> 
     generated_dir = tmp_path / "generated"
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
-    _write_test_manifest(dataset_root, ["00000_00000"])
+    write_aligned_test_manifest(dataset_root, ["00000_00000"])
 
     write_rgb_pair(target_dir, "00000_00000")
     write_rgb_image(generated_dir / "00000_00000_target_generated.png")
@@ -234,7 +191,7 @@ def test_evaluate_records_from_manifest_test_split(tmp_path: Path) -> None:
     generated_dir = tmp_path / "generated"
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
-    _write_test_manifest(dataset_root, ["00000_00000", "00256_00000"])
+    write_aligned_test_manifest(dataset_root, ["00000_00000", "00256_00000"])
 
     for sample_id in ["00000_00000", "00256_00000"]:
         write_rgb_pair(target_dir, sample_id)
@@ -267,7 +224,7 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
     generated_dir = tmp_path / "generated"
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
-    _write_test_manifest(dataset_root, ["00000_00000"])
+    write_aligned_test_manifest(dataset_root, ["00000_00000"])
     write_rgb_pair(target_dir, "00000_00000")
     write_rgb_image(generated_dir / "00000_00000_target_generated.png")
 
@@ -319,7 +276,7 @@ def test_evaluate_writes_skipped_csv_for_missing_generated(tmp_path: Path) -> No
     generated_dir = tmp_path / "generated"
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
-    _write_test_manifest(dataset_root, ["00000_00000"])
+    write_aligned_test_manifest(dataset_root, ["00000_00000"])
     write_rgb_pair(target_dir, "00000_00000")
 
     output_dir = tmp_path / "results" / "eval_run" / "evaluation"
@@ -346,7 +303,7 @@ def test_evaluate_skipped_csv_has_correct_columns(tmp_path: Path) -> None:
     generated_dir = tmp_path / "generated"
     target_dir.mkdir(parents=True)
     generated_dir.mkdir()
-    _write_test_manifest(dataset_root, ["00000_00000"])
+    write_aligned_test_manifest(dataset_root, ["00000_00000"])
     write_rgb_pair(target_dir, "00000_00000")
 
     output_dir = tmp_path / "results" / "eval_run" / "evaluation"
@@ -390,7 +347,7 @@ def _cyclegan_eval_config(
 
 def _write_aligned_cyclegan_dataset(tmp_path: Path, sample_ids: list[str]) -> Path:
     dataset_root = tmp_path / "dataset"
-    _write_test_manifest(dataset_root, sample_ids)
+    write_aligned_test_manifest(dataset_root, sample_ids)
     for sample_id in sample_ids:
         test_dir = dataset_root / "splits" / "test"
         write_rgb_image(test_dir / f"{sample_id}_source.png", color=_SOURCE_COLOR)
@@ -621,7 +578,7 @@ def test_pix2pix_evaluation_writes_paired_metadata(tmp_path: Path) -> None:
     dataset_root = tmp_path / "data"
     target_dir = dataset_root / "splits" / "test"
     target_dir.mkdir(parents=True)
-    _write_test_manifest(dataset_root, ["00000_00000", "00256_00000"])
+    write_aligned_test_manifest(dataset_root, ["00000_00000", "00256_00000"])
     write_rgb_pair(target_dir, "00000_00000")
     write_rgb_pair(target_dir, "00256_00000")
     write_rgb_image(tmp_path / "generated" / "00000_00000_target_generated.png")

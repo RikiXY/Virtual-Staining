@@ -48,7 +48,7 @@ Ablation summaries are written beside queue state as
 `local_workspace/queues/<queue-name>.ablation.summary.json`. The summary lists
 jobs, labels, run names, canonical resolved config hashes, declared fixed
 values, and declared variable values. Loss lists are compared through resolved
-EPIC_11 loss config entries, so omitted default-zero terms are not treated as
+loss config entries, so omitted default-zero terms are not treated as
 active losses.
 
 Example layout:
@@ -74,6 +74,83 @@ state file records queue-level status plus per-job fields such as
 `local_workspace/results/comparisons/`. `ExperimentSession` is the only run-stage
 bootstrap and creates the directories; layout instances themselves are pure path
 contracts.
+
+## Method-Specific Configuration
+
+A run selects one of the two built-in methods. Complete examples are
+[`config/runs/example.yaml`](../config/runs/example.yaml) (Pix2Pix) and
+[`config/runs/example_cyclegan.yaml`](../config/runs/example_cyclegan.yaml) (CycleGAN).
+
+### `method`
+
+```yaml
+method:
+  name: pix2pix          # pix2pix (default) | cyclegan
+  replay_buffer_size: 50 # cyclegan only; default 50
+```
+
+`replay_buffer_size` is the per-domain number of previously generated images kept in the
+`fake_A` / `fake_B` replay pools. Once a pool is full, each new fake is shown to the
+discriminator directly or, with probability 0.5, swapped for a stored one. `0` disables
+the pools. Pool contents and their RNG state are checkpointed. Setting the field for
+Pix2Pix is an error.
+
+### `data`
+
+```yaml
+data:
+  pairing: unpaired            # paired (default) | unpaired
+  domains:                     # unpaired only
+    label_free: domains/label_free
+    stained: "prepared/{split}/stained/**/*.tif"
+```
+
+Pix2Pix requires `pairing: paired` (the default) and trains from the prepared manifest;
+`domains` must then be omitted. CycleGAN requires `pairing: unpaired` and exactly two
+`domains`, keyed by `model.inputs[0]` (domain A) and `model.target` (domain B). Each entry
+is either a directory containing `train/`, `val/`, and `test/` (searched recursively) or a
+path/glob containing the literal `{split}`. Relative entries resolve from `dataset_root`.
+The two collections are independent: an epoch has `max(len(A), len(B))` samples, the
+shorter domain wraps around, and the domain-B draw is a deterministic function of the
+seed, epoch, and index.
+
+### `model.generator`
+
+| `architecture` | Method | Fields |
+|---|---|---|
+| `concat_unet` (default) | Pix2Pix only | `base_channels`, `norm` (default `batch`), `dropout`, `bilinear` |
+| `resnet` | CycleGAN only | `base_channels`, `blocks` (default 9), `norm` (must be `instance`) |
+
+The architecture is fixed by the method; it is not a free choice. Both methods use
+`model.discriminator` (`ndf`, `norm`, `use_sigmoid`) for their PatchGAN discriminators:
+conditional on the concatenated inputs for Pix2Pix, unconditional for CycleGAN. CycleGAN
+takes exactly one `model.inputs` entry and needs `image_size` dimensions that are
+multiples of 4 and at least 8.
+
+### `inference.direction`
+
+```yaml
+inference:
+  direction: A_to_B   # cyclegan only: A_to_B (default) | B_to_A
+```
+
+`A_to_B` translates `model.inputs[0]` into `model.target`; `B_to_A` translates the
+reverse with the second generator of the same checkpoint. Pix2Pix rejects the field.
+CycleGAN validation reports training-objective losses only, so CycleGAN checkpoint,
+scheduler, and early-stopping monitors must be `loss_G_val` or `loss_val_*` columns,
+not `val_*` image metrics.
+
+### `evaluation.protocol`
+
+```yaml
+evaluation:
+  protocol: unpaired  # paired | unpaired
+```
+
+The default follows the method: Pix2Pix -> `paired`, CycleGAN -> `unpaired`.
+`unpaired` is available only for CycleGAN. CycleGAN may explicitly select `paired` when an
+aligned held-out test manifest exists; `data.domains` collections are never treated as
+pairs. See [Evaluation outputs](#evaluation-outputs).
 
 ## Directory Layout
 
@@ -115,9 +192,13 @@ local_workspace/results/<run_name>/
 │   ├── output_val/
 │   └── output_test/
 └── evaluation/
-    ├── per_image_metrics.csv
-    ├── summary.csv
-    └── skipped.csv
+    ├── evaluation_metadata.json
+    ├── per_image_metrics.csv      # paired protocol
+    ├── summary.csv                # paired protocol
+    ├── summary_<unit>.csv         # paired protocol, unit = set | specimen | patient
+    ├── skipped.csv                # paired protocol, when applicable
+    ├── unpaired_image_statistics.csv    # unpaired protocol
+    └── unpaired_feature_comparison.csv  # unpaired protocol
 ```
 
 Cross-run comparisons are written separately under
@@ -130,8 +211,9 @@ fingerprints and source-file hashing. Preparation does not write experiment
 `run.json`, `events.jsonl`, or `metadata/stages/prepare.json`.
 
 Run checkpoints use the method-aware v4 `checkpoint_contract.py` and
-`checkpoint_selection.py` modules; model, optimizer, scaler, and scheduler state
-are method-owned and persisted opaquely through `state_dict()`. Training progress is a callback event rendered by
+`checkpoint_selection.py` modules; model, optimizer, scaler, scheduler, and (for
+CycleGAN) replay-pool state are method-owned and persisted opaquely through
+`state_dict()`. Training progress is a callback event rendered by
 the CLI, not terminal output from library code.
 
 ## File Descriptions
@@ -210,11 +292,41 @@ training:
     min_delta: 0.0
 ```
 
-Accepted loss names are:
+Accepted loss names depend on the method; a name from the other method's set is
+rejected.
+
+Pix2Pix:
 
 - `adversarial_bce`: generator or discriminator BCE-with-logits adversarial loss.
 - `l1`: generator image reconstruction loss.
 - `ssim`: generator image structural similarity loss.
+
+CycleGAN:
+
+- `adversarial_lsgan`: least-squares adversarial loss; required for the generator and
+  the discriminator.
+- `cycle_l1`: generator cycle-consistency L1 (`A -> B -> A` and `B -> A -> B`); required.
+- `identity_l1`: optional generator identity L1 (each generator applied to real images of
+  its own output domain).
+
+```yaml
+training:
+  losses:
+    generator:
+      - name: adversarial_lsgan
+        weight: 1.0
+      - name: cycle_l1
+        weight: 10.0
+      - name: identity_l1
+        weight: 5.0
+    discriminator:
+      - name: adversarial_lsgan
+        weight: 1.0
+```
+
+CycleGAN also requires `training.augmentation.enabled: false`.
+
+The Pix2Pix example below shows the SSIM options:
 
 ```yaml
 training:
@@ -241,7 +353,7 @@ training:
         weight: 1.0
 ```
 
-The baseline objective uses generator `adversarial_bce` with weight `1.0`,
+The Pix2Pix baseline objective uses generator `adversarial_bce` with weight `1.0`,
 generator `l1` with weight `25.0`, and discriminator `adversarial_bce` with
 weight `1.0`.
 
@@ -368,7 +480,7 @@ topology-neutral:
 | `image_size` | `[width, height]` |
 | `normalization` | Model-I/O normalization contract |
 | `config_hash` | Resolved-config hash of the writing stage, or `null` (provenance only) |
-| `state` | Opaque method-owned state from `state_dict()` |
+| `state` | Opaque method-owned state from `state_dict()`: models, optimizers, AMP scalers, schedulers, and CycleGAN replay pools |
 
 Resume and inference validate every semantic field before the method's
 `load_state_dict()` runs. Use `inference.checkpoint_policy: latest` to load the
@@ -390,11 +502,52 @@ Checkpoint files are not deleted by this metadata record.
 ### `artifacts/output_train/`, `output_val/`, `output_test/`
 
 Generated images produced during training (train/val) and inference (test).
-Each file is named after its source patch (e.g. `00512_09216_target_generated.tif`).
+Each file is named after its source patch. Pix2Pix outputs use the `_target_generated`
+suffix; CycleGAN outputs carry the translation direction, so both directions can share
+one output directory without collisions:
+
+```text
+00512_09216_target_generated.tif   # Pix2Pix
+00512_09216_A_to_B_generated.tif   # CycleGAN, inference.direction: A_to_B
+00512_09216_B_to_A_generated.tif   # CycleGAN, inference.direction: B_to_A
+```
+
+`vs infer-images --recursive` uses the same suffixes and preserves the input's relative
+directory structure under the output root, so equal filenames in different source folders
+do not collide.
+
+## Evaluation outputs
+
+Every evaluation writes `evaluation/evaluation_metadata.json` recording `method`,
+`training_pairing`, `evaluation_protocol`, `inference_direction` (`null` for Pix2Pix),
+`source_domains`, `reference_domain`, `generated_dir`, `counts`, the written `artifacts`,
+and `pairwise_metrics_available`: `true` for `paired`, `false` for `unpaired`. Unpaired
+metadata also records the feature definitions and explicit `limitations`. Switching
+protocol removes the other protocol's stale reports from the output directory.
+
+The **paired** protocol writes `per_image_metrics.csv`, `summary.csv`, `skipped.csv` when
+applicable, and grouped `<unit>_metrics.csv` / `summary_<unit>.csv` for `set`,
+`specimen`, and `patient` (bootstrap confidence intervals). Each generated image is
+compared with its aligned manifest reference: the target for Pix2Pix and CycleGAN
+`A_to_B`, the domain-A input for CycleGAN `B_to_A`.
+
+The **unpaired** protocol (CycleGAN) compares the active direction's generated images
+with the real `test` collection of the reference domain from `data.domains`. No pairs
+are formed. Each image is reduced to per-image RGB mean/std and luminance mean/std:
+
+- `unpaired_image_statistics.csv`: `collection` (`generated` or `reference`), `path`,
+  and the per-image features.
+- `unpaired_feature_comparison.csv`: per feature, descriptive statistics of both
+  collections, Wasserstein distance, and a two-sample KS statistic and p-value.
+- `unpaired_feature_distributions.png`: optional plot when `save_graphs: true`.
+
+These are low-order appearance/distribution diagnostics only. They carry no pairwise
+fidelity metrics and no ranking of generated against real images, and they do not
+establish sample-level fidelity, biological correctness, or clinical validity.
 
 ### `evaluation/per_image_metrics.csv`
 
-One row per evaluated test image.
+Paired protocol only. One row per evaluated test image.
 
 | Column | Description |
 |---|---|

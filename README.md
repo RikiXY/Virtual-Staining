@@ -1,9 +1,23 @@
 # Virtual Staining
 
-Research portfolio project for virtual staining of histopathology images using a Pix2Pix conditional GAN.
+Experimental, reproducible image-translation framework focused on virtual staining of
+histopathology images: generating stained-looking images from label-free microscopy inputs
+(and vice versa).
 
-The pipeline trains a paired image-to-image translation model on aligned histology patch pairs, enabling
-generation of virtually stained images from label-free microscopy inputs (and vice versa).
+Two translation methods are built in and share one training, checkpoint, inference, and run
+infrastructure:
+
+- **Pix2Pix** (reference method) - paired training on aligned patches; named
+  N-input -> one-target translation; ConcatUNet generator and conditional PatchGAN
+  discriminator; configurable BCE / L1 / SSIM losses.
+- **CycleGAN** - one source domain A <-> one target domain B; unpaired training from two
+  independent image collections; two ResNet generators and two unconditional PatchGAN
+  discriminators (LSGAN, cycle L1, optional identity L1, replay pools); `A_to_B` and
+  `B_to_A` inference from the same checkpoint.
+
+The method is selected with `method.name` in the run config. Only these two built-in methods
+are supported; there is no plugin mechanism for additional models or methods, and
+translation is always to exactly one target.
 
 ## CLI Commands
 
@@ -11,10 +25,10 @@ generation of virtually stained images from label-free microscopy inputs (and vi
 |---|---|
 | `vs prepare` | Build the patch dataset from full-size slide sets |
 | `vs run` | Run the complete pipeline or selected stages |
-| `vs train` | Train the Pix2Pix model |
-| `vs infer` | Run inference on the test split |
+| `vs train` | Train the configured built-in method |
+| `vs infer` | Run inference on the test split (CycleGAN: in the configured direction) |
 | `vs infer-images` | Run inference on one image file or a directory of images |
-| `vs evaluate` | Evaluate a configured run or one image pair |
+| `vs evaluate` | Paired image metrics or unpaired collection diagnostics for a run, or metrics for one image pair |
 | `vs compare` | Compare metric distributions across runs |
 | `vs convert` | Convert TIFF images to OpenSlide-compatible pyramidal BigTIFFs |
 | `vs panels` | Build source / generated / target comparison panels |
@@ -108,7 +122,11 @@ vs infer-images \
   --output local_workspace/results/my_run/example_outputs
 ```
 
-Single-input models retain the shorthand `--input PATH`.
+Single-input models retain the shorthand `--input PATH`. CycleGAN runs consume the
+domain selected by `inference.direction` (`model.inputs[0]` for `A_to_B`,
+`model.target` for `B_to_A`). Generated names carry the direction
+(`tile_A_to_B_generated.png`, `tile_B_to_A_generated.png`), so both directions can
+share one output root; Pix2Pix outputs keep the `_target_generated` suffix.
 
 `vs infer-images` accepts `.bmp`, `.jpg`, `.jpeg`, `.png`, `.tif`, and `.tiff`.
 It defaults to `--mode auto`: patch-sized inputs use the standard single-patch
@@ -153,7 +171,9 @@ differs outside the declared `variable_fields`. Summary metadata is written to
 ## Configuration
 
 All experiment parameters live in a single YAML file. Copy
-[`config/runs/example.yaml`](config/runs/example.yaml) and edit it:
+[`config/runs/example.yaml`](config/runs/example.yaml) (Pix2Pix) or
+[`config/runs/example_cyclegan.yaml`](config/runs/example_cyclegan.yaml) (CycleGAN) and
+edit it. A condensed Pix2Pix config:
 
 ```yaml
 dataset_root: local_workspace/datasets/your_sample
@@ -202,15 +222,19 @@ evaluation:
   save_graphs: true
 ```
 
+A CycleGAN run instead sets `method.name: cyclegan`, `data.pairing: unpaired` with one
+image collection per domain under `data.domains`, a `resnet` generator, and the
+`adversarial_lsgan` / `cycle_l1` / `identity_l1` losses; see the CycleGAN example.
+
 Experiment commands accept YAML configuration directly through `--config`.
 
-See [`docs/architecture.md`](docs/architecture.md) for the full config schema,
-[`docs/run_format.md`](docs/run_format.md) for run output layout, and
+See [`docs/run_format.md`](docs/run_format.md) for the method-specific config fields and
+run output layout, [`docs/architecture.md`](docs/architecture.md) for package boundaries, and
 [`docs/reproducibility.md`](docs/reproducibility.md) for canonical config snapshots and hashes.
 
 ## Qualitative Results
 
-Each panel compares source patch, generated target, and real target.
+Pix2Pix results. Each panel compares source patch, generated target, and real target.
 
 From label-free to H&E staining:
 ![Qualitative results](docs/assets/LabelFree-to-Stained_qualitative_result_2.png)
@@ -224,11 +248,17 @@ From H&E staining to label-free:
 - `utils/` - shared primitives: dimensions and image I/O
 - `config/` - YAML loading, validation, typed config sections
 - `experiment/` - run paths, metadata, stage lifecycle, and environment snapshots
-- `models/` - UNetGenerator, PatchGANDiscriminator, model config
-- `data/` - dataset, manifest, builder, preprocessing pipeline
-- `training/` - training mechanics: Trainer, steps, losses, validation, checkpoints
-- `inference/` - reusable model loading, prediction, single-image workflows, output naming
-- `evaluation/` - evaluator, plots, summaries, panels, ranking
+- `models/` - network implementations (ConcatUNet and ResNet generators, PatchGAN
+  discriminator) and the model-I/O normalization contract
+- `methods/` - the two built-in method runtimes (Pix2Pix, CycleGAN): topology, optimizers,
+  losses, method-owned checkpoint state, and inference loaders
+- `data/` - paired manifests, unpaired domain collections, dataset builder, preprocessing
+- `training/` - method-agnostic `Trainer`, validation loop, history, loss config, and the
+  generic v4 `MethodCheckpointManager`
+- `inference/` - checkpoint resolution, method dispatch, single/directory/tiled inference,
+  output naming
+- `evaluation/` - paired image metrics, unpaired collection diagnostics, plots, summaries,
+  panels, ranking
 - `applications/` - stage lifecycle owners (`prepare`, `train`, `infer`, `evaluate`) and other use cases
 - `cli/` - thin argparse entrypoints delegating to `applications/`
 
@@ -251,12 +281,15 @@ Virtual-Staining/
 │   ├── queues/                 # queue state files (gitignored except .gitkeep)
 │   └── results/                # run outputs (gitignored)
 ├── tests/                      # pytest suite grouped by subsystem
+│   ├── applications/
+│   ├── architecture/
 │   ├── cli/
 │   ├── config/
 │   ├── data/
 │   ├── evaluation/
 │   ├── experiment/
 │   ├── inference/
+│   ├── methods/
 │   ├── models/
 │   ├── smoke/
 │   ├── training/
@@ -270,6 +303,7 @@ Virtual-Staining/
 │   ├── evaluation/
 │   ├── experiment/
 │   ├── inference/
+│   ├── methods/
 │   ├── models/
 │   ├── training/
 │   └── utils/
@@ -288,7 +322,7 @@ make qa
 uv run ruff check .
 uv run ruff format --check .
 uv run pyright
-uv run --group dev pytest
+uv run --group dev pytest -m "not slow"
 ```
 
 The test layout is documented in [`tests/README.md`](tests/README.md).
@@ -326,12 +360,31 @@ from the same slide. For independent generalization evidence, configure `split.u
 
 ## Method
 
-- **Preprocessing** - tissue masking, feature-based affine alignment of target to source,
-  patch extraction with foreground and white-area quality filters.
-- **Model** - Pix2Pix conditional GAN: U-Net generator with skip connections and
-  PatchGAN discriminator, trained with adversarial loss + L1 reconstruction loss.
-- **Evaluation** - per-image MAE, RMSE, PSNR, SSIM; summary statistics; optional
-  comparison panels with difference maps.
+- **Shared framework** - one generic `Trainer` drives a method runtime; checkpoints use a
+  single method-aware v4 format with opaque method-owned state; inference, run metadata,
+  and provenance are shared. Details: [`docs/architecture.md`](docs/architecture.md).
+- **Preprocessing** (paired data) - tissue masking, feature-based affine alignment of
+  target to reference, patch extraction with foreground and white-area quality filters.
+- **Pix2Pix** (reference method) - conditional GAN on aligned pairs: ConcatUNet generator
+  over the concatenated named inputs, conditional PatchGAN discriminator, adversarial BCE
+  plus L1 (optional SSIM) losses.
+- **CycleGAN** (alternative method) - unpaired A <-> B translation: two ResNet generators,
+  two unconditional PatchGAN discriminators, LSGAN adversarial, cycle-consistency L1 and
+  optional identity L1 losses, fake-image replay pools.
+- **Evaluation** - two distinct protocols:
+  - *paired* (Pix2Pix default; CycleGAN opt-in) - per-image MAE, MSE, RMSE, PSNR, SSIM,
+    and PCC against aligned references, with set/specimen/patient summaries. Requires an
+    aligned held-out test manifest.
+  - *unpaired* (CycleGAN default) - compares the generated and real test collections
+    through per-image RGB/luminance feature distributions. No pairs are formed and no
+    pairwise fidelity metric is reported.
+
+### Scientific scope
+
+Paired image metrics are meaningful only against spatially aligned references. CycleGAN's
+unpaired diagnostics compare low-order appearance statistics of two image collections;
+they do not measure sample-level fidelity and do not establish biological correctness or
+clinical validity. Nothing in this repository is validated for clinical use.
 
 ## License
 

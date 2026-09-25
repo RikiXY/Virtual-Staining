@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import json
 from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
@@ -96,3 +98,52 @@ def write_manifest_csv(
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     manifest.to_csv(csv_path)
     return csv_path
+
+
+def write_aligned_test_manifest(dataset_root: Path, sample_ids: list[str]) -> None:
+    """Write an aligned test-split manifest of <id>_source/<id>_target PNGs for set P1."""
+    records = tuple(
+        make_manifest_record(
+            sample_id,
+            "test",
+            input_paths={"label_free": Path(f"splits/test/{sample_id}_source.png")},
+            ext=".png",
+            target_path=Path(f"splits/test/{sample_id}_target.png"),
+        )
+        for sample_id in sample_ids
+    )
+    write_manifest_csv(dataset_root, records)
+    with (dataset_root / "manifests" / "slide_sets.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "set_id",
+                "split",
+                "patient_id",
+                "specimen_id",
+                "status",
+                "label_free__alignment_method",
+                "target__alignment_method",
+                "label_free__alignment_metadata",
+                "target__alignment_metadata",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "set_id": "P1",
+                "split": "test",
+                "patient_id": "patient-1",
+                "specimen_id": "specimen-1",
+                "status": "processed",
+                "label_free__alignment_method": "identity",
+                "target__alignment_method": "identity",
+                "label_free__alignment_metadata": "{}",
+                "target__alignment_metadata": "{}",
+            }
+        )
+    (dataset_root / "manifests" / "manifest_metadata.json").write_text(
+        json.dumps(manifest_metadata().to_dict()), encoding="utf-8"
+    )

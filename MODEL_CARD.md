@@ -31,7 +31,8 @@ Intended uses:
 
 ## Architecture
 
-The repository implements a Pix2Pix-style conditional GAN.
+This card covers the Pix2Pix reference method, a Pix2Pix-style conditional GAN. The
+repository's second built-in method, CycleGAN, is not described by this card.
 
 **Generator**
 

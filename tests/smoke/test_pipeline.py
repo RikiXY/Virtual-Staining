@@ -5,16 +5,20 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import cv2
 import numpy as np
 import pytest
+import torch
+import yaml
 
-from tests.config_helpers import write_queue_config, write_run_config
+from tests.config_helpers import write_config_data, write_queue_config, write_run_config
 from virtual_staining.applications.pipeline import run_stage, run_stages
 from virtual_staining.applications.prepare import prepare
 from virtual_staining.applications.run_queue import run_queue
+from virtual_staining.checkpoint_contract import CHECKPOINT_FORMAT_VERSION
 from virtual_staining.config.run import RunConfig
 
 
@@ -130,6 +134,10 @@ def _write_smoke_config(tmp_path: Path, dataset_root: Path, *, run_name: str = "
     )
 
 
+def _read_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def _write_queue_file(
     tmp_path: Path,
     config_paths: list[Path],
@@ -157,11 +165,29 @@ def test_full_pipeline_smoke(tmp_path: Path) -> None:
     assert prepared.val_count > 0
     assert prepared.test_count > 0
 
+    run_root = tmp_path / "runs" / "smoke_run"
     run_stage(config_path, "train")
-    run_stage(config_path, "infer")
-    run_stage(config_path, "evaluate")
+    checkpoint = torch.load(
+        run_root / "checkpoints" / "ep000.pth", map_location="cpu", weights_only=False
+    )
+    assert checkpoint["format_version"] == CHECKPOINT_FORMAT_VERSION
+    assert checkpoint["method"]["name"] == "pix2pix"
 
-    metrics_csv = tmp_path / "runs" / "smoke_run" / "evaluation" / "per_image_metrics.csv"
+    # Resume the latest checkpoint in a fresh runtime; inference then resolves the newest one.
+    resume_data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    resume_data["training"].update(epochs=2, resume="latest")
+    resume_path = write_config_data(tmp_path / "smoke_resume.yaml", resume_data)
+    run_stage(resume_path, "train")
+    run_stage(resume_path, "infer")
+    run_stage(resume_path, "evaluate")
+
+    infer_record = _read_json(run_root / "metadata" / "stages" / "infer.json")
+    assert infer_record["details"]["checkpoint_path"] == str(run_root / "checkpoints" / "ep001.pth")
+    generated = sorted((run_root / "artifacts" / "output_test").iterdir())
+    assert generated
+    assert all(path.name.endswith("_target_generated.tif") for path in generated)
+
+    metrics_csv = run_root / "evaluation" / "per_image_metrics.csv"
     assert metrics_csv.exists()
 
     with metrics_csv.open(newline="", encoding="utf-8") as handle:
@@ -169,9 +195,19 @@ def test_full_pipeline_smoke(tmp_path: Path) -> None:
 
     assert rows
     assert rows[0]["sample_id"]
-    run_root = tmp_path / "runs" / "smoke_run"
-    run_data = json.loads((run_root / "metadata" / "run.json").read_text(encoding="utf-8"))
+    metadata = _read_json(run_root / "evaluation" / "evaluation_metadata.json")
+    assert metadata["method"] == "pix2pix"
+    assert metadata["evaluation_protocol"] == "paired"
+    assert metadata["pairwise_metrics_available"] is True
+    assert metadata["counts"]["evaluated_count"] == len(rows)
+    run_data = _read_json(run_root / "metadata" / "run.json")
     assert run_data["stages_present"] == ["train", "infer", "evaluate"]
+    for stage in ("train", "infer", "evaluate"):
+        assert _read_json(run_root / "metadata" / "stages" / f"{stage}.json")["status"] == (
+            "completed"
+        )
+        assert (run_root / "config" / stage / "resolved.yaml").is_file()
+        assert (run_root / "metadata" / "environments" / f"{stage}.json").is_file()
     assert (run_root / "logs" / "run.log").is_file()
     assert (run_root / "metrics" / "epochs.csv").is_file()
     for legacy in ("training.log", "train.csv", "validation.csv", "all.csv"):

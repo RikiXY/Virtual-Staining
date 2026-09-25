@@ -21,14 +21,64 @@ upper layers may import from lower layers, never the reverse.
 | `utils/` | Shared primitives: artifact naming, image dimensions, and image I/O helpers |
 | `config/` | Sole owner of YAML-facing dataclasses and strict parsers for every config section |
 | `experiment/` | Canonical `RunLayout` for one run, `ResultsLayout` for shared comparisons, stage snapshots, run metadata, manifest/config hashing, and environment snapshots |
-| `models/` | Model factory, model-I/O normalization contract, and generator/discriminator implementations |
-| `data/` | Canonical `DatasetLayout`, slide sets, manifests, dataset building, and dataset-owned provenance/fingerprints |
-| `methods/` | Built-in translation-method runtimes owning topology, state, and component metadata |
-| `training/` | Training mechanics, validation, history, losses, resume state, and callback-driven progress events |
-| `inference/` | Reusable checkpoint loading and runtime inference; application code owns runtime composition |
-| `evaluation/` | Set evaluation, diagnostic plots, representative selection, comparison panels, and summaries |
+| `models/` | Network implementations (`ConcatUNetGenerator`, `ResnetGenerator`, `PatchGANDiscriminator`), factories, and the model-I/O normalization contract; no training state |
+| `data/` | Canonical `DatasetLayout`, slide sets, paired manifests, unpaired domain collections, dataset building, registration, and dataset-owned provenance/fingerprints |
+| `methods/` | The two built-in method runtimes (`Pix2PixMethod`, `CycleGANMethod`), each owning its topology, optimizers, losses, checkpoint state, component metadata, and inference loader; `registry.py` selects one from `method.name` |
+| `training/` | The `TrainingMethodRuntime` protocol, method-agnostic `Trainer`, generic `MethodCheckpointManager`, validation, history, loss configuration/registry, and callback-driven progress events |
+| `inference/` | Checkpoint resolution, method dispatch to the method-owned loaders, CycleGAN direction resolution, generic single/directory/tiled/WSI inference, and output naming |
+| `evaluation/` | Paired per-image metrics and grouped summaries, unpaired collection diagnostics, diagnostic plots, representative selection, and comparison panels |
 | `applications/` | User-visible stage lifecycle owners and infer-images runtime composition; no `argparse` |
 | `cli/` | The `argparse` entrypoint, terminal rendering, and thin adapters over `applications/` |
+
+## Translation Methods
+
+Two methods are built in: Pix2Pix (paired, named N-input -> one-target) and CycleGAN
+(unpaired, one domain A <-> one domain B). `methods/registry.py` maps `method.name` to
+`Pix2PixMethod` or `CycleGANMethod` with an explicit branch; there is no dynamic import,
+`class_path` loading, or plugin discovery. `RunConfig` validates the method-specific
+combination of data pairing, generator architecture, losses, inference direction, and
+evaluation protocol before any runtime is built.
+
+`training/runtime.py` defines the `TrainingMethodRuntime` protocol the generic training
+code consumes: method identity (`name`, `pairing`, `input_names`, `output_names`,
+`prediction_directions`), `step()` / `validate()` returning named `MethodMetrics`,
+checkpoint-selection metrics and modes, scheduler stepping, learning rates, component
+metadata, and opaque `state_dict()` / `load_state_dict()`. It exposes no generator,
+discriminator, optimizer, or model-count accessors.
+
+- `Trainer` owns the epoch loop, validation cadence, `epochs.csv` history, checkpoint
+  cadence and `best.json` ranking, resume, and early stopping. It does not know which
+  networks a method trains.
+- `MethodCheckpointManager` wraps the runtime's `state_dict()` in the v4 payload from
+  `checkpoint_contract.py` and validates method identity, I/O names, image size, and
+  normalization before calling `load_state_dict()`. It assumes no fixed number of models
+  or optimizers. Only v4 is accepted; older or unversioned payloads are rejected, with no
+  migration path.
+- `Pix2PixMethod` owns the ConcatUNet generator, conditional PatchGAN discriminator, their
+  optimizers, AMP scalers, schedulers, and the configured BCE/L1/SSIM objective.
+- `CycleGANMethod` owns `G_A_to_B`, `G_B_to_A`, `D_A`, `D_B`, joint generator and
+  discriminator optimizers, scalers, schedulers, CycleGAN weight initialization, the LSGAN
+  / cycle L1 / identity L1 objective, and the `fake_A` / `fake_B` replay pools including
+  their RNG state.
+
+`applications/train.py` builds either manifest-backed paired datasets or
+`data/unpaired.py` domain datasets according to `data.pairing`, then hands the runtime to
+the `Trainer`.
+
+For inference, `inference/runner.py` resolves the checkpoint through the shared selection
+policy and dispatches to `load_pix2pix_inference_generator` or
+`load_cyclegan_inference_generator`. The CycleGAN loader returns a
+`CycleGANInferenceAdapter` wrapping the generator for `inference.direction`, so every
+loaded model accepts the same named-input mapping. Single-image, directory, tiled, and WSI
+inference in `inference/single.py` and the `vs infer` test-split loop are method-agnostic
+apart from choosing the input names and the direction-aware output filename
+(`utils/artifacts.py`).
+
+Evaluation protocol selection belongs to `applications/evaluate.py`: `paired` (default for
+Pix2Pix) maps aligned manifest records to references and reuses `evaluation/evaluator.py`
+and `metrics.py`; `unpaired` (default for CycleGAN) collects the active direction's
+generated images and the real test collection of the reference domain and delegates to
+`evaluation/unpaired.py`. Method code contains no evaluation metrics.
 
 ## Purity and I/O Boundaries
 
@@ -63,7 +113,7 @@ environment snapshots through the generic experiment snapshot helpers. Preparati
 is dataset-owned, writes dataset fingerprints and source hashes, and emits no
 experiment run events. Dataset provenance lives in `data/provenance.py`; run
 provenance lives in `experiment/snapshots.py`.
-Training model construction and dataset wiring terminate in the reusable `Trainer`;
+`applications/train.py` builds the method runtime and datasets and hands them to the reusable `Trainer`;
 its `ProgressUpdate` callback is silent unless an adapter supplies a reporter.
 The CLI supplies terminal rendering, while application/library callers remain
 presentation-neutral. Infer-images runtime creation belongs to `applications/`;
@@ -88,29 +138,32 @@ These constraints are enforced by convention and checked in code review:
 - **No `sys.exit()` outside `cli/`** - applications raise exceptions; the CLI
   layer converts them to exit codes.
 
-The library graph is an enforced direct-edge DAG:
+The current direct package dependencies (excluding self-imports) are:
 
 ```text
-cli -> applications, cli, metrics
-applications -> checkpoint_contract, checkpoint_selection, config, data, evaluation,
-                experiment, inference, methods, metrics, models, training, utils
-config -> config, checkpoint_selection, metrics, utils
+cli -> applications, metrics
+applications -> config, data, evaluation, experiment, inference, methods, metrics,
+                models, split_contract, training, utils
+inference -> checkpoint_selection, config, data, experiment, methods, models, utils
+methods -> checkpoint_contract, checkpoint_selection, config, models, training
+training -> checkpoint_contract, checkpoint_selection, config, experiment, metrics, models
+evaluation -> metrics, utils
+experiment -> config, data, utils
+data -> config, split_contract, utils
+models -> config
 checkpoint_contract -> models
-methods -> checkpoint_contract, checkpoint_selection, config, methods, models, training
-data -> config, data, utils
-models -> config, models
-experiment -> config, data, experiment
-training -> checkpoint_contract, checkpoint_selection, config, experiment, metrics,
-            models, training, utils
-inference -> checkpoint_contract, checkpoint_selection, config, data, experiment,
-             inference, methods, models, utils
-evaluation -> config, evaluation, metrics, utils
-utils -> utils
+checkpoint_selection -> metrics
+config -> checkpoint_selection, split_contract, utils
+metrics, split_contract, utils -> (none)
 ```
 
 `tests/architecture/test_package_dependencies.py` resolves absolute, relative,
-nested, and `TYPE_CHECKING` imports with the standard library. It reports the
-source file and illegal import, and verifies the allowlist topologically sorts.
+nested, and `TYPE_CHECKING` imports with the standard library and enforces the
+boundaries that matter: no library package imports `applications` or `cli`;
+`utils`, `metrics`, and `split_contract` stay leaves; `config` imports no runtime
+domain; CLI command modules call only `applications`; and the registration boundary
+below. `training` never imports `methods`: concrete methods depend on the generic
+training layer, not the reverse.
 
 Registration is implemented entirely in `data/alignment/`: `models.py` defines
 `AlignmentImage`, immutable `AlignmentResult`, `RegistrationDiagnostics`, and `AlignmentError`;

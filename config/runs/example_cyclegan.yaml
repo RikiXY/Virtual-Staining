@@ -53,7 +53,7 @@ training:
   scheduler:
     name: linear_decay
     decay_start_epoch: 100
-  # CycleGAN currently requires augmentation to stay disabled.
+  # CycleGAN requires augmentation to stay disabled.
   augmentation:
     enabled: false
   losses:

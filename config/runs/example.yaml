@@ -15,6 +15,10 @@ run_name: example_run
 # Convention: [width, height] - e.g. [320, 256] means 320 px wide, 256 px tall.
 image_size: [256, 256]
 
+# Paired Pix2Pix reference method (the default). See example_cyclegan.yaml for CycleGAN.
+method:
+  name: pix2pix
+
 model:
   inputs: [autofluorescence, label_free]
   target: H&E
