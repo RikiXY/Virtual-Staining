@@ -18,6 +18,7 @@ from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directo
 from virtual_staining.methods.cyclegan import CycleGANMethod, ReplayPool
 from virtual_staining.methods.registry import resolve_training_method
 from virtual_staining.training.checkpoints import MethodCheckpointManager
+from virtual_staining.training.preview import ValidationPreviewWriter
 
 _CPU = torch.device("cpu")
 
@@ -290,8 +291,9 @@ def test_validation_is_deterministic_restores_modes_and_writes_previews(tmp_path
     method.D_B.eval()
     loader = [_batch(3), _batch(4)]
 
-    first = method.validate(loader, epoch=2, output_dir=tmp_path / "val")  # type: ignore[arg-type]
-    second = method.validate(loader, epoch=2, output_dir=tmp_path / "val")  # type: ignore[arg-type]
+    writer = ValidationPreviewWriter(tmp_path / "val")
+    first = method.validate(loader, epoch=2, preview_sink=writer)  # type: ignore[arg-type]
+    second = method.validate(loader, epoch=2, preview_sink=writer)  # type: ignore[arg-type]
 
     assert first == second
     assert set(first.losses) == {"loss_G", "loss_D"}

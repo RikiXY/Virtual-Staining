@@ -21,6 +21,7 @@ from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.training.checkpoints import MethodCheckpointManager
 from virtual_staining.training.helpers import LossComponentAccumulator, dataset_len
 from virtual_staining.training.history import TrainingHistory
+from virtual_staining.training.preview import ValidationPreviewSink
 from virtual_staining.training.progress import (
     ProgressReporter,
     ProgressTracker,
@@ -79,8 +80,10 @@ class Trainer:
         image_size: tuple[int, int],
         progress_reporter: ProgressReporter | None = None,
         benchmark_recorder: TrainingBenchmarkRecorder | None = None,
+        preview_sink: ValidationPreviewSink | None = None,
     ) -> None:
         self.config = config
+        self.preview_sink = preview_sink
         self.method = method
         self.progress_reporter = progress_reporter
         self._benchmark_recorder = benchmark_recorder
@@ -374,7 +377,7 @@ class Trainer:
         return self.method.validate(
             self.val_loader,
             epoch=epoch,
-            output_dir=self._output_val_dir,
+            preview_sink=self.preview_sink,
         )
 
     def _step_lr_schedulers(

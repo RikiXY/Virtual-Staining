@@ -20,6 +20,7 @@ from virtual_staining.methods.registry import resolve_training_method
 from virtual_staining.models.io_contract import build_model_input_transform
 from virtual_staining.split_contract import TRAIN_SPLIT, VAL_SPLIT, DatasetSplit
 from virtual_staining.training.augmentation import build_training_paired_transform
+from virtual_staining.training.preview import ValidationPreviewWriter
 from virtual_staining.training.progress import ProgressReporter, ProgressUpdate, format_progress_log
 from virtual_staining.training.results import TrainingResult
 from virtual_staining.training.trainer import Trainer
@@ -211,6 +212,9 @@ def train(
             config_hash=session.config_hash,
             image_size=config.project.image_size,
             benchmark_recorder=benchmark_recorder,
+            preview_sink=ValidationPreviewWriter(
+                session.paths.output_val_dir, benchmark_recorder=benchmark_recorder
+            ),
         )
         if benchmark_recorder is not None:
             benchmark_recorder.start_run()

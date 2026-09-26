@@ -12,12 +12,10 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.amp import GradScaler
-from torchvision.utils import save_image
 
 from virtual_staining.checkpoint_contract import CheckpointCompatibilityError, first_difference
 from virtual_staining.config.losses import LossConfig
 from virtual_staining.config.training import LearningRateSchedulerConfig, TrainingConfig
-from virtual_staining.models.io_contract import denormalize_model_output
 from virtual_staining.training.runtime import MethodMetrics
 
 logger = logging.getLogger(__name__)
@@ -25,25 +23,6 @@ logger = logging.getLogger(__name__)
 
 def is_amp_enabled(device: torch.device) -> bool:
     return isinstance(device, torch.device) and device.type == "cuda"
-
-
-def save_images(
-    path: Path,
-    source_tensor: torch.Tensor,
-    output: torch.Tensor,
-    target: torch.Tensor,
-    epoch: int,
-    batch_index: int,
-) -> None:
-    save_image(
-        denormalize_model_output(source_tensor), path / f"epoch{epoch}_batch{batch_index}_input.tif"
-    )
-    save_image(
-        denormalize_model_output(output), path / f"epoch{epoch}_batch{batch_index}_output.tif"
-    )
-    save_image(
-        denormalize_model_output(target), path / f"epoch{epoch}_batch{batch_index}_target.tif"
-    )
 
 
 def dataset_len(loader: torch.utils.data.DataLoader) -> int:

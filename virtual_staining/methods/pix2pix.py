@@ -42,6 +42,7 @@ from virtual_staining.training.helpers import (
     validated_model_state,
 )
 from virtual_staining.training.losses import ConfiguredLossEvaluator
+from virtual_staining.training.preview import ValidationPreviewSink
 from virtual_staining.training.runtime import MethodMetrics
 from virtual_staining.training.steps import Pix2PixTrainingStep
 from virtual_staining.training.validator import validate_epoch
@@ -221,7 +222,7 @@ class Pix2PixMethod:
         loader: torch.utils.data.DataLoader,
         *,
         epoch: int,
-        output_dir: Path,
+        preview_sink: ValidationPreviewSink | None = None,
     ) -> MethodMetrics:
         result = validate_epoch(
             epoch=epoch,
@@ -232,8 +233,7 @@ class Pix2PixMethod:
             losses=self.loss_config,
             device=self.device,
             amp_enabled=self._amp_enabled,
-            output_dir=output_dir,
-            benchmark_recorder=self._benchmark_recorder,
+            preview_sink=preview_sink,
         )
         has_components = bool(result.raw or result.weighted or result.current_weight)
         return MethodMetrics(

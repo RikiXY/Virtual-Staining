@@ -13,7 +13,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.amp import GradScaler, autocast
-from torchvision.utils import save_image
 
 from virtual_staining.checkpoint_contract import (
     CheckpointIdentity,
@@ -26,10 +25,7 @@ from virtual_staining.config.run import RunConfig
 from virtual_staining.models.discriminator import PatchGANDiscriminator
 from virtual_staining.models.factory import build_discriminator, build_resnet_generator
 from virtual_staining.models.generator import ResnetGenerator
-from virtual_staining.models.io_contract import (
-    GENERATOR_OUTPUT_ACTIVATION,
-    denormalize_model_output,
-)
+from virtual_staining.models.io_contract import GENERATOR_OUTPUT_ACTIVATION
 from virtual_staining.training.helpers import (
     TRAINING_STATE_KEYS,
     LossComponentAccumulator,
@@ -47,12 +43,12 @@ from virtual_staining.training.helpers import (
     training_state_dict,
     validated_model_state,
 )
+from virtual_staining.training.preview import ValidationPreview, ValidationPreviewSink
 from virtual_staining.training.runtime import MethodMetrics
 
 _POOL_KEYS = frozenset({"fake_A", "fake_B"})
 _STATE_KEYS = TRAINING_STATE_KEYS | {"replay_pools"}
 _POOL_STATE_KEYS = frozenset({"capacity", "images", "rng_state"})
-_PREVIEW_BATCHES = 5
 
 
 def init_cyclegan_weights(module: nn.Module) -> None:
@@ -482,14 +478,13 @@ class CycleGANMethod:
         loader: torch.utils.data.DataLoader,
         *,
         epoch: int,
-        output_dir: Path,
+        preview_sink: ValidationPreviewSink | None = None,
     ) -> MethodMetrics:
         """Report deterministic training-objective diagnostics; no paired fidelity metrics."""
         was_training = {name: model.training for name, model in self._models().items()}
         for model in self._models().values():
             model.eval()
         try:
-            output_dir.mkdir(parents=True, exist_ok=True)
             components = LossComponentAccumulator(list(self.loss_names))
             total_G = total_D = 0.0
             count = 0
@@ -520,14 +515,18 @@ class CycleGANMethod:
                     total_G += float(generator.total.item())
                     total_D += float(discriminator.total.item())
                     count += 1
-                    if batch_index < _PREVIEW_BATCHES:
-                        preview = torch.stack(
-                            [image[0].float() for image in (real_a, fake_b, real_b, fake_a)]
-                        )
-                        save_image(
-                            denormalize_model_output(preview),
-                            output_dir / f"epoch{epoch}_batch{batch_index}_preview.tif",
-                            nrow=4,
+                    if preview_sink is not None and preview_sink.wants(epoch, batch_index):
+                        preview_sink.write(
+                            ValidationPreview(
+                                epoch=epoch,
+                                batch_index=batch_index,
+                                images={
+                                    "real_A": real_a.detach(),
+                                    "fake_B": fake_b.detach(),
+                                    "real_B": real_b.detach(),
+                                    "fake_A": fake_a.detach(),
+                                },
+                            )
                         )
         finally:
             for name, model in self._models().items():

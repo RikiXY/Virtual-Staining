@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import torch
 import torch.nn as nn
@@ -13,15 +12,12 @@ from virtual_staining.models.generator import concat_inputs
 from virtual_staining.training.helpers import (
     LossComponentAccumulator,
     configured_loss_names,
-    save_images,
     unpack_batch,
 )
 from virtual_staining.training.losses import ConfiguredLossEvaluator, LossEvaluationContext
+from virtual_staining.training.preview import ValidationPreview, ValidationPreviewSink
 from virtual_staining.training.results import EpochMetrics
 from virtual_staining.training.validation_metrics import ValidationImageMetricAccumulator
-
-if TYPE_CHECKING:
-    from virtual_staining.training.benchmarking import TrainingBenchmarkRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +32,7 @@ def validate_epoch(
     losses: LossConfig | None,
     device: torch.device,
     amp_enabled: bool,
-    output_dir: Path,
-    benchmark_recorder: TrainingBenchmarkRecorder | None = None,
+    preview_sink: ValidationPreviewSink | None = None,
 ) -> EpochMetrics:
     generator_was_training = generator.training
     discriminator_was_training = discriminator.training
@@ -45,7 +40,6 @@ def validate_epoch(
     discriminator.eval()
 
     try:
-        output_dir.mkdir(parents=True, exist_ok=True)
         total_loss_G = 0.0
         total_loss_D = 0.0
         component_totals = LossComponentAccumulator(configured_loss_names(losses))
@@ -97,26 +91,18 @@ def validate_epoch(
                 total_loss_G += generator_loss.total.item()
                 image_metric_totals.add_batch(generated, target)
                 count += 1
-                if batch_index < 5:
-                    if benchmark_recorder is None:
-                        save_images(
-                            output_dir,
-                            inputs[next(iter(inputs))][0],
-                            generated[0],
-                            target[0],
-                            epoch,
-                            batch_index,
+                if preview_sink is not None and preview_sink.wants(epoch, batch_index):
+                    preview_sink.write(
+                        ValidationPreview(
+                            epoch=epoch,
+                            batch_index=batch_index,
+                            images={
+                                "input": inputs[input_names[0]].detach(),
+                                "output": generated.detach(),
+                                "target": target.detach(),
+                            },
                         )
-                    else:
-                        with benchmark_recorder.phase("preview_io"):
-                            save_images(
-                                output_dir,
-                                inputs[next(iter(inputs))][0],
-                                generated[0],
-                                target[0],
-                                epoch,
-                                batch_index,
-                            )
+                    )
 
         averages = component_totals.average(count)
         loss_G = total_loss_G / count if count else 0.0

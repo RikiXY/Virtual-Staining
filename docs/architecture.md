@@ -120,7 +120,9 @@ presentation-neutral. Infer-images runtime creation belongs to `applications/`;
 `inference/single.py` accepts an already-loaded `InferenceRuntime`.
 
 Within training, `trainer.py` owns epoch orchestration, `validator.py` owns validation
-inference, `history.py` owns metric CSV persistence, `checkpoints.py` persists opaque
+inference, `preview.py` owns the optional validation preview sink (methods hand it
+detached semantic tensors; `applications/train.py` injects the default TIFF writer),
+`history.py` owns metric CSV persistence, `checkpoints.py` persists opaque
 method-owned state through the generic `MethodCheckpointManager`,
 `checkpoint_contract.py` owns the topology-neutral v4 contract, and
 `checkpoint_selection.py` owns `best.json` ranking and resolution. Evaluation keeps

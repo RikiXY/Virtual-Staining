@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Protocol
 
 import torch
 
 from virtual_staining.config.losses import LossConfig
+from virtual_staining.training.preview import ValidationPreviewSink
 
 
 @dataclass(frozen=True)
@@ -54,7 +54,7 @@ class TrainingMethodRuntime(Protocol):
         loader: torch.utils.data.DataLoader,
         *,
         epoch: int,
-        output_dir: Path,
+        preview_sink: ValidationPreviewSink | None = None,
     ) -> MethodMetrics: ...
     def validation_metric(self, metrics: MethodMetrics, name: str) -> float | None: ...
     def checkpoint_selection_metrics(self, metrics: MethodMetrics) -> dict[str, float]: ...
