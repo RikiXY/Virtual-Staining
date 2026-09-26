@@ -214,7 +214,9 @@ Run checkpoints use the method-aware v4 `checkpoint_contract.py` and
 `checkpoint_selection.py` modules; model, optimizer, scaler, scheduler, and (for
 CycleGAN) replay-pool state are method-owned and persisted opaquely through
 `state_dict()`. Training progress is a callback event rendered by
-the CLI, not terminal output from library code.
+the CLI, not terminal output from library code. `ProgressUpdate` carries raw
+data: monotonic `elapsed_seconds`/`eta_seconds` and a wall-clock
+`estimated_end`, formatted only by `training/progress.py` helpers.
 
 ## File Descriptions
 
@@ -459,6 +461,11 @@ writes and cannot invalidate them.
 One canonical row per training epoch. The header is the deterministic union of
 train, validation, configured component-loss, and validation-image columns.
 Values use six decimal places; missing or non-finite validation values are blank.
+Training loss/component columns use `step_mean`: the unweighted mean over the
+epoch's optimization steps, so a smaller final batch counts as much as a full one.
+Validation loss/component columns are likewise means over validation batches, while
+validation image metrics (`val_ssim`, `val_mae`, ...) are means over individual
+images, skipping non-finite values.
 Rows flush after every epoch. Resume requires a matching header and complete
 epochs `0..resume_at-1`; stale rows at or after `resume_at` are discarded before
 new rows append. Missing, malformed, gapped, duplicate, or incompatible history

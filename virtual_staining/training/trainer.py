@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import datetime
 import logging
 import math
 import time
@@ -19,14 +18,14 @@ from virtual_staining.config.training import TrainingConfig
 from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.training.checkpoints import MethodCheckpointManager
-from virtual_staining.training.helpers import LossComponentAccumulator, dataset_len
+from virtual_staining.training.helpers import TrainingEpochAccumulator, dataset_len
 from virtual_staining.training.history import TrainingHistory
 from virtual_staining.training.preview import ValidationPreviewSink
 from virtual_staining.training.progress import (
+    ProgressEstimate,
     ProgressReporter,
     ProgressTracker,
     ProgressUpdate,
-    format_duration,
     format_progress_log,
 )
 from virtual_staining.training.results import TrainingResult
@@ -42,7 +41,6 @@ checkpoint_logger = logging.getLogger("virtual_staining.training.checkpoints")
 @dataclass
 class _TrainingSession:
     start_epoch: int
-    start_time: float
     progress_tracker: ProgressTracker
     history: TrainingHistory
     last_checkpoint: str
@@ -133,19 +131,19 @@ class Trainer:
         seed: int,
         start_epoch: int = 0,
     ) -> TrainingResult:
-        start_time = time.time()
+        start_time = time.monotonic()
         self._prepare_run_directories()
         self._clear_training_outputs()
         self._log_training_start(seed, start_epoch)
 
-        session = self._run_training_epochs(start_epoch=start_epoch, start_time=start_time)
+        session = self._run_training_epochs(start_epoch=start_epoch)
 
         if session.best_checkpoint_path is None:
             session.best_checkpoint_path = self._checkpoints.latest()
             if session.best_checkpoint_path is not None:
                 session.best_checkpoint = session.best_checkpoint_path.name
 
-        total_seconds = time.time() - start_time
+        total_seconds = time.monotonic() - start_time
         logger.info("Execution completed. Total time = %.2f seconds", total_seconds)
         return TrainingResult(
             final_epoch=session.final_epoch,
@@ -217,7 +215,6 @@ class Trainer:
             total_epochs=self.config.epochs,
             total_batches=len(self.train_loader),
             start_epoch=start_epoch,
-            warmup_batches=max(10, self.config.log_rate),
         )
         progress_tracker.start()
         return progress_tracker
@@ -226,7 +223,6 @@ class Trainer:
         self,
         *,
         start_epoch: int,
-        start_time: float,
     ) -> _TrainingSession:
         loss_names = list(self.method.loss_names)
         progress_tracker = self._start_progress_tracker(start_epoch)
@@ -240,7 +236,6 @@ class Trainer:
         ) as history:
             session = _TrainingSession(
                 start_epoch=start_epoch,
-                start_time=start_time,
                 progress_tracker=progress_tracker,
                 history=history,
                 last_checkpoint=(Path(self.config.resume).name if self.config.resume else "none"),
@@ -256,6 +251,15 @@ class Trainer:
                     break
 
         self._save_final_checkpoint_if_needed(session)
+        if session.final_metrics is not None:
+            # The run's single completion event, emitted after any unscheduled final checkpoint.
+            self._emit_progress(
+                session,
+                epoch=session.final_epoch,
+                batch_index=len(self.train_loader) - 1,
+                step_metrics=session.final_metrics.losses,
+                estimate=progress_tracker.estimate(progress_tracker.total_steps),
+            )
         return session
 
     def _run_training_epoch(
@@ -274,15 +278,13 @@ class Trainer:
 
             val_metrics, validation_checkpoint_path = self._validate_and_update_best(
                 epoch=epoch,
-                epoch_metrics=epoch_metrics,
                 session=session,
             )
             if val_metrics is None:
                 self._step_lr_schedulers(epoch=epoch, val_metrics=None)
 
-            self._save_scheduled_checkpoint(
+            scheduled_checkpoint_path = self._save_scheduled_checkpoint(
                 epoch=epoch,
-                epoch_metrics=epoch_metrics,
                 session=session,
                 existing_checkpoint_path=validation_checkpoint_path,
             )
@@ -291,6 +293,20 @@ class Trainer:
             self._experiment_session.log_metrics(reported, step=epoch)
             if val_metrics is not None and self.config.early_stopping is not None:
                 self._update_early_stopping(epoch=epoch, val_metrics=val_metrics, session=session)
+
+            # One finalized lifecycle event per validation/checkpoint epoch; the run's last
+            # epoch is reported by the completion event instead.
+            is_last_epoch = session.stopped or epoch == self.config.epochs - 1
+            lifecycle_ran = val_metrics is not None or scheduled_checkpoint_path is not None
+            if lifecycle_ran and not is_last_epoch:
+                tracker = session.progress_tracker
+                self._emit_progress(
+                    session,
+                    epoch=epoch,
+                    batch_index=len(self.train_loader) - 1,
+                    step_metrics=epoch_metrics.losses,
+                    estimate=tracker.estimate((epoch + 1) * tracker.total_batches),
+                )
             return epoch_metrics
         finally:
             if recorder is not None:
@@ -300,7 +316,6 @@ class Trainer:
         self,
         *,
         epoch: int,
-        epoch_metrics: MethodMetrics,
         session: _TrainingSession,
         existing_checkpoint_path: Path | None = None,
     ) -> Path | None:
@@ -312,19 +327,12 @@ class Trainer:
             checkpoint_path = self._save_checkpoint(epoch)
             session.last_checkpoint = checkpoint_path.name
             logger.info("Checkpoint saved to %s at epoch %s", checkpoint_path, epoch)
-        self._emit_epoch_progress(
-            epoch=epoch,
-            epoch_metrics=epoch_metrics,
-            session=session,
-            eta_str="0s" if epoch == self.config.epochs - 1 else "--",
-        )
         return checkpoint_path
 
     def _validate_and_update_best(
         self,
         *,
         epoch: int,
-        epoch_metrics: MethodMetrics,
         session: _TrainingSession,
     ) -> tuple[MethodMetrics | None, Path | None]:
         if (epoch + 1) % self.config.validate_rate != 0:
@@ -358,12 +366,6 @@ class Trainer:
                 loss_config=loss_config,
             )
             self._sync_best_checkpoint(session)
-        self._emit_epoch_progress(
-            epoch=epoch,
-            epoch_metrics=epoch_metrics,
-            session=session,
-            eta_str="0s" if epoch == self.config.epochs - 1 else "--",
-        )
         return val_metrics, ranked_checkpoint_path
 
     def _validate(self, epoch: int) -> MethodMetrics:
@@ -507,13 +509,6 @@ class Trainer:
         if session.best_checkpoint_path is None:
             session.best_checkpoint_path = checkpoint_path
             session.best_checkpoint = checkpoint_path.name
-        self._emit_epoch_progress(
-            epoch=session.final_epoch,
-            epoch_metrics=session.final_metrics,
-            session=session,
-            progress=1.0,
-            eta_str="0s",
-        )
 
     def _save_checkpoint(self, epoch: int) -> Path:
         recorder = self._benchmark_recorder
@@ -522,40 +517,37 @@ class Trainer:
         with recorder.phase("checkpoint"):
             return self._checkpoints.save(epoch)
 
-    def _emit_epoch_progress(
+    def _emit_progress(
         self,
+        session: _TrainingSession,
         *,
         epoch: int,
-        epoch_metrics: MethodMetrics,
-        session: _TrainingSession,
-        eta_str: str,
-        progress: float | None = None,
+        batch_index: int,
+        step_metrics: Mapping[str, float],
+        estimate: ProgressEstimate,
     ) -> None:
+        tracker = session.progress_tracker
         update = ProgressUpdate(
-            progress=(
-                progress
-                if progress is not None
-                else (epoch + 1) / session.progress_tracker.total_epochs
-            ),
-            epoch_progress=1.0,
+            progress=estimate.progress,
+            epoch_progress=(batch_index + 1) / tracker.total_batches,
             epoch=epoch,
-            batch_index=len(self.train_loader) - 1,
-            total_epochs=session.progress_tracker.total_epochs,
-            total_batches=session.progress_tracker.total_batches,
-            step_metrics=epoch_metrics.losses,
-            elapsed_str=format_duration(time.time() - session.start_time),
-            eta_str=eta_str,
-            end_time_str=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            last_checkpoint_name=session.last_checkpoint,
-            best_checkpoint_name=session.best_checkpoint,
-            best_checkpoint_metric_name=self.method.default_checkpoint_metric,
-            best_checkpoint_metric_value=session.best_checkpoint_metric_value,
+            batch_index=batch_index,
+            total_epochs=tracker.total_epochs,
+            total_batches=tracker.total_batches,
+            step_metrics=step_metrics,
             eval_metrics=(
                 session.latest_eval_metrics.losses
                 if session.latest_eval_metrics is not None
                 else None
             ),
             eval_epoch=session.latest_eval_epoch,
+            elapsed_seconds=estimate.elapsed_seconds,
+            eta_seconds=estimate.eta_seconds,
+            estimated_end=estimate.estimated_end,
+            last_checkpoint_name=session.last_checkpoint,
+            best_checkpoint_name=session.best_checkpoint,
+            best_checkpoint_metric_name=self.method.default_checkpoint_metric,
+            best_checkpoint_metric_value=session.best_checkpoint_metric_value,
         )
         if self.progress_reporter is not None:
             self.progress_reporter(update)
@@ -571,20 +563,23 @@ class Trainer:
         if callable(set_epoch):
             set_epoch(epoch)
 
-        loss_totals: dict[str, float] = {}
-        method_component_totals: dict[str, float] = {}
-        component_totals = LossComponentAccumulator(list(self.method.loss_names))
-        num_batches = 0
+        totals = TrainingEpochAccumulator(
+            metric_names=self.method.metric_names,
+            component_total_names=self.method.component_total_names,
+            loss_names=list(self.method.loss_names),
+        )
+        last_batch_index = len(self.train_loader) - 1
 
         recorder = self._benchmark_recorder
         batch_cycle_started = time.perf_counter() if recorder is not None else 0.0
         for i, batch in enumerate(self.train_loader):
+            samples = self.method.batch_size(batch)
             if recorder is not None:
                 batch_received_at = time.perf_counter()
                 recorder.batch_received(
                     epoch=epoch,
                     batch_index=i,
-                    samples=self.method.batch_size(batch),
+                    samples=samples,
                     data_wait_seconds=batch_received_at - batch_cycle_started,
                     cycle_started_at=batch_cycle_started,
                 )
@@ -595,74 +590,24 @@ class Trainer:
                 global_step=epoch * len(self.train_loader) + i,
             )
             self._validate_method_metric_names(step_metrics)
-            _accumulate_values(loss_totals, step_metrics.losses)
-            _accumulate_values(method_component_totals, step_metrics.component_totals)
-            component_totals.add(
-                raw=step_metrics.raw,
-                weighted=step_metrics.weighted,
-                current_weight=step_metrics.current_weight,
-            )
-            num_batches += 1
+            totals.add(step_metrics, samples=samples)
 
-            progress, elapsed, eta, end_time = session.progress_tracker.calculate_progress(epoch, i)
-            elapsed_str = format_duration(elapsed)
-            eta_str = format_duration(eta)
-            epoch_progress = (i + 1) / session.progress_tracker.total_batches
-            end_time_str = (
-                "warming up"
-                if end_time is None
-                else datetime.datetime.fromtimestamp(end_time).strftime("%Y-%m-%d %H:%M:%S")
-            )
-
-            should_update_progress = (
-                i % self.config.log_rate == 0 or i == len(self.train_loader) - 1
-            )
-            if should_update_progress:
-                update = ProgressUpdate(
-                    progress=progress,
-                    epoch_progress=epoch_progress,
+            # Every step feeds the ETA; log_rate only throttles reporting.
+            estimate = session.progress_tracker.calculate_progress(epoch, i)
+            if i % self.config.log_rate == 0 or i == last_batch_index:
+                self._emit_progress(
+                    session,
                     epoch=epoch,
                     batch_index=i,
-                    total_epochs=session.progress_tracker.total_epochs,
-                    total_batches=session.progress_tracker.total_batches,
                     step_metrics=step_metrics.losses,
-                    elapsed_str=elapsed_str,
-                    eta_str=eta_str,
-                    end_time_str=end_time_str,
-                    last_checkpoint_name=session.last_checkpoint,
-                    best_checkpoint_name=session.best_checkpoint,
-                    best_checkpoint_metric_name=self.method.default_checkpoint_metric,
-                    best_checkpoint_metric_value=session.best_checkpoint_metric_value,
-                    eval_metrics=(
-                        session.latest_eval_metrics.losses
-                        if session.latest_eval_metrics is not None
-                        else None
-                    ),
-                    eval_epoch=session.latest_eval_epoch,
+                    estimate=estimate,
                 )
-                if self.progress_reporter is not None:
-                    self.progress_reporter(update)
-                logger.debug("%s", format_progress_log(update))
 
             if recorder is not None:
                 recorder.finish_batch()
                 batch_cycle_started = time.perf_counter()
 
-        if num_batches == 0:
-            raise RuntimeError("Training loader was empty; cannot compute epoch metrics.")
-
-        component_averages = component_totals.average(num_batches)
-        return MethodMetrics(
-            losses={name: loss_totals[name] / num_batches for name in self.method.metric_names},
-            component_totals={
-                name: method_component_totals[name] / num_batches
-                for name in self.method.component_total_names
-                if name in method_component_totals
-            },
-            raw=component_averages.raw,
-            weighted=component_averages.weighted,
-            current_weight=component_averages.current_weight,
-        )
+        return totals.step_mean()
 
     def _validate_method_metric_names(self, metrics: MethodMetrics) -> None:
         expected = tuple(self.method.metric_names)
@@ -672,8 +617,3 @@ class Trainer:
                 f"Method {self.method.name!r} returned training metrics {actual}; "
                 f"expected {expected}"
             )
-
-
-def _accumulate_values(totals: dict[str, float], values: Mapping[str, float]) -> None:
-    for name, value in values.items():
-        totals[name] = totals.get(name, 0.0) + value

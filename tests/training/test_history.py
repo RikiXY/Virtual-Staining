@@ -143,3 +143,37 @@ def test_resume_rejects_missing_gapped_duplicate_and_mismatched_history(tmp_path
         ),
     ):
         pass
+
+
+@pytest.mark.parametrize(
+    ("epochs", "message"),
+    [(["0", "0", "1"], "duplicate"), (["0", "x"], "malformed epoch")],
+)
+def test_resume_rejects_duplicate_and_malformed_epochs(
+    tmp_path: Path, epochs: list[str], message: str
+) -> None:
+    path = tmp_path / "epochs.csv"
+    fields = (
+        metrics_fieldnames(
+            [],
+            metric_names=("loss_G", "loss_D"),
+            component_total_names=("generator", "discriminator"),
+        )
+        + VALIDATION_IMAGE_METRIC_NAMES
+    )
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for epoch in epochs:
+            writer.writerow({name: (epoch if name == "epoch" else "") for name in fields})
+    with (
+        pytest.raises(ValueError, match=message),
+        TrainingHistory(
+            path,
+            [],
+            resume_at=2,
+            metric_names=("loss_G", "loss_D"),
+            component_total_names=("generator", "discriminator"),
+        ),
+    ):
+        pass

@@ -145,6 +145,57 @@ class LossComponentAccumulator:
         )
 
 
+class TrainingEpochAccumulator:
+    """Reduce per-optimization-step training metrics to epoch metrics with ``step_mean``.
+
+    Every optimization step has equal weight regardless of its batch size, so a smaller final
+    batch counts as much as a full one. ``samples`` is observed context only and never
+    weights the mean.
+    """
+
+    def __init__(
+        self,
+        *,
+        metric_names: Sequence[str],
+        component_total_names: Sequence[str],
+        loss_names: list[str],
+    ) -> None:
+        self._metric_names = tuple(metric_names)
+        self._component_total_names = tuple(component_total_names)
+        self._losses: dict[str, float] = {}
+        self._component_totals: dict[str, float] = {}
+        self._components = LossComponentAccumulator(loss_names)
+        self.steps = 0
+        self.samples = 0
+
+    def add(self, metrics: MethodMetrics, *, samples: int) -> None:
+        _accumulate_components(self._losses, metrics.losses)
+        _accumulate_components(self._component_totals, metrics.component_totals)
+        self._components.add(
+            raw=metrics.raw,
+            weighted=metrics.weighted,
+            current_weight=metrics.current_weight,
+        )
+        self.steps += 1
+        self.samples += samples
+
+    def step_mean(self) -> MethodMetrics:
+        if self.steps == 0:
+            raise RuntimeError("Training loader was empty; cannot compute epoch metrics.")
+        components = self._components.average(self.steps)
+        return MethodMetrics(
+            losses={name: self._losses[name] / self.steps for name in self._metric_names},
+            component_totals={
+                name: self._component_totals[name] / self.steps
+                for name in self._component_total_names
+                if name in self._component_totals
+            },
+            raw=components.raw,
+            weighted=components.weighted,
+            current_weight=components.current_weight,
+        )
+
+
 Scheduler = optim.lr_scheduler.LRScheduler | optim.lr_scheduler.ReduceLROnPlateau
 
 

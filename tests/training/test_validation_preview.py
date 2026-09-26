@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import torch
+from torch.utils.data import DataLoader
 
 from tests.config_helpers import cyclegan_config_data, write_config_data
 from virtual_staining.config.losses import parse_loss_config
@@ -16,12 +18,14 @@ from virtual_staining.config.model import ModelConfig
 from virtual_staining.config.project import ProjectConfig
 from virtual_staining.config.run import RunConfig
 from virtual_staining.config.training import TrainingConfig
+from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.methods.cyclegan import CycleGANMethod
 from virtual_staining.methods.pix2pix import Pix2PixMethod
 from virtual_staining.models.io_contract import denormalize_model_output
 from virtual_staining.training import preview as preview_module
 from virtual_staining.training.benchmarking import TrainingBenchmarkRecorder
 from virtual_staining.training.preview import ValidationPreview, ValidationPreviewWriter
+from virtual_staining.training.trainer import Trainer
 
 _CPU = torch.device("cpu")
 _ADVERSARIAL = {
@@ -299,3 +303,76 @@ def test_writer_times_preview_io_only_when_writing(tmp_path: Path, saved: list[A
     assert phases_during_save == [0, 1, 2, 3, 4]
     assert len(saved) == 15
     assert recorder.report()["summary"]["phases"]["preview_io"]["count"] == 5
+
+
+def test_pix2pix_image_metrics_are_sample_means_across_uneven_batches(tmp_path: Path) -> None:
+    method = _pix2pix(tmp_path)
+    full, partial = _pix2pix_batch(1, size=2), _pix2pix_batch(2, size=1)
+    singles = [
+        {
+            "inputs": {name: tensor[index : index + 1] for name, tensor in full["inputs"].items()},
+            "target": full["target"][index : index + 1],
+            "masks": {},
+        }
+        for index in range(2)
+    ] + [partial]
+    per_image = [method.validate([single], epoch=0).image for single in singles]
+
+    combined = method.validate([full, partial], epoch=0).image
+
+    assert combined.keys() == per_image[0].keys()
+    batch_means = [method.validate([b], epoch=0).image for b in (full, partial)]
+    for name, value in combined.items():
+        sample_mean = sum(image[name] for image in per_image) / 3
+        assert value == pytest.approx(sample_mean, rel=1e-5, abs=1e-7)
+    assert any(
+        combined[name] != pytest.approx((batch_means[0][name] + batch_means[1][name]) / 2)
+        for name in combined
+    )
+
+
+@pytest.mark.parametrize(("build", "batch"), _CASES)
+def test_trainer_preview_sink_changes_only_preview_io(
+    tmp_path: Path, build: Any, batch: Any
+) -> None:
+    def run(root: Path, with_previews: bool) -> tuple[Any, ...]:
+        method = build(root)
+        paths = RunLayout.from_project(method.config.project)
+        ensure_run_directories(paths)
+        training = method.config.training
+        updates: list[Any] = []
+        loader = DataLoader([batch(seed) for seed in range(2)], batch_size=None)
+        trainer = Trainer(
+            training,
+            paths,
+            method,
+            loader,
+            loader,
+            _CPU,
+            train_dir=root / "train",
+            val_dir=root / "val",
+            experiment_session=SimpleNamespace(log_metrics=lambda *_args, **_kwargs: None),
+            config_hash="sha256:test",
+            image_size=method.config.project.image_size,
+            progress_reporter=updates.append,
+            preview_sink=ValidationPreviewWriter(root / "previews") if with_previews else None,
+        )
+        torch.manual_seed(0)
+        result = trainer.train(seed=0)
+        previews = (root / "previews").is_dir() and any((root / "previews").iterdir())
+        return (
+            paths.epochs_csv.read_text(encoding="utf-8"),
+            sorted(path.name for path in paths.checkpoints_dir.iterdir()),
+            (result.final_epoch, result.best_checkpoint_path and result.best_checkpoint_path.name),
+            [
+                (u.epoch, u.batch_index, dict(u.step_metrics), u.eval_metrics, u.progress)
+                for u in updates
+            ],
+            previews,
+        )
+
+    *enabled, enabled_previews = run(tmp_path / "enabled", with_previews=True)
+    *disabled, disabled_previews = run(tmp_path / "disabled", with_previews=False)
+
+    assert enabled == disabled
+    assert (enabled_previews, disabled_previews) == (True, False)

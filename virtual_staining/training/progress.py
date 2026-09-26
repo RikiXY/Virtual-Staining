@@ -1,9 +1,16 @@
+"""Raw training progress events, their plain formatting, and ETA tracking.
+
+Durations (elapsed, ETA, step time) come from ``time.monotonic`` so wall-clock jumps cannot
+corrupt them; only the human calendar ``estimated_end`` uses wall time.
+"""
+
 from __future__ import annotations
 
+import datetime
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import NamedTuple, TypeAlias
 
 
 def format_duration(seconds: float | None) -> str:
@@ -22,8 +29,25 @@ def format_duration(seconds: float | None) -> str:
     return f"{days}d {hours:02d}h"
 
 
+def format_timestamp(value: datetime.datetime | None) -> str:
+    return "warming up" if value is None else value.strftime("%Y-%m-%d %H:%M:%S")
+
+
+class ProgressEstimate(NamedTuple):
+    progress: float
+    elapsed_seconds: float
+    eta_seconds: float | None
+    estimated_end: datetime.datetime | None
+
+
 @dataclass(frozen=True)
 class ProgressUpdate:
+    """Raw progress event; presentation belongs to reporters.
+
+    ``elapsed_seconds`` and ``eta_seconds`` are monotonic durations. ``eta_seconds`` and the
+    local wall-clock ``estimated_end`` are ``None`` while the ETA is still warming up.
+    """
+
     progress: float
     epoch_progress: float
     epoch: int
@@ -33,9 +57,9 @@ class ProgressUpdate:
     step_metrics: Mapping[str, float]
     eval_metrics: Mapping[str, float] | None
     eval_epoch: int | None
-    elapsed_str: str
-    eta_str: str
-    end_time_str: str
+    elapsed_seconds: float
+    eta_seconds: float | None
+    estimated_end: datetime.datetime | None
     last_checkpoint_name: str
     best_checkpoint_name: str
     best_checkpoint_metric_name: str
@@ -49,6 +73,14 @@ def _format_metrics(metrics: Mapping[str, float]) -> str:
     return " | ".join(f"{name} {value:.4f}" for name, value in metrics.items()) or "metrics --"
 
 
+def format_progress_timing(update: ProgressUpdate) -> str:
+    return (
+        f"elapsed {format_duration(update.elapsed_seconds)} | "
+        f"ETA {format_duration(update.eta_seconds)} | "
+        f"end {format_timestamp(update.estimated_end)}"
+    )
+
+
 def format_progress_log(update: ProgressUpdate) -> str:
     first_line = (
         f"ep {update.epoch + 1}/{update.total_epochs} "
@@ -56,9 +88,7 @@ def format_progress_log(update: ProgressUpdate) -> str:
         f"b {update.batch_index + 1}/{update.total_batches} "
         f"({update.epoch_progress:.0%}) | "
         f"{_format_metrics(update.step_metrics)} | "
-        f"elapsed {update.elapsed_str} | "
-        f"ETA {update.eta_str} | "
-        f"end {update.end_time_str} | "
+        f"{format_progress_timing(update)} | "
         f"last ckpt {update.last_checkpoint_name.strip()}"
     )
     if update.eval_metrics is None:
@@ -79,6 +109,8 @@ def format_progress_log(update: ProgressUpdate) -> str:
 
 
 class ProgressTracker:
+    """Estimate progress and ETA from monotonic durations of every observed training step."""
+
     def __init__(
         self,
         total_epochs: int,
@@ -103,39 +135,39 @@ class ProgressTracker:
         self.step_durations: list[float] = []
 
     def start(self) -> None:
-        now = time.time()
+        now = time.monotonic()
         self.start_time = now
         self.last_step_time = now
         self.step_durations = []
 
-    def calculate_progress(
-        self, epoch: int, batch: int
-    ) -> tuple[float, float, float | None, float | None]:
-        now = time.time()
-
+    def calculate_progress(self, epoch: int, batch: int) -> ProgressEstimate:
+        """Record the step that finished batch ``batch`` of ``epoch`` and estimate progress."""
+        now = time.monotonic()
         current_step = epoch * self.total_batches + batch + 1
-        completed_since_start = current_step - self.start_step
-        remaining_steps = max(self.total_steps - current_step, 0)
 
         assert self.last_step_time is not None, "call start() before calculate_progress()"
         step_duration = now - self.last_step_time
         self.last_step_time = now
 
-        if completed_since_start > self.warmup_batches:
+        if current_step - self.start_step > self.warmup_batches:
             self.step_durations.append(step_duration)
             if len(self.step_durations) > self.max_history:
                 self.step_durations.pop(0)
 
-        assert self.start_time is not None, "call start() before calculate_progress()"
-        total_elapsed_time = now - self.start_time
-        progress = current_step / self.total_steps if self.total_steps > 0 else 1.0
+        return self.estimate(current_step)
 
-        if len(self.step_durations) < self.min_eta_batches:
+    def estimate(self, completed_steps: int) -> ProgressEstimate:
+        """Estimate progress after ``completed_steps`` without recording a step."""
+        assert self.start_time is not None, "call start() before estimate()"
+        elapsed = time.monotonic() - self.start_time
+        progress = completed_steps / self.total_steps if self.total_steps > 0 else 1.0
+        remaining_steps = max(self.total_steps - completed_steps, 0)
+
+        if remaining_steps == 0:
+            eta: float | None = 0.0
+        elif len(self.step_durations) < self.min_eta_batches:
             eta = None
-            end_time = None
         else:
-            avg_step_time = sum(self.step_durations) / len(self.step_durations)
-            eta = avg_step_time * remaining_steps
-            end_time = now + eta
-
-        return progress, total_elapsed_time, eta, end_time
+            eta = sum(self.step_durations) / len(self.step_durations) * remaining_steps
+        estimated_end = None if eta is None else datetime.datetime.fromtimestamp(time.time() + eta)
+        return ProgressEstimate(progress, elapsed, eta, estimated_end)

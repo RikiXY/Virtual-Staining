@@ -3,17 +3,17 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, TextIO
+from typing import TextIO
 
 from virtual_staining.cli._output import style, use_color
-
-if TYPE_CHECKING:
-    from virtual_staining.applications.train import ProgressUpdate
+from virtual_staining.training.progress import (
+    ProgressUpdate,
+    format_progress_log,
+    format_progress_timing,
+)
 
 
 def render_training_progress(update: ProgressUpdate, stream: TextIO = sys.stderr) -> None:
-    from virtual_staining.applications.train import format_progress_log
-
     if not stream.isatty():
         stream.write(format_progress_log(update) + "\n")
         stream.flush()
@@ -45,8 +45,7 @@ def render_training_progress(update: ProgressUpdate, stream: TextIO = sys.stderr
     first_line = (
         f"{bar} ep {update.epoch + 1}/{update.total_epochs} ({progress_text}) | "
         f"b {update.batch_index + 1}/{update.total_batches} ({update.epoch_progress:.0%}) | "
-        f"{step_text} | elapsed {update.elapsed_str} | "
-        f"ETA {update.eta_str} | end {update.end_time_str} | last ckpt {last_checkpoint}"
+        f"{step_text} | {format_progress_timing(update)} | last ckpt {last_checkpoint}"
     )
     if update.eval_metrics is None:
         eval_text = "eval --"
