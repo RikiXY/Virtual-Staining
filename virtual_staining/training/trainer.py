@@ -101,7 +101,6 @@ class Trainer:
             method,
             run_paths.checkpoints_dir,
             image_size=image_size,
-            device=device,
             config_hash=config_hash,
         )
 

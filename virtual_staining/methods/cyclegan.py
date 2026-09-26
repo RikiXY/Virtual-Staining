@@ -16,7 +16,6 @@ from torch.amp import GradScaler, autocast
 from torchvision.utils import save_image
 
 from virtual_staining.checkpoint_contract import (
-    CheckpointCompatibilityError,
     CheckpointIdentity,
     read_checkpoint,
     validate_checkpoint,
@@ -32,19 +31,26 @@ from virtual_staining.models.io_contract import (
     denormalize_model_output,
 )
 from virtual_staining.training.helpers import (
+    TRAINING_STATE_KEYS,
     LossComponentAccumulator,
+    OptimizationRole,
     build_lr_scheduler,
+    check_training_state,
     configured_loss_names,
     is_amp_enabled,
+    load_training_state,
     loss_validation_metric,
+    require_state_keys,
+    restoring_validated_state,
+    state_error,
     step_lr_schedulers,
+    training_state_dict,
+    validated_model_state,
 )
 from virtual_staining.training.runtime import MethodMetrics
 
-_MODEL_KEYS = frozenset({"G_A_to_B", "G_B_to_A", "D_A", "D_B"})
-_ROLE_KEYS = frozenset({"generators", "discriminators"})
 _POOL_KEYS = frozenset({"fake_A", "fake_B"})
-_STATE_KEYS = frozenset({"models", "optimizers", "scalers", "schedulers", "replay_pools"})
+_STATE_KEYS = TRAINING_STATE_KEYS | {"replay_pools"}
 _POOL_STATE_KEYS = frozenset({"capacity", "images", "rng_state"})
 _PREVIEW_BATCHES = 5
 
@@ -59,18 +65,6 @@ def init_cyclegan_weights(module: nn.Module) -> None:
         elif isinstance(layer, (nn.BatchNorm2d, nn.InstanceNorm2d)) and layer.affine:
             nn.init.normal_(layer.weight, 1.0, 0.02)
             nn.init.zeros_(layer.bias)
-
-
-def _malformed(context: str, detail: str) -> CheckpointCompatibilityError:
-    return CheckpointCompatibilityError(f"Malformed CycleGAN method state: {context} {detail}")
-
-
-def _require_mapping(value: object, keys: frozenset[str], context: str) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise _malformed(context, "must be a mapping")
-    if set(value) != keys:
-        raise _malformed(context, f"must have exactly keys {sorted(keys)}; got {sorted(value)}")
-    return value
 
 
 class ReplayPool:
@@ -108,26 +102,42 @@ class ReplayPool:
         }
 
     def validate_state(self, state: object, context: str) -> None:
-        state = _require_mapping(state, _POOL_STATE_KEYS, context)
+        state = require_state_keys(state, _POOL_STATE_KEYS, context)
         if state["capacity"] != self.capacity:
-            raise _malformed(
+            raise state_error(
                 f"{context}.capacity",
                 f"is {state['capacity']!r} but method.replay_buffer_size is {self.capacity}",
             )
         images = state["images"]
-        if (
-            not isinstance(images, list)
-            or len(images) > self.capacity
-            or not all(isinstance(image, torch.Tensor) for image in images)
-        ):
-            raise _malformed(f"{context}.images", f"must be a list of <= {self.capacity} tensors")
+        if not isinstance(images, list) or len(images) > self.capacity:
+            raise state_error(f"{context}.images", f"must be a list of <= {self.capacity} tensors")
+        for index, image in enumerate(images):
+            if (
+                not isinstance(image, torch.Tensor)
+                or not image.is_floating_point()
+                or image.ndim != 4
+                or image.shape[0] != 1
+                or image.shape != images[0].shape
+            ):
+                raise state_error(
+                    f"{context}.images[{index}]",
+                    "must be a floating 1xCxHxW tensor shaped like the other pool images",
+                )
         rng_state = state["rng_state"]
-        if not isinstance(rng_state, torch.Tensor) or rng_state.dtype != torch.uint8:
-            raise _malformed(f"{context}.rng_state", "must be a uint8 tensor")
+        expected_rng = self._rng.get_state()
+        if (
+            not isinstance(rng_state, torch.Tensor)
+            or rng_state.dtype != torch.uint8
+            or rng_state.shape != expected_rng.shape
+        ):
+            raise state_error(
+                f"{context}.rng_state",
+                f"must be a uint8 tensor of shape {tuple(expected_rng.shape)}",
+            )
 
-    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+    def load_state_dict(self, state: Mapping[str, Any], device: torch.device) -> None:
         self.validate_state(state, "replay pool")
-        self.images = [image.detach().clone() for image in state["images"]]
+        self.images = [image.detach().to(device, copy=True) for image in state["images"]]
         self._rng.set_state(state["rng_state"].cpu())
 
 
@@ -193,16 +203,14 @@ def load_cyclegan_inference_generator(
 ) -> CycleGANInferenceAdapter:
     """Validate a v4 CycleGAN checkpoint and restore the generator for ``direction``."""
     checkpoint = validate_checkpoint(
-        read_checkpoint(checkpoint_path, device),
+        read_checkpoint(checkpoint_path),
         cyclegan_checkpoint_identity(config.model, config.project.image_size),
         checkpoint_path,
     )
-    key = f"G_{direction}"
-    models = checkpoint.state.get("models")
-    if not isinstance(models, Mapping) or not isinstance(models.get(key), Mapping):
-        raise _malformed(f"state.models.{key}", f"is missing in '{checkpoint_path}'")
     generator = build_resnet_generator(config.model).to(device)
-    generator.load_state_dict(models[key])
+    generator.load_state_dict(
+        validated_model_state(checkpoint.state, f"G_{direction}", generator, checkpoint_path)
+    )
     input_name = config.model.inputs[0] if direction == "A_to_B" else config.model.target
     adapter = CycleGANInferenceAdapter(generator, input_name)
     adapter.eval()
@@ -310,8 +318,11 @@ class CycleGANMethod:
     def _pools(self) -> dict[str, ReplayPool]:
         return {"fake_A": self._pool_A, "fake_B": self._pool_B}
 
-    def _schedulers(self) -> dict[str, Any]:
-        return {"generators": self._scheduler_G, "discriminators": self._scheduler_D}
+    def _roles(self) -> dict[str, OptimizationRole]:
+        return {
+            "generators": OptimizationRole(self._opt_G, self._scaler_G, self._scheduler_G),
+            "discriminators": OptimizationRole(self._opt_D, self._scaler_D, self._scheduler_D),
+        }
 
     def train_mode(self) -> None:
         for model in self._models().values():
@@ -572,69 +583,21 @@ class CycleGANMethod:
 
     def state_dict(self) -> dict[str, Any]:
         return {
-            "models": {name: model.state_dict() for name, model in self._models().items()},
-            "optimizers": {
-                "generators": self._opt_G.state_dict(),
-                "discriminators": self._opt_D.state_dict(),
-            },
-            "scalers": {
-                "generators": self._scaler_G.state_dict(),
-                "discriminators": self._scaler_D.state_dict(),
-            },
-            "schedulers": {
-                role: scheduler.state_dict() if scheduler is not None else None
-                for role, scheduler in self._schedulers().items()
-            },
+            **training_state_dict(self.training, self._models(), self._roles()),
             "replay_pools": {name: pool.state_dict() for name, pool in self._pools().items()},
         }
 
     def _validate_state(self, state: Mapping[str, Any]) -> None:
-        _require_mapping(state, _STATE_KEYS, "state")
-        models = _require_mapping(state["models"], _MODEL_KEYS, "state.models")
-        for name, model in self._models().items():
-            stored = models[name]
-            expected = model.state_dict()
-            if not isinstance(stored, Mapping) or set(stored) != set(expected):
-                raise _malformed(f"state.models.{name}", "does not match the model parameters")
-            for key, tensor in expected.items():
-                value = stored[key]
-                if not isinstance(value, torch.Tensor) or value.shape != tensor.shape:
-                    raise _malformed(f"state.models.{name}.{key}", "has the wrong shape")
-        optimizers = _require_mapping(state["optimizers"], _ROLE_KEYS, "state.optimizers")
-        for role, optimizer_state in optimizers.items():
-            if not isinstance(optimizer_state, Mapping) or not {"state", "param_groups"} <= set(
-                optimizer_state
-            ):
-                raise _malformed(f"state.optimizers.{role}", "is not an optimizer state")
-        scalers = _require_mapping(state["scalers"], _ROLE_KEYS, "state.scalers")
-        for role, scaler_state in scalers.items():
-            if not isinstance(scaler_state, Mapping):
-                raise _malformed(f"state.scalers.{role}", "must be a mapping")
-        schedulers = _require_mapping(state["schedulers"], _ROLE_KEYS, "state.schedulers")
-        for role, scheduler in self._schedulers().items():
-            stored = schedulers[role]
-            if scheduler is None and stored is not None:
-                raise _malformed(
-                    f"state.schedulers.{role}", "is set but no scheduler is configured"
-                )
-            if scheduler is not None and not isinstance(stored, Mapping):
-                raise _malformed(
-                    f"state.schedulers.{role}", "is missing for the configured scheduler"
-                )
-        pools = _require_mapping(state["replay_pools"], _POOL_KEYS, "state.replay_pools")
+        require_state_keys(state, _STATE_KEYS, "state")
+        check_training_state(state, self.training, self._models(), self._roles())
+        pools = require_state_keys(state["replay_pools"], _POOL_KEYS, "state.replay_pools")
         for name, pool in self._pools().items():
             pool.validate_state(pools[name], f"state.replay_pools.{name}")
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        """Preflight every state group, then restore; nothing is mutated on rejection."""
         self._validate_state(state)
-        for name, model in self._models().items():
-            model.load_state_dict(state["models"][name])
-        self._opt_G.load_state_dict(state["optimizers"]["generators"])
-        self._opt_D.load_state_dict(state["optimizers"]["discriminators"])
-        self._scaler_G.load_state_dict(state["scalers"]["generators"])
-        self._scaler_D.load_state_dict(state["scalers"]["discriminators"])
-        for role, scheduler in self._schedulers().items():
-            if scheduler is not None:
-                scheduler.load_state_dict(state["schedulers"][role])
-        for name, pool in self._pools().items():
-            pool.load_state_dict(state["replay_pools"][name])
+        with restoring_validated_state(self.name):
+            load_training_state(state, self._models(), self._roles())
+            for name, pool in self._pools().items():
+                pool.load_state_dict(state["replay_pools"][name], self.device)

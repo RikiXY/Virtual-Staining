@@ -75,7 +75,7 @@ def test_cyclegan_train_resume_infer_evaluate_smoke(
 
     # Train, then resume the latest checkpoint into a freshly constructed runtime.
     run_stage(_config(tmp_path, "train"), "train")
-    first = torch.load(checkpoints / "ep000.pth", map_location="cpu", weights_only=False)
+    first = torch.load(checkpoints / "ep000.pth", map_location="cpu", weights_only=True)
     assert first["format_version"] == CHECKPOINT_FORMAT_VERSION
     assert first["method"]["name"] == "cyclegan"
     run_stage(_config(tmp_path, "resume", training={"epochs": 2, "resume": "latest"}), "train")

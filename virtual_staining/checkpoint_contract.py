@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pickle
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,12 +26,14 @@ def _canonical(value: Any) -> Any:
 
 
 _MISSING = "<missing>"
+_IDENTITY_KEYS = frozenset({"name", "class"})
 
 
-def _first_difference(stored: Any, current: Any, path: str) -> tuple[str, Any, Any] | None:
+def first_difference(stored: Any, current: Any, path: str) -> tuple[str, Any, Any] | None:
     if isinstance(stored, dict) and isinstance(current, dict):
-        for key in sorted(set(stored) | set(current)):
-            difference = _first_difference(
+        # Identity keys first, so a type change is reported instead of its consequences.
+        for key in sorted(set(stored) | set(current), key=lambda k: (k not in _IDENTITY_KEYS, k)):
+            difference = first_difference(
                 stored.get(key, _MISSING), current.get(key, _MISSING), f"{path}.{key}"
             )
             if difference is not None:
@@ -38,7 +41,7 @@ def _first_difference(stored: Any, current: Any, path: str) -> tuple[str, Any, A
         return None
     if isinstance(stored, list) and isinstance(current, list) and len(stored) == len(current):
         for index, (stored_item, current_item) in enumerate(zip(stored, current, strict=True)):
-            difference = _first_difference(stored_item, current_item, f"{path}[{index}]")
+            difference = first_difference(stored_item, current_item, f"{path}[{index}]")
             if difference is not None:
                 return difference
         return None
@@ -98,8 +101,20 @@ def build_checkpoint_payload(
     }
 
 
-def read_checkpoint(path: Path, device: torch.device) -> object:
-    return torch.load(path, map_location=device, weights_only=False)
+def read_checkpoint(path: Path) -> object:
+    """Deserialize ``path`` onto the CPU with PyTorch's restricted weights-only unpickler.
+
+    Only tensors and primitive containers are accepted; no fallback to unrestricted pickle
+    exists. Callers move state to the execution device through normal model/optimizer
+    restoration. This narrows arbitrary-code deserialization exposure; it is not a resource
+    sandbox.
+    """
+    try:
+        return torch.load(path, map_location="cpu", weights_only=True)
+    except (pickle.UnpicklingError, EOFError, RuntimeError) as exc:
+        raise CheckpointCompatibilityError(
+            f"Checkpoint '{path}' cannot be read as a supported weights-only checkpoint: {exc}"
+        ) from exc
 
 
 def _require_mapping(payload: Mapping[str, Any], key: str, path: Path) -> dict[str, Any]:
@@ -112,7 +127,7 @@ def _require_mapping(payload: Mapping[str, Any], key: str, path: Path) -> dict[s
 
 
 def _check_equal(name: str, stored: Any, current: Any, path: Path) -> None:
-    difference = _first_difference(stored, current, name)
+    difference = first_difference(stored, current, name)
     if difference is not None:
         field_name, stored_value, current_value = difference
         raise CheckpointCompatibilityError(

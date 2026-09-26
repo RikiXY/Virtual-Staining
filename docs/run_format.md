@@ -480,11 +480,45 @@ topology-neutral:
 | `image_size` | `[width, height]` |
 | `normalization` | Model-I/O normalization contract |
 | `config_hash` | Resolved-config hash of the writing stage, or `null` (provenance only) |
-| `state` | Opaque method-owned state from `state_dict()`: models, optimizers, AMP scalers, schedulers, and CycleGAN replay pools |
+| `state` | Method-owned state from `state_dict()`: models, `optimization` policy, optimizers, AMP scalers, schedulers, and CycleGAN replay pools |
 
-Resume and inference validate every semantic field before the method's
-`load_state_dict()` runs. Use `inference.checkpoint_policy: latest` to load the
-most recent one automatically.
+Checkpoints are read onto the CPU with PyTorch's restricted `weights_only=True`
+unpickler, so only tensors and primitive containers are accepted; there is no
+unrestricted fallback. This narrows arbitrary-code deserialization exposure but is
+not a resource sandbox. State reaches the execution device through normal model and
+optimizer restoration.
+
+Resume and inference validate every semantic field before method state is touched.
+Each method then preflights its own state before mutating anything: exact state
+groups and roles, model state keys, tensor shapes and dtypes, optimizer parameter
+groups and per-parameter state shapes, AMP scaler state, scheduler presence and
+state keys, and (CycleGAN) replay pools. Inference checks the selected generator the
+same way. Malformed or incompatible state raises `CheckpointCompatibilityError`
+naming the offending field. If restoration fails after preflight, the runtime is
+reported as partially restored and must be discarded.
+
+`state.optimization` records, per optimizer role, the configured optimizer policy
+(class, initial `lr`, `betas`, `eps`, `weight_decay`, `amsgrad`, `maximize`) and the
+scheduler policy (`null` when none; `linear_decay` adds `decay_start_epoch` and the
+`epochs` basis of its decay horizon; `reduce_on_plateau` adds `monitor`, `mode`,
+`factor`, `patience`, `min_lr`). Resume requires the current configuration to match
+exactly. Changing optimizer or scheduler policy, including `training.epochs` under
+`linear_decay`, is a warm start rather than a resume and is rejected. Scheduler-decayed
+learning rates are restored from optimizer state and are not compared. `config_hash`
+stays provenance only.
+
+Resume restores model, optimizer, AMP scaler, scheduler, and replay-pool state (with
+its RNG) as of a completed epoch and continues at `epoch + 1`. Global Python, NumPy,
+and torch RNG, DataLoader shuffling and worker RNG, and augmentation RNG are **not**
+checkpointed, so a resumed run is not guaranteed to reproduce the stochastic
+trajectory of an uninterrupted run.
+
+Saving writes a hidden `.ep<NNN>.pth.*.tmp` file in the same directory, fsyncs it,
+reads it back and validates it under the contract, and only then atomically renames
+it to `ep<NNN>.pth`. A failed or interrupted save never exposes partial bytes or
+replaces an existing checkpoint, and `latest`, `best`, and `top_k` selection only
+ever see published files. Use `inference.checkpoint_policy: latest` to load the most
+recent one automatically.
 
 ### `checkpoints/best.json`
 

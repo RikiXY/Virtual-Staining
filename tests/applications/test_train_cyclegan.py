@@ -10,6 +10,7 @@ import torch
 from tests.config_helpers import cyclegan_config_data, write_config_data
 from tests.image_helpers import write_rgb_image
 from virtual_staining.applications.train import train
+from virtual_staining.checkpoint_contract import CheckpointCompatibilityError
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.run_layout import RunLayout
 
@@ -29,7 +30,14 @@ def _write_domains(dataset_root: Path) -> None:
                 )
 
 
-def _config(tmp_path: Path, name: str, *, epochs: int, resume: str | None) -> Path:
+def _config(
+    tmp_path: Path,
+    name: str,
+    *,
+    epochs: int,
+    resume: str | None,
+    scheduler: dict[str, Any] | None = None,
+) -> Path:
     data: dict[str, Any] = cyclegan_config_data(tmp_path)
     data["data"]["domains"] = {
         "label_free": "domains/label_free",
@@ -38,13 +46,14 @@ def _config(tmp_path: Path, name: str, *, epochs: int, resume: str | None) -> Pa
     data["training"].update(
         epochs=epochs,
         resume=resume,
-        scheduler={"name": "linear_decay", "decay_start_epoch": 0},
+        # Plateau policy does not depend on the epoch budget, so extending epochs is a resume.
+        scheduler=scheduler or {"name": "reduce_on_plateau", "patience": 0},
     )
     return write_config_data(tmp_path / f"{name}.yaml", data)
 
 
 def _pool_sizes(path: Path) -> list[int]:
-    payload = torch.load(path, map_location="cpu", weights_only=False)
+    payload = torch.load(path, map_location="cpu", weights_only=True)
     assert payload["method"]["name"] == "cyclegan"
     pools = payload["state"]["replay_pools"]
     return [len(pools[name]["images"]) for name in ("fake_A", "fake_B")]
@@ -81,3 +90,17 @@ def test_cyclegan_trains_checkpoints_and_resumes_through_generic_trainer(
         assert float(row["loss_train_raw_generator_cycle_l1"]) > 0
         assert float(row["loss_val_raw_discriminator_adversarial_lsgan"]) > 0
         assert row["val_ssim"] == row["val_psnr"] == ""
+
+
+def test_resume_rejects_a_changed_linear_decay_horizon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    _write_domains(tmp_path / "dataset")
+    linear = {"name": "linear_decay", "decay_start_epoch": 0}
+    first_path = _config(tmp_path, "first", epochs=1, resume=None, scheduler=linear)
+    train(RunConfig.from_yaml(first_path), first_path)
+
+    second_path = _config(tmp_path, "second", epochs=2, resume="latest", scheduler=linear)
+    with pytest.raises(CheckpointCompatibilityError, match=r"scheduler\.epochs is 1 .* but 2"):
+        train(RunConfig.from_yaml(second_path), second_path)

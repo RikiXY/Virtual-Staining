@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import math
 from collections.abc import Callable
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 import torch
 import torch.nn as nn
 
+from tests.checkpoint_helpers import assert_nested_equal
 from tests.config_helpers import cyclegan_config_data, write_config_data
 from virtual_staining.checkpoint_contract import CheckpointCompatibilityError
 from virtual_staining.config.run import RunConfig
@@ -56,7 +58,7 @@ def _manager(config: RunConfig, method: CycleGANMethod) -> MethodCheckpointManag
     paths = RunLayout.from_project(config.project)
     ensure_run_directories(paths)
     return MethodCheckpointManager(
-        method, paths.checkpoints_dir, image_size=config.project.image_size, device=_CPU
+        method, paths.checkpoints_dir, image_size=config.project.image_size
     )
 
 
@@ -247,7 +249,7 @@ def test_replay_pool_state_round_trip_continues_identically() -> None:
     _drive(pool, 10)
     restored = ReplayPool(4, seed=99)
 
-    restored.load_state_dict(pool.state_dict())
+    restored.load_state_dict(pool.state_dict(), _CPU)
 
     assert _drive(restored, 30, offset=100) == _drive(pool, 30, offset=100)
 
@@ -256,11 +258,19 @@ def test_replay_pool_rejects_malformed_state() -> None:
     pool = ReplayPool(2, seed=0)
     state = pool.state_dict()
     with pytest.raises(CheckpointCompatibilityError, match="capacity"):
-        ReplayPool(3, seed=0).load_state_dict(state)
+        ReplayPool(3, seed=0).load_state_dict(state, _CPU)
     with pytest.raises(CheckpointCompatibilityError, match="rng_state"):
-        pool.load_state_dict({**state, "rng_state": [1, 2]})
+        pool.load_state_dict({**state, "rng_state": [1, 2]}, _CPU)
+    with pytest.raises(CheckpointCompatibilityError, match="rng_state"):
+        pool.load_state_dict({**state, "rng_state": torch.zeros(3, dtype=torch.uint8)}, _CPU)
     with pytest.raises(CheckpointCompatibilityError, match="images"):
-        pool.load_state_dict({**state, "images": [torch.zeros(1)] * 3})
+        pool.load_state_dict({**state, "images": [torch.zeros(1)] * 3}, _CPU)
+    with pytest.raises(CheckpointCompatibilityError, match=r"images\[0\]"):
+        pool.load_state_dict({**state, "images": [torch.zeros(1, 3, 4, 4, dtype=torch.long)]}, _CPU)
+    with pytest.raises(CheckpointCompatibilityError, match=r"images\[1\]"):
+        pool.load_state_dict(
+            {**state, "images": [torch.zeros(1, 3, 4, 4), torch.zeros(1, 3, 8, 8)]}, _CPU
+        )
 
 
 def test_method_pools_use_independent_seed_derived_rngs(tmp_path: Path) -> None:
@@ -313,11 +323,12 @@ def test_cyclegan_v4_checkpoint_round_trip_restores_all_state(tmp_path: Path) ->
         source.step(_batch(step), epoch=0, global_step=step)
     source.step_schedulers(epoch=0, validation_metrics=None)
     path = _manager(config, source).save(0)
-    payload = torch.load(path, map_location="cpu", weights_only=False)
+    payload = torch.load(path, map_location="cpu", weights_only=True)
     assert payload["method"]["pairing"] == "unpaired"
     assert payload["method"]["prediction_directions"] == ["A_to_B", "B_to_A"]
     assert set(payload["state"]) == {
         "models",
+        "optimization",
         "optimizers",
         "scalers",
         "schedulers",
@@ -378,39 +389,160 @@ def test_semantic_domain_mismatch_is_rejected_before_state_loading(
         _manager(renamed, method).load(path)
 
 
-@pytest.mark.parametrize(
-    ("mutate", "match"),
-    [
-        (lambda state: state.pop("replay_pools"), "state must have exactly keys"),
-        (lambda state: state["models"].pop("D_B"), "state.models must have exactly keys"),
-        (
-            lambda state: state["models"]["G_A_to_B"].popitem(),
-            "state.models.G_A_to_B does not match",
+def _first_key(mapping: dict[str, Any]) -> str:
+    return next(iter(mapping))
+
+
+_MALFORMED: dict[str, tuple[Callable[[dict[str, Any]], object], str]] = {
+    "missing_pools": (
+        lambda state: state.pop("replay_pools"),
+        r"state has mismatched keys: missing \['replay_pools'\]",
+    ),
+    "missing_optimization": (
+        lambda state: state.pop("optimization"),
+        r"state has mismatched keys: missing \['optimization'\]",
+    ),
+    "missing_model_role": (
+        lambda state: state["models"].pop("D_B"),
+        r"state.models has mismatched keys: missing \['D_B'\]",
+    ),
+    "wrong_model_keys": (
+        lambda state: state["models"]["G_A_to_B"].popitem(),
+        "state.models.G_A_to_B has mismatched keys",
+    ),
+    "wrong_shape": (
+        lambda state: state["models"]["D_A"].update(
+            {_first_key(state["models"]["D_A"]): torch.zeros(3)}
         ),
-        (
-            lambda state: state["schedulers"].update({"generators": {"x": 1}}),
-            "no scheduler is configured",
+        "state.models.D_A.* has shape",
+    ),
+    "wrong_dtype": (
+        lambda state: state["models"]["G_B_to_A"].update(
+            {key: value.half() for key, value in list(state["models"]["G_B_to_A"].items())[:1]}
         ),
-        (lambda state: state["optimizers"].update({"generators": []}), "optimizer state"),
-        (
-            lambda state: state["replay_pools"]["fake_A"].pop("rng_state"),
-            "state.replay_pools.fake_A must have exactly keys",
+        "state.models.G_B_to_A.* has dtype torch.float16",
+    ),
+    "scheduler_without_config": (
+        lambda state: state["schedulers"].update({"generators": {"x": 1}}),
+        "state.schedulers.generators is present but the current run has no scheduler",
+    ),
+    "optimizer_not_mapping": (
+        lambda state: state["optimizers"].update({"generators": []}),
+        "state.optimizers.generators must be a mapping",
+    ),
+    "optimizer_params": (
+        lambda state: state["optimizers"]["discriminators"]["param_groups"][0]["params"].pop(),
+        r"state.optimizers.discriminators.param_groups\[0\].params does not match",
+    ),
+    "optimizer_policy": (
+        lambda state: state["optimization"]["generators"]["optimizer"].update(eps=1e-6),
+        "state.optimization.generators.optimizer.eps is 1e-06",
+    ),
+    "scaler_not_mapping": (
+        lambda state: state["scalers"].update({"discriminators": None}),
+        "state.scalers.discriminators must be a mapping",
+    ),
+    "pool_missing_rng": (
+        lambda state: state["replay_pools"]["fake_A"].pop("rng_state"),
+        r"state.replay_pools.fake_A has mismatched keys: missing \['rng_state'\]",
+    ),
+    "pool_missing_role": (
+        lambda state: state["replay_pools"].pop("fake_B"),
+        "state.replay_pools has mismatched keys",
+    ),
+    "pool_capacity": (
+        lambda state: state["replay_pools"]["fake_B"].update(capacity=1),
+        "state.replay_pools.fake_B.capacity is 1",
+    ),
+    "pool_image_type": (
+        lambda state: state["replay_pools"]["fake_A"]["images"].append([0.0]),
+        r"state.replay_pools.fake_A.images\[2\] must be a floating",
+    ),
+    "pool_image_shape": (
+        lambda state: state["replay_pools"]["fake_B"]["images"].__setitem__(
+            0, torch.zeros(2, 3, 32, 32)
         ),
-    ],
-)
-def test_malformed_state_is_rejected_before_mutation(
-    tmp_path: Path, mutate: Callable[[dict[str, Any]], object], match: str
-) -> None:
+        r"state.replay_pools.fake_B.images\[0\] must be a floating",
+    ),
+    "pool_rng_dtype": (
+        lambda state: state["replay_pools"]["fake_B"].update(rng_state=torch.zeros(5)),
+        "state.replay_pools.fake_B.rng_state must be a uint8 tensor",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_MALFORMED))
+def test_malformed_state_is_rejected_before_mutation(tmp_path: Path, case: str) -> None:
     config = _config(tmp_path)
     source = _method(config)
     source.step(_batch(), epoch=0, global_step=0)
-    state = source.state_dict()
+    state = copy.deepcopy(source.state_dict())
+    mutate, match = _MALFORMED[case]
     mutate(state)
     target = _method(config, seed=3)
-    before = {name: _params(module) for name, module in target._models().items()}
+    target.step(_batch(5), epoch=0, global_step=0)
+    before = copy.deepcopy(target.state_dict())
 
     with pytest.raises(CheckpointCompatibilityError, match=match):
         target.load_state_dict(state)
 
-    for name, module in target._models().items():
-        assert not _changed(before[name], module)
+    assert_nested_equal(target.state_dict(), before)
+
+
+def _with_plateau(data: dict[str, Any]) -> None:
+    data["training"]["scheduler"] = {"name": "reduce_on_plateau", "factor": 0.5, "patience": 1}
+
+
+def _with_longer_linear_decay(data: dict[str, Any]) -> None:
+    _with_linear_decay(data)
+    data["training"]["epochs"] = 8
+
+
+@pytest.mark.parametrize(
+    ("saved", "current", "match"),
+    [
+        (_with_linear_decay, None, "generators.scheduler is {.*} in the checkpoint but None"),
+        (None, _with_linear_decay, "generators.scheduler is None in the checkpoint"),
+        (_with_linear_decay, _with_plateau, "scheduler.name is 'linear_decay'"),
+        (_with_linear_decay, _with_longer_linear_decay, "scheduler.epochs is 4 .* but 8"),
+        (
+            _with_plateau,
+            lambda data: (_with_plateau(data), data["training"]["scheduler"].update(patience=3)),
+            "scheduler.patience is 1 .* but 3",
+        ),
+    ],
+)
+def test_cyclegan_resume_rejects_changed_scheduler_policy(
+    tmp_path: Path,
+    saved: Callable[[dict[str, Any]], None] | None,
+    current: Callable[[dict[str, Any]], None] | None,
+    match: str,
+) -> None:
+    config = _config(tmp_path, saved)
+    source = _method(config)
+    source.step(_batch(), epoch=0, global_step=0)
+    path = _manager(config, source).save(0)
+    changed = _config(tmp_path, current)
+    target = _method(changed, seed=3)
+    before = copy.deepcopy(target.state_dict())
+
+    with pytest.raises(CheckpointCompatibilityError, match=match):
+        _manager(changed, target).load(path)
+    assert_nested_equal(target.state_dict(), before)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_cyclegan_replay_pools_are_restored_onto_the_execution_device(tmp_path: Path) -> None:
+    cuda = torch.device("cuda")
+    config = _config(tmp_path)
+    source = CycleGANMethod(config, cuda, seed=7)
+    source.train_mode()
+    source.step(_batch(), epoch=0, global_step=0)
+    path = _manager(config, source).save(0)
+
+    resumed = CycleGANMethod(config, cuda, seed=9)
+    _manager(config, resumed).load(path)
+
+    assert all(image.device.type == "cuda" for image in resumed._pool_A.images)
+    assert_nested_equal(resumed.state_dict(), source.state_dict())
+    resumed.step(_batch(2), epoch=1, global_step=1)

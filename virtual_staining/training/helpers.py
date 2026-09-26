@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import torch
+import torch.nn as nn
 import torch.optim as optim
+from torch.amp import GradScaler
 from torchvision.utils import save_image
 
+from virtual_staining.checkpoint_contract import CheckpointCompatibilityError, first_difference
 from virtual_staining.config.losses import LossConfig
 from virtual_staining.config.training import LearningRateSchedulerConfig, TrainingConfig
 from virtual_staining.models.io_contract import denormalize_model_output
@@ -248,3 +253,235 @@ def loss_validation_metric(metrics: MethodMetrics, name: str) -> float | None:
         if name.startswith(prefix):
             return values.get(name.removeprefix(prefix))
     return None
+
+
+# Constructor policy persisted per optimizer role; learning rates are the configured initial
+# values from ``optimizer.defaults``, never the scheduler-decayed ``param_groups`` values.
+_OPTIMIZER_POLICY_KEYS = ("lr", "betas", "eps", "weight_decay", "amsgrad", "maximize")
+_SCALER_STATE_KEYS = frozenset(
+    {"scale", "growth_factor", "backoff_factor", "growth_interval", "_growth_tracker"}
+)
+TRAINING_STATE_KEYS = frozenset({"models", "optimization", "optimizers", "scalers", "schedulers"})
+
+
+@dataclass(frozen=True)
+class OptimizationRole:
+    """One method-owned optimizer with its AMP scaler and optional LR scheduler."""
+
+    optimizer: optim.Optimizer
+    scaler: GradScaler
+    scheduler: Scheduler | None
+
+
+def state_error(context: str, detail: str) -> CheckpointCompatibilityError:
+    return CheckpointCompatibilityError(f"method state {context} {detail}")
+
+
+def require_state_keys(value: object, keys: Collection[str], context: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise state_error(context, "must be a mapping")
+    if set(value) != set(keys):
+        missing = sorted(set(keys) - set(value))
+        unexpected = sorted(map(str, set(value) - set(keys)))
+        raise state_error(
+            context, f"has mismatched keys: missing {missing}, unexpected {unexpected}"
+        )
+    return value
+
+
+def check_module_state(stored: object, module: nn.Module, context: str) -> None:
+    """Check ``stored`` has exactly ``module``'s state keys, tensor shapes, and dtypes."""
+    expected = module.state_dict()
+    stored = require_state_keys(stored, expected.keys(), context)
+    for key, tensor in expected.items():
+        value = stored[key]
+        if not isinstance(value, torch.Tensor):
+            raise state_error(f"{context}.{key}", "must be a tensor")
+        if value.shape != tensor.shape:
+            raise state_error(
+                f"{context}.{key}",
+                f"has shape {tuple(value.shape)}; expected {tuple(tensor.shape)}",
+            )
+        if value.dtype != tensor.dtype:
+            raise state_error(
+                f"{context}.{key}", f"has dtype {value.dtype}; expected {tensor.dtype}"
+            )
+
+
+def validated_model_state(
+    state: Mapping[str, Any], name: str, module: nn.Module, checkpoint_path: Path
+) -> Mapping[str, Any]:
+    """Return ``state.models[name]`` after checking it fits ``module`` (inference loading)."""
+    try:
+        models = state.get("models")
+        if not isinstance(models, Mapping) or name not in models:
+            raise state_error("state.models", f"has no {name!r} entry")
+        check_module_state(models[name], module, f"state.models.{name}")
+    except CheckpointCompatibilityError as exc:
+        raise CheckpointCompatibilityError(
+            f"Checkpoint '{checkpoint_path}' is incompatible: {exc}"
+        ) from exc
+    return models[name]
+
+
+def scheduler_policy(training: TrainingConfig) -> dict[str, Any]:
+    """Return the reconstruction-relevant policy of the scheduler ``build_lr_scheduler`` makes."""
+    policy = training.scheduler.to_dict()
+    if training.scheduler.name == "linear_decay":
+        # LambdaLR state does not carry its closure; the decay horizon is fixed by this basis.
+        policy["epochs"] = training.epochs
+    return policy
+
+
+def optimization_identity(training: TrainingConfig, role: OptimizationRole) -> dict[str, Any]:
+    defaults = role.optimizer.defaults
+    optimizer: dict[str, Any] = {"class": type(role.optimizer).__name__}
+    for key in _OPTIMIZER_POLICY_KEYS:
+        value = defaults[key]
+        optimizer[key] = list(value) if isinstance(value, tuple) else value
+    return {
+        "optimizer": optimizer,
+        "scheduler": None if role.scheduler is None else scheduler_policy(training),
+    }
+
+
+def _check_identity(stored: object, current: dict[str, Any], context: str) -> None:
+    if stored == current:
+        return
+    field, stored_value, current_value = first_difference(stored, current, context) or (
+        context,
+        stored,
+        current,
+    )
+    raise CheckpointCompatibilityError(
+        f"method state {field} is {stored_value!r} in the checkpoint but {current_value!r} in "
+        "the current run; resume requires the same optimizer and scheduler policy."
+    )
+
+
+def _check_optimizer_state(stored: object, optimizer: optim.Optimizer, context: str) -> None:
+    stored = require_state_keys(stored, ("state", "param_groups"), context)
+    current_groups = optimizer.state_dict()["param_groups"]
+    groups = stored["param_groups"]
+    if not isinstance(groups, list) or len(groups) != len(current_groups):
+        raise state_error(
+            f"{context}.param_groups", f"must be a list of {len(current_groups)} groups"
+        )
+    for index, (group, current) in enumerate(zip(groups, current_groups, strict=True)):
+        group_context = f"{context}.param_groups[{index}]"
+        group = require_state_keys(group, current.keys(), group_context)
+        if group["params"] != current["params"]:
+            raise state_error(f"{group_context}.params", "does not match the optimizer parameters")
+    params = [param for group in optimizer.param_groups for param in group["params"]]
+    param_state = stored["state"]
+    if not isinstance(param_state, Mapping):
+        raise state_error(f"{context}.state", "must be a mapping")
+    for key, values in param_state.items():
+        if type(key) is not int or not 0 <= key < len(params):
+            raise state_error(f"{context}.state", f"has unknown parameter index {key!r}")
+        if not isinstance(values, Mapping):
+            raise state_error(f"{context}.state[{key}]", "must be a mapping")
+        for name, value in values.items():
+            if not isinstance(value, torch.Tensor):
+                raise state_error(f"{context}.state[{key}].{name}", "must be a tensor")
+            if value.ndim and value.shape != params[key].shape:
+                raise state_error(
+                    f"{context}.state[{key}].{name}",
+                    f"has shape {tuple(value.shape)}; expected {tuple(params[key].shape)}",
+                )
+
+
+def _check_scaler_state(stored: object, scaler: GradScaler, context: str) -> None:
+    if not isinstance(stored, Mapping):
+        raise state_error(context, "must be a mapping")
+    if not stored:
+        if scaler.is_enabled():
+            raise state_error(
+                context, "was saved without AMP scaling; resume on the same device type"
+            )
+        return
+    require_state_keys(stored, _SCALER_STATE_KEYS, context)
+    for key, value in stored.items():
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise state_error(f"{context}.{key}", "must be a number")
+
+
+def _check_scheduler_state(stored: object, scheduler: Scheduler | None, context: str) -> None:
+    if scheduler is None:
+        if stored is not None:
+            raise state_error(context, "is present but the current run has no scheduler")
+        return
+    if stored is None:
+        raise state_error(context, "is absent but the current run configures a scheduler")
+    require_state_keys(stored, scheduler.state_dict().keys(), context)
+
+
+def training_state_dict(
+    training: TrainingConfig,
+    models: Mapping[str, nn.Module],
+    roles: Mapping[str, OptimizationRole],
+) -> dict[str, Any]:
+    """Serialize method-owned models plus per-role optimizer, scaler, and scheduler state."""
+    return {
+        "models": {name: model.state_dict() for name, model in models.items()},
+        "optimization": {
+            name: optimization_identity(training, role) for name, role in roles.items()
+        },
+        "optimizers": {name: role.optimizer.state_dict() for name, role in roles.items()},
+        "scalers": {name: role.scaler.state_dict() for name, role in roles.items()},
+        "schedulers": {
+            name: None if role.scheduler is None else role.scheduler.state_dict()
+            for name, role in roles.items()
+        },
+    }
+
+
+def check_training_state(
+    state: Mapping[str, Any],
+    training: TrainingConfig,
+    models: Mapping[str, nn.Module],
+    roles: Mapping[str, OptimizationRole],
+) -> None:
+    """Preflight the ``training_state_dict`` groups of ``state`` without mutating anything."""
+    stored_models = require_state_keys(state["models"], models.keys(), "state.models")
+    for name, model in models.items():
+        check_module_state(stored_models[name], model, f"state.models.{name}")
+    identities = require_state_keys(state["optimization"], roles.keys(), "state.optimization")
+    for name, role in roles.items():
+        _check_identity(
+            identities[name], optimization_identity(training, role), f"state.optimization.{name}"
+        )
+    optimizers = require_state_keys(state["optimizers"], roles.keys(), "state.optimizers")
+    scalers = require_state_keys(state["scalers"], roles.keys(), "state.scalers")
+    schedulers = require_state_keys(state["schedulers"], roles.keys(), "state.schedulers")
+    for name, role in roles.items():
+        _check_optimizer_state(optimizers[name], role.optimizer, f"state.optimizers.{name}")
+        _check_scaler_state(scalers[name], role.scaler, f"state.scalers.{name}")
+        _check_scheduler_state(schedulers[name], role.scheduler, f"state.schedulers.{name}")
+
+
+def load_training_state(
+    state: Mapping[str, Any],
+    models: Mapping[str, nn.Module],
+    roles: Mapping[str, OptimizationRole],
+) -> None:
+    """Restore groups already accepted by ``check_training_state``."""
+    for name, model in models.items():
+        model.load_state_dict(state["models"][name])
+    for name, role in roles.items():
+        role.optimizer.load_state_dict(state["optimizers"][name])
+        role.scaler.load_state_dict(state["scalers"][name])
+        if role.scheduler is not None:
+            role.scheduler.load_state_dict(state["schedulers"][name])
+
+
+@contextmanager
+def restoring_validated_state(method: str) -> Iterator[None]:
+    """Flag a restore that failed after preflight: the runtime is partially mutated."""
+    try:
+        yield
+    except Exception as exc:
+        raise RuntimeError(
+            f"{method} state restoration failed after validation; this runtime is partially "
+            "restored and must be discarded and rebuilt."
+        ) from exc

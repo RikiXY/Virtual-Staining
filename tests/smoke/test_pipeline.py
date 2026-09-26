@@ -168,7 +168,7 @@ def test_full_pipeline_smoke(tmp_path: Path) -> None:
     run_root = tmp_path / "runs" / "smoke_run"
     run_stage(config_path, "train")
     checkpoint = torch.load(
-        run_root / "checkpoints" / "ep000.pth", map_location="cpu", weights_only=False
+        run_root / "checkpoints" / "ep000.pth", map_location="cpu", weights_only=True
     )
     assert checkpoint["format_version"] == CHECKPOINT_FORMAT_VERSION
     assert checkpoint["method"]["name"] == "pix2pix"

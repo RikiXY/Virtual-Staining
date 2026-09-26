@@ -12,6 +12,7 @@ from tests.image_helpers import write_rgb_image
 from virtual_staining.applications import infer as infer_app
 from virtual_staining.applications.infer import infer
 from virtual_staining.applications.infer_images import infer_images
+from virtual_staining.checkpoint_contract import CheckpointCompatibilityError
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.inference.outputs import generated_path_for_record
@@ -47,7 +48,7 @@ def _trained(tmp_path: Path, dataset_root: Path | None = None) -> CycleGANMethod
     layout = RunLayout.from_project(config.project)
     ensure_run_directories(layout)
     MethodCheckpointManager(
-        method, layout.checkpoints_dir, image_size=config.project.image_size, device=_CPU
+        method, layout.checkpoints_dir, image_size=config.project.image_size
     ).save(0)
     return method
 
@@ -154,3 +155,41 @@ def test_manifest_inference_reads_direction_specific_domain(
         expected = generated_path_for_record(record, output_dir, direction)
         assert results[direction].generated_paths == [expected]
         assert expected.is_file()
+
+
+@pytest.mark.parametrize(
+    ("direction", "mutate", "match"),
+    [
+        ("A_to_B", lambda state: state.pop("models"), "state.models has no 'G_A_to_B' entry"),
+        (
+            "B_to_A",
+            lambda state: state["models"].pop("G_B_to_A"),
+            "state.models has no 'G_B_to_A' entry",
+        ),
+        (
+            "A_to_B",
+            lambda state: state["models"]["G_A_to_B"].popitem(),
+            "state.models.G_A_to_B has mismatched keys",
+        ),
+        (
+            "B_to_A",
+            lambda state: state["models"]["G_B_to_A"].update(
+                {next(iter(state["models"]["G_B_to_A"])): torch.zeros(1)}
+            ),
+            "state.models.G_B_to_A.* has shape",
+        ),
+    ],
+)
+def test_inference_rejects_malformed_generator_state(
+    tmp_path: Path, direction: str, mutate: Any, match: str
+) -> None:
+    _trained(tmp_path)
+    config = RunConfig.from_yaml(_config_path(tmp_path, direction))
+    layout = RunLayout.from_project(config.project)
+    path = layout.checkpoints_dir / "ep000.pth"
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+    mutate(payload["state"])
+    torch.save(payload, path)
+
+    with pytest.raises(CheckpointCompatibilityError, match=f"{path}.*{match}"):
+        load_inference_generator(config, layout, _CPU)

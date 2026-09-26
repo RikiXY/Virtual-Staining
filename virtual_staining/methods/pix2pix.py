@@ -26,12 +26,20 @@ from virtual_staining.models.factory import build_discriminator, build_generator
 from virtual_staining.models.generator import ConcatUNetGenerator
 from virtual_staining.models.io_contract import GENERATOR_OUTPUT_ACTIVATION
 from virtual_staining.training.helpers import (
+    TRAINING_STATE_KEYS,
+    OptimizationRole,
     build_lr_scheduler,
+    check_training_state,
     configured_loss_names,
     is_amp_enabled,
+    load_training_state,
     loss_validation_metric,
+    require_state_keys,
+    restoring_validated_state,
     step_lr_schedulers,
+    training_state_dict,
     unpack_batch,
+    validated_model_state,
 )
 from virtual_staining.training.losses import ConfiguredLossEvaluator
 from virtual_staining.training.runtime import MethodMetrics
@@ -83,12 +91,14 @@ def load_pix2pix_inference_generator(
 ) -> ConcatUNetGenerator:
     """Validate a v4 Pix2Pix checkpoint and restore its forward generator for inference."""
     checkpoint = validate_checkpoint(
-        read_checkpoint(checkpoint_path, device),
+        read_checkpoint(checkpoint_path),
         pix2pix_checkpoint_identity(config.model, config.project.image_size),
         checkpoint_path,
     )
     generator = build_generator(config.model).to(device)
-    generator.load_state_dict(checkpoint.state["models"]["generator"])
+    generator.load_state_dict(
+        validated_model_state(checkpoint.state, "generator", generator, checkpoint_path)
+    )
     generator.eval()
     return generator
 
@@ -286,43 +296,21 @@ class Pix2PixMethod:
     def component_metadata(self) -> Mapping[str, object]:
         return pix2pix_component_metadata(self.config.model)
 
-    def state_dict(self) -> dict[str, Any]:
+    def _models(self) -> dict[str, torch.nn.Module]:
+        return {"generator": self.generator, "discriminator": self.discriminator}
+
+    def _roles(self) -> dict[str, OptimizationRole]:
         return {
-            "models": {
-                "generator": self.generator.state_dict(),
-                "discriminator": self.discriminator.state_dict(),
-            },
-            "optimizers": {
-                "generator": self._opt_G.state_dict(),
-                "discriminator": self._opt_D.state_dict(),
-            },
-            "scalers": {
-                "generator": self._scaler_G.state_dict(),
-                "discriminator": self._scaler_D.state_dict(),
-            },
-            "schedulers": {
-                "generator": (
-                    self._scheduler_G.state_dict() if self._scheduler_G is not None else None
-                ),
-                "discriminator": (
-                    self._scheduler_D.state_dict() if self._scheduler_D is not None else None
-                ),
-            },
+            "generator": OptimizationRole(self._opt_G, self._scaler_G, self._scheduler_G),
+            "discriminator": OptimizationRole(self._opt_D, self._scaler_D, self._scheduler_D),
         }
 
-    def load_state_dict(self, state: Mapping[str, Any]) -> None:
-        models = state["models"]
-        optimizers = state["optimizers"]
-        scalers = state["scalers"]
-        schedulers = state["schedulers"]
+    def state_dict(self) -> dict[str, Any]:
+        return training_state_dict(self.training, self._models(), self._roles())
 
-        self.generator.load_state_dict(models["generator"])
-        self.discriminator.load_state_dict(models["discriminator"])
-        self._opt_G.load_state_dict(optimizers["generator"])
-        self._opt_D.load_state_dict(optimizers["discriminator"])
-        self._scaler_G.load_state_dict(scalers["generator"])
-        self._scaler_D.load_state_dict(scalers["discriminator"])
-        if self._scheduler_G is not None and schedulers.get("generator") is not None:
-            self._scheduler_G.load_state_dict(schedulers["generator"])
-        if self._scheduler_D is not None and schedulers.get("discriminator") is not None:
-            self._scheduler_D.load_state_dict(schedulers["discriminator"])
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        """Preflight every state group, then restore; nothing is mutated on rejection."""
+        require_state_keys(state, TRAINING_STATE_KEYS, "state")
+        check_training_state(state, self.training, self._models(), self._roles())
+        with restoring_validated_state(self.name):
+            load_training_state(state, self._models(), self._roles())

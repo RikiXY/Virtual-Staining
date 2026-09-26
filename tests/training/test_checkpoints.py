@@ -128,13 +128,12 @@ def _fake_manager(
         cast(TrainingMethodRuntime, method),
         root,
         image_size=image_size,
-        device=torch.device("cpu"),
         config_hash="sha256:abc",
     )
 
 
 def _read(path: Path) -> dict[str, Any]:
-    return torch.load(path, map_location="cpu", weights_only=False)
+    return torch.load(path, map_location="cpu", weights_only=True)
 
 
 def test_generic_checkpoint_round_trips_arbitrary_method_state(tmp_path: Path) -> None:
@@ -327,3 +326,108 @@ def test_generic_checkpoint_layer_has_no_topology_or_legacy_paths() -> None:
     ):
         assert not hasattr(checkpoint_contract, obsolete)
     assert not hasattr(training_checkpoints, "CheckpointManager")
+
+
+class _Executes:
+    """Pickles as a call that would create ``marker`` if an unrestricted unpickler ran it."""
+
+    def __init__(self, marker: Path) -> None:
+        self.marker = marker
+
+    def __reduce__(self) -> tuple[Callable[..., object], tuple[object, ...]]:
+        return (Path.touch, (self.marker,))
+
+
+def test_restricted_loading_rejects_code_carrying_payload_without_running_it(
+    tmp_path: Path,
+) -> None:
+    path = _fake_manager(tmp_path, _FakeMethod()).save(0)
+    marker = tmp_path / "executed"
+    payload = _read(path)
+    payload["state"]["custom_runtime_state"] = {"counter": _Executes(marker)}
+    torch.save(payload, path)
+    target = _FakeMethod()
+
+    with pytest.raises(CheckpointCompatibilityError, match="weights-only"):
+        _fake_manager(tmp_path, target).load(path)
+    with pytest.raises(CheckpointCompatibilityError, match="weights-only"):
+        checkpoint_contract.read_checkpoint(path)
+    assert not marker.exists()
+    assert target.loaded_states == []
+
+
+def test_truncated_checkpoint_is_rejected_as_unreadable(tmp_path: Path) -> None:
+    path = _fake_manager(tmp_path, _FakeMethod()).save(0)
+    path.write_bytes(path.read_bytes()[:100])
+    with pytest.raises(CheckpointCompatibilityError, match="cannot be read"):
+        _fake_manager(tmp_path, _FakeMethod()).load(path)
+
+
+def _published(root: Path) -> list[str]:
+    return sorted(path.name for path in root.iterdir())
+
+
+def _rank(root: Path, epoch: int, value: float) -> None:
+    update_checkpoint_selection(
+        root,
+        metrics={"loss_G_val": value},
+        modes={"loss_G_val": "min"},
+        top_k=3,
+        epoch=epoch,
+        checkpoint_path=root / f"ep{epoch:03d}.pth",
+    )
+
+
+def _assert_selection_unchanged(root: Path) -> None:
+    for policy in ("latest", "best", "top_k"):
+        assert resolve_checkpoint_path(root, policy=policy, metric="loss_G_val").name == (
+            "ep001.pth"
+        )
+
+
+def test_interrupted_save_publishes_nothing_and_keeps_the_existing_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = _fake_manager(tmp_path, _FakeMethod())
+    existing = manager.save(1)
+    _rank(tmp_path, 1, 0.5)
+    original = existing.read_bytes()
+
+    def interrupted(_payload: object, handle: Any) -> None:
+        handle.write(b"PK\x03\x04 partial")
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(torch, "save", interrupted)
+    for epoch in (1, 2):
+        with pytest.raises(KeyboardInterrupt):
+            manager.save(epoch)
+
+    assert _published(tmp_path) == ["best.json", "ep001.pth"]
+    assert existing.read_bytes() == original
+    _assert_selection_unchanged(tmp_path)
+    with pytest.raises(FileNotFoundError):
+        _rank(tmp_path, 2, 0.1)
+
+
+def test_state_that_fails_restricted_readback_is_never_published(tmp_path: Path) -> None:
+    manager = _fake_manager(tmp_path, _FakeMethod())
+    manager.save(1)
+    _rank(tmp_path, 1, 0.5)
+    manager.method.counter = _Executes(tmp_path / "executed")  # type: ignore[attr-defined]
+
+    with pytest.raises(CheckpointCompatibilityError, match="weights-only"):
+        manager.save(2)
+
+    assert _published(tmp_path) == ["best.json", "ep001.pth"]
+    assert not (tmp_path / "executed").exists()
+    _assert_selection_unchanged(tmp_path)
+
+
+def test_stale_temporary_files_are_never_selected(tmp_path: Path) -> None:
+    manager = _fake_manager(tmp_path, _FakeMethod())
+    manager.save(1)
+    _rank(tmp_path, 1, 0.5)
+    (tmp_path / ".ep009.pth.abc123.tmp").write_bytes(b"partial")
+
+    assert manager.latest() == tmp_path / "ep001.pth"
+    _assert_selection_unchanged(tmp_path)
