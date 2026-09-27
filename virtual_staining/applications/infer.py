@@ -1,20 +1,19 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
 from pathlib import Path
 
+from PIL import Image
 from torchvision.utils import save_image
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.consumption import AssetRow, build_snapshot, relative_locator
-from virtual_staining.data.dataset import PairedManifestDataset
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.manifest import (
+    ManifestRecord,
     load_manifest_or_raise,
     load_set_groups,
     manifest_sources,
-    paired_record_rows,
 )
 from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.inference.outputs import generated_path_for_record
@@ -36,6 +35,15 @@ PAIRED_INFER_ADAPTER = "paired_manifest_infer/1"
 INFER_OUTPUT_ADAPTER = "inference_outputs/1"
 
 
+def _prediction_sources(
+    record: ManifestRecord, source_names: tuple[str, ...], direction: str | None
+) -> dict[str, Path]:
+    """Root-relative files a record feeds to the predictor; nothing else is opened."""
+    if direction == "B_to_A":
+        return {name: record.target_path for name in source_names}
+    return {name: record.input_paths[name] for name in source_names}
+
+
 def infer(config: RunConfig, config_path: Path) -> InferenceResult:
     if config.inference is None:
         raise ValueError("RunConfig.inference is required to run inference.")
@@ -53,29 +61,26 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
         checkpoint_path = resolve_inference_checkpoint(config, session.paths)
         checkpoint_sha256, _ = sha256_file_verified(checkpoint_path)
 
-        # Only the files fed to the predictor are consumed; for B_to_A the held-out aligned
-        # target is the domain-B source and the domain-A references are never read.
+        # The snapshot and the prediction loop read the same _prediction_sources, so exactly
+        # the files fed to the predictor are consumed; for B_to_A the held-out aligned target
+        # is the domain-B source and the domain-A references are never opened.
         groups = load_set_groups(config.project)
         source_names = inference_input_names(config)
-        if direction == "B_to_A":
-            rows = [
-                replace(row, role="input")
-                for row in paired_record_rows(
-                    test_manifest.records,
-                    input_names=(),
-                    target=config.model.target,
-                    include_mask=False,
-                    groups=groups,
-                )
-            ]
-        else:
-            rows = paired_record_rows(
-                test_manifest.records,
-                input_names=source_names,
-                target=None,
-                include_mask=False,
-                groups=groups,
+        rows = [
+            AssetRow(
+                root="dataset",
+                locator=path.as_posix(),
+                role="input",
+                domain=name,
+                split=record.split,
+                sample_id=record.sample_id,
+                set_id=record.set_id,
+                specimen_id=groups.get(record.set_id, ("", ""))[0],
+                patient_id=groups.get(record.set_id, ("", ""))[1],
             )
+            for record in test_manifest.records
+            for name, path in _prediction_sources(record, source_names, direction).items()
+        ]
         generation = {
             "method": config.method.to_dict(),
             "model": config.model.to_dict(),
@@ -106,10 +111,7 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
             config, session.paths, device, checkpoint_path
         )
         transform = build_inference_transform(config.project.image_size)
-        dataset = PairedManifestDataset(
-            test_manifest, input_names=config.model.inputs, transform=transform
-        )
-        logger.info("Loaded manifest: %s test samples", len(dataset))
+        logger.info("Loaded manifest: %s test samples", len(test_manifest))
         session.result(
             checkpoint_path=str(checkpoint_path),
             checkpoint_sha256=checkpoint_sha256,
@@ -121,20 +123,20 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
 
         output_dir.mkdir(parents=True, exist_ok=True)
         result = InferenceResult(output_dir=output_dir)
-        if len(dataset) == 0:
+        if len(test_manifest) == 0:
             logger.warning(
                 "No test pairs found in manifest: %s",
                 DatasetLayout.from_project(config.project).manifest_path,
             )
         output_domain = config.model.inputs[0] if direction == "B_to_A" else config.model.target
         produced: list[AssetRow] = []
-        for idx in range(len(dataset)):
-            sample = dataset[idx]
-            if direction == "B_to_A":
-                inputs = {config.model.target: sample["target"].unsqueeze(0)}
-            else:
-                inputs = {name: sample["inputs"][name].unsqueeze(0) for name in source_names}
-            record = test_manifest.records[idx]
+        for record in test_manifest.records:
+            inputs = {
+                name: transform(
+                    Image.open(config.project.dataset_root / path).convert("RGB")
+                ).unsqueeze(0)
+                for name, path in _prediction_sources(record, source_names, direction).items()
+            }
             output = predict_batch(generator, inputs, device)[0]
             out_path = generated_path_for_record(record, output_dir, direction)
             save_image(output, out_path)

@@ -19,8 +19,8 @@ from virtual_staining.experiment.run_layout import RunLayout
 
 def _write_domains(dataset_root: Path) -> None:
     layouts = {
-        "domains/label_free/{split}": {"train": 3, "val": 2},
-        "prepared/{split}/stained": {"train": 5, "val": 1},
+        "domains/label_free/{split}": {"train": 3, "val": 2, "test": 1},
+        "prepared/{split}/stained": {"train": 5, "val": 1, "test": 1},
     }
     for pattern, counts in layouts.items():
         for split_index, (split, count) in enumerate(counts.items()):

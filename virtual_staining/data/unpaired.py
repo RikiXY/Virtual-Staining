@@ -58,13 +58,13 @@ def resolve_domain_collections(
     splits: Sequence[DatasetSplit],
     roles: Mapping[str, str],
     group_metadata: Path | None = None,
-) -> tuple[dict[tuple[DatasetSplit, str], tuple[Path, ...]], list[AssetRow], tuple[AssetRow, ...]]:
+) -> tuple[dict[tuple[DatasetSplit, str], tuple[Path, ...]], list[AssetRow]]:
     """Resolve each selected domain/split collection exactly once.
 
-    Returns the resolved paths (to hand to the consumer), their snapshot rows enriched with
-    any explicit ``group_metadata`` sidecar identities, and the sidecar entries themselves
-    (for split-leakage checks). Locators are relative to ``dataset_root``; a domain resolving
-    outside it is rejected.
+    Returns the resolved paths (to hand to the consumer) and their snapshot rows enriched
+    with any explicit ``group_metadata`` sidecar identities. Sidecar entries for paths that
+    were not selected are ignored. Locators are relative to ``dataset_root``; a domain
+    resolving outside it is rejected.
     """
     groups = (
         load_group_metadata(
@@ -89,7 +89,7 @@ def resolve_domain_collections(
                 )
                 for path in resolved
             )
-    return paths, enrich_with_groups(rows, groups), groups
+    return paths, enrich_with_groups(rows, groups)
 
 
 class UnpairedImageDataset(Dataset):

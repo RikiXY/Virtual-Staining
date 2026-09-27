@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 import torch
+from PIL import Image
 
 from tests.config_helpers import cyclegan_config_data, write_config_data
 from tests.image_helpers import write_rgb_image
@@ -89,7 +90,9 @@ def _paired_manifest(root: Path, *, test_patient: str = "p4") -> DatasetManifest
     return manifest
 
 
-def _pix2pix_config(tmp_path: Path, **training: Any) -> RunConfig:
+def _pix2pix_config(
+    tmp_path: Path, data_section: dict[str, Any] | None = None, **training: Any
+) -> RunConfig:
     data: dict[str, Any] = {
         "dataset_root": str(tmp_path / "dataset"),
         "results_path": str(tmp_path / "results"),
@@ -102,6 +105,8 @@ def _pix2pix_config(tmp_path: Path, **training: Any) -> RunConfig:
             **training,
         },
     }
+    if data_section is not None:
+        data["data"] = data_section
     return RunConfig.from_yaml(write_config_data(tmp_path / "paired.yaml", data))
 
 
@@ -137,15 +142,72 @@ def test_paired_training_snapshots_the_filtered_records_that_build_the_datasets(
         assert record.target_path.as_posix() in locators
         assert (record.foreground_mask_path.as_posix() in locators) is include_mask  # type: ignore[union-attr]
     assert not any(row.split == "test" for row in snapshot.rows)
+    # Held-out test inputs/target (and mask when used) are leakage-checked, not consumed.
+    assert snapshot.validation_context["row_count"] == len(expected_roles)
+    assert snapshot.validation_context["splits"] == ["test"]
     assert {row.patient_id for row in snapshot.rows} == {"p1", "p3"}
     assert snapshot.group_validation["unit"] == "patient"
     assert snapshot.sources["manifest_sha256"].startswith("sha256:")
 
 
-def test_paired_training_rejects_patient_shared_with_held_out_test(tmp_path: Path) -> None:
+@pytest.mark.parametrize("group_validation", ["auto", "unavailable"])
+def test_paired_training_rejects_patient_shared_with_held_out_test(
+    tmp_path: Path, group_validation: str
+) -> None:
     _paired_manifest(tmp_path / "dataset", test_patient="p1")
+    config = _pix2pix_config(tmp_path, {"group_validation": group_validation})
+    with pytest.raises(DataLeakageError, match="patient_id"):
+        train_app._paired_datasets(config, lambda x: x, 0)
+
+
+def test_paired_training_on_declared_patch_split_records_shared_groups(tmp_path: Path) -> None:
+    root = tmp_path / "dataset"
+    _paired_manifest(root, test_patient="p1")
+    DatasetLayout(root).metadata_dir.mkdir(parents=True, exist_ok=True)
+    DatasetLayout(root).split_assignment_path.write_text(
+        "group_id,unit,split\n00000_00000,patch,train\n", encoding="utf-8"
+    )
+    config = _pix2pix_config(tmp_path, {"group_validation": "unavailable"})
+    _, _, _, snapshot = train_app._paired_datasets(config, lambda x: x, 0)
+    assert snapshot.group_validation["split_unit"] == "patch"
+    assert snapshot.group_validation["groups_shared_across_splits"] == {"patient": 1}
+    assert any("split unit is patch" in text for text in snapshot.limitations)
     with pytest.raises(DataLeakageError, match="patient_id"):
         train_app._paired_datasets(_pix2pix_config(tmp_path), lambda x: x, 0)
+
+
+def _alias(link: Path, source: Path, kind: str) -> None:
+    link.unlink()
+    if kind == "copy":
+        link.write_bytes(source.read_bytes())
+    elif kind == "hardlink":
+        os.link(source, link)
+    else:
+        link.symlink_to(source)
+
+
+@pytest.mark.parametrize(
+    ("kind", "hash_policy", "source_split", "match"),
+    [
+        ("copy", "content", "train", "same content"),
+        ("copy", "content", "val", "same content"),
+        ("hardlink", "membership", "train", "same file"),
+        ("symlink", "membership", "val", "same file"),
+        ("symlink", "content", "train", "same file"),
+    ],
+)
+def test_paired_training_rejects_held_out_test_file_leakage(
+    tmp_path: Path, kind: str, hash_policy: str, source_split: str, match: str
+) -> None:
+    root = tmp_path / "dataset"
+    manifest = _paired_manifest(root)
+    by_split = {record.split: record for record in manifest.records}
+    source = root / by_split[source_split].input_paths["label_free"]
+    # The leaking test asset is the held-out target, differently named from its source.
+    _alias(root / by_split["test"].target_path, source, kind)
+    config = _pix2pix_config(tmp_path, {"hash_policy": hash_policy})
+    with pytest.raises(DataLeakageError, match=f"{match} appears in disjoint splits"):
+        train_app._paired_datasets(config, lambda x: x, 0)
 
 
 # Unpaired training
@@ -193,6 +255,51 @@ def test_unpaired_training_snapshots_domain_membership_without_pairs(tmp_path: P
         == consumed
     )
     assert snapshot.group_validation["status"] == "unavailable"
+    assert snapshot.validation_context["row_count"] == 4  # both domains' test collections
+    assert snapshot.group_validation["splits"] == ["test", "train", "val"]
+
+
+@pytest.mark.parametrize(
+    ("source", "leaked"),
+    [
+        ("label_free/train/0.png", "label_free/test/1.png"),
+        ("label_free/train/0.png", "stained/test/0.png"),
+        ("stained/val/1.png", "label_free/test/0.png"),
+    ],
+)
+def test_unpaired_training_rejects_content_shared_with_held_out_test(
+    tmp_path: Path, source: str, leaked: str
+) -> None:
+    domains = tmp_path / "dataset" / "domains"
+    _write_domains(tmp_path / "dataset")
+    (domains / leaked).write_bytes((domains / source).read_bytes())
+    with pytest.raises(DataLeakageError, match="same content appears in disjoint splits"):
+        train_app._unpaired_datasets(_cyclegan_config(tmp_path), lambda x: x, 1)
+
+
+def test_unpaired_training_group_context_is_the_selected_test_collections(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "dataset"
+    _write_domains(root)
+    _write_group_sidecar(
+        root,
+        {
+            ("label_free", "train"): "p1",
+            ("stained", "train"): "p1",
+            ("label_free", "val"): "p2",
+            ("stained", "val"): "p2",
+            ("label_free", "test"): "p3",
+            ("stained", "test"): "p3",
+        },
+    )
+    # A sidecar entry for an unselected collection is not part of this dataset.
+    with (root / "groups.csv").open("a", encoding="utf-8") as handle:
+        handle.write("other/test/0.png,other,test,p1-set,p1-sp,p1\n")
+    config = _cyclegan_config(tmp_path, group_validation="auto", group_metadata="groups.csv")
+    _, _, snapshot = train_app._unpaired_datasets(config, lambda x: x, 1)
+    assert snapshot.group_validation["unit"] == "patient"
+    assert not any(row.split == "test" for row in snapshot.rows)
 
 
 def test_unpaired_training_requires_explicit_unavailable_without_group_metadata(
@@ -317,6 +424,30 @@ def test_inference_snapshots_only_predictor_inputs_and_binds_outputs(
         ("generated", sample, f"{sample}_{direction}_generated.png") for sample in _SAMPLES
     ]
     assert all(row.sha256 for row in produced.rows)
+
+
+@pytest.mark.parametrize("direction", ["A_to_B", "B_to_A"])
+def test_inference_opens_exactly_the_consumed_input_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, direction: str
+) -> None:
+    root = tmp_path / "dataset"
+    _aligned_dataset(root)
+    _checkpoint(tmp_path, 0)
+    opened: list[Path] = []
+    real_open = Image.open
+
+    def recording_open(path: Any, *args: Any, **kwargs: Any) -> Any:
+        opened.append(Path(path).resolve())
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Image, "open", recording_open)
+    layout = _run(tmp_path, "infer", direction)
+
+    consumed = load_snapshot(layout.consumed_data("infer"))
+    dataset_reads = sorted(path for path in opened if path.is_relative_to(root.resolve()))
+    assert dataset_reads == sorted((root / row.locator).resolve() for row in consumed.rows)
+    unread = "_target.png" if direction == "A_to_B" else "_source.png"
+    assert not any(path.name.endswith(unread) for path in dataset_reads)
 
 
 def _producer(layout: RunLayout) -> dict[str, Any]:

@@ -22,12 +22,13 @@ from virtual_staining.data.manifest import (
     load_set_groups,
     manifest_sources,
     paired_record_rows,
+    prepared_split_unit,
 )
 from virtual_staining.data.unpaired import UnpairedImageDataset, resolve_domain_collections
 from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.methods.registry import resolve_training_method
 from virtual_staining.models.io_contract import build_model_input_transform
-from virtual_staining.split_contract import TRAIN_SPLIT, VAL_SPLIT, DatasetSplit
+from virtual_staining.split_contract import TEST_SPLIT, TRAIN_SPLIT, VAL_SPLIT, DatasetSplit
 from virtual_staining.training.augmentation import build_training_paired_transform
 from virtual_staining.training.preview import ValidationPreviewWriter
 from virtual_staining.training.progress import ProgressReporter, ProgressUpdate, format_progress_log
@@ -88,12 +89,13 @@ def _paired_datasets(
         include_mask=include_mask,
         groups=groups,
     )
-    # Held-out test records are not consumed but share the split partition for leakage.
+    # Held-out test records are not consumed but share the split partition, so the same
+    # files they would supply are checked for file, content, and group leakage.
     test_context = paired_record_rows(
         manifest.filter_split("test").records,
-        input_names=(),
+        input_names=config.model.inputs,
         target=config.model.target,
-        include_mask=False,
+        include_mask=include_mask,
         groups=groups,
     )
     snapshot = build_snapshot(
@@ -103,7 +105,8 @@ def _paired_datasets(
         roots={"dataset": config.project.dataset_root},
         hash_policy=config.data.hash_policy,
         group_validation=config.data.group_validation,
-        group_context=test_context,
+        validation_context=test_context,
+        patch_split=prepared_split_unit(config.project) == "patch",
         selection={
             "pairing": "paired",
             "splits": ["train", "val"],
@@ -159,13 +162,16 @@ def _unpaired_datasets(
 ) -> tuple[UnpairedImageDataset, UnpairedImageDataset, DataSnapshot]:
     domain_a, domain_b = config.model.inputs[0], config.model.target
     splits: tuple[tuple[DatasetSplit, int | None], ...] = ((TRAIN_SPLIT, seed), (VAL_SPLIT, None))
-    paths, rows, groups = resolve_domain_collections(
+    # The held-out test collections of both domains are resolved only as leakage context.
+    paths, resolved = resolve_domain_collections(
         config.data.domains,
         config.project.dataset_root,
-        splits=[split for split, _ in splits],
+        splits=[*(split for split, _ in splits), TEST_SPLIT],
         roles={domain_a: "input", domain_b: "target"},
         group_metadata=config.data.group_metadata,
     )
+    rows = [row for row in resolved if row.split != TEST_SPLIT]
+    test_context = [row for row in resolved if row.split == TEST_SPLIT]
     # Domain membership only: epoch pairings are a seeded sampling operation, not
     # correspondence, so no A/B pair is ever recorded.
     snapshot = build_snapshot(
@@ -175,7 +181,7 @@ def _unpaired_datasets(
         roots={"dataset": config.project.dataset_root},
         hash_policy=config.data.hash_policy,
         group_validation=config.data.group_validation,
-        group_context=groups,
+        validation_context=test_context,
         selection={
             "pairing": "unpaired",
             "splits": [split for split, _ in splits],

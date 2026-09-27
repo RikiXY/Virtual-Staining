@@ -52,7 +52,12 @@ PROVENANCE_LIMITATIONS = (
 )
 _UNAVAILABLE_LIMITATION = (
     "group_validation=unavailable: no patient, specimen, or set independence between splits "
-    "is claimed or checked for this snapshot."
+    "is claimed for this snapshot; supplied group IDs were still checked for cross-split "
+    "contradictions."
+)
+_PATCH_SPLIT_LIMITATION = (
+    "Prepared split unit is patch: patches of one set, specimen, or patient are assigned to "
+    "different splits by construction, so the splits are not biologically independent."
 )
 _MEMBERSHIP_LIMITATION = (
     "hash_policy=membership: file bytes were not hashed; the identity covers locators, sizes, "
@@ -113,6 +118,8 @@ class DataSnapshot:
     group_validation: dict[str, Any] = field(default_factory=dict)
     duplicates: tuple[dict[str, Any], ...] = ()
     limitations: tuple[str, ...] = ()
+    # Non-consumed rows (e.g. held-out test assets) checked for leakage; not part of identity.
+    validation_context: dict[str, Any] = field(default_factory=dict)
 
     @property
     def membership_sha256(self) -> str:
@@ -191,17 +198,24 @@ def _observe(
 
 def _check_duplicates(
     observed: Sequence[tuple[AssetRow, tuple[int, int] | None]],
+    context: Sequence[tuple[AssetRow, tuple[int, int] | None]] = (),
 ) -> tuple[dict[str, Any], ...]:
-    by_file: dict[tuple[int, int], list[AssetRow]] = defaultdict(list)
-    by_content: dict[str, list[AssetRow]] = defaultdict(list)
-    for row, key in observed:
-        if key is not None:
-            by_file[key].append(row)
-        if row.sha256 is not None:
-            by_content[row.sha256].append(row)
+    """Fail on files/bytes shared across splits; list within-split duplicates of ``observed``.
+
+    ``context`` rows take part in the cross-split check but are never listed as duplicates.
+    """
+    by_file: dict[tuple[int, int], list[tuple[AssetRow, bool]]] = defaultdict(list)
+    by_content: dict[str, list[tuple[AssetRow, bool]]] = defaultdict(list)
+    for items, primary in ((observed, True), (context, False)):
+        for row, key in items:
+            if key is not None:
+                by_file[key].append((row, primary))
+            if row.sha256 is not None:
+                by_content[row.sha256].append((row, primary))
     duplicates: list[dict[str, Any]] = []
     for kind, groups in (("same_file", by_file), ("same_content", by_content)):
-        for rows in groups.values():
+        for members in groups.values():
+            rows = [row for row, _ in members]
             locations = sorted({(row.root, row.locator) for row in rows})
             if len(locations) < 2 and kind == "same_content":
                 continue
@@ -211,7 +225,7 @@ def _check_duplicates(
                 raise DataLeakageError(
                     f"{kind.replace('_', ' ')} appears in disjoint splits {splits}: {described}"
                 )
-            if len(locations) > 1:
+            if len(locations) > 1 and any(primary for _, primary in members):
                 duplicates.append(
                     {
                         "kind": kind,
@@ -224,32 +238,45 @@ def _check_duplicates(
 
 
 def validate_groups(
-    rows: Iterable[AssetRow], requested: str, context: Iterable[AssetRow] = ()
+    rows: Iterable[AssetRow], requested: str, *, patch_split: bool = False
 ) -> dict[str, Any]:
     """Check biological-group independence across splits at the strongest declared unit.
 
-    ``context`` rows are not consumed but share the split partition (for example the held-out
-    test split during training) and take part in the leakage check. Any observed group that
-    spans splits fails, even at a unit too incomplete to be claimed.
+    Any supplied group ID that spans splits fails, even at a unit too incomplete to be
+    claimed and even under ``unavailable``, which only withholds a positive claim. The one
+    exception is a prepared patch-level split (``patch_split``) under explicit
+    ``unavailable``: groups span splits by construction, and the shared counts are recorded.
     """
-    items = [*rows, *context]
+    items = list(rows)
     splits = sorted({row.split for row in items if row.split})
     result: dict[str, Any] = {"requested": requested, "splits": splits}
     if len(splits) < 2:
         return {**result, "unit": None, "status": "not_applicable"}
-    if requested == "unavailable":
-        return {**result, "unit": None, "status": "unavailable"}
+    exempt = patch_split and requested == "unavailable"
+    shared: dict[str, int] = {}
     for unit in GROUP_UNITS:
         group_splits: dict[str, set[str]] = defaultdict(set)
         for row in items:
             if row.group_id(unit):
                 group_splits[row.group_id(unit)].add(row.split)
         leaked = sorted(group for group, values in group_splits.items() if len(values) > 1)
-        if leaked:
+        if leaked and exempt:
+            shared[unit] = len(leaked)
+        elif leaked:
             raise DataLeakageError(
                 f"{unit}_id values appear in more than one split: {leaked[:10]}"
                 + (f" (+{len(leaked) - 10} more)" if len(leaked) > 10 else "")
             )
+    if exempt:
+        return {
+            **result,
+            "unit": None,
+            "status": "unavailable",
+            "split_unit": "patch",
+            "groups_shared_across_splits": shared,
+        }
+    if requested == "unavailable":
+        return {**result, "unit": None, "status": "unavailable"}
     complete = [unit for unit in GROUP_UNITS if all(row.group_id(unit) for row in items)]
     candidates = GROUP_UNITS if requested == "auto" else (requested,)
     for unit in candidates:
@@ -281,32 +308,48 @@ def build_snapshot(
     roots: Mapping[str, Path],
     hash_policy: str,
     group_validation: str = "auto",
-    group_context: Iterable[AssetRow] = (),
+    validation_context: Iterable[AssetRow] = (),
+    patch_split: bool = False,
     selection: Mapping[str, Any] | None = None,
     context: Mapping[str, Any] | None = None,
     sources: Mapping[str, Any] | None = None,
     allow_missing: bool = False,
 ) -> DataSnapshot:
-    """Observe ``rows`` under ``hash_policy``, validate splits/groups, and canonicalize them."""
+    """Observe ``rows`` under ``hash_policy``, validate splits/groups, and canonicalize them.
+
+    ``validation_context`` rows (for example held-out test assets during training) are
+    observed under the same policy and take part in file, content, and group leakage checks,
+    but they are not snapshot rows and do not enter ``snapshot_id``.
+    """
     if hash_policy not in HASH_POLICIES:
         raise ValueError(f"Unsupported hash policy {hash_policy!r}")
     if kind not in {"consumed", "produced"}:
         raise ValueError(f"Unsupported snapshot kind {kind!r}")
-    observed = []
-    for row in rows:
-        if row.role not in ROLES:
-            raise ValueError(f"Unsupported snapshot role {row.role!r}")
-        if row.root not in roots:
-            raise ValueError(f"Snapshot row references unbound root {row.root!r}")
-        observed.append(_observe(row, roots[row.root], hash_policy, allow_missing=allow_missing))
-    duplicates = _check_duplicates(observed)
+
+    def observe(items: Iterable[AssetRow]) -> list[tuple[AssetRow, tuple[int, int] | None]]:
+        observed = []
+        for row in items:
+            if row.role not in ROLES:
+                raise ValueError(f"Unsupported snapshot role {row.role!r}")
+            if row.root not in roots:
+                raise ValueError(f"Snapshot row references unbound root {row.root!r}")
+            observed.append(
+                _observe(row, roots[row.root], hash_policy, allow_missing=allow_missing)
+            )
+        return observed
+
+    observed, context_observed = observe(rows), observe(validation_context)
+    duplicates = _check_duplicates(observed, context_observed)
     canonical = tuple(sorted((row for row, _ in observed), key=AssetRow.sort_key))
-    groups = validate_groups(canonical, group_validation, group_context)
+    context_rows = sorted((row for row, _ in context_observed), key=AssetRow.sort_key)
+    groups = validate_groups((*canonical, *context_rows), group_validation, patch_split=patch_split)
     limitations: list[str] = list(PROVENANCE_LIMITATIONS)
     if hash_policy == "membership":
         limitations.append(_MEMBERSHIP_LIMITATION)
     if groups["status"] == "unavailable":
         limitations.append(_UNAVAILABLE_LIMITATION)
+    if groups.get("split_unit") == "patch":
+        limitations.append(_PATCH_SPLIT_LIMITATION)
     return DataSnapshot(
         kind=kind,
         adapter=adapter,
@@ -319,6 +362,13 @@ def build_snapshot(
         group_validation=groups,
         duplicates=duplicates,
         limitations=tuple(limitations),
+        validation_context={
+            "row_count": len(context_rows),
+            "splits": sorted({row.split for row in context_rows if row.split}),
+            "membership_sha256": sha256_json([asdict(row) for row in context_rows]),
+        }
+        if context_rows
+        else {},
     )
 
 
@@ -373,6 +423,7 @@ def write_snapshot(snapshot: DataSnapshot, paths: SnapshotPaths) -> dict[str, An
         "group_validation": snapshot.group_validation,
         "duplicates": list(snapshot.duplicates),
         "limitations": list(snapshot.limitations),
+        "validation_context": snapshot.validation_context,
         "root_binding": snapshot.roots,
         "row_count": len(snapshot.rows),
         "rows_file": paths.rows.name,
@@ -413,6 +464,7 @@ def load_snapshot(paths: SnapshotPaths) -> DataSnapshot:
         group_validation=metadata["group_validation"],
         duplicates=tuple(metadata["duplicates"]),
         limitations=tuple(metadata["limitations"]),
+        validation_context=metadata["validation_context"],
     )
     if snapshot.snapshot_id != metadata.get("snapshot_id"):
         raise ValueError(f"Snapshot identity mismatch at {paths.metadata}")

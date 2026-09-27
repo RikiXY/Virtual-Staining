@@ -543,22 +543,37 @@ Hash policy (`data.hash_policy`):
 
 Duplicate and leakage checks: the same resolved file, an alias of it (symlink or
 hard link), or identical verified bytes in two different splits fail. Identical content
-within one split is listed under `duplicates` for review, never deduplicated.
+within one split is listed under `duplicates` for review, never deduplicated. Byte
+identity is only asserted under `content`; `membership` still detects same-file aliases.
+
+Held-out assets: training also observes the held-out test assets of its selected data
+contract - the test manifest records' selected inputs, target, and mask (when used) for
+paired training, and the domain A and B `test` collections resolved from the same
+`data.domains` specs for unpaired training - under the same hash policy. They take part
+in the file, content, and group leakage checks but are not consumed rows and do not
+enter `snapshot_id`; the metadata's `validation_context` records their row count,
+splits, and membership digest.
 
 Biological groups (`data.group_validation`): `auto` (default) validates split
 independence at the strongest unit for which every asset has an ID
 (`patient` > `specimen` > `set`); an explicit unit requires complete IDs for it. Any
 observed group ID that appears in more than one split fails, including held-out test
-records during paired training and unpaired sidecar entries. The same group may
-appear across modalities or domains within one split. The result is stored under
+assets during training. The same group may appear across modalities or domains within
+one split. The result is stored under
 `group_validation` (`validated` with its `unit`, `unavailable`, or `not_applicable`
 for single-split snapshots). Paired stages take IDs from the prepared
 `manifests/slide_sets.csv`; unpaired `data.domains` collections take them only from an
 optional `data.group_metadata` CSV sidecar with columns
-`path,domain,split,set_id,specimen_id,patient_id`. Without group IDs, training requires
-an explicit `group_validation: unavailable`, which is persisted with a limitation and
-makes no patient, specimen, or set independence claim. Patch-level prepared splits
-likewise need `unavailable`. IDs are never inferred from filenames or directories.
+`path,domain,split,set_id,specimen_id,patient_id`; entries for unselected paths are
+ignored. Without group IDs, training requires an explicit `group_validation:
+unavailable`, which is persisted with a limitation and makes no patient, specimen, or
+set independence claim. `unavailable` is not a validation-off switch: any supplied ID
+that appears in more than one split still fails. The one exception is a prepared
+patch-level split (`split.unit: patch`, read from `metadata/split_assignment.csv`)
+trained under explicit `unavailable`: its groups span splits by construction, so the
+shared group counts are recorded under `group_validation` with a limitation instead of
+failing. `auto` or an explicit unit still fails on the same data. IDs are never
+inferred from filenames or directories.
 
 These are file-provenance checks only. Distinct SHA-256 digests do not prove
 biological independence, re-encoded or near-duplicate images are not detected, and no
@@ -574,7 +589,8 @@ Per stage:
   (`target`). The seeded epoch draw is a sampling policy (stage `details`), not a
   correspondence, so no pairs are recorded.
 - **infer**: only the files fed to the predictor - the selected inputs for Pix2Pix
-  and CycleGAN `A_to_B`, the held-out target for `B_to_A`. After writing, the
+  and CycleGAN `A_to_B`, the held-out target for `B_to_A`. These are exactly the
+  image files inference opens; the other side of each record is never read. After writing, the
   `produced_data` snapshot lists each `generated` output with its `sample_id` and
   content identity and references the consumed snapshot and checkpoint.
 - **evaluate** (paired): one `reference` and one `generated` row per evaluated

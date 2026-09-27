@@ -344,6 +344,18 @@ def load_set_groups(project: ProjectConfig) -> dict[str, tuple[str, str]]:
         }
 
 
+def prepared_split_unit(project: ProjectConfig) -> str | None:
+    """The ``split.unit`` recorded by preparation in ``split_assignment.csv``, if any."""
+    path = DatasetLayout.from_project(project).split_assignment_path
+    if not path.is_file():
+        return None
+    with path.open(newline="", encoding="utf-8") as handle:
+        units = {row["unit"] for row in csv.DictReader(handle)}
+    if len(units) > 1:
+        raise ValueError(f"Split assignment {path} mixes units {sorted(units)}")
+    return units.pop() if units else None
+
+
 def manifest_sources(project: ProjectConfig) -> dict[str, object]:
     """Prepared-dataset lineage of a manifest-backed stage: manifest and preparation identity."""
     layout = DatasetLayout.from_project(project)

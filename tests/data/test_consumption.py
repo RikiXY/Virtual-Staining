@@ -270,6 +270,51 @@ def test_missing_group_metadata_requires_explicit_unavailable(tmp_path: Path) ->
     assert all(not row.patient_id for row in stored.rows)
 
 
+@pytest.mark.parametrize(
+    "rows",
+    [
+        # Partial metadata: only the colliding assets carry a patient ID.
+        [
+            _row("a.png", patient_id="p1"),
+            _row("b.png", "val"),
+            _row("c.png", "test", patient_id="p1"),
+        ],
+        # Complete metadata.
+        [
+            _row("a.png", patient_id="p1"),
+            _row("b.png", "val", patient_id="p2"),
+            _row("c.png", "test", patient_id="p1"),
+        ],
+    ],
+)
+def test_unavailable_does_not_ignore_supplied_group_contradictions(rows: list[AssetRow]) -> None:
+    with pytest.raises(DataLeakageError, match="patient_id values appear in more than one split"):
+        validate_groups(rows, "unavailable")
+
+
+def test_unavailable_with_partial_consistent_metadata_makes_no_claim() -> None:
+    rows = [_row("a.png", patient_id="p1"), _row("b.png", "val"), _row("c.png", "test")]
+    assert validate_groups(rows, "unavailable") == {
+        "requested": "unavailable",
+        "splits": ["test", "train", "val"],
+        "unit": None,
+        "status": "unavailable",
+    }
+
+
+def test_declared_patch_split_records_shared_groups_only_under_unavailable() -> None:
+    rows = [
+        _row("a.png", patient_id="p1", set_id="x1"),
+        _row("b.png", "test", patient_id="p1", set_id="x1"),
+    ]
+    result = validate_groups(rows, "unavailable", patch_split=True)
+    assert result["status"] == "unavailable"
+    assert result["groups_shared_across_splits"] == {"patient": 1, "set": 1}
+    for requested in ("auto", "set"):
+        with pytest.raises(DataLeakageError, match="patient_id"):
+            validate_groups(rows, requested, patch_split=True)
+
+
 def test_sidecar_enriches_only_listed_paths_and_rejects_conflicts(tmp_path: Path) -> None:
     sidecar = tmp_path / "groups.csv"
     sidecar.write_text(
@@ -283,7 +328,7 @@ def test_sidecar_enriches_only_listed_paths_and_rejects_conflicts(tmp_path: Path
     assert rows[0].patient_id == "p1"
     assert rows[1].patient_id == ""
     with pytest.raises(DataLeakageError, match="patient_id"):
-        validate_groups(rows, "auto", groups)
+        validate_groups([*rows, *groups], "auto")
     with pytest.raises(ValueError, match="declares 'train/a.png' as A/train"):
         enrich_with_groups([_row("train/a.png", "val")], groups)
     sidecar.write_text("path,domain\n", encoding="utf-8")
@@ -313,3 +358,54 @@ def test_missing_files_are_recorded_only_when_allowed(tmp_path: Path) -> None:
     snapshot = _snapshot(tmp_path, [_row("absent.png")], allow_missing=True)
     assert snapshot.rows[0].status == "missing"
     assert snapshot.rows[0].sha256 is None
+
+
+# Held-out validation context
+
+
+def test_validation_context_takes_part_in_leakage_checks_without_becoming_rows(
+    tmp_path: Path,
+) -> None:
+    rows = _dataset(tmp_path)
+    _write(tmp_path, "test/x.png", b"x")
+    _write(tmp_path, "test/y.png", b"x")  # within-context duplicate: not listed
+    context = [_row("test/x.png", "test"), _row("test/y.png", "test")]
+    snapshot = _snapshot(tmp_path, rows, validation_context=context)
+
+    assert [row.locator for row in snapshot.rows] == ["train/a.png", "val/b.png"]
+    assert snapshot.duplicates == ()
+    assert snapshot.group_validation["splits"] == ["test", "train", "val"]
+    assert snapshot.validation_context["row_count"] == 2
+    assert snapshot.validation_context["splits"] == ["test"]
+    # The held-out context is checked, not consumed: it never enters the identity.
+    assert snapshot.snapshot_id == _snapshot(tmp_path, rows).snapshot_id
+    paths = SnapshotPaths.in_dir(tmp_path / "meta")
+    write_snapshot(snapshot, paths)
+    assert load_snapshot(paths).validation_context == snapshot.validation_context
+
+    _write(tmp_path, "test/x.png", b"a")  # bytes of train/a.png under another name
+    with pytest.raises(DataLeakageError, match="same content appears in disjoint splits"):
+        _snapshot(tmp_path, rows, validation_context=context)
+    # Membership mode cannot assert byte identity.
+    _snapshot(tmp_path, rows, hash_policy="membership", validation_context=context)
+
+
+def test_validation_context_aliases_and_groups_fail_in_membership_mode(tmp_path: Path) -> None:
+    rows = _dataset(tmp_path)
+    (tmp_path / "test").mkdir()
+    os.link(tmp_path / "val" / "b.png", tmp_path / "test" / "hard.png")
+    (tmp_path / "test" / "link.png").symlink_to(tmp_path / "train" / "a.png")
+    for alias in ("test/hard.png", "test/link.png"):
+        with pytest.raises(DataLeakageError, match="same file appears in disjoint splits"):
+            _snapshot(
+                tmp_path, rows, hash_policy="membership", validation_context=[_row(alias, "test")]
+            )
+
+    _write(tmp_path, "test/z.png", b"z")
+    with pytest.raises(DataLeakageError, match="patient_id"):
+        _snapshot(
+            tmp_path,
+            rows,
+            hash_policy="membership",
+            validation_context=[_row("test/z.png", "test", patient_id="p2")],
+        )
