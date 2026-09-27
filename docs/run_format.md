@@ -730,8 +730,10 @@ or `artifacts/output_images/` (directories). Library callers without run default
 must pass an output path (see [`library_api.md`](library_api.md#direct-predictor-inference)).
 
 Full-resolution WSI outputs are pyramidal BigTIFFs with the input's pixel dimensions.
-They carry the source MPP only when the inputs' metadata provide it (conflicting
-known values fail). Unknown MPP stays unknown. The run first requires at least
+For a single WSI input, known source MPP is preserved. For multi-input WSI, output
+MPP is preserved only when every input provides compatible known MPP. Conflicting
+known values fail; if any input lacks calibration, the shared output MPP remains
+unknown (never zero and never inferred from pixel counts). The run first requires at least
 `width x height x 15` bytes of free scratch space next to the output.
 
 ## Evaluation outputs

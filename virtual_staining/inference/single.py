@@ -353,7 +353,9 @@ def _write_tiled_rgb(
 
 
 def _shared_wsi_metadata(readers: Mapping[str, RegionImageReader]) -> ImageMetadata:
-    """Output geometry is the shared input grid; MPP is only carried when sources agree."""
+    """Output geometry is the shared input grid; MPP is carried per axis only when every
+    input provides it and all values agree. Known conflicts fail even if another input
+    is uncalibrated; any missing value leaves that output axis unknown."""
     metadata = {name: reader.metadata for name, reader in readers.items()}
     width, height = next(iter(readers.values())).size
     mpp: dict[str, float | None] = {}
@@ -366,7 +368,7 @@ def _shared_wsi_metadata(readers: Mapping[str, RegionImageReader]) -> ImageMetad
         values = list(known.values())
         if any(not math.isclose(v, values[0], rel_tol=MPP_REL_TOLERANCE) for v in values):
             raise ValueError(f"Input mpp_{axis} values conflict: {known}")
-        mpp[axis] = values[0] if values else None
+        mpp[axis] = values[0] if len(values) == len(metadata) else None
     return ImageMetadata(width=width, height=height, mpp_x=mpp["x"], mpp_y=mpp["y"])
 
 

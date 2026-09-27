@@ -3,6 +3,7 @@ from __future__ import annotations
 import builtins
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import numpy as np
 import pytest
@@ -14,10 +15,12 @@ from virtual_staining.inference.single import (
     InferenceRuntime,
     PredictionContract,
     _run_single_image_inference,
+    _shared_wsi_metadata,
 )
 from virtual_staining.utils.image_io import (
     ImageMetadata,
     OpenSlideRegionImageReader,
+    RegionImageReader,
     open_image_reader,
     write_pyramidal_tiff_from_raw_rgb,
 )
@@ -180,9 +183,9 @@ def test_wsi_inference_reads_regions_and_publishes_same_grid_with_mpp(
         reader.close()
 
 
-@pytest.mark.parametrize(("af_mpp", "lf_mpp", "expected"), [(None, None, None), (None, 0.25, 0.25)])
-def test_unknown_wsi_mpp_stays_unknown(
-    tmp_path: Path, af_mpp: float | None, lf_mpp: float | None, expected: float | None
+@pytest.mark.parametrize(("af_mpp", "lf_mpp"), [(None, None), (None, 0.25), (0.25, None)])
+def test_wsi_mpp_missing_from_any_input_stays_unknown(
+    tmp_path: Path, af_mpp: float | None, lf_mpp: float | None
 ) -> None:
     inputs = _wsi_inputs(tmp_path, af_mpp, lf_mpp)
     output = tmp_path / "generated.tif"
@@ -190,10 +193,45 @@ def test_unknown_wsi_mpp_stays_unknown(
     reader = open_image_reader(output)
     try:
         assert reader.size == WSI_SIZE
-        assert reader.metadata.mpp_x == (pytest.approx(expected) if expected else None)
-        assert reader.metadata.mpp_y == (pytest.approx(expected) if expected else None)
+        assert (reader.metadata.mpp_x, reader.metadata.mpp_y) == (None, None)
     finally:
         reader.close()
+
+
+def _fake_reader(mpp_x: float | None, mpp_y: float | None) -> RegionImageReader:
+    metadata = ImageMetadata(*WSI_SIZE, mpp_x=mpp_x, mpp_y=mpp_y)
+    return cast(RegionImageReader, SimpleNamespace(size=WSI_SIZE, metadata=metadata))
+
+
+@pytest.mark.parametrize(
+    ("mpps", "expected"),
+    [
+        ([(0.25, 0.3)], (0.25, 0.3)),  # single input: known preserved
+        ([(None, None)], (None, None)),  # single input: missing stays unknown
+        ([(0.25, 0.25), (0.25, 0.25)], (0.25, 0.25)),
+        ([(0.25, 0.25), (0.25001, 0.25)], (0.25, 0.25)),  # within tolerance
+        ([(0.25, 0.25), (None, 0.25)], (None, 0.25)),  # axes are independent
+        ([(None, None), (0.25, 0.25)], (None, None)),
+        ([(0.25, 0.25), (None, None)], (None, None)),
+    ],
+)
+def test_shared_wsi_mpp_requires_every_input(
+    mpps: list[tuple[float | None, float | None]], expected: tuple[float | None, float | None]
+) -> None:
+    readers = {f"in{index}": _fake_reader(*mpp) for index, mpp in enumerate(mpps)}
+    metadata = _shared_wsi_metadata(readers)
+    assert (metadata.width, metadata.height) == WSI_SIZE
+    assert (metadata.mpp_x, metadata.mpp_y) == pytest.approx(expected)
+
+
+def test_shared_wsi_mpp_conflict_is_not_hidden_by_a_missing_input() -> None:
+    readers = {
+        "A": _fake_reader(0.25, 0.25),
+        "B": _fake_reader(None, None),
+        "C": _fake_reader(0.5, 0.5),
+    }
+    with pytest.raises(ValueError, match="mpp_x values conflict"):
+        _shared_wsi_metadata(readers)
 
 
 def test_conflicting_wsi_mpp_fails_before_prediction(tmp_path: Path) -> None:

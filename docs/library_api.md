@@ -105,10 +105,15 @@ run_image_path_inference(runtime, {"AF": af_dir, "LF": lf_dir}, Path("out/batch"
   when a direction is set.
 - **WSI.** When every input opens with OpenSlide and tiling is needed, inputs are read
   region by region. The output has exactly the shared input pixel dimensions and is
-  written as a pyramidal BigTIFF by libvips. MPP is copied only from source metadata.
-  One known value is kept, known values from several inputs must agree (relative
-  tolerance 1e-4) or the run fails before prediction, and MPP missing from every
-  input stays unknown in the output. MPP is never derived from sizes. Before
+  written as a pyramidal BigTIFF by libvips. MPP is copied only from source metadata,
+  per axis. For a single WSI input, known source MPP is preserved. For multi-input
+  WSI, output MPP is preserved only when every input provides compatible known MPP
+  (relative tolerance 1e-4). Conflicting known values fail before prediction, even
+  when another input lacks calibration. If any input lacks calibration, the shared
+  output MPP remains unknown (not zero). A TIFF has one resolution unit, so an output
+  with only one known axis is published with both axes unknown. MPP is never derived
+  from pixel counts, and the same-grid output is a pixel-grid contract, not proof
+  that the inputs are biologically registered. Before
   prediction, the free space on the output's filesystem must cover at least
   `width x height x 3 x 5` bytes (float32 accumulator plus raw RGB). The compressed
   TIFF needs space on top of that estimate. This is disk-backed scratch space, not
