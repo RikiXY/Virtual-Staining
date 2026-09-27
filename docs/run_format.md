@@ -114,6 +114,18 @@ The two collections are independent: an epoch has `max(len(A), len(B))` samples,
 shorter domain wraps around, and the domain-B draw is a deterministic function of the
 seed, epoch, and index.
 
+Provenance fields apply to both pairings:
+
+```yaml
+data:
+  hash_policy: content        # content (default) | membership
+  group_validation: auto      # auto (default) | patient | specimen | set | unavailable
+  group_metadata: groups.csv  # unpaired only: path,domain,split,set_id,specimen_id,patient_id
+```
+
+Domain collections must resolve inside `dataset_root` so their locators stay portable.
+See [Consumed-data snapshots](#consumed-data-snapshots).
+
 ### `model.generator`
 
 | `architecture` | Method | Fields |
@@ -177,6 +189,12 @@ local_workspace/results/<run_name>/
 │   │   ├── train.json
 │   │   ├── infer.json
 │   │   └── evaluate.json
+│   ├── consumed_data/
+│   │   ├── train/{snapshot.json,rows.csv}
+│   │   ├── infer/{snapshot.json,rows.csv}
+│   │   └── evaluate/{snapshot.json,rows.csv}
+│   ├── produced_data/
+│   │   └── infer/{snapshot.json,rows.csv}
 │   ├── events.jsonl
 │   └── run.json
 ├── logs/
@@ -399,62 +417,181 @@ when validation runs.
 
 ### `metadata/run.json`
 
-Run identity and aggregate state only:
+Run identity and aggregate state only (schema version 2; version 1 files, which held a
+single incidental `dataset_fingerprint`, are rejected - start a new run directory):
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "run_id": "uuid",
   "run_name": "example_run",
   "created_at": "2025-01-15T10:30:00+00:00",
-  "dataset_fingerprint": "sha256:...",
+  "training_data": {
+    "snapshot_id": "sha256:...",
+    "membership_sha256": "sha256:...",
+    "hash_policy": "content"
+  },
   "last_event_at": "2025-01-15T12:45:00+00:00",
   "stages_present": ["train", "infer", "evaluate"],
   "last_completed_stage": "evaluate"
 }
 ```
 
-The first non-null dataset fingerprint becomes run identity. A later conflicting
-fingerprint or run name fails rather than mixing artifacts. Stage config,
+`training_data` is the consumed-data identity of the first bound training attempt and
+is part of run identity. A later training attempt, including a `resume`, whose train or
+validation membership, split, domain role, group metadata, or verified content differs
+fails before training starts; use a new `run_name`. Inference and evaluation inputs are
+stage-specific and are never required to equal the training inputs. Stage config,
 device, entrypoint, manifest, git, and package provenance do not belong here.
 
 ### `metadata/stages/<stage>.json`
 
-The current stage view is replaced on every attempt. Its normalized shape is:
+The current stage view is replaced on every attempt (schema version 2). Its normalized
+shape is:
 
 ```json
 {
-  "schema_version": 1,
-  "stage": "train",
+  "schema_version": 2,
+  "stage": "infer",
   "status": "completed",
   "started_at": "...",
   "completed_at": "...",
-  "entrypoint": "vs train",
+  "entrypoint": "vs infer",
   "config": {
-    "input_path": "config/train/input.yaml",
-    "resolved_path": "config/train/resolved.yaml",
+    "input_path": "config/infer/input.yaml",
+    "resolved_path": "config/infer/resolved.yaml",
     "sha256": "sha256:..."
   },
-  "environment_path": "metadata/environments/train.json",
-  "dataset": {
-    "fingerprint": "sha256:...",
-    "manifest_path": ".../manifest.csv",
-    "manifest_sha256": "sha256:..."
+  "environment_path": "metadata/environments/infer.json",
+  "consumed_data": {
+    "snapshot_id": "sha256:...",
+    "membership_sha256": "sha256:...",
+    "hash_policy": "content",
+    "content_verified": true,
+    "row_count": 42,
+    "metadata_path": "metadata/consumed_data/infer/snapshot.json",
+    "rows_path": "metadata/consumed_data/infer/rows.csv"
   },
+  "produced_data": {"snapshot_id": "sha256:...", "...": "..."},
   "details": {}
 }
 ```
 
-Failed stages add `error_type` and `error`. Stage-specific results remain under
-`details`; later `run.result()` calls replace earlier values by key.
+`consumed_data` references the frozen inventory of files this stage read (see
+[Consumed-data snapshots](#consumed-data-snapshots)); rows are never inlined.
+`produced_data` is set only by inference, after its outputs are written. Failed stages
+add `error_type` and `error`. Stage-specific results remain under `details`; later
+`run.result()` calls replace earlier values by key.
+
+Stage lifecycle: the session first snapshots config and environment; the application
+then resolves its exact inputs once, and `bind_inputs` persists the consumed-data
+snapshot before `stage_started` is published and reporters start (their start
+metadata carries the config hash and consumed snapshot ID). If configuration or input
+resolution fails first, a single `stage_failed` event and a failed stage record are
+written with `consumed_data: null` and the original error; reporters are not started.
+A snapshot written before a later failure is kept as evidence of what the failed
+attempt consumed. Metadata is a local single-writer store: concurrent writers to one
+run are not coordinated.
 
 ### `metadata/events.jsonl`
 
-Append-only events use the same config/environment/dataset/details fields plus
+Append-only events use the same config/environment/consumed/produced/details fields plus
 `schema_version`, `timestamp`, `run_id`, `run_name`, `stage`, `event_type`, and
 `status`. The event is appended before the stage and run JSON views are replaced.
 All local writes are strict; external reporters run only after successful local
 writes and cannot invalidate them.
+
+### Consumed-data snapshots
+
+A consumed-data snapshot answers *which exact assets did this tracked stage consume?*
+It is distinct from the dataset fingerprint, which answers *what dataset did
+preparation build?* (see [Dataset Format](dataset_format.md)). Each tracked stage
+resolves its inputs once, builds the snapshot from those same objects, and passes the
+same sequence to the computation, so membership cannot change between provenance and
+consumption.
+
+`snapshot.json` (snapshot schema version 1) and `rows.csv` are published atomically;
+`snapshot.json` binds the SHA-256 of `rows.csv`, so a mismatched pair is rejected.
+Row columns:
+
+```text
+root,locator,role,domain,split,sample_id,set_id,specimen_id,patient_id,status,size,sha256
+```
+
+- `root` names a binding (`dataset`, `generated`, `output`) and `locator` is a
+  normalized path relative to it. Absolute, traversing, or root-escaping locators and
+  escaping symlinks are rejected. Absolute roots appear only in `root_binding`.
+- `role` is `input`, `target`, `mask`, `generated`, or `reference`; `domain` is the
+  modality or domain name.
+- `sample_id` is set only where the adapter has an explicit correspondence (manifest
+  samples). Independent unpaired-domain images have none.
+- `status` is `present` or `missing` (a requested evaluation file that was absent).
+
+Identity: `membership_sha256` hashes the canonically sorted rows; `snapshot_id` also
+covers the adapter, hash policy, selection (modalities/domains, splits), and context
+(for inference: method, direction, checkpoint SHA-256, and a digest of the generation
+configuration). Neither depends on timestamps, absolute mount points, CSV row order, or
+directory traversal order.
+
+Hash policy (`data.hash_policy`):
+
+- `content` (default): every consumed file is SHA-256 hashed; the file is stat-ed
+  before and after reading and a file that changes while hashed fails the stage. This
+  is the mode for a content-identical freeze. A hashing failure never falls back.
+- `membership`: records locators, sizes, and semantic metadata only.
+  `content_verified: false` and an explicit limitation mark it as unverified.
+
+Duplicate and leakage checks: the same resolved file, an alias of it (symlink or
+hard link), or identical verified bytes in two different splits fail. Identical content
+within one split is listed under `duplicates` for review, never deduplicated.
+
+Biological groups (`data.group_validation`): `auto` (default) validates split
+independence at the strongest unit for which every asset has an ID
+(`patient` > `specimen` > `set`); an explicit unit requires complete IDs for it. Any
+observed group ID that appears in more than one split fails, including held-out test
+records during paired training and unpaired sidecar entries. The same group may
+appear across modalities or domains within one split. The result is stored under
+`group_validation` (`validated` with its `unit`, `unavailable`, or `not_applicable`
+for single-split snapshots). Paired stages take IDs from the prepared
+`manifests/slide_sets.csv`; unpaired `data.domains` collections take them only from an
+optional `data.group_metadata` CSV sidecar with columns
+`path,domain,split,set_id,specimen_id,patient_id`. Without group IDs, training requires
+an explicit `group_validation: unavailable`, which is persisted with a limitation and
+makes no patient, specimen, or set independence claim. Patch-level prepared splits
+likewise need `unavailable`. IDs are never inferred from filenames or directories.
+
+These are file-provenance checks only. Distinct SHA-256 digests do not prove
+biological independence, re-encoded or near-duplicate images are not detected, and no
+clinical or biological validity follows from them.
+
+Per stage:
+
+- **train** (paired): the files each train/val manifest record supplies - selected
+  inputs, target, and the foreground mask only when a mask loss requires it - with
+  set/specimen/patient IDs. Augmentation expansion is configuration, not extra rows.
+  `sources` records the manifest SHA-256 and dataset fingerprint.
+- **train** (unpaired): train/val membership of domain A (`input`) and domain B
+  (`target`). The seeded epoch draw is a sampling policy (stage `details`), not a
+  correspondence, so no pairs are recorded.
+- **infer**: only the files fed to the predictor - the selected inputs for Pix2Pix
+  and CycleGAN `A_to_B`, the held-out target for `B_to_A`. After writing, the
+  `produced_data` snapshot lists each `generated` output with its `sample_id` and
+  content identity and references the consumed snapshot and checkpoint.
+- **evaluate** (paired): one `reference` and one `generated` row per evaluated
+  sample, sharing its `sample_id` - the explicit correspondence the evaluator used.
+  Missing generated files keep `status=missing`; evaluated/skipped counts stay in
+  stage `details` and `skipped.csv`.
+- **evaluate** (unpaired): the generated and reference collections, without
+  correspondence.
+
+Evaluation lineage: `details.generated_producer` (also in
+`evaluation_metadata.json`) is `linked` only when the consumed generated files match
+this run's completed inference `produced_data` by locator, size, and content; it then
+names the inference output and input snapshots, checkpoint SHA-256, and direction.
+Otherwise it is `unlinked` with `missing`, `extra`, and `changed` locators or a
+direction mismatch, or `external` when no tracked inference exists. External
+predictions remain valid evaluation inputs; no checkpoint origin is fabricated for
+them, and a matching directory path alone never establishes a link.
 
 ### `metrics/epochs.csv`
 
@@ -562,6 +699,7 @@ do not collide.
 Every evaluation writes `evaluation/evaluation_metadata.json` recording `method`,
 `training_pairing`, `evaluation_protocol`, `inference_direction` (`null` for Pix2Pix),
 `source_domains`, `reference_domain`, `generated_dir`, `counts`, the written `artifacts`,
+the `consumed_data` reference and `generated_producer` lineage,
 and `pairwise_metrics_available`: `true` for `paired`, `false` for `unpaired`. Unpaired
 metadata also records the feature definitions and explicit `limitations`. Switching
 protocol removes the other protocol's stale reports from the output directory.

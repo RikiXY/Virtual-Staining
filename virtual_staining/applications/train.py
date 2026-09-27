@@ -11,10 +11,19 @@ import torch
 from torch.utils.data import DataLoader
 
 from virtual_staining.config.run import RunConfig
+from virtual_staining.data.consumption import (
+    DataSnapshot,
+    build_snapshot,
+)
 from virtual_staining.data.dataset import PairedManifestDataset
 from virtual_staining.data.layout import DatasetLayout
-from virtual_staining.data.manifest import load_manifest_or_raise
-from virtual_staining.data.unpaired import UnpairedImageDataset, resolve_domain_images
+from virtual_staining.data.manifest import (
+    load_manifest_or_raise,
+    load_set_groups,
+    manifest_sources,
+    paired_record_rows,
+)
+from virtual_staining.data.unpaired import UnpairedImageDataset, resolve_domain_collections
 from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.methods.registry import resolve_training_method
 from virtual_staining.models.io_contract import build_model_input_transform
@@ -49,11 +58,15 @@ def _requires_foreground_masks(config: RunConfig) -> bool:
     return any(term.requires_mask for term in config.training.losses.generator)
 
 
+PAIRED_TRAIN_ADAPTER = "paired_manifest_train/1"
+UNPAIRED_TRAIN_ADAPTER = "unpaired_domains_train/1"
+
+
 def _paired_datasets(
     config: RunConfig,
     transform: Callable[[Any], Any],
     seed: int,
-) -> tuple[PairedManifestDataset, PairedManifestDataset, dict[str, object]]:
+) -> tuple[PairedManifestDataset, PairedManifestDataset, dict[str, object], DataSnapshot]:
     assert config.training is not None
     training = config.training
     manifest = load_manifest_or_raise(config.project)
@@ -64,6 +77,42 @@ def _paired_datasets(
     manifest.validate(check_files_exist=True, require_splits={"train", "val"})
     train_manifest = manifest.filter_split("train")
     val_manifest = manifest.filter_split("val")
+    include_mask = _requires_foreground_masks(config)
+
+    # The snapshot and the datasets are built from these same filtered manifest objects.
+    groups = load_set_groups(config.project)
+    rows = paired_record_rows(
+        (*train_manifest.records, *val_manifest.records),
+        input_names=config.model.inputs,
+        target=config.model.target,
+        include_mask=include_mask,
+        groups=groups,
+    )
+    # Held-out test records are not consumed but share the split partition for leakage.
+    test_context = paired_record_rows(
+        manifest.filter_split("test").records,
+        input_names=(),
+        target=config.model.target,
+        include_mask=False,
+        groups=groups,
+    )
+    snapshot = build_snapshot(
+        rows,
+        kind="consumed",
+        adapter=PAIRED_TRAIN_ADAPTER,
+        roots={"dataset": config.project.dataset_root},
+        hash_policy=config.data.hash_policy,
+        group_validation=config.data.group_validation,
+        group_context=test_context,
+        selection={
+            "pairing": "paired",
+            "splits": ["train", "val"],
+            "inputs": list(config.model.inputs),
+            "target": config.model.target,
+            "foreground_mask": include_mask,
+        },
+        sources=manifest_sources(config.project),
+    )
 
     train_paired_transform = build_training_paired_transform(
         training.augmentation,
@@ -79,14 +128,14 @@ def _paired_datasets(
         input_names=config.model.inputs,
         transform=None if train_paired_transform is not None else transform,
         paired_transform=train_paired_transform,
-        include_foreground_mask=_requires_foreground_masks(config),
+        include_foreground_mask=include_mask,
         virtual_expansion_factor=training.augmentation.effective_expansion_factor,
     )
     val_dataset = PairedManifestDataset(
         val_manifest,
         input_names=config.model.inputs,
         transform=transform,
-        include_foreground_mask=_requires_foreground_masks(config),
+        include_foreground_mask=include_mask,
     )
     logger.info(
         "Loaded manifest: %s train samples (%s effective), %s val samples",
@@ -100,21 +149,46 @@ def _paired_datasets(
             len(train_manifest) * training.augmentation.effective_expansion_factor
         ),
     }
-    return train_dataset, val_dataset, details
+    return train_dataset, val_dataset, details, snapshot
 
 
 def _unpaired_datasets(
     config: RunConfig,
     transform: Callable[[Any], Any],
     seed: int,
-) -> tuple[UnpairedImageDataset, UnpairedImageDataset]:
+) -> tuple[UnpairedImageDataset, UnpairedImageDataset, DataSnapshot]:
     domain_a, domain_b = config.model.inputs[0], config.model.target
-    root = config.project.dataset_root
-    datasets = []
     splits: tuple[tuple[DatasetSplit, int | None], ...] = ((TRAIN_SPLIT, seed), (VAL_SPLIT, None))
+    paths, rows, groups = resolve_domain_collections(
+        config.data.domains,
+        config.project.dataset_root,
+        splits=[split for split, _ in splits],
+        roles={domain_a: "input", domain_b: "target"},
+        group_metadata=config.data.group_metadata,
+    )
+    # Domain membership only: epoch pairings are a seeded sampling operation, not
+    # correspondence, so no A/B pair is ever recorded.
+    snapshot = build_snapshot(
+        rows,
+        kind="consumed",
+        adapter=UNPAIRED_TRAIN_ADAPTER,
+        roots={"dataset": config.project.dataset_root},
+        hash_policy=config.data.hash_policy,
+        group_validation=config.data.group_validation,
+        group_context=groups,
+        selection={
+            "pairing": "unpaired",
+            "splits": [split for split, _ in splits],
+            "domains": {"A": domain_a, "B": domain_b},
+            "domain_specs": {name: config.data.domains[name] for name in (domain_a, domain_b)},
+            "group_metadata": str(config.data.group_metadata)
+            if config.data.group_metadata
+            else None,
+        },
+    )
+    datasets = []
     for split, pairing_seed in splits:
-        paths_a = resolve_domain_images(config.data.domains[domain_a], split, root)
-        paths_b = resolve_domain_images(config.data.domains[domain_b], split, root)
+        paths_a, paths_b = paths[split, domain_a], paths[split, domain_b]
         logger.info(
             "Unpaired %s split: %s %s images, %s %s images",
             split,
@@ -126,7 +200,7 @@ def _unpaired_datasets(
         datasets.append(
             UnpairedImageDataset(paths_a, paths_b, transform=transform, pairing_seed=pairing_seed)
         )
-    return datasets[0], datasets[1]
+    return datasets[0], datasets[1], snapshot
 
 
 def train(
@@ -148,13 +222,17 @@ def train(
         dataset_layout = DatasetLayout.from_project(config.project)
         transform = build_model_input_transform(config.project.image_size)
         if config.data.pairing == "unpaired":
-            train_dataset, val_dataset = _unpaired_datasets(config, transform, seed)
+            train_dataset, val_dataset, snapshot = _unpaired_datasets(config, transform, seed)
             dataset_details: dict[str, object] = {
                 "train_sample_count": len(train_dataset),
                 "effective_train_sample_count": len(train_dataset),
+                "pairing_policy": "independent_domains_seeded_draw",
             }
         else:
-            train_dataset, val_dataset, dataset_details = _paired_datasets(config, transform, seed)
+            train_dataset, val_dataset, dataset_details, snapshot = _paired_datasets(
+                config, transform, seed
+            )
+        session.bind_inputs(snapshot)
         train_details = {
             "seed": seed,
             "device": str(device),
@@ -209,7 +287,7 @@ def train(
             progress_reporter=progress_reporter,
             val_dir=dataset_layout.split_dir("val"),
             experiment_session=session,
-            config_hash=session.config_hash,
+            config_hash=session.config_hash or "",
             image_size=config.project.image_size,
             benchmark_recorder=benchmark_recorder,
             preview_sink=ValidationPreviewWriter(

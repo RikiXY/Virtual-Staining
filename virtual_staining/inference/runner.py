@@ -46,7 +46,7 @@ def build_inference_transform(image_size: tuple[int, int]) -> transforms.Compose
     return build_model_input_transform(image_size)
 
 
-def _resolve_checkpoint(config: RunConfig, paths: RunLayout) -> Path:
+def resolve_inference_checkpoint(config: RunConfig, paths: RunLayout) -> Path:
     if config.inference is None:
         raise ValueError("RunConfig.inference is required to run inference.")
 
@@ -87,8 +87,11 @@ def load_inference_generator(
     config: RunConfig,
     paths: RunLayout,
     device: torch.device,
+    checkpoint_path: Path | None = None,
 ) -> tuple[nn.Module, Path]:
-    checkpoint_path = _resolve_checkpoint(config, paths)
+    """Load the direction's generator from ``checkpoint_path`` (resolved from config if None)."""
+    if checkpoint_path is None:
+        checkpoint_path = resolve_inference_checkpoint(config, paths)
     direction = inference_direction(config)
     if direction is None:
         generator = load_pix2pix_inference_generator(checkpoint_path, config, device)

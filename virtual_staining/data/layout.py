@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from virtual_staining.config.project import ProjectConfig
+from virtual_staining.data.consumption import SnapshotPaths
 from virtual_staining.split_contract import DatasetSplit
 
 
@@ -59,6 +60,11 @@ class DatasetLayout:
     @property
     def dataset_fingerprint_path(self) -> Path:
         return self.metadata_dir / "dataset_fingerprint.json"
+
+    @property
+    def source_snapshot(self) -> SnapshotPaths:
+        """Raw assets selected by the last preparation attempt (consumed-data snapshot)."""
+        return SnapshotPaths.in_dir(self.metadata_dir / "consumed_data" / "prepare")
 
     @property
     def input_hashes_path(self) -> Path:

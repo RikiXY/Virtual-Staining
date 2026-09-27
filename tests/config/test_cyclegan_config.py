@@ -49,7 +49,11 @@ def test_pix2pix_config_without_data_resolves_as_paired(tmp_path: Path) -> None:
     config = _pix2pix(tmp_path)
 
     assert config.data.pairing == "paired"
-    assert config.to_dict()["data"] == {"pairing": "paired"}
+    assert config.to_dict()["data"] == {
+        "pairing": "paired",
+        "hash_policy": "content",
+        "group_validation": "auto",
+    }
     assert config.to_dict()["method"] == {"name": "pix2pix"}
     assert config.to_dict()["model"]["generator"] == {
         "architecture": "concat_unet",
@@ -68,6 +72,8 @@ def test_valid_cyclegan_config_resolves_defaults(tmp_path: Path) -> None:
     assert resolved["data"] == {
         "pairing": "unpaired",
         "domains": {"label_free": "domains/label_free", "stained": "domains/stained"},
+        "hash_policy": "content",
+        "group_validation": "unavailable",
     }
     assert resolved["model"]["generator"] == {
         "architecture": "resnet",

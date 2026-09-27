@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from virtual_staining.config.project import ProjectConfig
+from virtual_staining.data.consumption import SnapshotPaths
 from virtual_staining.experiment.stages import RunStageName
 
 
@@ -134,14 +135,28 @@ class RunLayout:
     def checkpoint_selection(self) -> Path:
         return self.checkpoints_dir / "best.json"
 
+    def stage_record(self, stage: RunStageName) -> Path:
+        return self.metadata_dir / "stages" / f"{_checked(stage)}.json"
+
+    def consumed_data(self, stage: RunStageName) -> SnapshotPaths:
+        return SnapshotPaths.in_dir(self.metadata_dir / "consumed_data" / _checked(stage))
+
+    def produced_data(self, stage: RunStageName) -> SnapshotPaths:
+        return SnapshotPaths.in_dir(self.metadata_dir / "produced_data" / _checked(stage))
+
     def stage(self, stage: RunStageName) -> StageLayout:
-        if stage not in {"train", "infer", "evaluate"}:
-            raise ValueError(f"Unsupported run stage: {stage}")
+        _checked(stage)
         return StageLayout(
             self.config_dir / stage / "input.yaml",
             self.config_dir / stage / "resolved.yaml",
             self.metadata_dir / "environments" / f"{stage}.json",
         )
+
+
+def _checked(stage: RunStageName) -> RunStageName:
+    if stage not in {"train", "infer", "evaluate"}:
+        raise ValueError(f"Unsupported run stage: {stage}")
+    return stage
 
 
 def ensure_run_directories(layout: RunLayout) -> None:

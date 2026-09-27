@@ -252,8 +252,14 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
     assert metadata["status"] == "completed"
     assert metadata["completed_at"]
     assert metadata["started_at"]
-    assert metadata["dataset"]["manifest_path"] == str(manifest_path)
-    assert metadata["dataset"]["manifest_sha256"] == expected_manifest_hash
+    consumed = metadata["consumed_data"]
+    assert consumed["hash_policy"] == "content"
+    assert consumed["row_count"] == 2
+    snapshot = json.loads(Path(consumed["metadata_path"]).read_text(encoding="utf-8"))
+    assert snapshot["snapshot_id"] == consumed["snapshot_id"]
+    assert snapshot["sources"]["manifest_path"] == str(manifest_path)
+    assert snapshot["sources"]["manifest_sha256"] == expected_manifest_hash
+    assert "dataset" not in metadata
     assert metadata["details"]["evaluated_count"] == 1
     assert metadata["details"]["skipped_count"] == 0
     assert metadata["details"]["metrics_csv_path"] == str(output_dir / "per_image_metrics.csv")

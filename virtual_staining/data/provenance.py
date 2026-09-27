@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -15,12 +16,15 @@ def _cached_file_provenance(
     *,
     cache: dict[str, Any],
     force: bool,
+    verified: Mapping[str, str],
 ) -> dict[str, Any]:
     resolved = path.resolve()
     stat = resolved.stat()
     key = str(resolved)
     cached = cache.get(key, {})
-    if (
+    if key in verified:
+        digest = verified[key]
+    elif (
         not force
         and cached.get("size") == stat.st_size
         and cached.get("mtime_ns") == stat.st_mtime_ns
@@ -72,7 +76,13 @@ def build_dataset_fingerprint_metadata(
     hash_cache_path: Path | None = None,
     force_hash_verification: bool = False,
     prepared_at: str | None = None,
+    verified_hashes: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
+    """Build preparation lineage: what dataset this configuration and these sources produce.
+
+    ``verified_hashes`` (resolved path -> digest) come from a content-verified consumed-data
+    snapshot and take precedence over the size/mtime hash cache.
+    """
     cache: dict[str, Any] = {}
     if hash_cache_path is not None and hash_cache_path.exists():
         try:
@@ -90,7 +100,10 @@ def build_dataset_fingerprint_metadata(
                         "modality": asset.modality,
                         "role": role,
                         **_cached_file_provenance(
-                            dataset_root / relative, cache=cache, force=force_hash_verification
+                            dataset_root / relative,
+                            cache=cache,
+                            force=force_hash_verification,
+                            verified=verified_hashes or {},
                         ),
                     }
                 )

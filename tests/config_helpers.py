@@ -72,6 +72,8 @@ def cyclegan_config_data(tmp_path: Path) -> dict[str, Any]:
         "data": {
             "pairing": "unpaired",
             "domains": {"label_free": "domains/label_free", "stained": "domains/stained"},
+            # The synthetic domains carry no biological identities.
+            "group_validation": "unavailable",
         },
         "model": {
             "inputs": ["label_free"],

@@ -1,26 +1,39 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 from torchvision.utils import save_image
 
 from virtual_staining.config.run import RunConfig
+from virtual_staining.data.consumption import AssetRow, build_snapshot, relative_locator
 from virtual_staining.data.dataset import PairedManifestDataset
 from virtual_staining.data.layout import DatasetLayout
-from virtual_staining.data.manifest import load_manifest_or_raise
+from virtual_staining.data.manifest import (
+    load_manifest_or_raise,
+    load_set_groups,
+    manifest_sources,
+    paired_record_rows,
+)
 from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.inference.outputs import generated_path_for_record
 from virtual_staining.inference.runner import (
     InferenceResult,
     build_inference_transform,
     inference_direction,
+    inference_input_names,
     load_inference_generator,
     predict_batch,
+    resolve_inference_checkpoint,
     resolve_inference_device,
 )
+from virtual_staining.utils.hashing import sha256_file_verified, sha256_json
 
 logger = logging.getLogger(__name__)
+
+PAIRED_INFER_ADAPTER = "paired_manifest_infer/1"
+INFER_OUTPUT_ADAPTER = "inference_outputs/1"
 
 
 def infer(config: RunConfig, config_path: Path) -> InferenceResult:
@@ -28,13 +41,8 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
         raise ValueError("RunConfig.inference is required to run inference.")
 
     with ExperimentSession.open(config=config, config_path=config_path, stage="infer") as session:
-        device = resolve_inference_device()
-        logger.info("Inference device: %s", device)
-        generator, checkpoint_path = load_inference_generator(config, session.paths, device)
-        transform = build_inference_transform(config.project.image_size)
         output_dir = config.inference.output_dir or session.paths.output_test_dir
         direction = inference_direction(config)
-
         manifest = load_manifest_or_raise(config.project)
         if not set(config.model.inputs).issubset(manifest.metadata.input_modalities):
             raise ValueError("model.inputs must be a subset of manifest input modalities")
@@ -42,12 +50,69 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
             raise ValueError("model.target must equal manifest target modality")
         manifest.validate(check_files_exist=True, require_splits={"test"})
         test_manifest = manifest.filter_split("test")
+        checkpoint_path = resolve_inference_checkpoint(config, session.paths)
+        checkpoint_sha256, _ = sha256_file_verified(checkpoint_path)
+
+        # Only the files fed to the predictor are consumed; for B_to_A the held-out aligned
+        # target is the domain-B source and the domain-A references are never read.
+        groups = load_set_groups(config.project)
+        source_names = inference_input_names(config)
+        if direction == "B_to_A":
+            rows = [
+                replace(row, role="input")
+                for row in paired_record_rows(
+                    test_manifest.records,
+                    input_names=(),
+                    target=config.model.target,
+                    include_mask=False,
+                    groups=groups,
+                )
+            ]
+        else:
+            rows = paired_record_rows(
+                test_manifest.records,
+                input_names=source_names,
+                target=None,
+                include_mask=False,
+                groups=groups,
+            )
+        generation = {
+            "method": config.method.to_dict(),
+            "model": config.model.to_dict(),
+            "image_size": list(config.project.image_size),
+            "direction": direction,
+        }
+        snapshot = build_snapshot(
+            rows,
+            kind="consumed",
+            adapter=PAIRED_INFER_ADAPTER,
+            roots={"dataset": config.project.dataset_root},
+            hash_policy=config.data.hash_policy,
+            group_validation=config.data.group_validation,
+            selection={"split": "test", "prediction_inputs": list(source_names)},
+            context={
+                "method": config.method.name,
+                "direction": direction,
+                "checkpoint_sha256": checkpoint_sha256,
+                "generation_config_sha256": sha256_json(generation),
+            },
+            sources={**manifest_sources(config.project), "checkpoint_path": str(checkpoint_path)},
+        )
+        session.bind_inputs(snapshot)
+
+        device = resolve_inference_device()
+        logger.info("Inference device: %s", device)
+        generator, checkpoint_path = load_inference_generator(
+            config, session.paths, device, checkpoint_path
+        )
+        transform = build_inference_transform(config.project.image_size)
         dataset = PairedManifestDataset(
             test_manifest, input_names=config.model.inputs, transform=transform
         )
         logger.info("Loaded manifest: %s test samples", len(dataset))
         session.result(
             checkpoint_path=str(checkpoint_path),
+            checkpoint_sha256=checkpoint_sha256,
             output_dir=str(output_dir),
             test_sample_count=len(test_manifest.records),
             device=str(device),
@@ -61,21 +126,46 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
                 "No test pairs found in manifest: %s",
                 DatasetLayout.from_project(config.project).manifest_path,
             )
-            return result
-
+        output_domain = config.model.inputs[0] if direction == "B_to_A" else config.model.target
+        produced: list[AssetRow] = []
         for idx in range(len(dataset)):
             sample = dataset[idx]
             if direction == "B_to_A":
-                # The aligned test target is only a convenient held-out domain-B source here.
                 inputs = {config.model.target: sample["target"].unsqueeze(0)}
             else:
-                inputs = {name: tensor.unsqueeze(0) for name, tensor in sample["inputs"].items()}
+                inputs = {name: sample["inputs"][name].unsqueeze(0) for name in source_names}
             record = test_manifest.records[idx]
             output = predict_batch(generator, inputs, device)[0]
             out_path = generated_path_for_record(record, output_dir, direction)
             save_image(output, out_path)
+            specimen, patient = groups.get(record.set_id, ("", ""))
+            produced.append(
+                AssetRow(
+                    root="output",
+                    locator=relative_locator(output_dir, out_path),
+                    role="generated",
+                    domain=output_domain,
+                    split=record.split,
+                    sample_id=record.sample_id,
+                    set_id=record.set_id,
+                    specimen_id=specimen,
+                    patient_id=patient,
+                )
+            )
             result.generated_paths.append(out_path)
             result.num_samples += 1
             session.result(inferred_count=result.num_samples)
+        outputs = session.record_outputs(
+            build_snapshot(
+                produced,
+                kind="produced",
+                adapter=INFER_OUTPUT_ADAPTER,
+                roots={"output": output_dir},
+                hash_policy=config.data.hash_policy,
+                selection={"direction": direction, "output_domain": output_domain},
+                context={"consumed_snapshot_id": snapshot.snapshot_id, **snapshot.context},
+            )
+        )
+        session.result(produced_snapshot_id=outputs["snapshot_id"])
     logger.info("Inference complete: %s samples -> %s", result.num_samples, output_dir)
     return result

@@ -23,7 +23,7 @@ upper layers may import from lower layers, never the reverse.
 | `config/` | Sole owner of YAML-facing dataclasses and strict parsers for every config section |
 | `experiment/` | Canonical `RunLayout` for one run, `ResultsLayout` for shared comparisons, stage snapshots, run metadata, manifest/config hashing, and environment snapshots |
 | `models/` | Network implementations (`ConcatUNetGenerator`, `ResnetGenerator`, `PatchGANDiscriminator`), factories, and the model-I/O normalization contract; no training state |
-| `data/` | Canonical `DatasetLayout`, slide sets, paired manifests, unpaired domain collections, dataset building, registration, and dataset-owned provenance/fingerprints |
+| `data/` | Canonical `DatasetLayout`, slide sets, paired manifests, unpaired domain collections, dataset building, registration, dataset-owned provenance/fingerprints, and the versioned consumed/produced-data snapshot format (`consumption.py`) |
 | `methods/` | The two built-in method runtimes (`Pix2PixMethod`, `CycleGANMethod`), each owning its topology, optimizers, losses, checkpoint state, component metadata, and inference loader; `registry.py` selects one from `method.name` |
 | `training/` | The `TrainingMethodRuntime` protocol, method-agnostic `Trainer`, generic `MethodCheckpointManager`, validation, history, the Pix2Pix configured-loss evaluator, and callback-driven progress events |
 | `inference/` | Checkpoint resolution, method dispatch to the method-owned loaders, CycleGAN direction resolution, generic single/directory/tiled/WSI inference, and output naming |
@@ -118,7 +118,10 @@ The architectural boundary is not “no I/O in library code.” The actual rule 
 - reusable package code should keep I/O explicit and testable
 - orchestration belongs in `applications/`
 The `ExperimentSession` owns each train/infer/evaluate lifecycle: stage snapshots,
-strict local metadata writes, and best-effort reporter callbacks. `RunLayout` owns
+strict local metadata writes, and best-effort reporter callbacks. Applications decide
+what a stage consumes: they resolve inputs once, build a consumed-data snapshot from
+those objects, and bind it with `session.bind_inputs()` before the stage starts; the
+session never infers stage inputs from which dataset files happen to exist. `RunLayout` owns
 one run's paths; `ResultsLayout` owns shared cross-run comparisons under
 `results/comparisons`. `applications.prepare` orchestrates dataset-local config and
 environment snapshots through the generic experiment snapshot helpers. Preparation

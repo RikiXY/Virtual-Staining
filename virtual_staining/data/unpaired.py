@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import glob
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +9,12 @@ import numpy as np
 from PIL import Image
 from torch.utils.data import Dataset
 
+from virtual_staining.data.consumption import (
+    AssetRow,
+    enrich_with_groups,
+    load_group_metadata,
+    relative_locator,
+)
 from virtual_staining.split_contract import DatasetSplit
 from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS
 
@@ -43,6 +49,47 @@ def resolve_domain_images(spec: str, split: DatasetSplit, dataset_root: Path) ->
             f"(pattern {full_pattern!r}; extensions {sorted(VALID_IMAGE_EXTENSIONS)})"
         )
     return tuple(paths)
+
+
+def resolve_domain_collections(
+    specs: Mapping[str, str],
+    dataset_root: Path,
+    *,
+    splits: Sequence[DatasetSplit],
+    roles: Mapping[str, str],
+    group_metadata: Path | None = None,
+) -> tuple[dict[tuple[DatasetSplit, str], tuple[Path, ...]], list[AssetRow], tuple[AssetRow, ...]]:
+    """Resolve each selected domain/split collection exactly once.
+
+    Returns the resolved paths (to hand to the consumer), their snapshot rows enriched with
+    any explicit ``group_metadata`` sidecar identities, and the sidecar entries themselves
+    (for split-leakage checks). Locators are relative to ``dataset_root``; a domain resolving
+    outside it is rejected.
+    """
+    groups = (
+        load_group_metadata(
+            group_metadata if group_metadata.is_absolute() else dataset_root / group_metadata
+        )
+        if group_metadata is not None
+        else ()
+    )
+    paths: dict[tuple[DatasetSplit, str], tuple[Path, ...]] = {}
+    rows: list[AssetRow] = []
+    for split in splits:
+        for domain, role in roles.items():
+            resolved = resolve_domain_images(specs[domain], split, dataset_root)
+            paths[split, domain] = resolved
+            rows.extend(
+                AssetRow(
+                    root="dataset",
+                    locator=relative_locator(dataset_root, path),
+                    role=role,
+                    domain=domain,
+                    split=split,
+                )
+                for path in resolved
+            )
+    return paths, enrich_with_groups(rows, groups), groups
 
 
 class UnpairedImageDataset(Dataset):

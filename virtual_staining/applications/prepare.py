@@ -8,6 +8,7 @@ from typing import Any
 from virtual_staining.config.data import PreprocessingConfig
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.builder import DatasetBuilder, DatasetBuildResult
+from virtual_staining.data.consumption import AssetRow, DataSnapshot, build_snapshot, write_snapshot
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.provenance import build_dataset_fingerprint_metadata
 from virtual_staining.data.slide_sets import SlideSet, resolve_slide_sets
@@ -17,9 +18,12 @@ from virtual_staining.experiment.snapshots import (
     save_stage_config_snapshots,
 )
 from virtual_staining.split_contract import DATASET_SPLITS
+from virtual_staining.utils.hashing import sha256_file
 from virtual_staining.utils.image_io import detect_openslide_format
 
 logger = logging.getLogger(__name__)
+
+PREPARE_ADAPTER = "slide_set_inventory/1"
 
 
 def _load_json(path: Path) -> dict[str, Any] | None:
@@ -31,19 +35,84 @@ def _load_json(path: Path) -> dict[str, Any] | None:
         return None
 
 
+def source_snapshot(config: RunConfig, slide_sets: tuple[SlideSet, ...]) -> DataSnapshot:
+    """Snapshot the raw inputs, targets, and supplied masks selected for preparation.
+
+    Splits are assigned by preparation itself, so rows carry no split and no cross-split
+    group claim is made here; the prepared stages validate their own split partitions.
+    """
+    assert config.preprocessing is not None
+    preprocessing = config.preprocessing
+    rows: list[AssetRow] = []
+    for item in slide_sets:
+        groups: dict[str, Any] = {
+            "set_id": item.set_id,
+            "specimen_id": item.specimen_id or "",
+            "patient_id": item.patient_id or "",
+        }
+        for role, asset in (*(("input", asset) for asset in item.inputs), ("target", item.target)):
+            rows.append(
+                AssetRow(
+                    root="dataset",
+                    locator=asset.path.as_posix(),
+                    role=role,
+                    domain=asset.modality,
+                    **groups,
+                )
+            )
+            if asset.mask_path is not None:
+                rows.append(
+                    AssetRow(
+                        root="dataset",
+                        locator=asset.mask_path.as_posix(),
+                        role="mask",
+                        domain=asset.modality,
+                        **groups,
+                    )
+                )
+    inventory = preprocessing.inputs.inventory
+    inventory_path = (
+        inventory if inventory.is_absolute() else preprocessing.dataset_root / inventory
+    )
+    return build_snapshot(
+        rows,
+        kind="consumed",
+        adapter=PREPARE_ADAPTER,
+        roots={"dataset": preprocessing.dataset_root},
+        hash_policy=config.data.hash_policy,
+        selection={
+            "modalities": list(preprocessing.inputs.modalities),
+            "reference": preprocessing.inputs.reference,
+            "target_modality": preprocessing.inputs.target_modality,
+            "split_unit": preprocessing.split.unit,
+        },
+        sources={"inventory": str(inventory), "inventory_sha256": sha256_file(inventory_path)},
+    )
+
+
 def _build_current_fingerprint(
-    config: RunConfig, slide_sets: tuple[SlideSet, ...]
+    config: RunConfig, slide_sets: tuple[SlideSet, ...], snapshot: DataSnapshot
 ) -> dict[str, Any]:
     assert config.preprocessing is not None
     layout = DatasetLayout(config.preprocessing.dataset_root)
-    return build_dataset_fingerprint_metadata(
+    root = layout.root.resolve()
+    verified = {
+        str((root / row.locator).resolve()): row.sha256
+        for row in snapshot.rows
+        if row.sha256 is not None
+    }
+    fingerprint = build_dataset_fingerprint_metadata(
         dataset_root=layout.root,
         preprocessing_config=config.preprocessing.to_dict(),
         slide_sets=slide_sets,
         inventory_path=layout.root / config.preprocessing.inputs.inventory,
         hash_cache_path=layout.input_hashes_path,
         force_hash_verification=config.preprocessing.inputs.hash_verification == "always",
+        verified_hashes=verified,
     )
+    # Cross-reference only; the fingerprint digest itself stays preparation lineage.
+    fingerprint["source_snapshot_id"] = snapshot.snapshot_id
+    return fingerprint
 
 
 def _dataset_outputs_are_complete(dataset_root: Path) -> bool:
@@ -126,7 +195,10 @@ def prepare(config: RunConfig, config_path: Path) -> DatasetBuildResult:
     save_config_hash(config_hash, layout.config_hash_path)
     save_environment_snapshot(layout.environment_path)
 
-    fingerprint = _build_current_fingerprint(config, slide_sets)
+    # Freeze and persist the selected raw assets before any reuse decision or build.
+    snapshot = source_snapshot(config, slide_sets)
+    write_snapshot(snapshot, layout.source_snapshot)
+    fingerprint = _build_current_fingerprint(config, slide_sets, snapshot)
     stored = _load_json(layout.dataset_fingerprint_path)
     result = None
     if (

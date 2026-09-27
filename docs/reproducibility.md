@@ -22,7 +22,11 @@ RunConfig.from_yaml(resolved_path) == config
 Sorted YAML keys make the resolved file and its `sha256:<hex>` hash stable for
 equivalent effective configurations, regardless of input key order. The hash
 identifies the resolved configuration bytes; it does not include source data or
-the software environment.
+the software environment. Source data is identified separately by each tracked stage's
+consumed-data snapshot (`metadata/consumed_data/<stage>/`), which lists the exact files
+the stage read with their roles, splits, group IDs, and (under the default
+`data.hash_policy: content`) verified SHA-256 digests; see
+[Run Output Format](run_format.md#consumed-data-snapshots).
 
 Each run stage writes `config/<stage>/input.yaml`,
 `config/<stage>/resolved.yaml`, and `metadata/environments/<stage>.json`.

@@ -70,6 +70,10 @@ def _write_smoke_config(tmp_path: Path, dataset_root: Path, *, run_name: str = "
         """\
         image_size: [64, 64]
 
+        # One slide set is patch-split, so no set-level independence can be claimed.
+        data:
+          group_validation: unavailable
+
         preprocessing:
           inputs:
             inventory: inputs/slide_sets.csv
@@ -203,11 +207,21 @@ def test_full_pipeline_smoke(tmp_path: Path) -> None:
     run_data = _read_json(run_root / "metadata" / "run.json")
     assert run_data["stages_present"] == ["train", "infer", "evaluate"]
     for stage in ("train", "infer", "evaluate"):
-        assert _read_json(run_root / "metadata" / "stages" / f"{stage}.json")["status"] == (
-            "completed"
-        )
+        record = _read_json(run_root / "metadata" / "stages" / f"{stage}.json")
+        assert record["status"] == "completed"
+        snapshot = _read_json(Path(record["consumed_data"]["metadata_path"]))
+        assert snapshot["snapshot_id"] == record["consumed_data"]["snapshot_id"]
+        assert snapshot["group_validation"]["status"] in {"unavailable", "not_applicable"}
         assert (run_root / "config" / stage / "resolved.yaml").is_file()
         assert (run_root / "metadata" / "environments" / f"{stage}.json").is_file()
+    assert (
+        run_data["training_data"]["snapshot_id"]
+        == _read_json(run_root / "metadata" / "stages" / "train.json")["consumed_data"][
+            "snapshot_id"
+        ]
+    )
+    assert metadata["generated_producer"]["status"] == "linked"
+    assert (dataset_root / "metadata" / "consumed_data" / "prepare" / "snapshot.json").is_file()
     assert (run_root / "logs" / "run.log").is_file()
     assert (run_root / "metrics" / "epochs.csv").is_file()
     for legacy in ("training.log", "train.csv", "validation.csv", "all.csv"):

@@ -21,6 +21,15 @@ data:
   domains:
     label_free: domains/label_free
     stained: "prepared/{split}/stained/**/*.tif"
+  # Consumed-data provenance. content hashes every consumed file (publication freeze);
+  # membership records locators/sizes only and is explicitly unverified.
+  hash_policy: content
+  # Raw domain folders carry no patient/specimen/set identity. Supply a sidecar CSV
+  # (path,domain,split,set_id,specimen_id,patient_id) to validate split independence:
+  # group_metadata: domains/groups.csv
+  # group_validation: auto
+  # Without one, independence must be disclaimed explicitly:
+  group_validation: unavailable
 
 # Domain A is model.inputs[0]; domain B is model.target.
 model:

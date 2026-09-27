@@ -3,10 +3,12 @@ from __future__ import annotations
 import csv
 import json
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from virtual_staining.data.consumption import AssetRow
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.split_contract import (
     DISCARDED_SPLIT,
@@ -15,6 +17,7 @@ from virtual_staining.split_contract import (
 from virtual_staining.split_contract import (
     ManifestSplit as Split,
 )
+from virtual_staining.utils.hashing import sha256_file
 
 if TYPE_CHECKING:
     from virtual_staining.config.project import ProjectConfig
@@ -320,3 +323,86 @@ def load_manifest_or_raise(project: ProjectConfig) -> DatasetManifest:
     return DatasetManifest.from_csv(
         manifest_path, dataset_root=project.dataset_root, metadata=metadata
     )
+
+
+def load_set_groups(project: ProjectConfig) -> dict[str, tuple[str, str]]:
+    """Map prepared ``set_id`` to ``(specimen_id, patient_id)`` from ``slide_sets.csv``.
+
+    Returns an empty mapping when the prepared dataset has no slide-set metadata; the rows
+    then carry only ``set_id`` and no stronger biological unit can be claimed.
+    """
+    path = DatasetLayout.from_project(project).slide_sets_path
+    if not path.is_file():
+        return {}
+    with path.open(newline="", encoding="utf-8") as handle:
+        return {
+            row["set_id"]: (
+                (row.get("specimen_id") or "").strip(),
+                (row.get("patient_id") or "").strip(),
+            )
+            for row in csv.DictReader(handle)
+        }
+
+
+def manifest_sources(project: ProjectConfig) -> dict[str, object]:
+    """Prepared-dataset lineage of a manifest-backed stage: manifest and preparation identity."""
+    layout = DatasetLayout.from_project(project)
+    fingerprint = None
+    if layout.dataset_fingerprint_path.is_file():
+        fingerprint = json.loads(layout.dataset_fingerprint_path.read_text(encoding="utf-8")).get(
+            "fingerprint"
+        )
+    return {
+        "manifest_path": str(layout.manifest_path),
+        "manifest_sha256": sha256_file(layout.manifest_path),
+        "dataset_fingerprint": fingerprint,
+    }
+
+
+def paired_record_rows(
+    records: Sequence[ManifestRecord],
+    *,
+    input_names: Sequence[str],
+    target: str | None,
+    include_mask: bool,
+    groups: Mapping[str, tuple[str, str]],
+) -> list[AssetRow]:
+    """Rows for the files a paired consumer actually reads from each manifest record."""
+    rows: list[AssetRow] = []
+    for record in records:
+        specimen, patient = groups.get(record.set_id, ("", ""))
+        common: dict[str, Any] = {
+            "root": "dataset",
+            "split": record.split,
+            "sample_id": record.sample_id,
+            "set_id": record.set_id,
+            "specimen_id": specimen,
+            "patient_id": patient,
+        }
+        for name in input_names:
+            rows.append(
+                AssetRow(
+                    locator=record.input_paths[name].as_posix(),
+                    role="input",
+                    domain=name,
+                    **common,
+                )
+            )
+        if target is not None:
+            rows.append(
+                AssetRow(
+                    locator=record.target_path.as_posix(), role="target", domain=target, **common
+                )
+            )
+        if include_mask:
+            if record.foreground_mask_path is None:
+                raise FileNotFoundError(f"Foreground mask path is missing for {record.sample_id!r}")
+            rows.append(
+                AssetRow(
+                    locator=record.foreground_mask_path.as_posix(),
+                    role="mask",
+                    domain="foreground_mask",
+                    **common,
+                )
+            )
+    return rows

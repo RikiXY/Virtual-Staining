@@ -36,17 +36,30 @@ dataset_root/
 │   ├── split_assignment.csv
 │   ├── excluded_sets.csv
 │   ├── dataset_build.json
-│   └── dataset_fingerprint.json
+│   ├── dataset_fingerprint.json
+│   └── consumed_data/prepare/{snapshot.json,rows.csv}
 └── discarded_patches/<set_id>/
 
 ```
 
 `metadata/dataset_build.json` is the successful dataset provenance record.
 `metadata/dataset_fingerprint.json` stores the semantic preprocessing,
-canonical inventory, source-file hashes, and a `sha256:` fingerprint. These
-dataset-owned artifacts are built by `data/provenance.py`. Experiment runs read
-this fingerprint and the manifest hash as lineage; they do not write generic
-run, event, or stage metadata into the dataset directory.
+canonical inventory, source-file hashes, and a `sha256:` fingerprint. It is
+preparation lineage: it answers what dataset this configuration and these sources
+build, and it decides whether an existing complete dataset can be reused. These
+dataset-owned artifacts are built by `data/provenance.py`.
+
+`metadata/consumed_data/prepare/` is the consumed-data snapshot of the raw assets the
+last preparation attempt selected: every input slide, target slide, and supplied mask
+with its modality and set/specimen/patient IDs (format in
+[Run Output Format](run_format.md#consumed-data-snapshots)). It is written before any
+reuse decision or build. Under `data.hash_policy: content` its verified digests feed
+the fingerprint in place of the size/mtime hash cache, so reuse is claimed only after
+the selected sources were re-verified; the fingerprint records the snapshot as
+`source_snapshot_id`. Splits are assigned during preparation, so this snapshot makes
+no cross-split claim. Experiment runs record the manifest hash and fingerprint as
+`sources` of their own stage snapshots; they do not write generic run, event, or stage
+metadata into the dataset directory.
 
 Every non-reference input and the target is aligned directly to the reference
 coordinate frame. No full aligned whole-slide image is created.

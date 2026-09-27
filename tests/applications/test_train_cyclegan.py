@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ from tests.image_helpers import write_rgb_image
 from virtual_staining.applications.train import train
 from virtual_staining.checkpoint_contract import CheckpointCompatibilityError
 from virtual_staining.config.run import RunConfig
+from virtual_staining.data.consumption import load_snapshot
 from virtual_staining.experiment.run_layout import RunLayout
 
 
@@ -21,12 +23,13 @@ def _write_domains(dataset_root: Path) -> None:
         "prepared/{split}/stained": {"train": 5, "val": 1},
     }
     for pattern, counts in layouts.items():
-        for split, count in counts.items():
+        for split_index, (split, count) in enumerate(counts.items()):
             for index in range(count):
+                # Distinct bytes per split: identical content across splits is leakage.
                 write_rgb_image(
                     dataset_root / pattern.format(split=split) / f"{index}.png",
                     size=(40, 36),
-                    color=(40 * index, 100, 200 - 30 * index),
+                    color=(40 * index, 100 + split_index, 200 - 30 * index),
                 )
 
 
@@ -104,3 +107,36 @@ def test_resume_rejects_a_changed_linear_decay_horizon(
     second_path = _config(tmp_path, "second", epochs=2, resume="latest", scheduler=linear)
     with pytest.raises(CheckpointCompatibilityError, match=r"scheduler\.epochs is 1 .* but 2"):
         train(RunConfig.from_yaml(second_path), second_path)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda root: write_rgb_image(
+            root / "domains/label_free/val/0.png", size=(40, 36), color=(1, 2, 3)
+        ),
+        lambda root: write_rgb_image(
+            root / "domains/label_free/train/9.png", size=(40, 36), color=(9, 9, 9)
+        ),
+        lambda root: (root / "prepared/train/stained/4.png").unlink(),
+    ],
+    ids=["validation-content", "train-added", "train-removed"],
+)
+def test_resume_rejects_changed_training_data_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutate: Any
+) -> None:
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    root = tmp_path / "dataset"
+    _write_domains(root)
+    first_path = _config(tmp_path, "first", epochs=1, resume=None)
+    train(RunConfig.from_yaml(first_path), first_path)
+    layout = RunLayout.from_project(RunConfig.from_yaml(first_path).project)
+    bound = json.loads(layout.run_metadata.read_text())["training_data"]["snapshot_id"]
+
+    mutate(root)
+    second_path = _config(tmp_path, "second", epochs=2, resume="latest")
+    with pytest.raises(ValueError, match="conflicts with the existing run identity"):
+        train(RunConfig.from_yaml(second_path), second_path)
+    assert json.loads(layout.run_metadata.read_text())["training_data"]["snapshot_id"] == bound
+    assert load_snapshot(layout.consumed_data("train")).snapshot_id == bound
+    assert not (layout.checkpoints_dir / "ep001.pth").exists()
