@@ -5,12 +5,8 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from tests.config_helpers import cyclegan_config_data, write_config_data
-from virtual_staining.config.method import MethodConfig
-from virtual_staining.config.model import ModelConfig
-from virtual_staining.config.project import ProjectConfig
+from tests.config_helpers import cyclegan_config_data, pix2pix_config_data, write_config_data
 from virtual_staining.config.run import RunConfig
-from virtual_staining.config.training import TrainingConfig
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.methods.cyclegan import CycleGANMethod
 from virtual_staining.methods.pix2pix import Pix2PixMethod
@@ -30,43 +26,17 @@ def test_unpack_batch_preserves_named_inputs_and_validates_shapes() -> None:
     assert masks["foreground_mask"].shape == (2, 1, 8, 8)
 
 
+def _pix2pix_config(tmp_path: Path, inputs: tuple[str, ...]) -> RunConfig:
+    data = pix2pix_config_data(tmp_path, inputs=inputs, image_size=(8, 8))
+    data["training"]["epochs"] = 1
+    return RunConfig.from_mapping(data)
+
+
 def test_trainer_requires_named_generator(tmp_path: Path) -> None:
-    project = ProjectConfig(
-        dataset_root=tmp_path / "dataset",
-        results_path=tmp_path / "results",
-        run_name="run",
-        image_size=(8, 8),
-    )
-    paths = RunLayout.from_project(project)
+    run_config = _pix2pix_config(tmp_path, ("LF", "AF"))
+    assert run_config.training is not None
+    paths = RunLayout.from_project(run_config.project)
     ensure_run_directories(paths)
-    training = TrainingConfig(
-        batch_size=1,
-        epochs=1,
-        lr_g=2e-4,
-        lr_d=2e-4,
-        beta1=0.5,
-        beta2=0.999,
-        seed=0,
-        num_workers=0,
-        validate_rate=1,
-        checkpoint_rate=1,
-    )
-    run_config = RunConfig(
-        project=project,
-        method=MethodConfig(),
-        model=ModelConfig.from_mapping(
-            {
-                "inputs": ["LF", "AF"],
-                "target": "stained",
-                "generator": {"base_channels": 4},
-                "discriminator": {"ndf": 4},
-            }
-        ),
-        training=training,
-        inference=None,
-        preprocessing=None,
-        evaluation=None,
-    )
     method = Pix2PixMethod(run_config, torch.device("cpu"))
     sample = {
         "inputs": {"LF": torch.zeros(1, 3, 8, 8), "AF": torch.zeros(1, 3, 8, 8)},
@@ -75,51 +45,24 @@ def test_trainer_requires_named_generator(tmp_path: Path) -> None:
     }
     loader = DataLoader([sample], batch_size=1)  # pyright: ignore[reportArgumentType]
     trainer = Trainer(
-        training,
+        run_config.training,
         paths,
         method,
         loader,
         loader,
         torch.device("cpu"),
         config_hash="sha256:test",
-        image_size=(8, 8),
     )
     assert trainer.method.name == "pix2pix"
     assert method.generator.input_names == ("LF", "AF")
 
 
 def test_trainer_resumes_from_v4_checkpoint_at_next_epoch(tmp_path: Path) -> None:
-    project = ProjectConfig(
-        dataset_root=tmp_path / "dataset",
-        results_path=tmp_path / "results",
-        run_name="run",
-        image_size=(8, 8),
-    )
-    paths = RunLayout.from_project(project)
+    run_config = _pix2pix_config(tmp_path, ("LF",))
+    training = run_config.training
+    assert training is not None
+    paths = RunLayout.from_project(run_config.project)
     ensure_run_directories(paths)
-    training = TrainingConfig(
-        batch_size=1,
-        epochs=1,
-        lr_g=2e-4,
-        lr_d=2e-4,
-        beta1=0.5,
-        beta2=0.999,
-        seed=0,
-        num_workers=0,
-        validate_rate=1,
-        checkpoint_rate=1,
-    )
-    run_config = RunConfig(
-        project=project,
-        method=MethodConfig(),
-        model=ModelConfig.from_mapping(
-            {"inputs": ["LF"], "target": "stained", "generator": {"base_channels": 4}}
-        ),
-        training=training,
-        inference=None,
-        preprocessing=None,
-        evaluation=None,
-    )
     loader = DataLoader([], batch_size=1)  # pyright: ignore[reportArgumentType]
 
     def build() -> Trainer:
@@ -131,7 +74,6 @@ def test_trainer_resumes_from_v4_checkpoint_at_next_epoch(tmp_path: Path) -> Non
             loader,
             torch.device("cpu"),
             config_hash="sha256:test",
-            image_size=(8, 8),
         )
 
     build()._checkpoints.save(2)
@@ -170,7 +112,6 @@ def test_trainer_calls_optional_dataset_epoch_hook(tmp_path: Path) -> None:
         loader,
         torch.device("cpu"),
         config_hash="sha256:test",
-        image_size=config.project.image_size,
     )
 
     trainer.train(seed=0)

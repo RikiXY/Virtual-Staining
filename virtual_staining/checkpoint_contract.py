@@ -26,7 +26,7 @@ def _canonical(value: Any) -> Any:
 
 
 _MISSING = "<missing>"
-_IDENTITY_KEYS = frozenset({"name", "class"})
+_IDENTITY_KEYS = frozenset({"name", "source", "version"})
 
 
 def first_difference(stored: Any, current: Any, path: str) -> tuple[str, Any, Any] | None:
@@ -52,13 +52,21 @@ def first_difference(stored: Any, current: Any, path: str) -> tuple[str, Any, An
 
 @dataclass(frozen=True)
 class CheckpointIdentity:
-    """Semantic identity a checkpoint must match before method state is loaded."""
+    """Semantic identity a checkpoint must match before method state is loaded.
+
+    ``method``/``implementation`` name the registered method definition and its version
+    and source; ``options`` holds method-level reconstruction options and ``components``
+    the registered identity and normalized constructor options of every persisted
+    component. Names are compared, never imported.
+    """
 
     method: str
+    implementation: Mapping[str, object]
     pairing: str
     inputs: tuple[str, ...]
     outputs: tuple[str, ...]
     prediction_directions: tuple[str, ...]
+    options: Mapping[str, object]
     components: Mapping[str, object]
     image_size: tuple[int, int]
     normalization: Mapping[str, object] = field(default_factory=lambda: NORMALIZATION_CONTRACT)
@@ -67,17 +75,32 @@ class CheckpointIdentity:
         return _canonical(
             {
                 "name": self.method,
+                "implementation": self.implementation,
                 "pairing": self.pairing,
                 "inputs": self.inputs,
                 "outputs": self.outputs,
                 "prediction_directions": self.prediction_directions,
+                "options": self.options,
                 "components": self.components,
             }
         )
 
 
+_METHOD_METADATA_KEYS = (
+    "name",
+    "implementation",
+    "pairing",
+    "inputs",
+    "outputs",
+    "prediction_directions",
+    "options",
+    "components",
+)
+
+
 @dataclass(frozen=True)
 class ValidatedCheckpoint:
+    path: Path
     epoch: int
     state: Mapping[str, Any]
     config_hash: str | None
@@ -164,10 +187,11 @@ def validate_checkpoint(
 
     stored_method = _require_mapping(payload, "method", path)
     current_method = expected.method_metadata()
-    for key in ("name", "pairing", "inputs", "outputs", "prediction_directions", "components"):
+    for key in _METHOD_METADATA_KEYS:
         if key not in stored_method:
             raise CheckpointCompatibilityError(
-                f"Checkpoint '{path}' is missing method.{key} metadata."
+                f"Checkpoint '{path}' is missing method.{key} metadata; checkpoints without "
+                "explicit method-definition identity are unsupported. Retrain with current code."
             )
         _check_equal(f"method.{key}", stored_method[key], current_method[key], path)
     if set(stored_method) != set(current_method):
@@ -196,4 +220,4 @@ def validate_checkpoint(
             f"Checkpoint '{path}' has malformed method state; expected a non-empty mapping "
             "with string keys."
         )
-    return ValidatedCheckpoint(epoch=epoch, state=state, config_hash=config_hash)
+    return ValidatedCheckpoint(path=path, epoch=epoch, state=state, config_hash=config_hash)

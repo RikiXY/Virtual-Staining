@@ -15,9 +15,10 @@ infrastructure:
   discriminators (LSGAN, cycle L1, optional identity L1, replay pools); `A_to_B` and
   `B_to_A` inference from the same checkpoint.
 
-The method is selected with `method.name` in the run config. Only these two built-in methods
-are supported; there is no plugin mechanism for additional models or methods, and
-translation is always to exactly one target.
+The method is selected with `method.name` in the run config. The stock CLI ships only
+these two built-in methods. Python callers can register further methods and network
+components explicitly (see [`docs/library_api.md`](docs/library_api.md#extending-with-explicit-definitions));
+there is no plugin discovery, and translation is always to exactly one target.
 
 ## CLI Commands
 

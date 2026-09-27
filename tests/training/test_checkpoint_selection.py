@@ -187,6 +187,50 @@ def test_legacy_single_record_is_rejected_actionably(tmp_path: Path) -> None:
         load_best_checkpoint_record(tmp_path, policy="best", metric="loss_G_val")
 
 
+def test_records_carry_method_owned_objective_metadata_verbatim(tmp_path: Path) -> None:
+    checkpoint = _checkpoint(tmp_path, 1)
+    metadata = {"objective": "l1", "weights": [1.0, 0.5]}
+    update_checkpoint_selection(
+        tmp_path,
+        metrics={"val_custom": 0.3},
+        modes={"val_custom": "min"},
+        top_k=1,
+        epoch=1,
+        checkpoint_path=checkpoint,
+        objective_metadata=metadata,
+    )
+
+    payload = _payload(tmp_path)
+    assert CHECKPOINT_SELECTION_SCHEMA_VERSION == payload["schema_version"] == 2
+    assert payload["metrics"]["val_custom"]["best"]["objective_metadata"] == metadata
+    assert "loss_config" not in payload["metrics"]["val_custom"]["best"]
+
+
+def test_schema_version_1_loss_config_records_are_rejected_not_converted(tmp_path: Path) -> None:
+    checkpoint = _checkpoint(tmp_path, 1)
+    record = {"epoch": 1, "checkpoint_path": checkpoint.name, "metric_value": 0.4, "rank": 1}
+    original = json.dumps(
+        {
+            "schema_version": 1,
+            "metrics": {
+                "loss_G_val": {
+                    "mode": "min",
+                    "top_k": 1,
+                    "records": [{**record, "loss_config": {"generator": []}}],
+                    "best": record,
+                }
+            },
+        }
+    )
+    (tmp_path / "best.json").write_text(original, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unsupported checkpoint selection schema_version 1"):
+        load_best_checkpoint_record(tmp_path, policy="best", metric="loss_G_val")
+    with pytest.raises(ValueError, match="Unsupported checkpoint selection schema_version 1"):
+        _update(tmp_path, _checkpoint(tmp_path, 2), epoch=2, metric="loss_G_val", value=0.1)
+    assert (tmp_path / "best.json").read_text(encoding="utf-8") == original
+
+
 def test_unknown_future_schema_is_rejected_actionably(tmp_path: Path) -> None:
     (tmp_path / "best.json").write_text(
         json.dumps({"schema_version": CHECKPOINT_SELECTION_SCHEMA_VERSION + 1, "metrics": {}}),

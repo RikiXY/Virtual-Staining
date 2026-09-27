@@ -232,7 +232,7 @@ training:
 
   # Optional; default: absent/null = no early stopping (this experiment).
   # early_stopping:
-  #   monitor: loss_G_val # default val_ssim, which CycleGAN rejects, so set it. A
+  #   monitor: loss_G_val # required for CycleGAN (it has no default monitor). A
   #                       # validation CSV column: loss_G_val, loss_D_val,
   #                       # loss_val_total_{generator|discriminator}, or
   #                       # loss_val_{raw|weighted|current_weight}_{generator|discriminator}_<loss>

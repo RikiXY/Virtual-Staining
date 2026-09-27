@@ -38,6 +38,7 @@ def test_history_writes_one_union_csv_and_flushes(tmp_path: Path) -> None:
         resume_at=0,
         metric_names=("loss_G", "loss_D"),
         component_total_names=("generator", "discriminator"),
+        validation_metric_names=VALIDATION_IMAGE_METRIC_NAMES,
     ) as history:
         reported = history.write_epoch(0, *_metrics(0))
         assert path.read_text(encoding="utf-8").count("\n") == 2
@@ -59,6 +60,7 @@ def test_history_blanks_validation_columns_when_validation_does_not_run(tmp_path
         resume_at=0,
         metric_names=("loss_G", "loss_D"),
         component_total_names=("generator", "discriminator"),
+        validation_metric_names=VALIDATION_IMAGE_METRIC_NAMES,
     ) as history:
         history.write_epoch(0, *_metrics(0, validation=False))
     row = next(csv.DictReader(path.open(newline="", encoding="utf-8")))
@@ -74,6 +76,7 @@ def test_resume_reconciles_epoch_history(tmp_path: Path) -> None:
         resume_at=0,
         metric_names=("loss_G", "loss_D"),
         component_total_names=("generator", "discriminator"),
+        validation_metric_names=VALIDATION_IMAGE_METRIC_NAMES,
     ) as history:
         for epoch in range(3):
             history.write_epoch(epoch, *_metrics(epoch))
@@ -84,6 +87,7 @@ def test_resume_reconciles_epoch_history(tmp_path: Path) -> None:
         resume_at=2,
         metric_names=("loss_G", "loss_D"),
         component_total_names=("generator", "discriminator"),
+        validation_metric_names=VALIDATION_IMAGE_METRIC_NAMES,
     ) as history:
         history.write_epoch(2, *_metrics(9))
     rows = list(csv.DictReader(path.open(newline="", encoding="utf-8")))
@@ -103,6 +107,7 @@ def test_resume_rejects_missing_gapped_duplicate_and_mismatched_history(tmp_path
             resume_at=1,
             metric_names=("loss_G", "loss_D"),
             component_total_names=("generator", "discriminator"),
+            validation_metric_names=VALIDATION_IMAGE_METRIC_NAMES,
         ),
     ):
         pass
@@ -115,6 +120,7 @@ def test_resume_rejects_missing_gapped_duplicate_and_mismatched_history(tmp_path
             resume_at=1,
             metric_names=("loss_G", "loss_D"),
             component_total_names=("generator", "discriminator"),
+            validation_metric_names=VALIDATION_IMAGE_METRIC_NAMES,
         ),
     ):
         pass
@@ -140,6 +146,7 @@ def test_resume_rejects_missing_gapped_duplicate_and_mismatched_history(tmp_path
             resume_at=2,
             metric_names=("loss_G", "loss_D"),
             component_total_names=("generator", "discriminator"),
+            validation_metric_names=VALIDATION_IMAGE_METRIC_NAMES,
         ),
     ):
         pass
@@ -174,6 +181,7 @@ def test_resume_rejects_duplicate_and_malformed_epochs(
             resume_at=2,
             metric_names=("loss_G", "loss_D"),
             component_total_names=("generator", "discriminator"),
+            validation_metric_names=VALIDATION_IMAGE_METRIC_NAMES,
         ),
     ):
         pass

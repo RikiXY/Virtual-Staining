@@ -6,13 +6,19 @@ from typing import Any, Protocol
 
 import torch
 
-from virtual_staining.config.losses import LossConfig
+from virtual_staining.checkpoint_contract import CheckpointIdentity
 from virtual_staining.training.preview import ValidationPreviewSink
 
 
 @dataclass(frozen=True)
 class MethodMetrics:
-    """Named method-owned metrics returned to generic training orchestration."""
+    """Named method-owned metrics returned to generic training orchestration.
+
+    ``losses`` holds the method's objective scalars (``metric_names``), written as
+    ``<name>_train``/``<name>_val``. ``component_totals`` and the ``raw``/``weighted``/
+    ``current_weight`` maps hold optional per-term diagnostics keyed by ``loss_names``.
+    ``image`` holds further validation scalars keyed by ``validation_metric_names``.
+    """
 
     losses: dict[str, float]
     component_totals: dict[str, float] = field(default_factory=dict)
@@ -23,18 +29,14 @@ class MethodMetrics:
 
 
 class TrainingMethodRuntime(Protocol):
-    """Behavior owned by one concrete translation method during training."""
+    """Behavior owned by one concrete translation method during training.
+
+    The method owns its topology, objectives, optimizers and state; ``Trainer`` owns the
+    epoch, validation, checkpoint and history lifecycle and never inspects either.
+    """
 
     @property
     def name(self) -> str: ...
-    @property
-    def pairing(self) -> str: ...
-    @property
-    def input_names(self) -> tuple[str, ...]: ...
-    @property
-    def output_names(self) -> tuple[str, ...]: ...
-    @property
-    def prediction_directions(self) -> tuple[str, ...]: ...
     @property
     def default_checkpoint_metric(self) -> str: ...
     @property
@@ -44,7 +46,7 @@ class TrainingMethodRuntime(Protocol):
     @property
     def loss_names(self) -> Sequence[str]: ...
     @property
-    def loss_config(self) -> LossConfig: ...
+    def validation_metric_names(self) -> Sequence[str]: ...
 
     def train_mode(self) -> None: ...
     def batch_size(self, batch: object) -> int: ...
@@ -66,6 +68,10 @@ class TrainingMethodRuntime(Protocol):
         validation_metrics: MethodMetrics | None,
     ) -> bool: ...
     def learning_rates(self) -> Mapping[str, float]: ...
-    def component_metadata(self) -> Mapping[str, object]: ...
+    def checkpoint_identity(self) -> CheckpointIdentity: ...
+    def objective_metadata(self) -> dict[str, Any] | None:
+        """Optional JSON-compatible objective provenance recorded in ``best.json``."""
+        ...
+
     def state_dict(self) -> dict[str, Any]: ...
     def load_state_dict(self, state: Mapping[str, Any]) -> None: ...

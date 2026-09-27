@@ -1,5 +1,5 @@
-"""Built-in image-translation method implementations."""
+"""Image-translation methods: explicit definitions plus the built-in implementations.
 
-from virtual_staining.methods.registry import resolve_training_method
-
-__all__ = ["resolve_training_method"]
+The extension API lives in ``virtual_staining.definitions``; import
+``virtual_staining.methods.builtin`` for the built-in definition set.
+"""

@@ -8,7 +8,6 @@ import torch
 from tests.config_helpers import write_yaml
 from virtual_staining.config.run import RunConfig
 from virtual_staining.methods.pix2pix import Pix2PixMethod
-from virtual_staining.methods.registry import resolve_training_method
 
 
 def _yaml(root: Path, *, method: str | None = None, extra_method: str = "") -> Path:
@@ -50,7 +49,7 @@ def test_method_defaults_to_pix2pix_and_is_persisted_in_resolved_config(tmp_path
 
 
 def test_method_config_rejects_unknown_method(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="method.name must be one of"):
+    with pytest.raises(ValueError, match="'stylegan' is not a registered method definition"):
         RunConfig.from_yaml(_yaml(tmp_path, method="stylegan"))
 
 
@@ -65,21 +64,23 @@ def test_method_config_rejects_dynamic_plugin_fields(tmp_path: Path) -> None:
         )
 
 
-def test_resolver_builds_pix2pix_runtime_without_exposing_optimizer_count(
+def test_definition_builds_pix2pix_runtime_without_exposing_optimizer_count(
     tmp_path: Path,
 ) -> None:
     config = RunConfig.from_yaml(_yaml(tmp_path))
 
-    method = resolve_training_method(config, torch.device("cpu"))
+    method = config.method.definition.build_training_runtime(config, torch.device("cpu"), seed=0)
 
     assert isinstance(method, Pix2PixMethod)
     assert method.name == "pix2pix"
-    assert method.pairing == "paired"
-    assert method.prediction_directions == ("forward",)
     assert not hasattr(method, "optimizers")
-    assert method.input_names == ("source",)
-    assert method.output_names == ("target",)
-    assert set(method.component_metadata()) == {"generator", "discriminator"}
+    identity = method.checkpoint_identity()
+    assert identity.pairing == "paired"
+    assert identity.prediction_directions == ("forward",)
+    assert identity.inputs == ("source",)
+    assert identity.outputs == ("target",)
+    assert set(identity.components) == {"generator", "discriminator"}
+    assert method.objective_metadata() == config.to_dict()["training"]["losses"]
 
 
 def test_pix2pix_method_state_round_trip(tmp_path: Path) -> None:

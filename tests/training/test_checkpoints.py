@@ -13,6 +13,7 @@ import virtual_staining.training.checkpoints as training_checkpoints
 from virtual_staining.checkpoint_contract import (
     CHECKPOINT_FORMAT_VERSION,
     CheckpointCompatibilityError,
+    CheckpointIdentity,
 )
 from virtual_staining.checkpoint_selection import (
     RANKED_CHECKPOINT_POLICIES,
@@ -87,6 +88,9 @@ class _FakeMethod:
 
     def __init__(self, **overrides: Any) -> None:
         self.name = overrides.get("name", "fake")
+        self.implementation = overrides.get("implementation", {"version": "1", "source": "tests"})
+        self.options = overrides.get("options", {"flavour": "plain"})
+        self.image_size = overrides.get("image_size", (16, 16))
         self.pairing = overrides.get("pairing", "unpaired")
         self.input_names = overrides.get("input_names", ("left", "right"))
         self.output_names = overrides.get("output_names", ("middle",))
@@ -103,8 +107,18 @@ class _FakeMethod:
         self.counter = overrides.get("counter", 123)
         self.loaded_states: list[Mapping[str, Any]] = []
 
-    def component_metadata(self) -> Mapping[str, object]:
-        return self.components
+    def checkpoint_identity(self) -> CheckpointIdentity:
+        return CheckpointIdentity(
+            method=self.name,
+            implementation=self.implementation,
+            pairing=self.pairing,
+            inputs=self.input_names,
+            outputs=self.output_names,
+            prediction_directions=self.prediction_directions,
+            options=self.options,
+            components=self.components,
+            image_size=self.image_size,
+        )
 
     def state_dict(self) -> dict[str, Any]:
         return {
@@ -121,14 +135,9 @@ class _FakeMethod:
         self.counter = state["custom_runtime_state"]["counter"]
 
 
-def _fake_manager(
-    root: Path, method: _FakeMethod, image_size: tuple[int, int] = (16, 16)
-) -> MethodCheckpointManager:
+def _fake_manager(root: Path, method: _FakeMethod) -> MethodCheckpointManager:
     return MethodCheckpointManager(
-        cast(TrainingMethodRuntime, method),
-        root,
-        image_size=image_size,
-        config_hash="sha256:abc",
+        cast(TrainingMethodRuntime, method), root, config_hash="sha256:abc"
     )
 
 
@@ -149,10 +158,12 @@ def test_generic_checkpoint_round_trips_arbitrary_method_state(tmp_path: Path) -
     assert payload["epoch"] == 7
     assert payload["method"] == {
         "name": "fake",
+        "implementation": {"version": "1", "source": "tests"},
         "pairing": "unpaired",
         "inputs": ["left", "right"],
         "outputs": ["middle"],
         "prediction_directions": ["sideways"],
+        "options": {"flavour": "plain"},
         "components": {
             "alpha": {"class": "Alpha", "width": 3},
             "beta": {"class": "Beta", "depth": 2},
@@ -175,6 +186,15 @@ def test_generic_checkpoint_round_trips_arbitrary_method_state(tmp_path: Path) -
 
 _IDENTITY_MISMATCHES: dict[str, tuple[dict[str, Any], str]] = {
     "method": ({"name": "other"}, "method.name"),
+    "implementation_version": (
+        {"implementation": {"version": "2", "source": "tests"}},
+        "method.implementation.version",
+    ),
+    "implementation_source": (
+        {"implementation": {"version": "1", "source": "elsewhere"}},
+        "method.implementation.source",
+    ),
+    "method_options": ({"options": {"flavour": "spicy"}}, "method.options.flavour"),
     "pairing": ({"pairing": "paired"}, "method.pairing"),
     "input_order": ({"input_names": ("right", "left")}, r"method.inputs\[0\]"),
     "input_set": ({"input_names": ("left",)}, "method.inputs"),
@@ -218,8 +238,9 @@ def test_semantic_mismatch_is_rejected_before_state_loading(tmp_path: Path, case
 def test_image_size_mismatch_is_rejected_before_state_loading(tmp_path: Path) -> None:
     path = _fake_manager(tmp_path, _FakeMethod()).save(0)
     target = _FakeMethod()
+    target.image_size = (32, 16)
     with pytest.raises(CheckpointCompatibilityError, match="image_size"):
-        _fake_manager(tmp_path, target, image_size=(32, 16)).load(path)
+        _fake_manager(tmp_path, target).load(path)
     assert target.loaded_states == []
 
 
@@ -254,6 +275,13 @@ _PAYLOAD_MUTATIONS: dict[str, tuple[Callable[[dict[str, Any]], object], str]] = 
     "missing_method": (
         lambda payload: {k: v for k, v in payload.items() if k != "method"},
         "'method' metadata",
+    ),
+    "missing_implementation": (
+        lambda payload: {
+            **payload,
+            "method": {k: v for k, v in payload["method"].items() if k != "implementation"},
+        },
+        "missing method.implementation metadata; checkpoints without explicit",
     ),
     "missing_pairing": (
         lambda payload: {

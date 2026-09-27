@@ -145,7 +145,7 @@ def test_pix2pix_protocol_defaults_to_paired_and_accepts_explicit_paired(tmp_pat
 
 
 def test_pix2pix_rejects_unpaired_protocol(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="requires method.name='cyclegan'"):
+    with pytest.raises(ValueError, match="protocol='unpaired' requires data.pairing='unpaired'"):
         _pix2pix_config(tmp_path, "evaluation:\n  protocol: unpaired")
 
 

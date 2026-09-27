@@ -1,47 +1,83 @@
+"""Generic ``training.*`` lifecycle keys plus the Pix2Pix-owned optimization keys.
+
+Both are resolved through ``RunConfig.from_mapping``: the framework parses the lifecycle
+keys and the selected method definition parses the keys it owns.
+"""
+
 from __future__ import annotations
 
-from typing import get_args
+from pathlib import Path
+from typing import Any, get_args
 
 import pytest
 
-from virtual_staining.config.losses import LossName
+from tests.config_helpers import pix2pix_config_data
+from virtual_staining.config.losses import LossName, parse_loss_config
+from virtual_staining.config.run import RunConfig
 from virtual_staining.config.training import TrainingConfig
 from virtual_staining.loss_definitions import LOSS_DEFINITIONS
+from virtual_staining.methods.builtin import GanTrainingOptions, Pix2PixDefinition
+
+_LOSSES = {
+    "generator": [
+        {"name": "adversarial_bce", "weight": 1.0},
+        {"name": "l1", "weight": 25.0},
+    ],
+    "discriminator": [{"name": "adversarial_bce", "weight": 1.0}],
+}
 
 
-def _mapping(**overrides: object) -> dict[str, object]:
-    data: dict[str, object] = {
-        "epochs": 100,
-        "losses": {
-            "generator": [
-                {"name": "adversarial_bce", "weight": 1.0},
-                {"name": "l1", "weight": 25.0},
-            ],
-            "discriminator": [{"name": "adversarial_bce", "weight": 1.0}],
-        },
-    }
-    data.update(overrides)
-    return data
+def _resolve(**overrides: object) -> RunConfig:
+    data = pix2pix_config_data(Path("unused"))
+    data["training"] = {"epochs": 100, "losses": _LOSSES, **overrides}
+    return RunConfig.from_mapping(data)
 
 
-def test_training_owns_nested_configs_and_round_trips() -> None:
-    config = TrainingConfig.from_mapping(
-        _mapping(
-            scheduler={"name": "linear_decay", "decay_start_epoch": 50},
-            early_stopping={"monitor": "val_ssim", "patience": 10},
-            augmentation={"enabled": True, "expansion_factor": 3, "intensity": "medium"},
-        )
+def _training(**overrides: object) -> TrainingConfig:
+    config = _resolve(**overrides)
+    assert config.training is not None
+    return config.training
+
+
+def _optimization(**overrides: object) -> GanTrainingOptions:
+    optimization = _resolve(**overrides).method.options.training
+    assert optimization is not None
+    return optimization
+
+
+def test_training_sections_round_trip() -> None:
+    config = _resolve(
+        scheduler={"name": "linear_decay", "decay_start_epoch": 50},
+        early_stopping={"monitor": "val_ssim", "patience": 10},
+        augmentation={"enabled": True, "expansion_factor": 3, "intensity": "medium"},
     )
+    training = config.training
+    optimization = config.method.options.training
 
-    assert config.scheduler.name == "linear_decay"
-    assert config.early_stopping is not None
-    assert config.augmentation.effective_expansion_factor == 3
-    assert config.losses.generator[1].name == "l1"
-    assert TrainingConfig.from_mapping(config.to_dict()) == config
+    assert optimization.scheduler.name == "linear_decay"
+    assert training is not None and training.early_stopping is not None
+    assert training.augmentation.effective_expansion_factor == 3
+    assert optimization.losses.generator[1].name == "l1"
+    data = pix2pix_config_data(Path("unused"))
+    data["training"] = config.to_dict()["training"]
+    assert RunConfig.from_mapping(data).to_dict() == config.to_dict()
+
+
+def test_generic_training_config_holds_only_lifecycle_fields() -> None:
+    assert set(_training().to_dict()) == {
+        "batch_size",
+        "epochs",
+        "num_workers",
+        "validate_rate",
+        "checkpoint_rate",
+        "checkpoint_top_k",
+        "log_rate",
+        "augmentation",
+    }
 
 
 def test_training_resolves_defaults() -> None:
-    data = TrainingConfig.from_mapping(_mapping()).to_dict()
+    data = _resolve().to_dict()["training"]
     assert data["batch_size"] == 8
     assert data["scheduler"] == {"name": "none"}
     assert data["augmentation"] == {
@@ -53,27 +89,31 @@ def test_training_resolves_defaults() -> None:
 
 @pytest.mark.parametrize("name", ["none", "linear_decay", "reduce_on_plateau"])
 def test_training_accepts_scheduler_choices(name: str) -> None:
-    config = TrainingConfig.from_mapping(
-        _mapping(scheduler={"name": name, "decay_start_epoch": 50})
-    )
-    assert config.scheduler.name == name
+    optimization = _optimization(scheduler={"name": name, "decay_start_epoch": 50})
+    assert optimization.scheduler.name == name
 
 
 @pytest.mark.parametrize("intensity", ["light", "medium", "strong"])
 def test_training_accepts_augmentation_choices(intensity: str) -> None:
-    config = TrainingConfig.from_mapping(_mapping(augmentation={"intensity": intensity}))
-    assert config.augmentation.intensity == intensity
+    assert _training(augmentation={"intensity": intensity}).augmentation.intensity == intensity
 
 
 @pytest.mark.parametrize("mode", ["min", "max"])
 def test_training_accepts_checkpoint_modes(mode: str) -> None:
-    config = TrainingConfig.from_mapping(
-        _mapping(
-            scheduler={"name": "reduce_on_plateau", "mode": mode}, early_stopping={"mode": mode}
-        )
+    config = _resolve(
+        scheduler={"name": "reduce_on_plateau", "mode": mode}, early_stopping={"mode": mode}
     )
-    assert config.scheduler.mode == mode
-    assert config.early_stopping is not None and config.early_stopping.mode == mode
+    assert config.method.options.training.scheduler.mode == mode
+    assert config.training is not None and config.training.early_stopping is not None
+    assert config.training.early_stopping.mode == mode
+
+
+def test_early_stopping_default_monitor_and_mode_come_from_the_method() -> None:
+    early_stopping = _training(early_stopping={}).early_stopping
+
+    assert early_stopping is not None
+    assert early_stopping.monitor == Pix2PixDefinition.default_monitor == "val_ssim"
+    assert early_stopping.mode == "max"
 
 
 @pytest.mark.parametrize(
@@ -90,7 +130,7 @@ def test_training_rejects_invalid_choices(
     section: str, field: str, value: object, error: type[Exception]
 ) -> None:
     with pytest.raises(error, match=rf"{section}\.{field} must be"):
-        TrainingConfig.from_mapping(_mapping(**{section: {field: value}}))
+        _resolve(**{section: {field: value}})
 
 
 def test_static_loss_name_alias_matches_canonical_definitions() -> None:
@@ -110,21 +150,19 @@ def test_static_loss_name_alias_matches_canonical_definitions() -> None:
         "turn_off_after_epoch",
     ],
 )
-def test_training_accepts_loss_and_schedule_choices(name: str, schedule_type: str) -> None:
-    config = TrainingConfig.from_mapping(
-        _mapping(
-            losses={
-                "generator": [
-                    {
-                        "name": name,
-                        "weight": 1.0,
-                        "schedule": {"type": schedule_type, "end_epoch": 10, "epoch": 5},
-                    }
-                ]
-            }
-        )
+def test_loss_config_accepts_loss_and_schedule_choices(name: str, schedule_type: str) -> None:
+    losses = parse_loss_config(
+        {
+            "generator": [
+                {
+                    "name": name,
+                    "weight": 1.0,
+                    "schedule": {"type": schedule_type, "end_epoch": 10, "epoch": 5},
+                }
+            ]
+        }
     )
-    term = config.losses.generator[0]
+    term = losses.generator[0]
     assert term.name == name and term.schedule.type == schedule_type
 
 
@@ -135,25 +173,28 @@ def test_training_rejects_invalid_loss_choices(
 ) -> None:
     term = {"name": "l1", "weight": 1.0, field: {"type": value} if field == "schedule" else value}
     with pytest.raises(error, match=r"losses\.generator\[0\]\.(name|schedule.type) must be"):
-        TrainingConfig.from_mapping(_mapping(losses={"generator": [term]}))
+        _resolve(losses={"generator": [term]})
 
 
-def test_training_requires_epochs_and_losses() -> None:
+def test_training_requires_epochs_and_the_method_requires_losses() -> None:
+    data: dict[str, Any] = pix2pix_config_data(Path("unused"))
+    data["training"] = {"losses": {}}
     with pytest.raises(ValueError, match="epochs"):
-        TrainingConfig.from_mapping({"losses": {}})
+        RunConfig.from_mapping(data)
+    data["training"] = {"epochs": 1}
     with pytest.raises(ValueError, match="losses"):
-        TrainingConfig.from_mapping({"epochs": 1})
+        RunConfig.from_mapping(data)
 
 
 @pytest.mark.parametrize("legacy_key", ["lr_schedule", "decay_start_epoch"])
 def test_training_rejects_legacy_scheduler_keys(legacy_key: str) -> None:
     with pytest.raises(ValueError, match=legacy_key):
-        TrainingConfig.from_mapping(_mapping(**{legacy_key: "linear_decay"}))
+        _resolve(**{legacy_key: "linear_decay"})
 
 
 def test_training_rejects_top_level_unknown_key() -> None:
     with pytest.raises(ValueError, match="unexpected"):
-        TrainingConfig.from_mapping(_mapping(unexpected=True))
+        _resolve(unexpected=True)
 
 
 @pytest.mark.parametrize(
@@ -166,42 +207,41 @@ def test_training_rejects_top_level_unknown_key() -> None:
 )
 def test_invalid_scheduler_is_rejected(scheduler: dict[str, object]) -> None:
     with pytest.raises(ValueError):
-        TrainingConfig.from_mapping(_mapping(scheduler=scheduler))
+        _resolve(scheduler=scheduler)
 
 
 def test_loss_term_schedule_and_mask_are_preserved() -> None:
-    config = TrainingConfig.from_mapping(
-        _mapping(
-            losses={
-                "generator": [
-                    {
-                        "name": "ssim",
-                        "weight": 2.5,
-                        "params": {
-                            "mask": {
-                                "enabled": True,
-                                "source": "foreground_mask",
-                                "background_weight": 0.25,
-                            }
-                        },
-                        "schedule": {
-                            "type": "linear_warmup",
-                            "start_epoch": 0,
-                            "end_epoch": 10,
-                        },
-                    }
-                ],
-                "discriminator": [],
-            }
-        )
+    config = _resolve(
+        losses={
+            "generator": [
+                {
+                    "name": "ssim",
+                    "weight": 2.5,
+                    "params": {
+                        "mask": {
+                            "enabled": True,
+                            "source": "foreground_mask",
+                            "background_weight": 0.25,
+                        }
+                    },
+                    "schedule": {
+                        "type": "linear_warmup",
+                        "start_epoch": 0,
+                        "end_epoch": 10,
+                    },
+                }
+            ],
+            "discriminator": [],
+        }
     )
 
-    term = config.losses.generator[0]
+    term = config.method.options.training.losses.generator[0]
     assert term.requires_mask is True
+    assert config.method.definition.requires_foreground_mask(config) is True
     assert term.current_weight(epoch=5) == pytest.approx(1.25)
-    assert config.to_dict()["losses"]["generator"][0]["weight"] == 2.5
+    assert config.to_dict()["training"]["losses"]["generator"][0]["weight"] == 2.5
 
 
 def test_strict_augmentation_boolean_is_preserved() -> None:
     with pytest.raises(TypeError, match="YAML boolean"):
-        TrainingConfig.from_mapping(_mapping(augmentation={"enabled": "false"}))
+        _resolve(augmentation={"enabled": "false"})

@@ -16,7 +16,6 @@ from virtual_staining.checkpoint_contract import CheckpointCompatibilityError
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.methods.cyclegan import CycleGANMethod, ReplayPool
-from virtual_staining.methods.registry import resolve_training_method
 from virtual_staining.training.checkpoints import MethodCheckpointManager
 from virtual_staining.training.preview import ValidationPreviewWriter
 
@@ -58,50 +57,40 @@ def _changed(before: list[torch.Tensor], module: nn.Module) -> bool:
 def _manager(config: RunConfig, method: CycleGANMethod) -> MethodCheckpointManager:
     paths = RunLayout.from_project(config.project)
     ensure_run_directories(paths)
-    return MethodCheckpointManager(
-        method, paths.checkpoints_dir, image_size=config.project.image_size
-    )
+    return MethodCheckpointManager(method, paths.checkpoints_dir)
 
 
-def test_resolver_builds_cyclegan_with_method_contract(tmp_path: Path) -> None:
+def test_definition_builds_cyclegan_with_method_contract(tmp_path: Path) -> None:
     config = _config(tmp_path)
 
-    method = resolve_training_method(config, _CPU, seed=7)
+    method = config.method.definition.build_training_runtime(config, _CPU, seed=7)
 
     assert isinstance(method, CycleGANMethod)
-    assert (method.name, method.pairing) == ("cyclegan", "unpaired")
-    assert method.input_names == ("label_free",)
-    assert method.output_names == ("stained",)
-    assert method.prediction_directions == ("A_to_B", "B_to_A")
-    assert set(method.component_metadata()) == {"G_A_to_B", "G_B_to_A", "D_A", "D_B"}
-    with pytest.raises(ValueError, match="resolved training seed"):
-        resolve_training_method(config, _CPU)
+    identity = method.checkpoint_identity()
+    assert (identity.method, identity.pairing) == ("cyclegan", "unpaired")
+    assert identity.inputs == ("label_free",)
+    assert identity.outputs == ("stained",)
+    assert identity.prediction_directions == ("A_to_B", "B_to_A")
+    assert set(identity.components) == {"G_A_to_B", "G_B_to_A", "D_A", "D_B"}
 
 
-def test_component_metadata_describes_all_four_components(tmp_path: Path) -> None:
-    metadata = _method(_config(tmp_path)).component_metadata()
+def test_component_identity_describes_all_four_components(tmp_path: Path) -> None:
+    components = _method(_config(tmp_path)).checkpoint_identity().components
 
-    assert metadata["G_A_to_B"] == {
-        "class": "ResnetGenerator",
-        "output_activation": "tanh",
-        "in_channels": 3,
-        "out_channels": 3,
-        "architecture": "resnet",
-        "base_channels": 4,
-        "norm": "instance",
-        "blocks": 1,
+    assert components["G_A_to_B"] == {
+        "name": "resnet",
+        "version": "1",
+        "source": "virtual_staining",
+        "options": {"base_channels": 4, "norm": "instance", "blocks": 1},
     }
-    assert metadata["G_B_to_A"] == metadata["G_A_to_B"]
-    assert metadata["D_A"] == {
-        "class": "PatchGANDiscriminator",
-        "architecture": "patchgan",
-        "conditional": False,
-        "in_channels": 3,
-        "ndf": 4,
-        "norm": "instance",
-        "use_sigmoid": False,
+    assert components["G_B_to_A"] == components["G_A_to_B"]
+    assert components["D_A"] == {
+        "name": "patchgan",
+        "version": "1",
+        "source": "virtual_staining",
+        "options": {"ndf": 4, "norm": "instance", "use_sigmoid": False},
     }
-    assert metadata["D_B"] == metadata["D_A"]
+    assert components["D_B"] == components["D_A"]
 
 
 def test_full_step_is_finite_and_reports_configured_components(tmp_path: Path) -> None:

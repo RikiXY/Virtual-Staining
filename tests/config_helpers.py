@@ -102,6 +102,43 @@ def cyclegan_config_data(tmp_path: Path) -> dict[str, Any]:
     }
 
 
+def pix2pix_config_data(
+    tmp_path: Path,
+    *,
+    inputs: tuple[str, ...] = ("LF", "AF"),
+    image_size: tuple[int, int] = (32, 32),
+) -> dict[str, Any]:
+    """Return a canonical tiny Pix2Pix run configuration mapping for tests to adjust."""
+    return {
+        "dataset_root": str(tmp_path / "dataset"),
+        "results_path": str(tmp_path / "results"),
+        "run_name": "run",
+        "image_size": list(image_size),
+        "method": {"name": "pix2pix"},
+        "model": {
+            "inputs": list(inputs),
+            "target": "stained",
+            "generator": {"base_channels": 4},
+            "discriminator": {"ndf": 4},
+        },
+        "training": {
+            "batch_size": 1,
+            "epochs": 2,
+            "seed": 0,
+            "num_workers": 0,
+            "validate_rate": 1,
+            "checkpoint_rate": 1,
+            "losses": {
+                "generator": [
+                    {"name": "adversarial_bce", "weight": 1.0},
+                    {"name": "l1", "weight": 100.0},
+                ],
+                "discriminator": [{"name": "adversarial_bce", "weight": 1.0}],
+            },
+        },
+    }
+
+
 def write_config_data(path: Path, data: dict[str, Any]) -> Path:
     """Write a run configuration mapping as YAML and return its path."""
     path.parent.mkdir(parents=True, exist_ok=True)

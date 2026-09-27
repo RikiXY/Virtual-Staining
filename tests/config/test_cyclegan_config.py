@@ -88,8 +88,9 @@ def test_resnet_generator_defaults_to_nine_instance_norm_blocks(tmp_path: Path) 
     def mutate(data: dict[str, Any]) -> None:
         data["model"]["generator"] = {"architecture": "resnet"}
 
-    generator = _load(tmp_path, mutate).model.generator
-    assert (generator.blocks, generator.norm, generator.base_channels) == (9, "instance", 64)
+    generator = _load(tmp_path, mutate).method.options.generator
+    assert generator.name == "resnet"
+    assert generator.options == {"base_channels": 64, "norm": "instance", "blocks": 9}
 
 
 def test_split_pattern_domain_form_is_accepted(tmp_path: Path) -> None:
@@ -103,7 +104,7 @@ def test_replay_buffer_size_zero_is_allowed(tmp_path: Path) -> None:
     def mutate(data: dict[str, Any]) -> None:
         data["method"]["replay_buffer_size"] = 0
 
-    assert _load(tmp_path, mutate).method.replay_buffer_size == 0
+    assert _load(tmp_path, mutate).method.options.replay_buffer_size == 0
 
 
 def _set(path: tuple[str | int, ...], value: object) -> Mutation:
@@ -223,7 +224,8 @@ def test_pix2pix_rejects_resnet_generator(tmp_path: Path) -> None:
 
 
 def test_pix2pix_rejects_cyclegan_only_method_settings(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="replay_buffer_size is supported only"):
+    # The key is owned by the CycleGAN definition only, so Pix2Pix never accepts it.
+    with pytest.raises(ValueError, match="Unknown key.*in method: replay_buffer_size"):
         _pix2pix(tmp_path, "method:\n  name: pix2pix\n  replay_buffer_size: 50")
 
 
@@ -239,7 +241,7 @@ def test_pix2pix_rejects_concat_unet_incompatible_resnet_fields(tmp_path: Path) 
 
 def test_pix2pix_rejects_inference_direction(tmp_path: Path) -> None:
     extra = "inference:\n  checkpoint_policy: latest\n  direction: B_to_A"
-    with pytest.raises(ValueError, match="inference.direction is supported only"):
+    with pytest.raises(ValueError, match="direction is not supported by method.name='pix2pix'"):
         _pix2pix(tmp_path, extra)
 
 
@@ -290,7 +292,7 @@ def test_method_compatibility_uses_canonical_definitions(
         tmp_path,
         lambda data: data["training"]["losses"]["generator"].append({"name": "l1", "weight": 1.0}),
     )
-    assert "l1" in {term.name for term in config.training.losses.generator}  # type: ignore[union-attr]
+    assert "l1" in {term.name for term in config.method.options.training.losses.generator}
 
 
 @pytest.mark.parametrize(
@@ -308,7 +310,8 @@ def test_cyclegan_identity_term_is_optional(
         data["training"]["losses"]["generator"][2:] = [] if identity is None else [identity]
 
     config = _load(tmp_path, mutate)
-    assert "identity_l1" not in {t.name for t in config.training.losses.active_generator}  # type: ignore[union-attr]
+    losses = config.method.options.training.losses
+    assert "identity_l1" not in {t.name for t in losses.active_generator}
 
 
 @pytest.mark.parametrize("role", ["generator", "discriminator"])

@@ -23,16 +23,15 @@ from virtual_staining.applications.run_queue import (
     _load_local_run_queue,
     _preflight_run_configs,
 )
-from virtual_staining.checkpoint_selection import (
-    SUPPORTED_CHECKPOINT_METRICS,
-    SUPPORTED_CHECKPOINT_POLICIES,
-)
+from virtual_staining.checkpoint_selection import SUPPORTED_CHECKPOINT_POLICIES
 from virtual_staining.config import data as preprocessing_module
 from virtual_staining.config import evaluation, experiment_data, inference, losses, method, model
 from virtual_staining.config import run as run_module
+from virtual_staining.config import scheduler as scheduler_module
 from virtual_staining.config import training as training_module
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.layout import DatasetLayout
+from virtual_staining.definitions import ComponentContext
 from virtual_staining.experiment.stages import VALID_STAGES
 from virtual_staining.loss_definitions import (
     _LOSS_MASK_KEYS,
@@ -41,6 +40,13 @@ from virtual_staining.loss_definitions import (
     LossMaskSource,
     SsimChannelMode,
 )
+from virtual_staining.methods.builtin import (
+    PIX2PIX_CHECKPOINT_METRICS,
+    CycleGANDefinition,
+    Pix2PixDefinition,
+    builtin_definitions,
+)
+from virtual_staining.models import components
 from virtual_staining.utils.image_io import SUPPORTED_IMAGE_BACKENDS
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -130,7 +136,7 @@ def test_full_references_select_their_method(
 
     assert config.method.name == method_name
     assert config.data.pairing == pairing
-    assert config.model.generator.architecture == architecture
+    assert config.method.options.generator.name == architecture
 
 
 # --- 2. Minimal starters are the full references with defaults omitted ------------
@@ -174,6 +180,21 @@ def _dataclass_keys(cls: type) -> frozenset[str]:
     return frozenset(field.name for field in fields(cls))
 
 
+def _owned(section: str) -> frozenset[str]:
+    """Keys the built-in definitions own in ``section``."""
+    return frozenset(
+        key
+        for definition in builtin_definitions().methods.values()
+        for key in definition.owned_keys.get(section, ())
+    )
+
+
+def _component_keys(definition: Any) -> frozenset[str]:
+    """Option keys a built-in component resolves (its defaults fill every key)."""
+    context = ComponentContext(field="model.component", image_size=(256, 256))
+    return frozenset(definition.resolve({}, context).options)
+
+
 _LOSS_PARAM_KEYS = {name: definition.param_keys for name, definition in LOSS_DEFINITIONS.items()}
 
 _PUBLIC_OPTIONS: dict[str, tuple[frozenset[str], set[str]]] = {
@@ -194,8 +215,8 @@ _PUBLIC_OPTIONS: dict[str, tuple[frozenset[str], set[str]]] = {
             "evaluation",
         },
     ),
-    "method keys": (method._METHOD_KEYS, {"name", "replay_buffer_size"}),
-    "method names": (frozenset(method._BUILTIN_METHODS), {"pix2pix", "cyclegan"}),
+    "method keys": (method.METHOD_KEYS | _owned("method"), {"name", "replay_buffer_size"}),
+    "method names": (frozenset(builtin_definitions().methods), {"pix2pix", "cyclegan"}),
     "data keys": (
         experiment_data._DATA_KEYS,
         {"pairing", "domains", "hash_policy", "group_validation", "group_metadata"},
@@ -206,21 +227,26 @@ _PUBLIC_OPTIONS: dict[str, tuple[frozenset[str], set[str]]] = {
         frozenset(get_args(experiment_data.GroupValidation)),
         {"auto", "patient", "specimen", "set", "unavailable"},
     ),
-    "model keys": (model._MODEL_KEYS, {"inputs", "target", "generator", "discriminator"}),
+    "model keys": (
+        model.MODEL_KEYS | _owned("model"),
+        {"inputs", "target", "generator", "discriminator"},
+    ),
     "generator architectures": (
-        frozenset(get_args(model.GeneratorArchitecture)),
+        frozenset(
+            {Pix2PixDefinition.generator_architecture, CycleGANDefinition.generator_architecture}
+        ),
         {"concat_unet", "resnet"},
     ),
     "concat_unet keys": (
-        model._GENERATOR_KEYS["concat_unet"],
+        _component_keys(components.CONCAT_UNET) | {"architecture"},
         {"architecture", "base_channels", "norm", "dropout", "bilinear"},
     ),
     "resnet keys": (
-        model._GENERATOR_KEYS["resnet"],
+        _component_keys(components.RESNET) | {"architecture"},
         {"architecture", "base_channels", "norm", "blocks"},
     ),
-    "norms": (frozenset(get_args(model.NormName)), {"batch", "instance"}),
-    "discriminator keys": (model._DISCRIMINATOR_KEYS, {"ndf", "norm", "use_sigmoid"}),
+    "norms": (frozenset(get_args(components.NormName)), {"batch", "instance"}),
+    "discriminator keys": (_component_keys(components.PATCHGAN), {"ndf", "norm", "use_sigmoid"}),
     "preprocessing sections": (
         preprocessing_module._SECTION_KEYS,
         {"inputs", "patching", "masks", "alignment", "filtering", "split", "io"},
@@ -270,7 +296,7 @@ _PUBLIC_OPTIONS: dict[str, tuple[frozenset[str], set[str]]] = {
     ),
     "image backends": (SUPPORTED_IMAGE_BACKENDS, {"auto", "pillow", "openslide"}),
     "training keys": (
-        training_module._TRAINING_KEYS,
+        training_module.TRAINING_KEYS | _owned("training"),
         {
             "batch_size",
             "epochs",
@@ -292,11 +318,11 @@ _PUBLIC_OPTIONS: dict[str, tuple[frozenset[str], set[str]]] = {
         },
     ),
     "scheduler keys": (
-        training_module._SCHEDULER_KEYS,
+        scheduler_module._SCHEDULER_KEYS,
         {"name", "decay_start_epoch", "monitor", "mode", "factor", "patience", "min_lr"},
     ),
     "scheduler names": (
-        frozenset(get_args(training_module.LearningRateSchedulerName)),
+        frozenset(get_args(scheduler_module.LearningRateSchedulerName)),
         {"none", "linear_decay", "reduce_on_plateau"},
     ),
     "early stopping keys": (
@@ -312,7 +338,7 @@ _PUBLIC_OPTIONS: dict[str, tuple[frozenset[str], set[str]]] = {
         {"light", "medium", "strong"},
     ),
     "checkpoint metrics": (
-        SUPPORTED_CHECKPOINT_METRICS,
+        frozenset(PIX2PIX_CHECKPOINT_METRICS),
         {
             "loss_G_val",
             "val_ssim",
@@ -373,7 +399,7 @@ _PUBLIC_OPTIONS: dict[str, tuple[frozenset[str], set[str]]] = {
     ),
     "checkpoint policies": (SUPPORTED_CHECKPOINT_POLICIES, {"latest", "best", "top_k"}),
     "inference directions": (
-        frozenset(get_args(inference.InferenceDirection)),
+        frozenset(CycleGANDefinition.prediction_directions),
         {"A_to_B", "B_to_A"},
     ),
     "evaluation keys": (
@@ -586,7 +612,7 @@ _VALID_VARIANTS: list[tuple[str, dict[str, Any]]] = [
                 }
             },
         )
-        for metric in sorted(SUPPORTED_CHECKPOINT_METRICS)
+        for metric in sorted(PIX2PIX_CHECKPOINT_METRICS)
     ],
     ("pix2pix", {"training.early_stopping": {"monitor": "val_ssim", "patience": 15}}),
     ("pix2pix", {"training.early_stopping": {"monitor": "loss_D_val", "min_delta": 0.01}}),
@@ -713,15 +739,15 @@ def test_optional_sections_resolve_documented_defaults(tmp_path: Path) -> None:
     assert config.training is not None
     assert config.training.early_stopping is not None
     assert config.training.early_stopping.mode == "min"
-    assert config.training.scheduler.mode == "max"
+    assert config.method.options.training.scheduler.mode == "max"
 
     cyclegan = _load(_FULL["cyclegan"])
     del cyclegan["method"]["replay_buffer_size"]
     del cyclegan["inference"]["direction"]
     del cyclegan["evaluation"]["protocol"]
     resolved = _parse(tmp_path, cyclegan)
-    assert resolved.method.replay_buffer_size == 50
-    assert resolved.model.generator.blocks == 9
+    assert resolved.method.options.replay_buffer_size == 50
+    assert resolved.method.options.generator.options["blocks"] == 9
     assert resolved.inference is not None and resolved.inference.direction is None
     assert resolved.evaluation is not None and resolved.evaluation.protocol is None
 
@@ -744,7 +770,7 @@ _INVALID_VARIANTS: list[tuple[str, dict[str, Any], str]] = [
     ("pix2pix", {"data.group_metadata": "groups.csv"}, "supported only with data.pairing"),
     ("pix2pix", {"data.hash_policy": "sha256"}, "data.hash_policy"),
     ("pix2pix", {"data.group_validation": "none"}, "data.group_validation"),
-    ("pix2pix", {"method.replay_buffer_size": 0}, "supported only for method.name='cyclegan'"),
+    ("pix2pix", {"method.replay_buffer_size": 0}, "Unknown key.*in method: replay_buffer_size"),
     ("cyclegan", {"method.replay_buffer_size": -1}, ">= 0"),
     ("cyclegan", {"model.generator": {"architecture": "concat_unet"}}, "architecture='resnet'"),
     ("pix2pix", {"model.generator": {"architecture": "resnet"}}, "architecture='concat_unet'"),
@@ -756,8 +782,12 @@ _INVALID_VARIANTS: list[tuple[str, dict[str, Any], str]] = [
     ("pix2pix", {"model.discriminator.use_sigmoid": True}, "use_sigmoid=True"),
     ("pix2pix", {"model.target": "PAS"}, "model.target must equal"),
     ("cyclegan", {"training.augmentation.enabled": True}, "augmentation.enabled=false"),
-    ("pix2pix", {"inference.direction": "A_to_B"}, "supported only for method.name='cyclegan'"),
-    ("pix2pix", {"evaluation.protocol": "unpaired"}, "requires method.name='cyclegan'"),
+    ("pix2pix", {"inference.direction": "A_to_B"}, "not supported by method.name='pix2pix'"),
+    ("cyclegan", {"inference.direction": "sideways"}, r"direction must be one of \['A_to_B'"),
+    ("pix2pix", {"evaluation.protocol": "unpaired"}, "requires data.pairing='unpaired'"),
+    ("pix2pix", {"inference.checkpoint_metric": "val_loss"}, "not a checkpoint metric"),
+    ("pix2pix", {"method.options": {}}, "Unknown key.*in method: options"),
+    ("pix2pix", {"method.name": "stylegan"}, "not a registered method definition"),
     ("cyclegan", {"inference.checkpoint_metric": "val_ssim"}, "paired image-fidelity metric"),
     (
         "cyclegan",

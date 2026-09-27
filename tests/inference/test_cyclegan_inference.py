@@ -47,9 +47,7 @@ def _trained(tmp_path: Path, dataset_root: Path | None = None) -> CycleGANMethod
     method.step(batch, epoch=0, global_step=0)
     layout = RunLayout.from_project(config.project)
     ensure_run_directories(layout)
-    MethodCheckpointManager(
-        method, layout.checkpoints_dir, image_size=config.project.image_size
-    ).save(0)
+    MethodCheckpointManager(method, layout.checkpoints_dir).save(0)
     return method
 
 

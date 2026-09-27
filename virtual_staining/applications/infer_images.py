@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from virtual_staining.config.run import RunConfig
+from virtual_staining.definitions import Definitions
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.inference.runner import (
     inference_direction,
@@ -97,8 +98,10 @@ def infer_images(
     mode: SingleInferenceMode = "auto",
     tile_overlap: int = DEFAULT_TILE_OVERLAP,
     output_format: str = "same",
+    definitions: Definitions | None = None,
 ) -> SingleInferenceResult | DirectoryInferenceResult:
-    config = RunConfig.from_yaml(config_path.resolve())
+    """Translate images with a run's checkpoint; ``definitions`` defaults to the built-ins."""
+    config = RunConfig.from_yaml(config_path.resolve(), definitions)
     input_paths = _resolve_input_specs(input_specs, inference_input_names(config))
     return run_image_path_inference(
         lambda: _create_runtime(config),

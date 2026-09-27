@@ -12,13 +12,10 @@ import pytest
 import torch
 from torch.utils.data import DataLoader
 
-from virtual_staining.config.losses import LossConfig
+from virtual_staining.checkpoint_contract import CheckpointIdentity
 from virtual_staining.config.project import ProjectConfig
-from virtual_staining.config.training import (
-    EarlyStoppingConfig,
-    LearningRateSchedulerConfig,
-    TrainingConfig,
-)
+from virtual_staining.config.scheduler import LearningRateSchedulerConfig
+from virtual_staining.config.training import EarlyStoppingConfig, TrainingConfig
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.training import progress as progress_module
 from virtual_staining.training.helpers import (
@@ -39,23 +36,25 @@ class _FakeMethod:
     """Scripted runtime: step loss is the batch mean; validation replays ``val_losses``."""
 
     name = "fake"
-    pairing = "paired"
-    input_names = ("LF",)
-    output_names = ("stained",)
-    prediction_directions = ("LF->stained",)
     default_checkpoint_metric = "loss_G_val"
     metric_names = ("loss_G", "loss_D")
     component_total_names = ("generator",)
     loss_names = ["generator_l1"]
-    loss_config = LossConfig()
+    validation_metric_names = ("val_ssim",)
 
-    def __init__(self, training: TrainingConfig, val_losses: Sequence[Any] = ()) -> None:
+    def __init__(
+        self,
+        training: TrainingConfig,
+        val_losses: Sequence[Any] = (),
+        scheduler: LearningRateSchedulerConfig | None = None,
+    ) -> None:
         self.training = training
+        self.scheduler_config = scheduler or LearningRateSchedulerConfig()
         self.val_losses = list(val_losses)
         self.calls: list[tuple[Any, ...]] = []
         self.clock: _Clock | None = None
         self.optimizer = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=1.0)
-        self.scheduler = build_lr_scheduler(training, self.optimizer)
+        self.scheduler = build_lr_scheduler(self.scheduler_config, training.epochs, self.optimizer)
         if self.scheduler is not None:
             original_step = self.scheduler.step
 
@@ -102,24 +101,36 @@ class _FakeMethod:
 
     def step_schedulers(self, *, epoch: int, validation_metrics: MethodMetrics | None) -> bool:
         self.calls.append(("step_schedulers", epoch, validation_metrics is not None))
+        monitor = self.scheduler_config.monitor
         return step_lr_schedulers(
-            self.training.scheduler,
+            self.scheduler_config,
             (self.scheduler,),
             epoch=epoch,
             monitor_value=(
                 None
-                if validation_metrics is None
-                else lambda: self.validation_metric(
-                    validation_metrics, self.training.scheduler.monitor
-                )
+                if validation_metrics is None or monitor is None
+                else lambda: self.validation_metric(validation_metrics, monitor)
             ),
         )
 
     def learning_rates(self) -> Mapping[str, float]:
         return {}
 
-    def component_metadata(self) -> Mapping[str, object]:
-        return {}
+    def checkpoint_identity(self) -> CheckpointIdentity:
+        return CheckpointIdentity(
+            method=self.name,
+            implementation={"version": "1", "source": "tests"},
+            pairing="paired",
+            inputs=("LF",),
+            outputs=("stained",),
+            prediction_directions=("forward",),
+            options={},
+            components={},
+            image_size=(8, 8),
+        )
+
+    def objective_metadata(self) -> dict[str, Any]:
+        return {"objective": "scripted"}
 
     def state_dict(self) -> dict[str, Any]:
         return {"weight": torch.zeros(1)}
@@ -143,10 +154,6 @@ def _training(**overrides: Any) -> TrainingConfig:
     values: dict[str, Any] = {
         "batch_size": 2,
         "epochs": 3,
-        "lr_g": 1.0,
-        "lr_d": 1.0,
-        "beta1": 0.5,
-        "beta2": 0.999,
         "seed": 0,
         "num_workers": 0,
         "validate_rate": 1,
@@ -164,6 +171,7 @@ def _run(
     samples: Sequence[float] = (1.0, 1.0, 1.0, 1.0),
     val_losses: Sequence[Any] = (),
     clock: _Clock | None = None,
+    scheduler: LearningRateSchedulerConfig | None = None,
 ) -> tuple[TrainingResult, list[ProgressUpdate], _FakeMethod, RunLayout]:
     project = ProjectConfig(
         dataset_root=tmp_path / "dataset",
@@ -173,7 +181,7 @@ def _run(
     )
     paths = RunLayout.from_project(project)
     ensure_run_directories(paths)
-    method = _FakeMethod(training, val_losses)
+    method = _FakeMethod(training, val_losses, scheduler)
     method.clock = clock
     loader = DataLoader(list(samples), batch_size=training.batch_size)  # pyright: ignore[reportArgumentType]
     updates: list[ProgressUpdate] = []
@@ -185,7 +193,6 @@ def _run(
         loader,
         torch.device("cpu"),
         config_hash="sha256:test",
-        image_size=(8, 8),
         progress_reporter=updates.append,
     )
     return trainer.train(seed=0), updates, method, paths
@@ -367,8 +374,8 @@ def test_early_stopping_ignores_epochs_without_validation(tmp_path: Path) -> Non
 
 def test_linear_decay_steps_once_per_epoch_after_validation(tmp_path: Path) -> None:
     scheduler = LearningRateSchedulerConfig(name="linear_decay", decay_start_epoch=0)
-    training = _training(epochs=4, validate_rate=2, checkpoint_rate=100, scheduler=scheduler)
-    _, _, method, _ = _run(tmp_path, training)
+    training = _training(epochs=4, validate_rate=2, checkpoint_rate=100)
+    _, _, method, _ = _run(tmp_path, training, scheduler=scheduler)
 
     assert method.calls == [
         ("step_schedulers", 0, False),
@@ -386,8 +393,10 @@ def test_linear_decay_steps_once_per_epoch_after_validation(tmp_path: Path) -> N
 
 def test_plateau_steps_only_on_finite_validation_events(tmp_path: Path) -> None:
     scheduler = LearningRateSchedulerConfig(name="reduce_on_plateau", monitor="loss_G_val")
-    training = _training(epochs=8, validate_rate=2, checkpoint_rate=100, scheduler=scheduler)
-    _, _, method, _ = _run(tmp_path, training, val_losses=[1.0, math.nan, _MISSING, 0.5])
+    training = _training(epochs=8, validate_rate=2, checkpoint_rate=100)
+    _, _, method, _ = _run(
+        tmp_path, training, val_losses=[1.0, math.nan, _MISSING, 0.5], scheduler=scheduler
+    )
 
     assert [call for call in method.calls if call[0] == "scheduler_step"] == [
         ("scheduler_step", 1.0),

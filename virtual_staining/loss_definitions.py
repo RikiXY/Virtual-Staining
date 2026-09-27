@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from virtual_staining.config.method import MethodName
 from virtual_staining.config.validation import (
     parse_bool_strict,
     parse_choice,
@@ -143,7 +142,7 @@ class LossDefinition:
 
     name: str
     roles: frozenset[LossRole]
-    methods: frozenset[MethodName]
+    methods: frozenset[str]
     param_keys: frozenset[str] = frozenset()
     adversarial: AdversarialPrimitive | None = None
     reconstruction: ReconstructionPrimitive | None = None
@@ -298,7 +297,7 @@ LOSS_DEFINITIONS: Mapping[str, LossDefinition] = MappingProxyType(
 )
 
 
-def method_loss_names(method: MethodName) -> frozenset[str]:
+def method_loss_names(method: str) -> frozenset[str]:
     return frozenset(name for name, d in LOSS_DEFINITIONS.items() if method in d.methods)
 
 

@@ -196,6 +196,15 @@ class LossConfig:
         }
 
 
+def configured_loss_names(losses: LossConfig | None) -> list[str]:
+    """Role-qualified term names, the component columns of the training history."""
+    if losses is None:
+        return []
+    names = [f"generator_{term.name}" for term in losses.generator]
+    names.extend(f"discriminator_{term.name}" for term in losses.discriminator)
+    return names
+
+
 def parse_loss_config(raw: Any) -> LossConfig:
     if raw is None:
         raw = {}

@@ -10,34 +10,31 @@ import pytest
 import torch
 
 from tests.checkpoint_helpers import assert_nested_equal
+from tests.config_helpers import pix2pix_config_data
 from virtual_staining.checkpoint_contract import CheckpointCompatibilityError
-from virtual_staining.config.inference import InferenceConfig
-from virtual_staining.config.losses import parse_loss_config
-from virtual_staining.config.method import MethodConfig
-from virtual_staining.config.model import ModelConfig
-from virtual_staining.config.project import ProjectConfig
 from virtual_staining.config.run import RunConfig
-from virtual_staining.config.training import LearningRateSchedulerConfig, TrainingConfig
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.inference.runner import load_inference_generator, predict_batch
 from virtual_staining.methods.pix2pix import Pix2PixMethod
 from virtual_staining.training.checkpoints import MethodCheckpointManager
 
 _CPU = torch.device("cpu")
-_LOSSES = parse_loss_config(
-    {
-        "generator": [{"name": "l1", "weight": 1.0}, {"name": "adversarial_bce", "weight": 1.0}],
-        "discriminator": [{"name": "adversarial_bce", "weight": 1.0}],
-    }
-)
-_LINEAR = {
-    "epochs": 4,
-    "scheduler": LearningRateSchedulerConfig(name="linear_decay", decay_start_epoch=1),
+_LOSSES = {
+    "generator": [{"name": "l1", "weight": 1.0}, {"name": "adversarial_bce", "weight": 1.0}],
+    "discriminator": [{"name": "adversarial_bce", "weight": 1.0}],
 }
-_PLATEAU = {
-    "scheduler": LearningRateSchedulerConfig(
-        name="reduce_on_plateau", monitor="loss_G_val", mode="min", factor=0.5, patience=2
-    )
+_LINEAR: dict[str, Any] = {
+    "epochs": 4,
+    "scheduler": {"name": "linear_decay", "decay_start_epoch": 1},
+}
+_PLATEAU: dict[str, Any] = {
+    "scheduler": {
+        "name": "reduce_on_plateau",
+        "monitor": "loss_G_val",
+        "mode": "min",
+        "factor": 0.5,
+        "patience": 2,
+    }
 }
 
 
@@ -48,53 +45,17 @@ def _config(
     training: dict[str, Any] | None = None,
     **model: Any,
 ) -> RunConfig:
-    model_mapping: dict[str, Any] = {
-        "inputs": ["LF", "AF"],
-        "target": "stained",
-        "generator": {"base_channels": 4},
-        "discriminator": {"ndf": 4},
-    }
-    model_mapping.update(model)
-    return RunConfig(
-        project=ProjectConfig(
-            dataset_root=tmp_path / "dataset",
-            results_path=tmp_path / "results",
-            run_name="run",
-            image_size=image_size,
-        ),
-        method=MethodConfig(),
-        model=ModelConfig.from_mapping(model_mapping),
-        training=TrainingConfig(
-            **{
-                "batch_size": 1,
-                "epochs": 2,
-                "lr_g": 2e-4,
-                "lr_d": 2e-4,
-                "beta1": 0.5,
-                "beta2": 0.999,
-                "seed": 0,
-                "num_workers": 0,
-                "validate_rate": 1,
-                "checkpoint_rate": 1,
-                "losses": _LOSSES,
-                **(training or {}),
-            }
-        ),
-        inference=InferenceConfig(checkpoint_policy="latest"),
-        preprocessing=None,
-        evaluation=None,
-    )
+    data = pix2pix_config_data(tmp_path, image_size=image_size)
+    data["model"].update(model)
+    data["training"].update({"losses": _LOSSES, **(training or {})})
+    data["inference"] = {"checkpoint_policy": "latest"}
+    return RunConfig.from_mapping(data)
 
 
 def _manager(config: RunConfig, method: Pix2PixMethod) -> MethodCheckpointManager:
     paths = RunLayout.from_project(config.project)
     ensure_run_directories(paths)
-    return MethodCheckpointManager(
-        method,
-        paths.checkpoints_dir,
-        image_size=config.project.image_size,
-        config_hash="sha256:test",
-    )
+    return MethodCheckpointManager(method, paths.checkpoints_dir, config_hash="sha256:test")
 
 
 def _batch() -> dict[str, Any]:
@@ -142,9 +103,11 @@ def test_pix2pix_v4_payload_holds_method_owned_state_only(tmp_path: Path) -> Non
     assert payload["method"]["inputs"] == ["LF", "AF"]
     assert payload["method"]["outputs"] == ["stained"]
     assert payload["method"]["prediction_directions"] == ["forward"]
-    assert payload["method"]["components"]["generator"]["class"] == "ConcatUNetGenerator"
-    assert payload["method"]["components"]["generator"]["base_channels"] == 4
-    assert payload["method"]["components"]["discriminator"]["class"] == "PatchGANDiscriminator"
+    assert payload["method"]["implementation"] == {"version": "1", "source": "virtual_staining"}
+    assert payload["method"]["options"] == {}
+    assert payload["method"]["components"]["generator"]["name"] == "concat_unet"
+    assert payload["method"]["components"]["generator"]["options"]["base_channels"] == 4
+    assert payload["method"]["components"]["discriminator"]["name"] == "patchgan"
     assert set(payload["state"]) == {
         "models",
         "optimization",
@@ -207,10 +170,10 @@ def test_pix2pix_v4_inference_round_trip(tmp_path: Path) -> None:
     [
         ({"inputs": ["AF", "LF"]}, r"method.inputs\[0\]"),
         ({"target": "other"}, r"method.outputs\[0\]"),
-        ({"generator": {"base_channels": 8}}, "method.components.generator.base_channels"),
-        ({"generator": {"base_channels": 4, "norm": "instance"}}, "generator.norm"),
-        ({"generator": {"base_channels": 4, "dropout": True}}, "generator.dropout"),
-        ({"discriminator": {"ndf": 8}}, "method.components.discriminator.ndf"),
+        ({"generator": {"base_channels": 8}}, "method.components.generator.options.base_channels"),
+        ({"generator": {"base_channels": 4, "norm": "instance"}}, "generator.options.norm"),
+        ({"generator": {"base_channels": 4, "dropout": True}}, "generator.options.dropout"),
+        ({"discriminator": {"ndf": 8}}, "method.components.discriminator.options.ndf"),
     ],
 )
 def test_pix2pix_config_mismatch_is_rejected_for_training_and_inference(
@@ -246,10 +209,8 @@ def test_pix2pix_image_size_mismatch_is_rejected(tmp_path: Path) -> None:
     ("mutate", "message"),
     [
         (
-            lambda payload: payload["method"]["components"]["generator"].update(
-                {"class": "ResNetGenerator"}
-            ),
-            "generator.class",
+            lambda payload: payload["method"]["components"]["generator"].update({"name": "resnet"}),
+            "generator.name",
         ),
         (lambda payload: payload["method"].update({"name": "cyclegan"}), "method.name"),
         (lambda payload: payload["method"].update({"pairing": "unpaired"}), "method.pairing"),
@@ -298,7 +259,7 @@ def test_pix2pix_rejects_legacy_v3_layout(tmp_path: Path) -> None:
 
 
 def _plateau(**changes: Any) -> dict[str, Any]:
-    return {"scheduler": dataclasses.replace(_PLATEAU["scheduler"], **changes)}
+    return {"scheduler": {**_PLATEAU["scheduler"], **changes}}
 
 
 def _reject(config: RunConfig, state: dict[str, Any], match: str) -> None:
@@ -436,7 +397,7 @@ _POLICY_CHANGES: dict[str, tuple[dict[str, Any], dict[str, Any], str]] = {
     "scheduler_type": (_LINEAR, {**_PLATEAU, "epochs": 4}, "scheduler.name is 'linear_decay'"),
     "linear_decay_start": (
         _LINEAR,
-        {"epochs": 4, "scheduler": LearningRateSchedulerConfig("linear_decay", 2)},
+        {"epochs": 4, "scheduler": {"name": "linear_decay", "decay_start_epoch": 2}},
         "scheduler.decay_start_epoch is 1 in the checkpoint but 2",
     ),
     "linear_decay_horizon": (
@@ -479,7 +440,7 @@ def test_decayed_learning_rate_is_not_mistaken_for_a_policy_change(tmp_path: Pat
     for epoch in range(3):
         source.step(_batch(), epoch=epoch, global_step=epoch)
         source.step_schedulers(epoch=epoch, validation_metrics=None)
-    assert source.learning_rates()["lr_g"] < config.training.lr_g  # type: ignore[union-attr]
+    assert source.learning_rates()["lr_g"] < config.method.options.training.lr_g
     path = _manager(config, source).save(2)
 
     resumed = Pix2PixMethod(config, _CPU)

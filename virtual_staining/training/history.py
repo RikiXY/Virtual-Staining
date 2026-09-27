@@ -8,7 +8,6 @@ from pathlib import Path
 from types import TracebackType
 from typing import TextIO
 
-from virtual_staining.metrics import VALIDATION_IMAGE_METRIC_NAMES
 from virtual_staining.training.helpers import metrics_fieldnames
 from virtual_staining.training.runtime import MethodMetrics
 
@@ -24,11 +23,13 @@ class TrainingHistory:
         resume_at: int,
         metric_names: Sequence[str],
         component_total_names: Sequence[str],
+        validation_metric_names: Sequence[str] = (),
     ) -> None:
         self._path = path
         self._loss_names = loss_names
         self._metric_names = tuple(metric_names)
         self._component_total_names = tuple(component_total_names)
+        self._validation_metric_names = tuple(validation_metric_names)
         self._resume_at = resume_at
         if resume_at < 0:
             raise ValueError("resume_at must be non-negative")
@@ -38,7 +39,7 @@ class TrainingHistory:
             loss_names,
             metric_names=self._metric_names,
             component_total_names=self._component_total_names,
-        ) + list(VALIDATION_IMAGE_METRIC_NAMES)
+        ) + list(self._validation_metric_names)
 
     def __enter__(self) -> TrainingHistory:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -87,7 +88,7 @@ class TrainingHistory:
         if self._writer is None or self._file is None:
             raise RuntimeError("TrainingHistory must be entered before writing epochs")
 
-        metrics = _flat_metrics(train_metrics, val_metrics)
+        metrics = _flat_metrics(train_metrics, val_metrics, self._validation_metric_names)
         row = {name: _format_metric(metrics.get(name)) for name in self._fieldnames}
         row["epoch"] = str(epoch)
         self._writer.writerow(row)
@@ -129,6 +130,7 @@ class TrainingHistory:
 def _flat_metrics(
     train_metrics: MethodMetrics,
     val_metrics: MethodMetrics | None,
+    validation_metric_names: Sequence[str],
 ) -> dict[str, float]:
     metrics = {f"{name}_train": value for name, value in train_metrics.losses.items()}
     _add_components(metrics, "train", train_metrics)
@@ -136,10 +138,7 @@ def _flat_metrics(
         metrics.update({f"{name}_val": value for name, value in val_metrics.losses.items()})
         _add_components(metrics, "val", val_metrics)
         metrics.update(
-            {
-                name: val_metrics.image.get(name, float("nan"))
-                for name in VALIDATION_IMAGE_METRIC_NAMES
-            }
+            {name: val_metrics.image.get(name, float("nan")) for name in validation_metric_names}
         )
     return metrics
 

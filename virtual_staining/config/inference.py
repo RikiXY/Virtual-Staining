@@ -2,16 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any
 
 from virtual_staining.checkpoint_selection import (
     RANKED_CHECKPOINT_POLICIES,
-    SUPPORTED_CHECKPOINT_METRICS,
     SUPPORTED_CHECKPOINT_POLICIES,
 )
-from virtual_staining.config.validation import parse_choice, reject_unknown_keys
-
-InferenceDirection = Literal["A_to_B", "B_to_A"]
+from virtual_staining.config.validation import reject_unknown_keys
 
 _INFERENCE_KEYS: frozenset[str] = frozenset(
     {
@@ -27,12 +24,14 @@ _INFERENCE_KEYS: frozenset[str] = frozenset(
 
 @dataclass(frozen=True)
 class InferenceConfig:
+    """Inference stage selection; the method validates ``checkpoint_metric``/``direction``."""
+
     checkpoint_policy: str | None = None
     checkpoint_path: Path | None = None
     checkpoint_metric: str | None = None
     checkpoint_rank: int | None = None
     output_dir: Path | None = None
-    direction: InferenceDirection | None = None
+    direction: str | None = None
 
     def __post_init__(self) -> None:
         self.validate()
@@ -43,19 +42,14 @@ class InferenceConfig:
         return cls(
             checkpoint_policy=data.get("checkpoint_policy"),
             checkpoint_path=Path(data["checkpoint_path"]) if data.get("checkpoint_path") else None,
-            checkpoint_metric=data.get("checkpoint_metric"),
+            checkpoint_metric=_optional_string(
+                data.get("checkpoint_metric"), "inference.checkpoint_metric"
+            ),
             checkpoint_rank=int(data["checkpoint_rank"])
             if data.get("checkpoint_rank") is not None
             else None,
             output_dir=Path(data["output_dir"]) if data.get("output_dir") else None,
-            direction=(
-                cast(
-                    InferenceDirection,
-                    parse_choice(data["direction"], "inference.direction", {"A_to_B", "B_to_A"}),
-                )
-                if data.get("direction") is not None
-                else None
-            ),
+            direction=_optional_string(data.get("direction"), "inference.direction"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -87,14 +81,6 @@ class InferenceConfig:
             )
         if self.checkpoint_path is not None and not str(self.checkpoint_path).strip():
             raise ValueError("checkpoint_path must be a non-empty path")
-        if (
-            self.checkpoint_metric is not None
-            and self.checkpoint_metric not in SUPPORTED_CHECKPOINT_METRICS
-        ):
-            raise ValueError(
-                f"Unknown checkpoint_metric: {self.checkpoint_metric!r}. "
-                f"Supported values: {sorted(SUPPORTED_CHECKPOINT_METRICS)}."
-            )
         if self.checkpoint_rank is not None and self.checkpoint_rank <= 0:
             raise ValueError("checkpoint_rank must be greater than 0")
         if (
@@ -108,3 +94,11 @@ class InferenceConfig:
             raise ValueError(
                 "checkpoint_metric is required with checkpoint_policy 'best' or 'top_k'"
             )
+
+
+def _optional_string(value: object, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise TypeError(f"{field_name} must be a non-blank string")
+    return value

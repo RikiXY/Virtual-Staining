@@ -81,9 +81,10 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
             for record in test_manifest.records
             for name, path in _prediction_sources(record, source_names, direction).items()
         ]
+        resolved = config.to_dict()
         generation = {
-            "method": config.method.to_dict(),
-            "model": config.model.to_dict(),
+            "method": resolved["method"],
+            "model": resolved["model"],
             "image_size": list(config.project.image_size),
             "direction": direction,
         }

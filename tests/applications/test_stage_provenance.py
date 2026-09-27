@@ -421,9 +421,7 @@ def _checkpoint(tmp_path: Path, seed: int) -> None:
     method.step(batch, epoch=0, global_step=0)
     layout = RunLayout.from_project(config.project)
     ensure_run_directories(layout)
-    MethodCheckpointManager(
-        method, layout.checkpoints_dir, image_size=config.project.image_size
-    ).save(0)
+    MethodCheckpointManager(method, layout.checkpoints_dir).save(0)
 
 
 def _run(tmp_path: Path, stage: str, direction: str = "A_to_B", **kwargs: Any) -> RunLayout:

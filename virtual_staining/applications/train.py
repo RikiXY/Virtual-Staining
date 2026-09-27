@@ -25,7 +25,6 @@ from virtual_staining.data.manifest import (
 )
 from virtual_staining.data.unpaired import UnpairedImageDataset, resolve_domain_collections
 from virtual_staining.experiment.session import ExperimentSession
-from virtual_staining.methods.registry import resolve_training_method
 from virtual_staining.models.io_contract import build_model_input_transform
 from virtual_staining.split_contract import TEST_SPLIT, TRAIN_SPLIT, VAL_SPLIT, DatasetSplit
 from virtual_staining.training.augmentation import build_training_paired_transform
@@ -53,9 +52,7 @@ def _set_seed(seed: int) -> None:
 
 
 def _requires_foreground_masks(config: RunConfig) -> bool:
-    if config.training is None:
-        return False
-    return any(term.requires_mask for term in config.training.losses.generator)
+    return config.training is not None and config.method.definition.requires_foreground_mask(config)
 
 
 PAIRED_TRAIN_ADAPTER = "paired_manifest_train/1"
@@ -250,6 +247,16 @@ def train(
             "val_sample_count": len(val_dataset),
         }
         session.result(**train_details)
+        # Implementation provenance of the registered definition; name and options are
+        # already part of the resolved config snapshot.
+        definition = config.method.definition
+        session.result(
+            method_definition={
+                "name": definition.name,
+                "version": definition.version,
+                "source": definition.source,
+            }
+        )
         if benchmark_recorder is not None:
             benchmark_recorder.set_workload(**train_details, batch_size=training.batch_size)
 
@@ -274,7 +281,7 @@ def train(
             generator=val_loader_generator,
         )
 
-        method = resolve_training_method(
+        method = config.method.definition.build_training_runtime(
             config,
             device,
             seed=seed,
@@ -290,7 +297,6 @@ def train(
             progress_reporter=progress_reporter,
             experiment_session=session,
             config_hash=session.config_hash or "",
-            image_size=config.project.image_size,
             benchmark_recorder=benchmark_recorder,
             preview_sink=ValidationPreviewWriter(
                 session.paths.output_val_dir, benchmark_recorder=benchmark_recorder

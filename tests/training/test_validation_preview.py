@@ -10,13 +10,8 @@ import pytest
 import torch
 from torch.utils.data import DataLoader
 
-from tests.config_helpers import cyclegan_config_data, write_config_data
-from virtual_staining.config.losses import parse_loss_config
-from virtual_staining.config.method import MethodConfig
-from virtual_staining.config.model import ModelConfig
-from virtual_staining.config.project import ProjectConfig
+from tests.config_helpers import cyclegan_config_data, pix2pix_config_data, write_config_data
 from virtual_staining.config.run import RunConfig
-from virtual_staining.config.training import TrainingConfig
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.methods.cyclegan import CycleGANMethod
 from virtual_staining.methods.pix2pix import Pix2PixMethod
@@ -34,41 +29,9 @@ _ADVERSARIAL = {
 
 
 def _pix2pix(tmp_path: Path, losses: dict[str, Any] = _ADVERSARIAL) -> Pix2PixMethod:
-    project = ProjectConfig(
-        dataset_root=tmp_path / "dataset",
-        results_path=tmp_path / "results",
-        run_name="run",
-        image_size=(32, 32),
-    )
-    training = TrainingConfig(
-        batch_size=2,
-        epochs=1,
-        lr_g=2e-4,
-        lr_d=2e-4,
-        beta1=0.5,
-        beta2=0.999,
-        seed=0,
-        num_workers=0,
-        validate_rate=1,
-        checkpoint_rate=1,
-        losses=parse_loss_config(losses),
-    )
-    config = RunConfig(
-        project=project,
-        method=MethodConfig(),
-        model=ModelConfig.from_mapping(
-            {
-                "inputs": ["LF", "AF"],
-                "target": "stained",
-                "generator": {"base_channels": 4},
-                "discriminator": {"ndf": 4},
-            }
-        ),
-        training=training,
-        inference=None,
-        preprocessing=None,
-        evaluation=None,
-    )
+    data = pix2pix_config_data(tmp_path)
+    data["training"].update({"batch_size": 2, "epochs": 1, "losses": losses})
+    config = RunConfig.from_mapping(data)
     torch.manual_seed(0)
     return Pix2PixMethod(config, _CPU)
 
@@ -349,7 +312,6 @@ def test_trainer_preview_sink_changes_only_preview_io(
             loader,
             _CPU,
             config_hash="sha256:test",
-            image_size=method.config.project.image_size,
             progress_reporter=updates.append,
             preview_sink=ValidationPreviewWriter(root / "previews") if with_previews else None,
         )

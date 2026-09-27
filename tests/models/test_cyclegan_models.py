@@ -4,31 +4,27 @@ import pytest
 import torch
 import torch.nn as nn
 
-from virtual_staining.config.model import ModelConfig
+from virtual_staining.definitions import Component, ComponentContext
 from virtual_staining.methods.cyclegan import init_cyclegan_weights
-from virtual_staining.methods.pix2pix import pix2pix_component_metadata
+from virtual_staining.models.components import CONCAT_UNET, PATCHGAN, RESNET
 from virtual_staining.models.discriminator import PatchGANDiscriminator
-from virtual_staining.models.factory import (
-    build_discriminator,
-    build_generator,
-    build_resnet_generator,
-)
-from virtual_staining.models.generator import ResnetBlock, ResnetGenerator
+from virtual_staining.models.generator import ConcatUNetGenerator, ResnetBlock, ResnetGenerator
+
+_CONTEXT = ComponentContext(field="model.generator", image_size=(32, 32))
 
 
-def _resnet_config(**generator: object) -> ModelConfig:
-    return ModelConfig.from_mapping(
-        {
-            "inputs": ["a"],
-            "target": "b",
-            "generator": {"architecture": "resnet", **generator},
-            "discriminator": {"ndf": 4},
-        }
-    )
+def _resnet(**options: object) -> Component:
+    return RESNET.resolve(options, _CONTEXT)
+
+
+def build_resnet_generator(component: Component) -> ResnetGenerator:
+    generator = component.build()
+    assert isinstance(generator, ResnetGenerator)
+    return generator
 
 
 def test_resnet_generator_maps_rgb_to_bounded_rgb_of_same_size() -> None:
-    generator = build_resnet_generator(_resnet_config(base_channels=4, blocks=1))
+    generator = build_resnet_generator(_resnet(base_channels=4, blocks=1))
     x = torch.randn(2, 3, 32, 24) * 10
 
     y = generator(x)
@@ -38,7 +34,7 @@ def test_resnet_generator_maps_rgb_to_bounded_rgb_of_same_size() -> None:
 
 
 def test_resnet_generator_defaults_to_nine_blocks() -> None:
-    generator = build_resnet_generator(_resnet_config(base_channels=4))
+    generator = build_resnet_generator(_resnet(base_channels=4))
 
     assert generator.blocks == 9
     assert sum(isinstance(module, ResnetBlock) for module in generator.modules()) == 9
@@ -47,7 +43,7 @@ def test_resnet_generator_defaults_to_nine_blocks() -> None:
 
 
 def test_resnet_generator_construction_is_deterministic_under_torch_seed() -> None:
-    config = _resnet_config(base_channels=4, blocks=1)
+    config = _resnet(base_channels=4, blocks=1)
     torch.manual_seed(3)
     first = build_resnet_generator(config).state_dict()
     torch.manual_seed(3)
@@ -72,11 +68,10 @@ def test_resnet_generator_rejects_invalid_shapes(shape: tuple[int, ...], match: 
 
 
 def test_patchgan_conditional_and_unconditional_inputs() -> None:
-    config = ModelConfig.from_mapping(
-        {"inputs": ["a", "c"], "target": "b", "discriminator": {"ndf": 4}}
-    )
-    conditional = build_discriminator(config)
-    unconditional = build_discriminator(config, conditional=False)
+    patchgan = PATCHGAN.resolve({"ndf": 4}, _CONTEXT)
+    # Pix2Pix conditions on its two inputs plus the target; CycleGAN scores one image.
+    conditional = patchgan.build(in_channels=9)
+    unconditional = patchgan.build(in_channels=3)
 
     assert conditional.in_channels == 9
     assert unconditional.in_channels == 3
@@ -119,16 +114,20 @@ def test_cyclegan_initializer_is_applied_to_convs_and_affine_norms() -> None:
     assert torch.count_nonzero(norm.bias) == 0
 
 
-def test_pix2pix_component_metadata_is_unaffected_by_resnet_fields() -> None:
-    config = ModelConfig.from_mapping({"inputs": ["a"], "target": "b"})
+def test_component_identity_holds_registered_name_version_and_normalized_options() -> None:
+    concat_unet = CONCAT_UNET.resolve({}, _CONTEXT)
 
-    assert build_generator(config).unet.base_channels == 64
-    assert pix2pix_component_metadata(config)["generator"] == {
-        "class": "ConcatUNetGenerator",
-        "output_activation": "tanh",
-        "architecture": "concat_unet",
+    generator = concat_unet.build(input_names=("a",))
+    assert isinstance(generator, ConcatUNetGenerator)
+    assert generator.unet.base_channels == 64
+    assert concat_unet.identity() == {
+        "name": "concat_unet",
+        "version": "1",
+        "source": "virtual_staining",
+        "options": {"base_channels": 64, "norm": "batch", "dropout": False, "bilinear": False},
+    }
+    assert _resnet().identity()["options"] == {
         "base_channels": 64,
-        "norm": "batch",
-        "dropout": False,
-        "bilinear": False,
+        "norm": "instance",
+        "blocks": 9,
     }

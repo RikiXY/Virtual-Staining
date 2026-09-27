@@ -16,29 +16,42 @@ upper layers may import from lower layers, never the reverse.
 | Package | Responsibility |
 |---|---|
 | `metrics.py` | Image metric computations, directions, quality thresholds, and validation image metric names |
+| `definitions.py` | The torch-free extension seam: `MethodDefinition`, `ComponentDefinition`, and the immutable `Definitions` set callers supply explicitly |
 | `checkpoint_contract.py` | Topology-neutral v4 checkpoint payload and strict method-aware compatibility validation |
 | `checkpoint_selection.py` | Neutral `best.json` ranking, policy, and metric-direction selection |
-| `loss_definitions.py` | Canonical built-in loss definitions: name, allowed roles, supported methods, parameter contract and validation, and primitive tensor math, shared by config validation and method runtimes |
+| `loss_definitions.py` | Canonical built-in loss definitions: name, allowed roles, supported methods, parameter contract and validation, and primitive tensor math, shared by the built-in definitions and runtimes |
 | `utils/` | Shared primitives: artifact naming, image dimensions, and image I/O helpers |
-| `config/` | Sole owner of YAML-facing dataclasses and strict parsers for every config section |
+| `config/` | Framework-common YAML-facing dataclasses and strict parsers, `RunConfig.from_mapping` resolution against supplied definitions, and reusable option blocks (losses, LR scheduler) that definitions parse |
 | `experiment/` | Canonical `RunLayout` for one run, `ResultsLayout` for shared comparisons, stage snapshots, run metadata, manifest/config hashing, and environment snapshots |
-| `models/` | Network implementations (`ConcatUNetGenerator`, `ResnetGenerator`, `PatchGANDiscriminator`), factories, and the model-I/O normalization contract; no training state |
+| `models/` | Network implementations (`ConcatUNetGenerator`, `ResnetGenerator`, `PatchGANDiscriminator`), their `ComponentDefinition`s (`components.py`), and the model-I/O normalization contract; no training state |
 | `data/` | Canonical `DatasetLayout`, slide sets, paired manifests, unpaired domain collections, dataset building, registration, dataset-owned provenance/fingerprints, and the versioned consumed/produced-data snapshot format (`consumption.py`) |
-| `methods/` | The two built-in method runtimes (`Pix2PixMethod`, `CycleGANMethod`), each owning its topology, optimizers, losses, checkpoint state, component metadata, and inference loader; `registry.py` selects one from `method.name` |
+| `methods/` | The built-in definitions (`builtin.py`: `Pix2PixDefinition`, `CycleGANDefinition`, `builtin_definitions()`) and runtimes (`Pix2PixMethod`, `CycleGANMethod`), each owning its options, topology, optimizers, losses, checkpoint state and inference-only generator |
 | `training/` | The `TrainingMethodRuntime` protocol, method-agnostic `Trainer`, generic `MethodCheckpointManager`, validation, history, the Pix2Pix configured-loss evaluator, and callback-driven progress events |
-| `inference/` | Checkpoint resolution, method dispatch to the method-owned loaders, CycleGAN direction resolution, generic single/directory/tiled/WSI inference, and output naming |
+| `inference/` | Checkpoint resolution, definition-driven inference model construction, prediction-direction resolution, generic single/directory/tiled/WSI inference, and output naming |
 | `evaluation/` | Paired per-image metrics and grouped summaries, unpaired collection diagnostics, diagnostic plots, representative selection, and comparison panels |
 | `applications/` | User-visible stage lifecycle owners and infer-images runtime composition; no `argparse` |
 | `cli/` | The `argparse` entrypoint, terminal rendering, and thin adapters over `applications/` |
 
 ## Translation Methods
 
-Two methods are built in: Pix2Pix (paired, named N-input -> one-target) and CycleGAN
-(unpaired, one domain A <-> one domain B). `methods/registry.py` maps `method.name` to
-`Pix2PixMethod` or `CycleGANMethod` with an explicit branch; there is no dynamic import,
-`class_path` loading, or plugin discovery. `RunConfig` validates the method-specific
-combination of data pairing, generator architecture, losses, inference direction, and
-evaluation protocol before any runtime is built.
+Every method, built-in or external, is a registered `MethodDefinition`, and every
+network architecture a registered `ComponentDefinition` (`definitions.py`). Callers pass
+an immutable `Definitions` set explicitly; `builtin_definitions()` is the default and
+holds Pix2Pix (paired, named N-input -> one-target) and CycleGAN (unpaired, one domain
+A <-> one domain B) plus the `concat_unet`, `resnet` and `patchgan` components. There
+is no dynamic import, `class_path` loading, or plugin discovery, and checkpoint
+metadata is compared with, never used to import, definitions.
+
+`RunConfig.from_mapping` (used by `from_yaml`) parses the framework-common fields,
+resolves `method.name`, splits the shared `method`/`model`/`training` sections into
+framework keys and the keys the definition declares in `owned_keys`, and lets the
+definition parse its options. Generic config knows no method, loss, metric catalogue
+or architecture: the definition validates its options and cross-section rules,
+declares its pairing and prediction directions, and supplies the direction and
+validity of `training.early_stopping.monitor` and `inference.checkpoint_metric`. The
+built-ins keep the documented `model.generator`, `model.discriminator`, `training.lr_*`,
+`beta*`, `scheduler`, `losses` and `method.replay_buffer_size` spelling as keys they own;
+an external method owns `method.options` and needs none of them.
 
 The six built-in losses (`adversarial_bce`, `l1`, `ssim` for Pix2Pix; `adversarial_lsgan`,
 `cycle_l1`, `identity_l1` for CycleGAN) are each defined once in `loss_definitions.py`.
@@ -52,18 +65,21 @@ directions, and requires its active adversarial and cycle terms. Loss-weight sch
 remain `LossScheduleConfig` in `config/losses.py`; definitions do not own weights.
 
 `training/runtime.py` defines the `TrainingMethodRuntime` protocol the generic training
-code consumes: method identity (`name`, `pairing`, `input_names`, `output_names`,
-`prediction_directions`), `step()` / `validate()` returning named `MethodMetrics`,
-checkpoint-selection metrics and modes, scheduler stepping, learning rates, component
-metadata, and opaque `state_dict()` / `load_state_dict()`. It exposes no generator,
-discriminator, optimizer, or model-count accessors.
+code consumes: `name`, the history schema (`metric_names`, optional per-term
+`loss_names`/`component_total_names`, and extra `validation_metric_names`), `step()` /
+`validate()` returning named `MethodMetrics`, checkpoint-selection metrics and modes,
+scheduler stepping, learning rates, the `checkpoint_identity()` built by its definition,
+optional JSON `objective_metadata()` for `best.json`, and opaque `state_dict()` /
+`load_state_dict()`. It exposes no generator, discriminator, optimizer, loss-config, or
+model-count accessors.
 
 - `Trainer` owns the epoch loop, validation cadence, `epochs.csv` history, checkpoint
   cadence and `best.json` ranking, resume, and early stopping. It does not know which
   networks a method trains.
 - `MethodCheckpointManager` wraps the runtime's `state_dict()` in the v4 payload from
-  `checkpoint_contract.py` and validates method identity, I/O names, image size, and
-  normalization before calling `load_state_dict()`. It assumes no fixed number of models
+  `checkpoint_contract.py` and validates the definition name/version/source, component
+  identities and options, I/O names, directions, image size, and normalization before
+  calling `load_state_dict()`. It assumes no fixed number of models
   or optimizers. Only v4 is accepted; older or unversioned payloads are rejected, with no
   migration path.
 - `Pix2PixMethod` owns the ConcatUNet generator, conditional PatchGAN discriminator, their
@@ -74,23 +90,24 @@ discriminator, optimizer, or model-count accessors.
   their RNG state.
 
 `applications/train.py` builds either manifest-backed paired datasets or
-`data/unpaired.py` domain datasets according to `data.pairing`, then hands the runtime to
-the `Trainer`.
+`data/unpaired.py` domain datasets according to `data.pairing`, asks the selected
+definition for the training runtime, then hands it to the `Trainer`.
 
 For inference, `inference/runner.py` resolves the checkpoint through the shared selection
-policy and dispatches to `load_pix2pix_inference_generator` or
-`load_cyclegan_inference_generator`. The CycleGAN loader returns a
-`CycleGANInferenceAdapter` wrapping the generator for `inference.direction`, so every
-loaded model accepts the same named-input mapping. Single-image, directory, tiled, and WSI
+policy, rejects checkpoints naming unregistered definitions, validates the definition's
+checkpoint identity, and calls `build_inference_model`, which constructs only the
+prediction network (no optimizer, scheduler, objective, discriminator or replay pool).
+CycleGAN returns a `CycleGANInferenceAdapter` wrapping the generator for
+`inference.direction`, so every loaded model accepts the same named-input mapping. Single-image, directory, tiled, and WSI
 inference in `inference/single.py` and the `vs infer` test-split loop are method-agnostic
 apart from choosing the input names and the direction-aware output filename
 (`utils/artifacts.py`).
 
-Evaluation protocol selection belongs to `applications/evaluate.py`: `paired` (default for
-Pix2Pix) maps aligned manifest records to references and reuses `evaluation/evaluator.py`
+Evaluation protocol selection belongs to `applications/evaluate.py`; it defaults to the
+run's `data.pairing`. `paired` maps aligned manifest records to references and reuses `evaluation/evaluator.py`
 and `metrics.py`; `unpaired` (default for CycleGAN) collects the active direction's
 generated images and the real test collection of the reference domain and delegates to
-`evaluation/unpaired.py`. Method code contains no evaluation metrics.
+`evaluation/unpaired.py` (it requires `data.pairing: unpaired`). Method code contains no evaluation metrics.
 
 ## Purity and I/O Boundaries
 
@@ -162,20 +179,25 @@ These constraints are enforced by convention and checked in code review:
 The current direct package dependencies (excluding self-imports) are:
 
 ```text
-cli -> applications, metrics
-applications -> config, data, evaluation, experiment, inference, methods, metrics,
+cli -> applications, metrics, training
+applications -> config, data, definitions, evaluation, experiment, inference, metrics,
                 models, split_contract, training, utils
-inference -> checkpoint_selection, config, data, experiment, methods, models, utils
-methods -> checkpoint_contract, checkpoint_selection, config, models, training
-training -> checkpoint_contract, checkpoint_selection, config, experiment, metrics, models
+inference -> checkpoint_contract, checkpoint_selection, config, data, experiment, models,
+             utils
+methods -> checkpoint_contract, checkpoint_selection, config, definitions,
+           loss_definitions, metrics, models, training
+training -> checkpoint_contract, checkpoint_selection, config, experiment,
+            loss_definitions, metrics, models
+definitions -> checkpoint_selection (+ type-only/lazy: checkpoint_contract, config, training)
 evaluation -> metrics, utils
 experiment -> config, data, utils
 data -> config, split_contract, utils
-models -> config
+models -> config, definitions
 checkpoint_contract -> models
-checkpoint_selection -> metrics
-config -> checkpoint_selection, split_contract, utils
-metrics, split_contract, utils -> (none)
+config -> checkpoint_selection, definitions, loss_definitions, split_contract, utils
+          (+ one lazy import of methods.builtin for the default definition set)
+loss_definitions -> config
+checkpoint_selection, metrics, split_contract, utils -> (none)
 ```
 
 `tests/architecture/test_package_dependencies.py` resolves absolute, relative,
@@ -183,8 +205,11 @@ nested, and `TYPE_CHECKING` imports with the standard library and enforces the
 boundaries that matter: no library package imports `applications` or `cli`;
 `utils`, `metrics`, and `split_contract` stay leaves; `config` imports no runtime
 domain; CLI command modules call only `applications`; and the registration boundary
-below. `training` never imports `methods`: concrete methods depend on the generic
-training layer, not the reverse.
+below. `training` and `inference` never import `methods`: concrete methods depend on
+the generic layers, not the reverse. `tests/architecture/test_method_definitions.py`
+additionally checks that config resolution loads no method runtime or torch, that the
+`Trainer` loads no loss configuration, that only definition owners name the built-in
+methods, and that no import-string or discovery mechanism exists in these layers.
 
 Registration is implemented entirely in `data/alignment/`: `models.py` defines
 `AlignmentImage`, immutable `AlignmentResult`, `RegistrationDiagnostics`, and `AlignmentError`;

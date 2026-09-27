@@ -4,7 +4,6 @@ import itertools
 import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -13,25 +12,17 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.amp import GradScaler, autocast
 
-from virtual_staining.checkpoint_contract import (
-    CheckpointIdentity,
-    read_checkpoint,
-    validate_checkpoint,
-)
-from virtual_staining.config.inference import InferenceDirection
-from virtual_staining.config.model import ModelConfig
+from virtual_staining.checkpoint_contract import CheckpointIdentity, ValidatedCheckpoint
+from virtual_staining.config.losses import configured_loss_names
 from virtual_staining.config.run import RunConfig
-from virtual_staining.models.discriminator import PatchGANDiscriminator
-from virtual_staining.models.factory import build_discriminator, build_resnet_generator
-from virtual_staining.models.generator import ResnetGenerator
-from virtual_staining.models.io_contract import GENERATOR_OUTPUT_ACTIVATION
+from virtual_staining.methods.builtin import GanOptions, GanTrainingOptions
+from virtual_staining.metrics import VALIDATION_IMAGE_METRIC_NAMES
 from virtual_staining.training.helpers import (
     TRAINING_STATE_KEYS,
     LossComponentAccumulator,
     OptimizationRole,
     build_lr_scheduler,
     check_training_state,
-    configured_loss_names,
     is_amp_enabled,
     load_training_state,
     loss_validation_metric,
@@ -136,50 +127,10 @@ class ReplayPool:
         self._rng.set_state(state["rng_state"].cpu())
 
 
-def cyclegan_component_metadata(model: ModelConfig) -> dict[str, object]:
-    """Describe the reconstruction-relevant CycleGAN components built from ``model``."""
-    resolved = model.to_dict()
-    generator = {
-        "class": ResnetGenerator.__name__,
-        "output_activation": GENERATOR_OUTPUT_ACTIVATION,
-        "in_channels": 3,
-        "out_channels": 3,
-        **resolved["generator"],
-    }
-    discriminator = {
-        "class": PatchGANDiscriminator.__name__,
-        "architecture": "patchgan",
-        "conditional": False,
-        "in_channels": 3,
-        **resolved["discriminator"],
-    }
-    return {
-        "G_A_to_B": generator,
-        "G_B_to_A": dict(generator),
-        "D_A": discriminator,
-        "D_B": dict(discriminator),
-    }
-
-
-def cyclegan_checkpoint_identity(
-    model: ModelConfig,
-    image_size: tuple[int, int],
-) -> CheckpointIdentity:
-    return CheckpointIdentity(
-        method=CycleGANMethod.name,
-        pairing=CycleGANMethod.pairing,
-        inputs=(model.inputs[0],),
-        outputs=(model.target,),
-        prediction_directions=CycleGANMethod.prediction_directions,
-        components=cyclegan_component_metadata(model),
-        image_size=image_size,
-    )
-
-
 class CycleGANInferenceAdapter(nn.Module):
     """Expose one tensor-to-tensor CycleGAN generator through named-input inference."""
 
-    def __init__(self, generator: ResnetGenerator, input_name: str) -> None:
+    def __init__(self, generator: nn.Module, input_name: str) -> None:
         super().__init__()
         self.generator = generator
         self.input_names = (input_name,)
@@ -190,21 +141,17 @@ class CycleGANInferenceAdapter(nn.Module):
         return self.generator(inputs[self.input_names[0]])
 
 
-def load_cyclegan_inference_generator(
-    checkpoint_path: Path,
+def build_cyclegan_inference_generator(
     config: RunConfig,
-    direction: InferenceDirection,
+    checkpoint: ValidatedCheckpoint,
+    direction: str,
     device: torch.device,
 ) -> CycleGANInferenceAdapter:
-    """Validate a v4 CycleGAN checkpoint and restore the generator for ``direction``."""
-    checkpoint = validate_checkpoint(
-        read_checkpoint(checkpoint_path),
-        cyclegan_checkpoint_identity(config.model, config.project.image_size),
-        checkpoint_path,
-    )
-    generator = build_resnet_generator(config.model).to(device)
+    """Build and restore only the generator for ``direction``; no discriminator or pool."""
+    options: GanOptions = config.method.options
+    generator = options.generator.build().to(device)
     generator.load_state_dict(
-        validated_model_state(checkpoint.state, f"G_{direction}", generator, checkpoint_path)
+        validated_model_state(checkpoint.state, f"G_{direction}", generator, checkpoint.path)
     )
     input_name = config.model.inputs[0] if direction == "A_to_B" else config.model.target
     adapter = CycleGANInferenceAdapter(generator, input_name)
@@ -245,52 +192,57 @@ class CycleGANMethod:
     domain-A images and ``D_B`` scores domain-B images.
     """
 
-    name: str = "cyclegan"
-    pairing: str = "unpaired"
-    prediction_directions: tuple[str, ...] = ("A_to_B", "B_to_A")
-    default_checkpoint_metric: str = "loss_G_val"
     metric_names: tuple[str, ...] = ("loss_G", "loss_D")
     component_total_names: tuple[str, ...] = ("generator", "discriminator")
+    # Kept as empty columns so the history header matches every built-in method.
+    validation_metric_names: tuple[str, ...] = VALIDATION_IMAGE_METRIC_NAMES
 
     def __init__(self, config: RunConfig, device: torch.device, *, seed: int) -> None:
-        if config.training is None:
+        options: GanOptions = config.method.options
+        if config.training is None or options.training is None:
             raise ValueError("training config is required to construct CycleGAN")
-        if config.method.replay_buffer_size is None:
+        if options.replay_buffer_size is None:
             raise ValueError("method.replay_buffer_size is required to construct CycleGAN")
+        definition = config.method.definition
         self.config = config
-        self.training = config.training
+        self.name = definition.name
+        self._checkpoint_metrics = dict(definition.checkpoint_metrics)
+        self.default_checkpoint_metric = next(iter(self._checkpoint_metrics))
+        self._identity = definition.checkpoint_identity(config)
+        self._epochs = config.training.epochs
+        self._optimization: GanTrainingOptions = options.training
         self.device = device
         self._amp_enabled = is_amp_enabled(device)
-        self.input_names = (config.model.inputs[0],)
-        self.output_names = (config.model.target,)
-        self.loss_config = self.training.losses
+        self.loss_config = self._optimization.losses
         self.loss_names = tuple(configured_loss_names(self.loss_config))
 
-        self.G_A_to_B = build_resnet_generator(config.model)
-        self.G_B_to_A = build_resnet_generator(config.model)
-        self.D_A = build_discriminator(config.model, conditional=False)
-        self.D_B = build_discriminator(config.model, conditional=False)
+        self.G_A_to_B = options.generator.build()
+        self.G_B_to_A = options.generator.build()
+        # Unconditional PatchGANs score one RGB image of their own domain.
+        self.D_A = options.discriminator.build(in_channels=3)
+        self.D_B = options.discriminator.build(in_channels=3)
         for model in self._models().values():
             init_cyclegan_weights(model)
             model.to(device)
 
-        betas = (self.training.beta1, self.training.beta2)
+        optimization = self._optimization
+        betas = (optimization.beta1, optimization.beta2)
         self._opt_G = optim.Adam(
             itertools.chain(self.G_A_to_B.parameters(), self.G_B_to_A.parameters()),
-            lr=self.training.lr_g,
+            lr=optimization.lr_g,
             betas=betas,
         )
         self._opt_D = optim.Adam(
             itertools.chain(self.D_A.parameters(), self.D_B.parameters()),
-            lr=self.training.lr_d,
+            lr=optimization.lr_d,
             betas=betas,
         )
         self._scaler_G = GradScaler(enabled=self._amp_enabled)
         self._scaler_D = GradScaler(enabled=self._amp_enabled)
-        self._scheduler_G = build_lr_scheduler(self.training, self._opt_G)
-        self._scheduler_D = build_lr_scheduler(self.training, self._opt_D)
+        self._scheduler_G = build_lr_scheduler(optimization.scheduler, self._epochs, self._opt_G)
+        self._scheduler_D = build_lr_scheduler(optimization.scheduler, self._epochs, self._opt_D)
 
-        capacity = config.method.replay_buffer_size
+        capacity = options.replay_buffer_size
         seed_a, seed_b = (
             int(child.generate_state(1)[0]) for child in np.random.SeedSequence(seed).spawn(2)
         )
@@ -558,7 +510,7 @@ class CycleGANMethod:
         return {"loss_G_val": value} if math.isfinite(value) else {}
 
     def checkpoint_selection_modes(self) -> dict[str, str]:
-        return {"loss_G_val": "min"}
+        return dict(self._checkpoint_metrics)
 
     def step_schedulers(
         self,
@@ -566,16 +518,16 @@ class CycleGANMethod:
         epoch: int,
         validation_metrics: MethodMetrics | None,
     ) -> bool:
+        scheduler = self._optimization.scheduler
+        monitor = scheduler.monitor
         return step_lr_schedulers(
-            self.training.scheduler,
+            scheduler,
             (self._scheduler_G, self._scheduler_D),
             epoch=epoch,
             monitor_value=(
                 None
-                if validation_metrics is None
-                else lambda: self.validation_metric(
-                    validation_metrics, self.training.scheduler.monitor
-                )
+                if validation_metrics is None or monitor is None
+                else lambda: self.validation_metric(validation_metrics, monitor)
             ),
         )
 
@@ -585,18 +537,25 @@ class CycleGANMethod:
             "lr_d": float(self._opt_D.param_groups[0]["lr"]),
         }
 
-    def component_metadata(self) -> Mapping[str, object]:
-        return cyclegan_component_metadata(self.config.model)
+    def checkpoint_identity(self) -> CheckpointIdentity:
+        return self._identity
+
+    def objective_metadata(self) -> dict[str, Any]:
+        return self.loss_config.to_dict()
 
     def state_dict(self) -> dict[str, Any]:
         return {
-            **training_state_dict(self.training, self._models(), self._roles()),
+            **training_state_dict(
+                self._optimization.scheduler, self._epochs, self._models(), self._roles()
+            ),
             "replay_pools": {name: pool.state_dict() for name, pool in self._pools().items()},
         }
 
     def _validate_state(self, state: Mapping[str, Any]) -> None:
         require_state_keys(state, _STATE_KEYS, "state")
-        check_training_state(state, self.training, self._models(), self._roles())
+        check_training_state(
+            state, self._optimization.scheduler, self._epochs, self._models(), self._roles()
+        )
         pools = require_state_keys(state["replay_pools"], _POOL_KEYS, "state.replay_pools")
         for name, pool in self._pools().items():
             pool.validate_state(pools[name], f"state.replay_pools.{name}")

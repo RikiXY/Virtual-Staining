@@ -640,7 +640,7 @@ topology-neutral:
 |---|---|
 | `format_version` | `4` |
 | `epoch` | Completed epoch; resume starts at `epoch + 1` |
-| `method` | `name`, `pairing`, ordered `inputs`, ordered `outputs`, `prediction_directions`, and method-owned `components` metadata |
+| `method` | Registered method `name`; `implementation` (`version`, `source`) of that definition; `pairing`; ordered `inputs`; ordered `outputs`; `prediction_directions`; method-level reconstruction `options`; and `components`, each a registered component identity (`name`, `version`, `source`) with its normalized constructor `options` |
 | `image_size` | `[width, height]` |
 | `normalization` | Model-I/O normalization contract |
 | `config_hash` | Resolved-config hash of the writing stage, or `null` (provenance only) |
@@ -651,6 +651,13 @@ unpickler, so only tensors and primitive containers are accepted; there is no
 unrestricted fallback. This narrows arbitrary-code deserialization exposure but is
 not a resource sandbox. State reaches the execution device through normal model and
 optimizer restoration.
+
+Names in `method` are compared with the definitions the caller supplied; they are never
+imported. A checkpoint naming a method or component that is not registered is rejected
+before anything is built, and v4 checkpoints written before explicit definition identity
+existed (no `method.implementation`) are rejected rather than converted. The resolved
+config hash is recorded for provenance only, so output, evaluation, or reporting paths do
+not affect compatibility.
 
 Resume and inference validate every semantic field before method state is touched.
 Each method then preflights its own state before mutating anything: exact state
@@ -686,11 +693,14 @@ recent one automatically.
 
 ### `checkpoints/best.json`
 
-Machine-readable checkpoint selection record written during validation. It
-records per-metric `best` and ranked `records` for all finite validation
-checkpoint metrics available at a checkpointed validation epoch. Each record
-includes `rank`, `epoch`, `checkpoint_path`, and `metric_value`, plus
-config/loss context when available.
+Machine-readable checkpoint selection record (schema version 2) written during
+validation. It records per-metric `mode`, `best` and ranked `records` for all finite
+checkpoint metrics the method ranks at a checkpointed validation epoch; each method
+declares its metrics and their `min`/`max` direction. Each record includes `rank`,
+`epoch`, `checkpoint_path`, and `metric_value`, plus `config_hash` and the method's
+optional JSON `objective_metadata` (the built-ins store their resolved `training.losses`)
+when available. Version 1 files, which stored a built-in `loss_config`, are rejected;
+start a new run directory.
 
 Inference can use `checkpoint_policy: best` with `checkpoint_metric` to load
 rank 1 for that metric. `checkpoint_policy: top_k` additionally uses

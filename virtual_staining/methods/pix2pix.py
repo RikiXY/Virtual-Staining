@@ -3,34 +3,22 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Mapping
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import torch
 import torch.optim as optim
 from torch.amp import GradScaler
 
-from virtual_staining.checkpoint_contract import (
-    CheckpointIdentity,
-    read_checkpoint,
-    validate_checkpoint,
-)
-from virtual_staining.checkpoint_selection import (
-    SUPPORTED_CHECKPOINT_METRICS,
-    default_checkpoint_mode,
-)
-from virtual_staining.config.model import ModelConfig
+from virtual_staining.checkpoint_contract import CheckpointIdentity, ValidatedCheckpoint
+from virtual_staining.config.losses import configured_loss_names
 from virtual_staining.config.run import RunConfig
-from virtual_staining.models.discriminator import PatchGANDiscriminator
-from virtual_staining.models.factory import build_discriminator, build_generator
-from virtual_staining.models.generator import ConcatUNetGenerator
-from virtual_staining.models.io_contract import GENERATOR_OUTPUT_ACTIVATION
+from virtual_staining.methods.builtin import GanOptions, GanTrainingOptions
+from virtual_staining.metrics import VALIDATION_IMAGE_METRIC_NAMES
 from virtual_staining.training.helpers import (
     TRAINING_STATE_KEYS,
     OptimizationRole,
     build_lr_scheduler,
     check_training_state,
-    configured_loss_names,
     is_amp_enabled,
     load_training_state,
     loss_validation_metric,
@@ -53,52 +41,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def pix2pix_component_metadata(model: ModelConfig) -> dict[str, object]:
-    """Describe the reconstruction-relevant Pix2Pix components built from ``model``."""
-    resolved = model.to_dict()
-    return {
-        "generator": {
-            "class": ConcatUNetGenerator.__name__,
-            "output_activation": GENERATOR_OUTPUT_ACTIVATION,
-            **resolved["generator"],
-        },
-        "discriminator": {
-            "class": PatchGANDiscriminator.__name__,
-            "architecture": "patchgan",
-            **resolved["discriminator"],
-        },
-    }
-
-
-def pix2pix_checkpoint_identity(
-    model: ModelConfig,
-    image_size: tuple[int, int],
-) -> CheckpointIdentity:
-    return CheckpointIdentity(
-        method=Pix2PixMethod.name,
-        pairing=Pix2PixMethod.pairing,
-        inputs=tuple(model.inputs),
-        outputs=(model.target,),
-        prediction_directions=Pix2PixMethod.prediction_directions,
-        components=pix2pix_component_metadata(model),
-        image_size=image_size,
-    )
-
-
-def load_pix2pix_inference_generator(
-    checkpoint_path: Path,
+def build_pix2pix_inference_generator(
     config: RunConfig,
+    checkpoint: ValidatedCheckpoint,
     device: torch.device,
-) -> ConcatUNetGenerator:
-    """Validate a v4 Pix2Pix checkpoint and restore its forward generator for inference."""
-    checkpoint = validate_checkpoint(
-        read_checkpoint(checkpoint_path),
-        pix2pix_checkpoint_identity(config.model, config.project.image_size),
-        checkpoint_path,
-    )
-    generator = build_generator(config.model).to(device)
+) -> torch.nn.Module:
+    """Build only the forward generator and restore it from a validated checkpoint."""
+    options: GanOptions = config.method.options
+    generator = options.generator.build(input_names=tuple(config.model.inputs)).to(device)
     generator.load_state_dict(
-        validated_model_state(checkpoint.state, "generator", generator, checkpoint_path)
+        validated_model_state(checkpoint.state, "generator", generator, checkpoint.path)
     )
     generator.eval()
     return generator
@@ -107,12 +59,9 @@ def load_pix2pix_inference_generator(
 class Pix2PixMethod:
     """Own the concrete paired Pix2Pix training topology."""
 
-    name: str = "pix2pix"
-    pairing: str = "paired"
-    prediction_directions: tuple[str, ...] = ("forward",)
-    default_checkpoint_metric: str = "loss_G_val"
     metric_names: tuple[str, ...] = ("loss_G", "loss_D")
     component_total_names: tuple[str, ...] = ("generator", "discriminator")
+    validation_metric_names: tuple[str, ...] = VALIDATION_IMAGE_METRIC_NAMES
 
     def __init__(
         self,
@@ -121,36 +70,47 @@ class Pix2PixMethod:
         *,
         benchmark_recorder: TrainingBenchmarkRecorder | None = None,
     ) -> None:
-        if config.training is None:
+        options: GanOptions = config.method.options
+        if config.training is None or options.training is None:
             raise ValueError("training config is required to construct Pix2Pix")
+        definition = config.method.definition
         self.config = config
-        self.training = config.training
+        self.name = definition.name
+        self._checkpoint_metrics = dict(definition.checkpoint_metrics)
+        self.default_checkpoint_metric = next(iter(self._checkpoint_metrics))
+        self._identity = definition.checkpoint_identity(config)
+        self._epochs = config.training.epochs
+        self._optimization: GanTrainingOptions = options.training
         self.device = device
         self._benchmark_recorder = benchmark_recorder
         self._amp_enabled = is_amp_enabled(device)
-        self.input_names = tuple(config.model.inputs)
-        self.output_names = (config.model.target,)
-        self.loss_config = self.training.losses
+        self.loss_config = self._optimization.losses
         self.loss_names = tuple(configured_loss_names(self.loss_config))
 
-        self.generator = build_generator(config.model).to(device)
-        self.discriminator = build_discriminator(config.model).to(device)
+        input_names = tuple(config.model.inputs)
+        self.generator = options.generator.build(input_names=input_names).to(device)
+        # Conditional PatchGAN: the concatenated inputs plus the real or generated target.
+        self.discriminator = options.discriminator.build(in_channels=3 * len(input_names) + 3).to(
+            device
+        )
+        optimization = self._optimization
         self._opt_G = optim.Adam(
             self.generator.parameters(),
-            lr=self.training.lr_g,
-            betas=(self.training.beta1, self.training.beta2),
+            lr=optimization.lr_g,
+            betas=(optimization.beta1, optimization.beta2),
         )
         self._opt_D = optim.Adam(
             self.discriminator.parameters(),
-            lr=self.training.lr_d,
-            betas=(self.training.beta1, self.training.beta2),
+            lr=optimization.lr_d,
+            betas=(optimization.beta1, optimization.beta2),
         )
 
         self._scaler_G = GradScaler(enabled=self._amp_enabled)
         self._scaler_D = GradScaler(enabled=self._amp_enabled)
-        self._scheduler_G = build_lr_scheduler(self.training, self._opt_G)
+        scheduler = optimization.scheduler
+        self._scheduler_G = build_lr_scheduler(scheduler, self._epochs, self._opt_G)
         self._scheduler_D = (
-            build_lr_scheduler(self.training, self._opt_D)
+            build_lr_scheduler(scheduler, self._epochs, self._opt_D)
             if self.loss_config.active_discriminator
             else None
         )
@@ -260,13 +220,13 @@ class Pix2PixMethod:
             {
                 name: value
                 for name, value in metrics.image.items()
-                if name in SUPPORTED_CHECKPOINT_METRICS
+                if name in self._checkpoint_metrics
             }
         )
         return {name: value for name, value in values.items() if math.isfinite(value)}
 
     def checkpoint_selection_modes(self) -> dict[str, str]:
-        return {metric: default_checkpoint_mode(metric) for metric in SUPPORTED_CHECKPOINT_METRICS}
+        return dict(self._checkpoint_metrics)
 
     def step_schedulers(
         self,
@@ -274,16 +234,16 @@ class Pix2PixMethod:
         epoch: int,
         validation_metrics: MethodMetrics | None,
     ) -> bool:
+        scheduler = self._optimization.scheduler
+        monitor = scheduler.monitor
         return step_lr_schedulers(
-            self.training.scheduler,
+            scheduler,
             (self._scheduler_G, self._scheduler_D),
             epoch=epoch,
             monitor_value=(
                 None
-                if validation_metrics is None
-                else lambda: self.validation_metric(
-                    validation_metrics, self.training.scheduler.monitor
-                )
+                if validation_metrics is None or monitor is None
+                else lambda: self.validation_metric(validation_metrics, monitor)
             ),
         )
 
@@ -293,8 +253,11 @@ class Pix2PixMethod:
             "lr_d": float(self._opt_D.param_groups[0]["lr"]),
         }
 
-    def component_metadata(self) -> Mapping[str, object]:
-        return pix2pix_component_metadata(self.config.model)
+    def checkpoint_identity(self) -> CheckpointIdentity:
+        return self._identity
+
+    def objective_metadata(self) -> dict[str, Any]:
+        return self.loss_config.to_dict()
 
     def _models(self) -> dict[str, torch.nn.Module]:
         return {"generator": self.generator, "discriminator": self.discriminator}
@@ -306,11 +269,15 @@ class Pix2PixMethod:
         }
 
     def state_dict(self) -> dict[str, Any]:
-        return training_state_dict(self.training, self._models(), self._roles())
+        return training_state_dict(
+            self._optimization.scheduler, self._epochs, self._models(), self._roles()
+        )
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
         """Preflight every state group, then restore; nothing is mutated on rejection."""
         require_state_keys(state, TRAINING_STATE_KEYS, "state")
-        check_training_state(state, self.training, self._models(), self._roles())
+        check_training_state(
+            state, self._optimization.scheduler, self._epochs, self._models(), self._roles()
+        )
         with restoring_validated_state(self.name):
             load_training_state(state, self._models(), self._roles())

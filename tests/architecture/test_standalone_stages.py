@@ -182,7 +182,6 @@ def test_trainer_runs_from_loaders_and_run_layout_without_session(
             loader,
             loader,
             torch.device("cpu"),
-            image_size=(8, 8),
         )
 
     with _recorded_access() as accessed:

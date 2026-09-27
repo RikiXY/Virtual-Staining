@@ -8,12 +8,10 @@ import torch.nn as nn
 from torch.amp import autocast
 from torchvision import transforms
 
+from virtual_staining.checkpoint_contract import read_checkpoint, validate_checkpoint
 from virtual_staining.checkpoint_selection import resolve_checkpoint_path
-from virtual_staining.config.inference import InferenceDirection
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.run_layout import RunLayout
-from virtual_staining.methods.cyclegan import load_cyclegan_inference_generator
-from virtual_staining.methods.pix2pix import load_pix2pix_inference_generator
 from virtual_staining.models.io_contract import (
     build_model_input_transform,
     denormalize_model_output,
@@ -67,20 +65,21 @@ def resolve_inference_checkpoint(config: RunConfig, paths: RunLayout) -> Path:
     )
 
 
-def inference_direction(config: RunConfig) -> InferenceDirection | None:
-    """Return the CycleGAN translation direction (default A_to_B), or None for Pix2Pix."""
-    if config.method.name != "cyclegan":
+def inference_direction(config: RunConfig) -> str | None:
+    """Return the selected prediction direction, or None for single-direction methods.
+
+    Methods with several directions default to their first declared direction.
+    """
+    directions = config.method.definition.prediction_directions
+    if len(directions) < 2:
         return None
     configured = config.inference.direction if config.inference is not None else None
-    return configured or "A_to_B"
+    return configured or directions[0]
 
 
 def inference_input_names(config: RunConfig) -> tuple[str, ...]:
     """Return the named inputs the configured inference direction consumes."""
-    direction = inference_direction(config)
-    if direction is None:
-        return tuple(config.model.inputs)
-    return (config.model.inputs[0],) if direction == "A_to_B" else (config.model.target,)
+    return config.method.definition.prediction_inputs(config, inference_direction(config))
 
 
 def load_inference_generator(
@@ -89,12 +88,22 @@ def load_inference_generator(
     device: torch.device,
     checkpoint_path: Path | None = None,
 ) -> tuple[nn.Module, Path]:
-    """Load the direction's generator from ``checkpoint_path`` (resolved from config if None)."""
+    """Build the prediction network through the selected method definition.
+
+    The checkpoint must name registered definitions and match the config's semantic
+    identity before the definition builds anything; only the prediction network is
+    constructed (no optimizer, scheduler, objective or unused network).
+    """
     if checkpoint_path is None:
         checkpoint_path = resolve_inference_checkpoint(config, paths)
-    direction = inference_direction(config)
-    if direction is None:
-        generator = load_pix2pix_inference_generator(checkpoint_path, config, device)
-    else:
-        generator = load_cyclegan_inference_generator(checkpoint_path, config, direction, device)
+    definition = config.method.definition
+    payload = read_checkpoint(checkpoint_path)
+    config.definitions.require_checkpoint(payload, checkpoint_path)
+    checkpoint = validate_checkpoint(
+        payload, definition.checkpoint_identity(config), checkpoint_path
+    )
+    generator = definition.build_inference_model(
+        config, checkpoint, direction=inference_direction(config), device=device
+    )
+    generator.eval()
     return generator, checkpoint_path

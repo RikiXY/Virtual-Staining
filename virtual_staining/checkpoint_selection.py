@@ -8,30 +8,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, get_args
 
-from virtual_staining.metrics import VALIDATION_IMAGE_METRIC_NAMES, is_higher_better_metric
-
 logger = logging.getLogger(__name__)
 
-CheckpointMetric = str
 CheckpointMode = Literal["min", "max"]
-CHECKPOINT_SELECTION_SCHEMA_VERSION = 1
-SUPPORTED_CHECKPOINT_METRICS = frozenset(("loss_G_val", *VALIDATION_IMAGE_METRIC_NAMES))
+# Version 2 replaced the built-in ``loss_config`` record field with method-owned
+# ``objective_metadata``; version 1 files are rejected, never converted.
+CHECKPOINT_SELECTION_SCHEMA_VERSION = 2
 RANKED_CHECKPOINT_POLICIES = frozenset({"best", "top_k"})
 SUPPORTED_CHECKPOINT_POLICIES = frozenset({"latest"}) | RANKED_CHECKPOINT_POLICIES
 _CHECKPOINT_NAME_PATTERN = re.compile(r"^ep(?P<epoch>\d+)\.pth$")
-
-
-def default_checkpoint_mode(metric: str) -> CheckpointMode:
-    if metric not in SUPPORTED_CHECKPOINT_METRICS:
-        raise ValueError(
-            f"Unsupported checkpoint_metric {metric!r}. "
-            f"Supported metrics: {sorted(SUPPORTED_CHECKPOINT_METRICS)}."
-        )
-    if metric == "loss_G_val":
-        return "min"
-    if metric.startswith("val_"):
-        return "max" if is_higher_better_metric(metric.removeprefix("val_")) else "min"
-    raise AssertionError(f"Unsupported checkpoint_metric slipped through validation: {metric!r}")
 
 
 @dataclass(frozen=True)
@@ -53,8 +38,13 @@ def update_checkpoint_selection(
     epoch: int,
     checkpoint_path: Path,
     config_hash: str | None = None,
-    loss_config: dict[str, Any] | None = None,
+    objective_metadata: dict[str, Any] | None = None,
 ) -> Path:
+    """Rank ``checkpoint_path`` per metric in ``best.json``.
+
+    ``objective_metadata`` is optional JSON-compatible, method-owned provenance about the
+    configured objective; it is recorded verbatim and never interpreted.
+    """
     if top_k <= 0:
         raise ValueError("top_k must be greater than 0")
     if epoch < 0:
@@ -98,8 +88,8 @@ def update_checkpoint_selection(
         }
         if config_hash is not None:
             record["config_hash"] = config_hash
-        if loss_config is not None:
-            record["loss_config"] = loss_config
+        if objective_metadata is not None:
+            record["objective_metadata"] = objective_metadata
         records.append(record)
 
         ranked_records = _rank_top_k_records(records, mode=mode, top_k=top_k)
@@ -318,13 +308,13 @@ def _normalize_top_k_record(record: Any, top_k_path: Path) -> dict[str, Any]:
                 f"Top-k checkpoint metadata at {top_k_path} has invalid record config_hash."
             )
         normalized["config_hash"] = config_hash
-    if "loss_config" in record:
-        loss_config = record["loss_config"]
-        if not isinstance(loss_config, dict):
+    if "objective_metadata" in record:
+        objective_metadata = record["objective_metadata"]
+        if not isinstance(objective_metadata, dict):
             raise ValueError(
-                f"Top-k checkpoint metadata at {top_k_path} has invalid record loss_config."
+                f"Top-k checkpoint metadata at {top_k_path} has invalid record objective_metadata."
             )
-        normalized["loss_config"] = loss_config
+        normalized["objective_metadata"] = objective_metadata
     return normalized
 
 

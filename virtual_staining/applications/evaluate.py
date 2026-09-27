@@ -5,7 +5,7 @@ import json
 import logging
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from virtual_staining.config.evaluation import EvaluationProtocol
 from virtual_staining.config.run import RunConfig
@@ -73,7 +73,7 @@ EVALUATION_OWNED_OUTPUTS: tuple[str, ...] = (
 def evaluation_protocol(config: RunConfig) -> EvaluationProtocol:
     """Return the configured protocol, defaulting to the method's training pairing."""
     configured = config.evaluation.protocol if config.evaluation is not None else None
-    return configured or ("unpaired" if config.method.name == "cyclegan" else "paired")
+    return configured or cast(EvaluationProtocol, config.data.pairing)
 
 
 def reference_domain(config: RunConfig) -> str:
@@ -106,7 +106,7 @@ def paired_sample(
 def _load_paired_manifest(config: RunConfig) -> DatasetManifest:
     try:
         manifest = load_manifest_or_raise(config.project)
-        if config.method.name == "cyclegan" and (
+        if config.data.pairing == "unpaired" and (
             config.model.inputs[0] not in manifest.metadata.input_modalities
             or config.model.target != manifest.metadata.target_modality
         ):
@@ -117,11 +117,12 @@ def _load_paired_manifest(config: RunConfig) -> DatasetManifest:
             )
         manifest.validate(check_files_exist=True, require_splits={"test"})
     except (FileNotFoundError, ValueError) as exc:
-        if config.method.name != "cyclegan":
+        if config.data.pairing != "unpaired":
             raise
         raise type(exc)(
-            "CycleGAN evaluation.protocol='paired' requires an aligned held-out test manifest; "
-            f"data.domains collections are never treated as pairs. {exc}"
+            "evaluation.protocol='paired' for a data.pairing='unpaired' run requires an aligned "
+            "held-out test manifest; data.domains collections are never treated as pairs. "
+            f"{exc}"
         ) from exc
     return manifest
 

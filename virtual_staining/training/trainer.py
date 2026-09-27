@@ -71,7 +71,6 @@ class Trainer:
         val_loader: torch.utils.data.DataLoader,
         device: torch.device,
         *,
-        image_size: tuple[int, int],
         experiment_session: ExperimentSession | None = None,
         config_hash: str | None = None,
         progress_reporter: ProgressReporter | None = None,
@@ -89,7 +88,6 @@ class Trainer:
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
-        self.losses = method.loss_config
         self._logs_dir = run_paths.logs_dir
         self._checkpoints_dir = run_paths.checkpoints_dir
         self._output_val_dir = run_paths.output_val_dir
@@ -97,7 +95,6 @@ class Trainer:
         self._checkpoints = MethodCheckpointManager(
             method,
             run_paths.checkpoints_dir,
-            image_size=image_size,
             config_hash=config_hash,
         )
 
@@ -197,11 +194,7 @@ class Trainer:
         learning_rates = " | ".join(
             f"{name}={value}" for name, value in self.method.learning_rates().items()
         )
-        logger.info(
-            "Optimization | %s | scheduler=%s",
-            learning_rates or "no optimizer learning rates",
-            self.config.scheduler.to_dict(),
-        )
+        logger.info("Optimization | %s", learning_rates or "no optimizer learning rates")
         logger.info("Training started")
 
     def _start_progress_tracker(self, start_epoch: int) -> ProgressTracker:
@@ -227,6 +220,7 @@ class Trainer:
             resume_at=start_epoch,
             metric_names=self.method.metric_names,
             component_total_names=self.method.component_total_names,
+            validation_metric_names=self.method.validation_metric_names,
         ) as history:
             session = _TrainingSession(
                 start_epoch=start_epoch,
@@ -349,7 +343,6 @@ class Trainer:
                 session=session,
             )
             config_hash = self._config_hash
-            loss_config = self.losses.to_dict() if self.losses is not None else None
             checkpoint_modes = self._checkpoint_selection_modes()
             update_checkpoint_selection(
                 self._checkpoints_dir,
@@ -359,7 +352,7 @@ class Trainer:
                 epoch=epoch,
                 checkpoint_path=ranked_checkpoint_path,
                 config_hash=config_hash,
-                loss_config=loss_config,
+                objective_metadata=self.method.objective_metadata(),
             )
             self._sync_best_checkpoint(session)
         return val_metrics, ranked_checkpoint_path

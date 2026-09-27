@@ -14,8 +14,7 @@ import torch.optim as optim
 from torch.amp import GradScaler
 
 from virtual_staining.checkpoint_contract import CheckpointCompatibilityError, first_difference
-from virtual_staining.config.losses import LossConfig
-from virtual_staining.config.training import LearningRateSchedulerConfig, TrainingConfig
+from virtual_staining.config.scheduler import LearningRateSchedulerConfig
 from virtual_staining.training.runtime import MethodMetrics
 
 logger = logging.getLogger(__name__)
@@ -60,14 +59,6 @@ def unpack_batch(
             raise TypeError(f"training batch mask {name!r} must be a tensor")
         masks[str(name)] = value.to(device)
     return inputs, raw_target.to(device), masks
-
-
-def configured_loss_names(losses: LossConfig | None) -> list[str]:
-    if losses is None:
-        return []
-    names = [f"generator_{term.name}" for term in losses.generator]
-    names.extend(f"discriminator_{term.name}" for term in losses.discriminator)
-    return names
 
 
 def metrics_fieldnames(
@@ -199,14 +190,15 @@ class TrainingEpochAccumulator:
 Scheduler = optim.lr_scheduler.LRScheduler | optim.lr_scheduler.ReduceLROnPlateau
 
 
-def build_lr_scheduler(training: TrainingConfig, optimizer: optim.Optimizer) -> Scheduler | None:
-    scheduler_config = training.scheduler
+def build_lr_scheduler(
+    scheduler_config: LearningRateSchedulerConfig, epochs: int, optimizer: optim.Optimizer
+) -> Scheduler | None:
     if scheduler_config.name == "none":
         return None
     if scheduler_config.name == "linear_decay":
         assert scheduler_config.decay_start_epoch is not None
         decay_start_epoch = scheduler_config.decay_start_epoch
-        decay_span = max(1, training.epochs - decay_start_epoch)
+        decay_span = max(1, epochs - decay_start_epoch)
 
         def lr_lambda(epoch: int) -> float:
             if epoch <= decay_start_epoch:
@@ -354,16 +346,18 @@ def validated_model_state(
     return models[name]
 
 
-def scheduler_policy(training: TrainingConfig) -> dict[str, Any]:
+def scheduler_policy(scheduler: LearningRateSchedulerConfig, epochs: int) -> dict[str, Any]:
     """Return the reconstruction-relevant policy of the scheduler ``build_lr_scheduler`` makes."""
-    policy = training.scheduler.to_dict()
-    if training.scheduler.name == "linear_decay":
+    policy = scheduler.to_dict()
+    if scheduler.name == "linear_decay":
         # LambdaLR state does not carry its closure; the decay horizon is fixed by this basis.
-        policy["epochs"] = training.epochs
+        policy["epochs"] = epochs
     return policy
 
 
-def optimization_identity(training: TrainingConfig, role: OptimizationRole) -> dict[str, Any]:
+def optimization_identity(
+    scheduler: LearningRateSchedulerConfig, epochs: int, role: OptimizationRole
+) -> dict[str, Any]:
     defaults = role.optimizer.defaults
     optimizer: dict[str, Any] = {"class": type(role.optimizer).__name__}
     for key in _OPTIMIZER_POLICY_KEYS:
@@ -371,7 +365,7 @@ def optimization_identity(training: TrainingConfig, role: OptimizationRole) -> d
         optimizer[key] = list(value) if isinstance(value, tuple) else value
     return {
         "optimizer": optimizer,
-        "scheduler": None if role.scheduler is None else scheduler_policy(training),
+        "scheduler": None if role.scheduler is None else scheduler_policy(scheduler, epochs),
     }
 
 
@@ -447,7 +441,8 @@ def _check_scheduler_state(stored: object, scheduler: Scheduler | None, context:
 
 
 def training_state_dict(
-    training: TrainingConfig,
+    scheduler: LearningRateSchedulerConfig,
+    epochs: int,
     models: Mapping[str, nn.Module],
     roles: Mapping[str, OptimizationRole],
 ) -> dict[str, Any]:
@@ -455,7 +450,7 @@ def training_state_dict(
     return {
         "models": {name: model.state_dict() for name, model in models.items()},
         "optimization": {
-            name: optimization_identity(training, role) for name, role in roles.items()
+            name: optimization_identity(scheduler, epochs, role) for name, role in roles.items()
         },
         "optimizers": {name: role.optimizer.state_dict() for name, role in roles.items()},
         "scalers": {name: role.scaler.state_dict() for name, role in roles.items()},
@@ -468,7 +463,8 @@ def training_state_dict(
 
 def check_training_state(
     state: Mapping[str, Any],
-    training: TrainingConfig,
+    scheduler: LearningRateSchedulerConfig,
+    epochs: int,
     models: Mapping[str, nn.Module],
     roles: Mapping[str, OptimizationRole],
 ) -> None:
@@ -479,7 +475,9 @@ def check_training_state(
     identities = require_state_keys(state["optimization"], roles.keys(), "state.optimization")
     for name, role in roles.items():
         _check_identity(
-            identities[name], optimization_identity(training, role), f"state.optimization.{name}"
+            identities[name],
+            optimization_identity(scheduler, epochs, role),
+            f"state.optimization.{name}",
         )
     optimizers = require_state_keys(state["optimizers"], roles.keys(), "state.optimizers")
     scalers = require_state_keys(state["scalers"], roles.keys(), "state.scalers")

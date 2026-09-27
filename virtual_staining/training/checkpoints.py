@@ -9,7 +9,6 @@ import torch
 
 from virtual_staining.checkpoint_contract import (
     CheckpointCompatibilityError,
-    CheckpointIdentity,
     build_checkpoint_payload,
     read_checkpoint,
     validate_checkpoint,
@@ -28,25 +27,11 @@ class MethodCheckpointManager:
         method: TrainingMethodRuntime,
         checkpoints_dir: Path,
         *,
-        image_size: tuple[int, int],
         config_hash: str | None = None,
     ) -> None:
         self.method = method
         self.checkpoints_dir = checkpoints_dir
-        self.image_size = image_size
         self.config_hash = config_hash
-
-    def identity(self) -> CheckpointIdentity:
-        method = self.method
-        return CheckpointIdentity(
-            method=method.name,
-            pairing=method.pairing,
-            inputs=tuple(method.input_names),
-            outputs=tuple(method.output_names),
-            prediction_directions=tuple(method.prediction_directions),
-            components=method.component_metadata(),
-            image_size=self.image_size,
-        )
 
     def save(self, epoch: int) -> Path:
         """Write, read back, validate, then atomically publish ``ep<NNN>.pth``.
@@ -57,7 +42,7 @@ class MethodCheckpointManager:
         """
         self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
         path = self.checkpoints_dir / f"ep{epoch:03d}.pth"
-        identity = self.identity()
+        identity = self.method.checkpoint_identity()
         payload = build_checkpoint_payload(
             identity,
             epoch=epoch,
@@ -88,7 +73,11 @@ class MethodCheckpointManager:
 
     def load(self, path: Path) -> int:
         """Validate ``path`` and restore method state; a failed restore voids the runtime."""
-        checkpoint = validate_checkpoint(read_checkpoint(path), self.identity(), path)
+        # Identity (method definition, components, options, I/O) is checked before any
+        # method state is touched.
+        checkpoint = validate_checkpoint(
+            read_checkpoint(path), self.method.checkpoint_identity(), path
+        )
         try:
             self.method.load_state_dict(checkpoint.state)
         except CheckpointCompatibilityError as exc:
