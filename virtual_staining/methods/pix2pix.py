@@ -154,6 +154,11 @@ class Pix2PixMethod:
             if self.loss_config.active_discriminator
             else None
         )
+        # One resolved evaluator shared by training steps and validation.
+        self._loss_evaluator = ConfiguredLossEvaluator(
+            generator_terms=self.loss_config.generator,
+            discriminator_terms=self.loss_config.discriminator,
+        )
         self._step = Pix2PixTrainingStep(
             generator=self.generator,
             discriminator=self.discriminator,
@@ -163,13 +168,8 @@ class Pix2PixMethod:
             scaler_D=self._scaler_D,
             device=device,
             amp_enabled=self._amp_enabled,
-            generator_loss_terms=self.loss_config.generator,
-            discriminator_loss_terms=self.loss_config.discriminator,
+            loss_evaluator=self._loss_evaluator,
             benchmark_recorder=benchmark_recorder,
-        )
-        self._loss_evaluator = ConfiguredLossEvaluator(
-            generator_terms=self.loss_config.generator,
-            discriminator_terms=self.loss_config.discriminator,
         )
 
     def train_mode(self) -> None:

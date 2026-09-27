@@ -14,14 +14,11 @@ from virtual_staining.config.model import ModelConfig
 from virtual_staining.config.project import PROJECT_KEYS, ProjectConfig
 from virtual_staining.config.training import TrainingConfig
 from virtual_staining.config.validation import reject_unknown_keys
+from virtual_staining.loss_definitions import method_loss_names
 
 _TOP_LEVEL_KEYS = PROJECT_KEYS | frozenset(
     {"preprocessing", "training", "inference", "evaluation", "method", "model", "data"}
 )
-_METHOD_LOSSES: dict[str, frozenset[str]] = {
-    "pix2pix": frozenset({"adversarial_bce", "l1", "ssim"}),
-    "cyclegan": frozenset({"adversarial_lsgan", "cycle_l1", "identity_l1"}),
-}
 # Two stride-2 stages must round-trip exactly; residual reflection padding needs >= 2 px.
 _RESNET_SIZE_MULTIPLE = 4
 _RESNET_MIN_SIZE = 8
@@ -76,14 +73,14 @@ class RunConfig:
             self._validate_cyclegan()
         if self.training is not None:
             losses = self.training.losses
+            supported = method_loss_names(method)
             unsupported = sorted(
-                {term.name for term in (*losses.generator, *losses.discriminator)}
-                - _METHOD_LOSSES[method]
+                {term.name for term in (*losses.generator, *losses.discriminator)} - supported
             )
             if unsupported:
                 raise ValueError(
                     f"training.losses {unsupported} are not supported by method.name={method!r}; "
-                    f"supported: {sorted(_METHOD_LOSSES[method])}"
+                    f"supported: {sorted(supported)}"
                 )
 
     def _validate_cyclegan(self) -> None:

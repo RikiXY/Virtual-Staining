@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 from collections.abc import Callable
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import pytest
 
 from tests.config_helpers import cyclegan_config_data, write_config_data, write_run_config
+from virtual_staining import loss_definitions
 from virtual_staining.config.run import RunConfig
+from virtual_staining.loss_definitions import LOSS_DEFINITIONS
 
 Mutation = Callable[[dict[str, Any]], None]
 
@@ -248,3 +252,63 @@ training:
 """,
             )
         )
+
+
+@pytest.mark.parametrize("name", ["adversarial_bce", "l1", "ssim"])
+def test_cyclegan_rejects_every_pix2pix_loss(tmp_path: Path, name: str) -> None:
+    def add(data: dict[str, Any]) -> None:
+        data["training"]["losses"]["generator"].append({"name": name, "weight": 1.0})
+
+    with pytest.raises(ValueError, match=rf"\['{name}'\] are not supported by method.name='cyc"):
+        _load(tmp_path, add)
+
+
+@pytest.mark.parametrize("name", ["adversarial_lsgan", "cycle_l1", "identity_l1"])
+def test_pix2pix_rejects_every_cyclegan_loss(tmp_path: Path, name: str) -> None:
+    losses = (
+        f"training:\n  epochs: 1\n  losses:\n    generator:\n      - name: {name}\n"
+        "        weight: 1.0\n"
+    )
+    with pytest.raises(ValueError, match=rf"\['{name}'\] are not supported by method.name='pix"):
+        RunConfig.from_yaml(write_run_config(tmp_path, losses))
+
+
+def test_method_compatibility_uses_canonical_definitions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    l1 = LOSS_DEFINITIONS["l1"]
+    patched = {**LOSS_DEFINITIONS, "l1": dataclasses.replace(l1, methods=frozenset({"cyclegan"}))}
+    monkeypatch.setattr(loss_definitions, "LOSS_DEFINITIONS", MappingProxyType(patched))
+
+    config = _load(
+        tmp_path,
+        lambda data: data["training"]["losses"]["generator"].append({"name": "l1", "weight": 1.0}),
+    )
+    assert "l1" in {term.name for term in config.training.losses.generator}  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        None,
+        {"name": "identity_l1", "weight": 0.0},
+        {"name": "identity_l1", "weight": 1.0, "enabled": False},
+    ],
+)
+def test_cyclegan_identity_term_is_optional(
+    tmp_path: Path, identity: dict[str, Any] | None
+) -> None:
+    def mutate(data: dict[str, Any]) -> None:
+        data["training"]["losses"]["generator"][2:] = [] if identity is None else [identity]
+
+    config = _load(tmp_path, mutate)
+    assert "identity_l1" not in {t.name for t in config.training.losses.active_generator}  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize("role", ["generator", "discriminator"])
+def test_cyclegan_required_terms_must_be_enabled(tmp_path: Path, role: str) -> None:
+    def disable(data: dict[str, Any]) -> None:
+        data["training"]["losses"][role][0]["enabled"] = False
+
+    with pytest.raises(ValueError, match=f"requires an active training.losses.{role} term"):
+        _load(tmp_path, disable)

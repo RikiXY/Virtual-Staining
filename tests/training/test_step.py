@@ -4,6 +4,7 @@ import torch
 from torch import nn
 
 from virtual_staining.config.losses import LossTermConfig
+from virtual_staining.training.losses import ConfiguredLossEvaluator
 from virtual_staining.training.steps import Pix2PixTrainingStep
 
 
@@ -39,8 +40,10 @@ def test_training_step_accepts_named_inputs_and_derived_channels() -> None:
         torch.amp.GradScaler("cpu", enabled=False),
         torch.device("cpu"),
         False,
-        generator_loss_terms=(LossTermConfig("adversarial_bce", 1.0), LossTermConfig("l1", 1.0)),
-        discriminator_loss_terms=(LossTermConfig("adversarial_bce", 1.0),),
+        loss_evaluator=ConfiguredLossEvaluator(
+            generator_terms=(LossTermConfig("adversarial_bce", 1.0), LossTermConfig("l1", 1.0)),
+            discriminator_terms=(LossTermConfig("adversarial_bce", 1.0),),
+        ),
     )
     inputs = {"LF": torch.randn(2, 3, 8, 8), "AF": torch.randn(2, 3, 8, 8)}
     result = step.step(inputs, torch.randn(2, 3, 8, 8), masks={})
@@ -59,8 +62,7 @@ def test_training_step_rejects_missing_named_input() -> None:
         torch.amp.GradScaler("cpu", enabled=False),
         torch.device("cpu"),
         False,
-        generator_loss_terms=(LossTermConfig("l1", 1.0),),
-        discriminator_loss_terms=(),
+        loss_evaluator=ConfiguredLossEvaluator(generator_terms=(LossTermConfig("l1", 1.0),)),
     )
     try:
         step.step({"LF": torch.zeros(1, 3, 4, 4)}, torch.zeros(1, 3, 4, 4), masks={})

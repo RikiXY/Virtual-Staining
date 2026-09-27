@@ -9,7 +9,6 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.amp import GradScaler, autocast
 
-from virtual_staining.config.losses import LossTermConfig
 from virtual_staining.models.generator import concat_inputs
 from virtual_staining.training.losses import (
     ConfiguredLossEvaluator,
@@ -34,8 +33,7 @@ class Pix2PixTrainingStep:
         scaler_D: GradScaler,
         device: torch.device,
         amp_enabled: bool,
-        generator_loss_terms: tuple[LossTermConfig, ...] = (),
-        discriminator_loss_terms: tuple[LossTermConfig, ...] = (),
+        loss_evaluator: ConfiguredLossEvaluator,
         benchmark_recorder: TrainingBenchmarkRecorder | None = None,
     ) -> None:
         self.generator = generator
@@ -46,13 +44,8 @@ class Pix2PixTrainingStep:
         self.scaler_D = scaler_D
         self.device = device
         self.amp_enabled = amp_enabled
-        self.generator_loss_terms = generator_loss_terms
-        self.discriminator_loss_terms = discriminator_loss_terms
         self.benchmark_recorder = benchmark_recorder
-        self.loss_evaluator = ConfiguredLossEvaluator(
-            generator_terms=generator_loss_terms,
-            discriminator_terms=discriminator_loss_terms,
-        )
+        self.loss_evaluator = loss_evaluator
 
     def step(
         self,

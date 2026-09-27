@@ -43,7 +43,7 @@ def validate_epoch(
         total_loss_G = 0.0
         total_loss_D = 0.0
         component_totals = LossComponentAccumulator(configured_loss_names(losses))
-        needs_discriminator = _needs_discriminator_logits(losses)
+        needs_discriminator = loss_evaluator.needs_discriminator_logits
         image_metric_totals = ValidationImageMetricAccumulator()
         count = 0
         with torch.no_grad():
@@ -121,11 +121,3 @@ def validate_epoch(
             generator.train()
         if discriminator_was_training:
             discriminator.train()
-
-
-def _needs_discriminator_logits(losses: LossConfig | None) -> bool:
-    if losses is None:
-        return False
-    return any(
-        term.name == "adversarial_bce" for term in (*losses.generator, *losses.discriminator)
-    )

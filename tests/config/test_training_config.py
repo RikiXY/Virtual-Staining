@@ -6,7 +6,7 @@ import pytest
 
 from virtual_staining.config.losses import LossName
 from virtual_staining.config.training import TrainingConfig
-from virtual_staining.training.losses import LOSS_REGISTRY
+from virtual_staining.loss_definitions import LOSS_DEFINITIONS
 
 
 def _mapping(**overrides: object) -> dict[str, object]:
@@ -93,8 +93,8 @@ def test_training_rejects_invalid_choices(
         TrainingConfig.from_mapping(_mapping(**{section: {field: value}}))
 
 
-def test_config_loss_names_match_runtime_registry() -> None:
-    assert set(get_args(LossName)) == set(LOSS_REGISTRY)
+def test_static_loss_name_alias_matches_canonical_definitions() -> None:
+    assert set(get_args(LossName)) == set(LOSS_DEFINITIONS)
 
 
 @pytest.mark.parametrize("name", get_args(LossName))

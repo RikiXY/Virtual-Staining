@@ -628,3 +628,23 @@ def test_cpu_deserialized_checkpoint_is_restored_onto_the_execution_device(
     assert_nested_equal(resumed.state_dict(), source.state_dict())
     generator = load_inference_generator(config, RunLayout.from_project(config.project), cuda)[0]
     assert next(generator.parameters()).device.type == "cuda"
+
+
+def test_training_and_validation_share_one_resolved_loss_evaluator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import virtual_staining.methods.pix2pix as pix2pix_module
+
+    method = Pix2PixMethod(_config(tmp_path), _CPU)
+    captured: dict[str, Any] = {}
+
+    def fake_validate_epoch(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(pix2pix_module, "validate_epoch", fake_validate_epoch)
+    with pytest.raises(RuntimeError, match="stop"):
+        method.validate([], epoch=0)  # type: ignore[arg-type]
+
+    assert method._step.loss_evaluator is method._loss_evaluator
+    assert captured["loss_evaluator"] is method._loss_evaluator

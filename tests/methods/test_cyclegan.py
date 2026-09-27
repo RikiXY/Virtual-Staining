@@ -548,3 +548,66 @@ def test_cyclegan_replay_pools_are_restored_onto_the_execution_device(tmp_path: 
     assert all(image.device.type == "cuda" for image in resumed._pool_A.images)
     assert_nested_equal(resumed.state_dict(), source.state_dict())
     resumed.step(_batch(2), epoch=1, global_step=1)
+
+
+def test_objectives_match_explicit_reference_formulas(tmp_path: Path) -> None:
+    method = _method(_config(tmp_path))
+    for model in method._models().values():
+        model.eval()
+    batch = _batch()
+    real_a, real_b = batch["domain_a"], batch["domain_b"]
+    D_A, D_B, G_AB, G_BA = method.D_A, method.D_B, method.G_A_to_B, method.G_B_to_A
+
+    with torch.no_grad():
+        fake_a, fake_b, rec_a, rec_b = method._translate(real_a, real_b)
+        generator = method._generator_objective(
+            real_a, real_b, fake_a, fake_b, rec_a, rec_b, epoch=0, global_step=0
+        )
+        discriminator = method._discriminator_objective(
+            real_a, real_b, fake_a, fake_b, epoch=0, global_step=0
+        )
+        adversarial = ((D_B(fake_b) - 1) ** 2).mean() + ((D_A(fake_a) - 1) ** 2).mean()
+        cycle = (rec_a - real_a).abs().mean() + (rec_b - real_b).abs().mean()
+        identity = (G_BA(real_a) - real_a).abs().mean() + (G_AB(real_b) - real_b).abs().mean()
+        domain_a = 0.5 * (((D_A(real_a) - 1) ** 2).mean() + (D_A(fake_a) ** 2).mean())
+        domain_b = 0.5 * (((D_B(real_b) - 1) ** 2).mean() + (D_B(fake_b) ** 2).mean())
+
+    expected_raw = {
+        "generator_adversarial_lsgan": adversarial.item(),
+        "generator_cycle_l1": cycle.item(),
+        "generator_identity_l1": identity.item(),
+    }
+    weights = {
+        "generator_adversarial_lsgan": 1.0,
+        "generator_cycle_l1": 10.0,
+        "generator_identity_l1": 5.0,
+    }
+    assert generator.raw == pytest.approx(expected_raw)
+    assert generator.current_weight == weights
+    assert generator.weighted == pytest.approx(
+        {key: value * weights[key] for key, value in expected_raw.items()}
+    )
+    assert generator.total.item() == pytest.approx(sum(generator.weighted.values()))
+    assert discriminator.raw == pytest.approx(
+        {"discriminator_adversarial_lsgan": (domain_a + domain_b).item()}
+    )
+    assert discriminator.total.item() == pytest.approx((domain_a + domain_b).item())
+
+
+def test_objectives_apply_schedules_and_skip_inactive_terms(tmp_path: Path) -> None:
+    def mutate(data: dict[str, Any]) -> None:
+        generator = data["training"]["losses"]["generator"]
+        generator[1]["schedule"] = {"type": "linear_warmup", "start_epoch": 0, "end_epoch": 4}
+        generator[2]["enabled"] = False
+
+    method = _method(_config(tmp_path, mutate))
+    batch = _batch()
+    real_a, real_b = batch["domain_a"], batch["domain_b"]
+    with torch.no_grad():
+        outputs = method._translate(real_a, real_b)
+        objective = method._generator_objective(real_a, real_b, *outputs, epoch=1, global_step=None)
+
+    assert objective.current_weight == {
+        "generator_adversarial_lsgan": 1.0,
+        "generator_cycle_l1": 2.5,
+    }

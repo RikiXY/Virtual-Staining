@@ -10,7 +10,6 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 from torch.amp import GradScaler, autocast
 
@@ -233,11 +232,6 @@ def _objective(terms: list[tuple[str, torch.Tensor, float]]) -> _Objective:
     )
 
 
-def _lsgan(prediction: torch.Tensor, real: bool) -> torch.Tensor:
-    target = torch.ones_like(prediction) if real else torch.zeros_like(prediction)
-    return F.mse_loss(prediction, target)
-
-
 def _set_requires_grad(modules: Iterable[nn.Module], requires_grad: bool) -> None:
     for module in modules:
         for parameter in module.parameters():
@@ -365,17 +359,24 @@ class CycleGANMethod:
         epoch: int,
         global_step: int | None,
     ) -> _Objective:
+        # CycleGAN owns which directional tensors each term compares; the primitive math
+        # comes from the canonical loss definition.
         terms: list[tuple[str, torch.Tensor, float]] = []
         for term in self.loss_config.active_generator:
             weight = term.current_weight(epoch=epoch, global_step=global_step)
+            loss = term.definition
             if term.name == "adversarial_lsgan":
-                raw = _lsgan(self.D_B(fake_b), True) + _lsgan(self.D_A(fake_a), True)
+                raw = loss.adversarial_loss(
+                    self.D_B(fake_b), target_is_real=True
+                ) + loss.adversarial_loss(self.D_A(fake_a), target_is_real=True)
             elif term.name == "cycle_l1":
-                raw = F.l1_loss(rec_a, real_a) + F.l1_loss(rec_b, real_b)
-            elif term.name == "identity_l1":
-                raw = F.l1_loss(self.G_B_to_A(real_a), real_a) + F.l1_loss(
-                    self.G_A_to_B(real_b), real_b
+                raw = loss.reconstruction_loss(rec_a, real_a) + loss.reconstruction_loss(
+                    rec_b, real_b
                 )
+            elif term.name == "identity_l1":
+                raw = loss.reconstruction_loss(
+                    self.G_B_to_A(real_a), real_a
+                ) + loss.reconstruction_loss(self.G_A_to_B(real_b), real_b)
             else:
                 raise AssertionError(f"Unsupported CycleGAN generator loss {term.name!r}")
             terms.append((f"generator_{term.name}", raw, weight))
@@ -395,8 +396,15 @@ class CycleGANMethod:
         for term in self.loss_config.active_discriminator:
             if term.name != "adversarial_lsgan":
                 raise AssertionError(f"Unsupported CycleGAN discriminator loss {term.name!r}")
-            loss_d_a = 0.5 * (_lsgan(self.D_A(real_a), True) + _lsgan(self.D_A(fake_a), False))
-            loss_d_b = 0.5 * (_lsgan(self.D_B(real_b), True) + _lsgan(self.D_B(fake_b), False))
+            loss = term.definition
+            loss_d_a = 0.5 * (
+                loss.adversarial_loss(self.D_A(real_a), target_is_real=True)
+                + loss.adversarial_loss(self.D_A(fake_a), target_is_real=False)
+            )
+            loss_d_b = 0.5 * (
+                loss.adversarial_loss(self.D_B(real_b), target_is_real=True)
+                + loss.adversarial_loss(self.D_B(fake_b), target_is_real=False)
+            )
             weight = term.current_weight(epoch=epoch, global_step=global_step)
             terms.append((f"discriminator_{term.name}", loss_d_a + loss_d_b, weight))
         return _objective(terms)

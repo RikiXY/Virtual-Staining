@@ -18,13 +18,14 @@ upper layers may import from lower layers, never the reverse.
 | `metrics.py` | Image metric computations, directions, quality thresholds, and validation image metric names |
 | `checkpoint_contract.py` | Topology-neutral v4 checkpoint payload and strict method-aware compatibility validation |
 | `checkpoint_selection.py` | Neutral `best.json` ranking, policy, and metric-direction selection |
+| `loss_definitions.py` | Canonical built-in loss definitions: name, allowed roles, supported methods, parameter contract and validation, and primitive tensor math, shared by config validation and method runtimes |
 | `utils/` | Shared primitives: artifact naming, image dimensions, and image I/O helpers |
 | `config/` | Sole owner of YAML-facing dataclasses and strict parsers for every config section |
 | `experiment/` | Canonical `RunLayout` for one run, `ResultsLayout` for shared comparisons, stage snapshots, run metadata, manifest/config hashing, and environment snapshots |
 | `models/` | Network implementations (`ConcatUNetGenerator`, `ResnetGenerator`, `PatchGANDiscriminator`), factories, and the model-I/O normalization contract; no training state |
 | `data/` | Canonical `DatasetLayout`, slide sets, paired manifests, unpaired domain collections, dataset building, registration, and dataset-owned provenance/fingerprints |
 | `methods/` | The two built-in method runtimes (`Pix2PixMethod`, `CycleGANMethod`), each owning its topology, optimizers, losses, checkpoint state, component metadata, and inference loader; `registry.py` selects one from `method.name` |
-| `training/` | The `TrainingMethodRuntime` protocol, method-agnostic `Trainer`, generic `MethodCheckpointManager`, validation, history, loss configuration/registry, and callback-driven progress events |
+| `training/` | The `TrainingMethodRuntime` protocol, method-agnostic `Trainer`, generic `MethodCheckpointManager`, validation, history, the Pix2Pix configured-loss evaluator, and callback-driven progress events |
 | `inference/` | Checkpoint resolution, method dispatch to the method-owned loaders, CycleGAN direction resolution, generic single/directory/tiled/WSI inference, and output naming |
 | `evaluation/` | Paired per-image metrics and grouped summaries, unpaired collection diagnostics, diagnostic plots, representative selection, and comparison panels |
 | `applications/` | User-visible stage lifecycle owners and infer-images runtime composition; no `argparse` |
@@ -38,6 +39,17 @@ Two methods are built in: Pix2Pix (paired, named N-input -> one-target) and Cycl
 `class_path` loading, or plugin discovery. `RunConfig` validates the method-specific
 combination of data pairing, generator architecture, losses, inference direction, and
 evaluation protocol before any runtime is built.
+
+The six built-in losses (`adversarial_bce`, `l1`, `ssim` for Pix2Pix; `adversarial_lsgan`,
+`cycle_l1`, `identity_l1` for CycleGAN) are each defined once in `loss_definitions.py`.
+Config parsing derives accepted names, roles, parameters, and method compatibility from
+those definitions, and runtimes take primitive math (BCE/LSGAN adversarial, L1, SSIM,
+foreground-mask weighting) from them. Objective composition stays method-owned: Pix2Pix's
+`ConfiguredLossEvaluator` (one per method instance, shared by training and validation)
+applies primitives to the conditional discriminator logits and generated image, while
+`CycleGANMethod` decides which directional tensors each term compares, sums the A/B
+directions, and requires its active adversarial and cycle terms. Loss-weight schedules
+remain `LossScheduleConfig` in `config/losses.py`; definitions do not own weights.
 
 `training/runtime.py` defines the `TrainingMethodRuntime` protocol the generic training
 code consumes: method identity (`name`, `pairing`, `input_names`, `output_names`,

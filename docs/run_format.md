@@ -232,11 +232,11 @@ and all derived paths resolved. Differences from `input.yaml` reflect default
 values that were not explicitly set by the user.
 
 Training losses are recorded under `training.losses.generator` and
-`training.losses.discriminator` lists. Training requires explicit loss terms. Registered
-losses have a default weight of `0.0`; a term is active only when it is
-explicitly listed, `enabled` is `true`, and its scheduled current weight is
-nonzero. Explicitly listed terms must declare `weight`; unlisted registry
-entries remain absent and inactive.
+`training.losses.discriminator` lists. Training requires explicit loss terms. A term is
+active only when it is explicitly listed, `enabled` is `true`, and its scheduled current
+weight is nonzero. Explicitly listed terms must declare `weight`; unlisted losses remain
+absent and inactive. Weights, schedule factors, mask weights, and SSIM numeric
+parameters must be finite; NaN and infinity are rejected.
 
 Training-only augmentation is recorded under `training.augmentation`. When
 enabled, the training split is virtually expanded in memory; no augmented patch
@@ -362,7 +362,7 @@ weight `1.0`.
 The training SSIM implementation is differentiable PyTorch code. It maps
 current training tensors from `[-1, 1]` to `[0, 1]` before computing SSIM, and
 uses `ssim_loss = 1 - SSIM(prediction, target)`. MS-SSIM and other structural
-losses are not supported by this registry yet.
+losses are not built in.
 
 Supported schedule types are `constant`, `linear_warmup`, `linear_decay`,
 `step`, `cosine`, `turn_on_after_epoch`, and `turn_off_after_epoch`.

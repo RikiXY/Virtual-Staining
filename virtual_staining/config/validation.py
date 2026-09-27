@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from typing import Any
 
@@ -25,3 +26,15 @@ def parse_choice(value: object, field_name: str, choices: set[str]) -> str:
     if value not in choices:
         raise ValueError(f"{field_name} must be one of {sorted(choices)}. Got {value!r}.")
     return value
+
+
+def require_finite(value: float, field_name: str) -> None:
+    if not math.isfinite(value):
+        raise ValueError(f"{field_name} must be a finite number, got {value!r}")
+
+
+def parse_int(value: object, field_name: str) -> int:
+    """Parse with ``int()`` but reject non-finite floats with a ``ValueError``."""
+    if isinstance(value, float):
+        require_finite(value, field_name)
+    return int(value)  # type: ignore[call-overload]
