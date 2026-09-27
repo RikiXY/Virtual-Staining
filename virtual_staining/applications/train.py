@@ -16,7 +16,6 @@ from virtual_staining.data.consumption import (
     build_snapshot,
 )
 from virtual_staining.data.dataset import PairedManifestDataset
-from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.manifest import (
     load_manifest_or_raise,
     load_set_groups,
@@ -225,7 +224,6 @@ def train(
         _set_seed(seed)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info("Device: %s", device)
-        dataset_layout = DatasetLayout.from_project(config.project)
         transform = build_model_input_transform(config.project.image_size)
         if config.data.pairing == "unpaired":
             train_dataset, val_dataset, snapshot = _unpaired_datasets(config, transform, seed)
@@ -289,9 +287,7 @@ def train(
             train_loader=train_loader,
             val_loader=val_loader,
             device=device,
-            train_dir=dataset_layout.split_dir("train"),
             progress_reporter=progress_reporter,
-            val_dir=dataset_layout.split_dir("val"),
             experiment_session=session,
             config_hash=session.config_hash or "",
             image_size=config.project.image_size,

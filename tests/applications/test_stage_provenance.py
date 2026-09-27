@@ -91,13 +91,16 @@ def _paired_manifest(root: Path, *, test_patient: str = "p4") -> DatasetManifest
 
 
 def _pix2pix_config(
-    tmp_path: Path, data_section: dict[str, Any] | None = None, **training: Any
+    tmp_path: Path,
+    data_section: dict[str, Any] | None = None,
+    image_size: int = 16,
+    **training: Any,
 ) -> RunConfig:
     data: dict[str, Any] = {
         "dataset_root": str(tmp_path / "dataset"),
         "results_path": str(tmp_path / "results"),
         "run_name": "paired",
-        "image_size": [16, 16],
+        "image_size": [image_size, image_size],
         "model": {"inputs": ["label_free"], "target": "stained"},
         "training": {
             "epochs": 1,
@@ -174,6 +177,43 @@ def test_paired_training_on_declared_patch_split_records_shared_groups(tmp_path:
     assert any("split unit is patch" in text for text in snapshot.limitations)
     with pytest.raises(DataLeakageError, match="patient_id"):
         train_app._paired_datasets(_pix2pix_config(tmp_path), lambda x: x, 0)
+
+
+def test_tracked_training_accepts_externally_produced_current_schema_dataset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Hand-written manifest, metadata, files, and slide-set groups: no preparation run,
+    # preparation config snapshot, or dataset fingerprint exists for this dataset.
+    root = tmp_path / "dataset"
+    _paired_manifest(root)
+    layout = DatasetLayout(root)
+    assert not layout.metadata_dir.exists() and not layout.config_dir.exists()
+    config = _pix2pix_config(tmp_path, image_size=32, validate_rate=1, checkpoint_rate=1)
+    logged: list[tuple[dict[str, float], int]] = []
+    original_log_metrics = train_app.ExperimentSession.log_metrics
+
+    def recording_log_metrics(self: Any, metrics: Any, *, step: int) -> None:
+        logged.append((dict(metrics), step))
+        original_log_metrics(self, metrics, step=step)
+
+    monkeypatch.setattr(train_app.ExperimentSession, "log_metrics", recording_log_metrics)
+
+    result = train_app.train(config, tmp_path / "paired.yaml")
+
+    run = RunLayout.from_project(config.project)
+    snapshot = load_snapshot(run.consumed_data("train"))
+    record = _stage(run, "train")
+    run_metadata = json.loads(run.run_metadata.read_text(encoding="utf-8"))
+    # The consumed-data snapshot, not a preparation identity, is the training identity.
+    assert run_metadata["training_data"]["snapshot_id"] == snapshot.snapshot_id
+    assert record["consumed_data"]["snapshot_id"] == snapshot.snapshot_id
+    assert snapshot.sources["dataset_fingerprint"] is None
+    assert snapshot.group_validation["unit"] == "patient"
+    assert {row.split for row in snapshot.rows} == {"train", "val"}
+    # Tracked training still reports every epoch to its real session.
+    assert [step for _metrics, step in logged] == [0]
+    assert {"loss_G_train", "loss_G_val"} <= logged[0][0].keys()
+    assert result.best_checkpoint_path is not None and result.best_checkpoint_path.is_file()
 
 
 def _alias(link: Path, source: Path, kind: str) -> None:

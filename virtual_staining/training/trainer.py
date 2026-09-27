@@ -16,7 +16,6 @@ from virtual_staining.checkpoint_selection import (
 )
 from virtual_staining.config.training import TrainingConfig
 from virtual_staining.experiment.run_layout import RunLayout
-from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.training.checkpoints import MethodCheckpointManager
 from virtual_staining.training.helpers import TrainingEpochAccumulator, dataset_len
 from virtual_staining.training.history import TrainingHistory
@@ -32,6 +31,7 @@ from virtual_staining.training.results import TrainingResult
 from virtual_staining.training.runtime import MethodMetrics, TrainingMethodRuntime
 
 if TYPE_CHECKING:
+    from virtual_staining.experiment.session import ExperimentSession
     from virtual_staining.training.benchmarking import TrainingBenchmarkRecorder
 
 logger = logging.getLogger(__name__)
@@ -71,11 +71,9 @@ class Trainer:
         val_loader: torch.utils.data.DataLoader,
         device: torch.device,
         *,
-        train_dir: Path,
-        val_dir: Path,
-        experiment_session: ExperimentSession,
-        config_hash: str,
         image_size: tuple[int, int],
+        experiment_session: ExperimentSession | None = None,
+        config_hash: str | None = None,
         progress_reporter: ProgressReporter | None = None,
         benchmark_recorder: TrainingBenchmarkRecorder | None = None,
         preview_sink: ValidationPreviewSink | None = None,
@@ -91,8 +89,6 @@ class Trainer:
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
-        self._train_dir = train_dir
-        self._val_dir = val_dir
         self.losses = method.loss_config
         self._logs_dir = run_paths.logs_dir
         self._checkpoints_dir = run_paths.checkpoints_dir
@@ -191,8 +187,6 @@ class Trainer:
 
         logger.info("=== %s training ===", self.method.name)
         logger.info("Run root: %s", self._run_paths.root)
-        logger.info("Train dir: %s", self._train_dir)
-        logger.info("Validation dir: %s", self._val_dir)
         logger.info("Device: %s", self.device)
         logger.info("Epochs: %s", self.config.epochs)
         logger.info("Start epoch: %s", start_epoch)
@@ -290,7 +284,9 @@ class Trainer:
             )
 
             reported = session.history.write_epoch(epoch, epoch_metrics, val_metrics)
-            self._experiment_session.log_metrics(reported, step=epoch)
+            # Only tracked runs have a session; standalone callers rely on epochs.csv.
+            if self._experiment_session is not None:
+                self._experiment_session.log_metrics(reported, step=epoch)
             if val_metrics is not None and self.config.early_stopping is not None:
                 self._update_early_stopping(epoch=epoch, val_metrics=val_metrics, session=session)
 

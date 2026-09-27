@@ -6,7 +6,6 @@ import csv
 import math
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -21,7 +20,6 @@ from virtual_staining.config.training import (
     TrainingConfig,
 )
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
-from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.training import progress as progress_module
 from virtual_staining.training.helpers import (
     TrainingEpochAccumulator,
@@ -186,11 +184,6 @@ def _run(
         loader,
         loader,
         torch.device("cpu"),
-        train_dir=tmp_path / "train",
-        val_dir=tmp_path / "val",
-        experiment_session=cast(
-            ExperimentSession, SimpleNamespace(log_metrics=lambda *_args, **_kwargs: None)
-        ),
         config_hash="sha256:test",
         image_size=(8, 8),
         progress_reporter=updates.append,

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
-from typing import cast
 
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -14,15 +12,10 @@ from virtual_staining.config.project import ProjectConfig
 from virtual_staining.config.run import RunConfig
 from virtual_staining.config.training import TrainingConfig
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
-from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.methods.cyclegan import CycleGANMethod
 from virtual_staining.methods.pix2pix import Pix2PixMethod
 from virtual_staining.training.helpers import unpack_batch
 from virtual_staining.training.trainer import Trainer
-
-
-def _session() -> ExperimentSession:
-    return cast(ExperimentSession, SimpleNamespace(log_metrics=lambda *_args, **_kwargs: None))
 
 
 def test_unpack_batch_preserves_named_inputs_and_validates_shapes() -> None:
@@ -37,7 +30,7 @@ def test_unpack_batch_preserves_named_inputs_and_validates_shapes() -> None:
     assert masks["foreground_mask"].shape == (2, 1, 8, 8)
 
 
-def test_trainer_requires_named_generator_and_keeps_validation_dir(tmp_path: Path) -> None:
+def test_trainer_requires_named_generator(tmp_path: Path) -> None:
     project = ProjectConfig(
         dataset_root=tmp_path / "dataset",
         results_path=tmp_path / "results",
@@ -88,15 +81,11 @@ def test_trainer_requires_named_generator_and_keeps_validation_dir(tmp_path: Pat
         loader,
         loader,
         torch.device("cpu"),
-        experiment_session=_session(),
         config_hash="sha256:test",
         image_size=(8, 8),
-        train_dir=tmp_path / "train",
-        val_dir=tmp_path / "val",
     )
     assert trainer.method.name == "pix2pix"
     assert method.generator.input_names == ("LF", "AF")
-    assert trainer._val_dir == tmp_path / "val"
 
 
 def test_trainer_resumes_from_v4_checkpoint_at_next_epoch(tmp_path: Path) -> None:
@@ -141,11 +130,8 @@ def test_trainer_resumes_from_v4_checkpoint_at_next_epoch(tmp_path: Path) -> Non
             loader,
             loader,
             torch.device("cpu"),
-            experiment_session=_session(),
             config_hash="sha256:test",
             image_size=(8, 8),
-            train_dir=tmp_path / "train",
-            val_dir=tmp_path / "val",
         )
 
     build()._checkpoints.save(2)
@@ -183,11 +169,8 @@ def test_trainer_calls_optional_dataset_epoch_hook(tmp_path: Path) -> None:
         loader,
         loader,
         torch.device("cpu"),
-        experiment_session=_session(),
         config_hash="sha256:test",
         image_size=config.project.image_size,
-        train_dir=tmp_path / "train",
-        val_dir=tmp_path / "val",
     )
 
     trainer.train(seed=0)

@@ -109,7 +109,7 @@ Typical examples:
 | Dataset orchestration | `data/builder.py` | Coordinates slide-set processing and writes manifests, metadata and provenance |
 | Registration and warping | `data/alignment/` | Identity/SIFT policy, affine estimation, diagnostics, coordinate conversion and image/mask warping |
 | Slide-set processing | `data/slide_set_processor.py` | Computes masks, delegates alignment and writes patches for one set; returns `SetBuildResult` and closes readers |
-| Side-effecting training service | `training/trainer.py` | Training loop, checkpoint and epoch-history writes; the active session owns run metadata/logging |
+| Side-effecting training service | `training/trainer.py` | Training loop, checkpoint and epoch-history writes into a supplied `RunLayout`; an optional tracked session receives epoch metrics |
 | Side-effecting inference service | `inference/runner.py`, `inference/single.py` | Reusable model loading and prediction plus single-image output writing |
 | Side-effecting evaluation service | `evaluation/` runners/report writers | Metrics computation plus report/CSV output |
 
@@ -117,6 +117,10 @@ The architectural boundary is not “no I/O in library code.” The actual rule 
 
 - reusable package code should keep I/O explicit and testable
 - orchestration belongs in `applications/`
+
+Each stage is also usable as a standalone library primitive from its natural inputs,
+without a tracked run; see [`library_api.md`](library_api.md).
+
 The `ExperimentSession` owns each train/infer/evaluate lifecycle: stage snapshots,
 strict local metadata writes, and best-effort reporter callbacks. Applications decide
 what a stage consumes: they resolve inputs once, build a consumed-data snapshot from

@@ -231,6 +231,8 @@ Experiment commands accept YAML configuration directly through `--config`.
 See [`docs/run_format.md`](docs/run_format.md) for the method-specific config fields and
 run output layout, [`docs/architecture.md`](docs/architecture.md) for package boundaries, and
 [`docs/reproducibility.md`](docs/reproducibility.md) for canonical config snapshots and hashes.
+To call a single stage from Python without the YAML pipeline, see
+[`docs/library_api.md`](docs/library_api.md).
 
 ## Qualitative Results
 

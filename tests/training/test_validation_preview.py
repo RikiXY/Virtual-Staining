@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -349,9 +348,6 @@ def test_trainer_preview_sink_changes_only_preview_io(
             loader,
             loader,
             _CPU,
-            train_dir=root / "train",
-            val_dir=root / "val",
-            experiment_session=SimpleNamespace(log_metrics=lambda *_args, **_kwargs: None),
             config_hash="sha256:test",
             image_size=method.config.project.image_size,
             progress_reporter=updates.append,
