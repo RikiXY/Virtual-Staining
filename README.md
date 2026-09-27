@@ -60,23 +60,32 @@ vs status
 
 ### NiceGUI application
 
-The web interface discovers compatible current-format checkpoints from a configurable
-directory:
+The web interface opens on a focused training-YAML editor. It collects only the
+essential experiment, modality, epoch, and loss values, validates them with the same
+schema used by `vs train`, and provides a live preview. The resulting file contains no
+preprocessing, inference, evaluation, or queue sections. It can be downloaded in the
+browser or saved without overwriting an existing file.
+
+The same application also retains the inference and experiment-analysis workspaces from
+the original UI. Their checkpoint, output, and results directories remain configurable:
 
 ```bash
 uv sync --locked
 uv run vs-ui \
+  --config-dir config/runs/local \
   --checkpoint-dir local_workspace/ui/checkpoints \
   --output-dir local_workspace/ui/outputs \
   --results-dir local_workspace/results
 ```
 
 Open [http://localhost:8080](http://localhost:8080). The paths may be located outside
-the repository. They can also be configured with `VIRTUAL_STAINING_CHECKPOINT_DIR`,
-`VIRTUAL_STAINING_OUTPUT_DIR`, and `VIRTUAL_STAINING_RESULTS_DIR`; CLI options take
-precedence. Defaults are `./checkpoints`, `./outputs`, and `./results`, resolved from
-the launch directory. The UI starts with useful empty states when no compatible
-checkpoint or evaluated run is available.
+the repository. They can also be configured with `VIRTUAL_STAINING_CONFIG_DIR`,
+`VIRTUAL_STAINING_CHECKPOINT_DIR`, `VIRTUAL_STAINING_OUTPUT_DIR`, and
+`VIRTUAL_STAINING_RESULTS_DIR`; CLI options take precedence. Defaults are
+`./config/runs/local`, `./checkpoints`, `./outputs`, and `./results`, resolved from the
+launch directory. A saved training file can be started directly with
+`uv run vs train --config PATH`. The UI starts with useful empty states when no
+compatible checkpoint or evaluated run is available.
 
 The catalog validates `.pth` files recursively and derives transformation labels,
 input/target domains, architecture, image size, and channel requirements from existing

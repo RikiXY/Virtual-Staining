@@ -217,7 +217,7 @@ def test_nicegui_page_has_no_repository_checkpoint_mapping() -> None:
     assert "virtual_staining.applications.api" in source
 
 
-def test_main_navigation_starts_on_source_only_inference(tmp_path: Path) -> None:
+def test_main_navigation_starts_on_training_config(tmp_path: Path) -> None:
     service = ApplicationService(
         tmp_path / "checkpoints",
         tmp_path / "outputs",
@@ -250,10 +250,20 @@ def test_main_navigation_starts_on_source_only_inference(tmp_path: Path) -> None
         element._props.get("aria-label"): element
         for element in client.elements.values()
         if element.tag == "q-btn"
-        and element._props.get("aria-label") in {"Open Inference", "Open Experiments"}
+        and element._props.get("aria-label")
+        in {
+            "Open Training config",
+            "Open Inference",
+            "Open Experiments",
+        }
     }
     current_page = next(
         element for element in client.elements.values() if "vs-current-page" in element._classes
+    )
+    training_page = next(
+        element
+        for element in client.elements.values()
+        if "vs-training-config-page" in element._classes
     )
     inference_page = next(
         element for element in client.elements.values() if "vs-inference-page" in element._classes
@@ -283,10 +293,15 @@ def test_main_navigation_starts_on_source_only_inference(tmp_path: Path) -> None
 
     assert drawer.value is False
     assert menu_button.parent_slot.parent is header_bar
-    assert set(workspace_buttons) == {"Open Inference", "Open Experiments"}
+    assert set(workspace_buttons) == {
+        "Open Training config",
+        "Open Inference",
+        "Open Experiments",
+    }
     assert tutorial_button.parent_slot.parent is not header_bar
-    assert current_page.text == "Inference"
-    assert inference_page.visible is True
+    assert current_page.text == "Training config"
+    assert training_page.visible is True
+    assert inference_page.visible is False
     assert experiments_page.visible is False
     assert not experiment_panels._props.get("animated", False)
     assert evaluation_status.visible is False

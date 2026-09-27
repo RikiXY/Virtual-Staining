@@ -106,6 +106,34 @@ body { background: var(--vs-bg); color: var(--vs-ink); font-size: 1rem; }
 .vs-section-tabs { align-self: center; width: auto; max-width: 100%; }
 .vs-section-tabs .q-tabs__content { justify-content: center !important; }
 .vs-section-tabs .q-tab { flex: 0 0 auto !important; text-transform: none; }
+.vs-config-hero {
+  position: relative; overflow: hidden;
+  background: linear-gradient(135deg, #ecfdf5 0%, #f0f9ff 58%, #f8fafc 100%);
+  border: 1px solid #bae6d3;
+}
+.vs-config-hero::after {
+  content: ""; position: absolute; width: 16rem; height: 16rem; border-radius: 9999px;
+  right: -6rem; bottom: -9rem; background: rgb(20 184 166 / .1);
+}
+.vs-config-hero-icon {
+  display: grid; place-items: center; width: 4rem; height: 4rem; border-radius: 1rem;
+  background: rgb(255 255 255 / .72); border: 1px solid rgb(15 118 110 / .16);
+  box-shadow: 0 8px 28px rgb(15 118 110 / .08); z-index: 1;
+}
+.vs-config-layout {
+  display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(22rem, .85fr);
+}
+.vs-config-step { border-top: 3px solid #99f6e4; }
+.vs-config-field .q-field__control { border-radius: .65rem; }
+.vs-config-preview-column { position: sticky; top: 6.5rem; }
+.vs-yaml-preview {
+  margin: 0 !important; min-height: 28rem; max-height: 34rem; overflow: auto;
+  padding: 1.25rem !important; background: #0f172a !important; color: #d1fae5 !important;
+  font-size: .9rem !important; line-height: 1.55 !important;
+}
+.vs-yaml-preview code { white-space: pre-wrap !important; overflow-wrap: anywhere; }
+.vs-default-note { background: #f0f9ff; border: 1px solid #bae6fd; }
+.vs-command-box { background: #f8fafc; border: 1px solid #e2e8f0; }
 .q-uploader { box-shadow: none !important; border: 1px dashed #94a3b8; border-radius: .75rem; }
 .q-dialog__inner > .vs-tutorial { max-width: 980px !important; }
 .vs-tutorial-footer {
@@ -122,6 +150,8 @@ body { background: var(--vs-bg); color: var(--vs-ink); font-size: 1rem; }
   .vs-header-bar { gap: .75rem; }
   .vs-brand-copy .text-2xl { font-size: 1.25rem; }
   .vs-current-page { font-size: .9375rem; }
+  .vs-config-layout { grid-template-columns: minmax(0, 1fr); }
+  .vs-config-preview-column { position: static; }
 }
 """
 

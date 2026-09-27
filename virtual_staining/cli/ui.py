@@ -11,12 +11,13 @@ from virtual_staining.ui.app import run_ui
 CHECKPOINT_DIRECTORY_ENV = "VIRTUAL_STAINING_CHECKPOINT_DIR"
 OUTPUT_DIRECTORY_ENV = "VIRTUAL_STAINING_OUTPUT_DIR"
 RESULTS_DIRECTORY_ENV = "VIRTUAL_STAINING_RESULTS_DIR"
+TRAINING_CONFIG_DIRECTORY_ENV = "VIRTUAL_STAINING_CONFIG_DIR"
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vs-ui",
-        description="Launch the Virtual-Staining inference and experiments interface.",
+        description="Launch the Virtual-Staining training configuration and analysis interface.",
     )
     parser.add_argument(
         "--checkpoint-dir",
@@ -42,6 +43,14 @@ def _build_parser() -> argparse.ArgumentParser:
             f"(default: ${RESULTS_DIRECTORY_ENV} or ./results)."
         ),
     )
+    parser.add_argument(
+        "--config-dir",
+        default=os.environ.get(TRAINING_CONFIG_DIRECTORY_ENV, "config/runs/local"),
+        help=(
+            "Directory used for training YAML files created by the UI "
+            f"(default: ${TRAINING_CONFIG_DIRECTORY_ENV} or ./config/runs/local)."
+        ),
+    )
     parser.add_argument("--host", default="0.0.0.0", help="Interface to bind (default: 0.0.0.0).")
     parser.add_argument("--port", type=int, default=8080, help="Port to bind (default: 8080).")
     add_log_level_argument(parser)
@@ -58,6 +67,7 @@ def main(argv: list[str] | None = None) -> None:
             Path(args.checkpoint_dir),
             Path(args.output_dir),
             Path(args.results_dir),
+            training_config_directory=Path(args.config_dir),
             host=args.host,
             port=args.port,
         )

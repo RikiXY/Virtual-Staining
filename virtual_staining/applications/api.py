@@ -19,6 +19,14 @@ from virtual_staining.applications.compare_panels import (
 )
 from virtual_staining.applications.evaluate_single import evaluate_pair
 from virtual_staining.applications.pipeline import run_stage
+from virtual_staining.applications.training_config import (
+    SavedTrainingConfig,
+    TrainingConfigDocument,
+    TrainingConfigDraft,
+    TrainingConfigError,
+    build_training_config,
+    save_training_config,
+)
 from virtual_staining.applications.ui_inference import (
     CatalogIssue,
     ModelCatalog,
@@ -67,8 +75,11 @@ __all__ = [
     "RunEvaluationRequest",
     "RunEvaluationResult",
     "SavedInferenceResult",
+    "SavedTrainingConfig",
     "SingleSampleRequest",
     "SingleSampleResult",
+    "TrainingConfigDocument",
+    "TrainingConfigDraft",
     "metric_quality",
 ]
 
@@ -196,17 +207,31 @@ class ApplicationService:
         output_directory: Path,
         results_directory: Path,
         *,
+        training_config_directory: Path = Path("config/runs/local"),
         working_directory: Path | None = None,
     ) -> None:
         self.working_directory = (working_directory or Path.cwd()).resolve()
         self.output_directory = self._resolve(output_directory)
         self.results_directory = self._resolve(results_directory)
+        self.training_config_directory = self._resolve(training_config_directory)
         self._inference = UIInferenceService(
             checkpoint_directory,
             output_directory,
             working_directory=self.working_directory,
         )
         self._analysis_lock = RLock()
+
+    def preview_training_config(self, draft: TrainingConfigDraft) -> TrainingConfigDocument:
+        try:
+            return build_training_config(draft)
+        except TrainingConfigError as exc:
+            raise ApplicationError(str(exc)) from exc
+
+    def save_training_config(self, draft: TrainingConfigDraft) -> SavedTrainingConfig:
+        try:
+            return save_training_config(draft, self.training_config_directory)
+        except TrainingConfigError as exc:
+            raise ApplicationError(str(exc)) from exc
 
     @property
     def supported_metrics(self) -> tuple[str, ...]:

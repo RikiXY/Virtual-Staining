@@ -15,6 +15,7 @@ def test_ui_cli_passes_explicit_portable_directories(
         output_directory: Path,
         results_directory: Path,
         *,
+        training_config_directory: Path,
         host: str,
         port: int,
     ) -> None:
@@ -22,6 +23,7 @@ def test_ui_cli_passes_explicit_portable_directories(
             checkpoint_directory=checkpoint_directory,
             output_directory=output_directory,
             results_directory=results_directory,
+            training_config_directory=training_config_directory,
             host=host,
             port=port,
         )
@@ -36,6 +38,8 @@ def test_ui_cli_passes_explicit_portable_directories(
             "elsewhere/results",
             "--results-dir",
             "elsewhere/runs",
+            "--config-dir",
+            "elsewhere/configs",
             "--host",
             "127.0.0.1",
             "--port",
@@ -47,26 +51,49 @@ def test_ui_cli_passes_explicit_portable_directories(
         "checkpoint_directory": Path("elsewhere/models"),
         "output_directory": Path("elsewhere/results"),
         "results_directory": Path("elsewhere/runs"),
+        "training_config_directory": Path("elsewhere/configs"),
         "host": "127.0.0.1",
         "port": 9000,
     }
 
 
 def test_ui_cli_uses_environment_directory_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: list[tuple[Path, Path, Path]] = []
+    captured: list[tuple[Path, Path, Path, Path]] = []
     monkeypatch.setenv(ui_cli.CHECKPOINT_DIRECTORY_ENV, "/portable/models")
     monkeypatch.setenv(ui_cli.OUTPUT_DIRECTORY_ENV, "/portable/results")
     monkeypatch.setenv(ui_cli.RESULTS_DIRECTORY_ENV, "/portable/runs")
+    monkeypatch.setenv(ui_cli.TRAINING_CONFIG_DIRECTORY_ENV, "/portable/configs")
+
+    def fake_run_ui(
+        checkpoint_directory: Path,
+        output_directory: Path,
+        results_directory: Path,
+        *,
+        training_config_directory: Path,
+        **_kwargs: object,
+    ) -> None:
+        captured.append(
+            (
+                checkpoint_directory,
+                output_directory,
+                results_directory,
+                training_config_directory,
+            )
+        )
+
     monkeypatch.setattr(
         ui_cli,
         "run_ui",
-        lambda checkpoint_directory, output_directory, results_directory, **_kwargs: (
-            captured.append((checkpoint_directory, output_directory, results_directory))
-        ),
+        fake_run_ui,
     )
 
     ui_cli.main([])
 
     assert captured == [
-        (Path("/portable/models"), Path("/portable/results"), Path("/portable/runs"))
+        (
+            Path("/portable/models"),
+            Path("/portable/results"),
+            Path("/portable/runs"),
+            Path("/portable/configs"),
+        )
     ]

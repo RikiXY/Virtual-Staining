@@ -8,6 +8,7 @@ from virtual_staining.applications.api import ApplicationService
 from virtual_staining.ui.experiments_page import build_experiments_page
 from virtual_staining.ui.inference_page import build_inference_page
 from virtual_staining.ui.theme import configure_theme
+from virtual_staining.ui.training_config_page import build_training_config_page
 from virtual_staining.ui.tutorial import build_tutorial
 
 APP_ICON_PATH = Path(__file__).with_name("assets") / "icon.png"
@@ -36,6 +37,11 @@ def _build_page(service: ApplicationService, output_directory: Path) -> None:
         ui.separator()
         ui.label("WORKSPACE").classes(
             "px-5 pt-5 pb-2 text-sm font-semibold tracking-wider text-slate-400"
+        )
+        training_menu_button = (
+            ui.button("Training config", icon="tune")
+            .props('flat no-caps align=left aria-label="Open Training config"')
+            .classes("vs-menu-item mx-3")
         )
         inference_menu_button = (
             ui.button("Inference", icon="auto_awesome")
@@ -76,19 +82,23 @@ def _build_page(service: ApplicationService, output_directory: Path) -> None:
                     "text-2xl font-semibold leading-tight whitespace-nowrap"
                 )
                 ui.label("Research workspace").classes("text-base text-slate-500 whitespace-nowrap")
-        current_page_label = ui.label("Inference").classes(
+        current_page_label = ui.label("Training config").classes(
             "vs-current-page justify-self-end text-base font-semibold text-teal-700"
         )
 
     with ui.column().classes("w-full max-w-7xl mx-auto px-4 sm:px-6 py-6 md:py-8 gap-5"):
         content = ui.column().classes("w-full")
         with content:
+            training_page = ui.column().classes("vs-training-config-page w-full")
+            with training_page:
+                build_training_config_page(service)
             inference_page = ui.column().classes("vs-inference-page w-full")
             with inference_page:
                 build_inference_page(service, catalog, output_directory)
             experiments_page = ui.column().classes("vs-experiments-page w-full")
             with experiments_page:
                 build_experiments_page(service, catalog, runs)
+            inference_page.set_visibility(False)
             experiments_page.set_visibility(False)
 
         ui.separator().classes("mt-4")
@@ -98,13 +108,21 @@ def _build_page(service: ApplicationService, output_directory: Path) -> None:
 
     def select_page(name: str) -> None:
         inference_selected = name == "inference"
+        experiments_selected = name == "experiments"
+        training_selected = name == "training"
+        training_page.set_visibility(training_selected)
         inference_page.set_visibility(inference_selected)
-        experiments_page.set_visibility(not inference_selected)
-        selected_name = "Inference" if inference_selected else "Experiments"
+        experiments_page.set_visibility(experiments_selected)
+        selected_name = {
+            "training": "Training config",
+            "inference": "Inference",
+            "experiments": "Experiments",
+        }[name]
         current_page_label.set_text(selected_name)
         for button, selected in (
+            (training_menu_button, training_selected),
             (inference_menu_button, inference_selected),
-            (experiments_menu_button, not inference_selected),
+            (experiments_menu_button, experiments_selected),
         ):
             if selected:
                 button.props(remove="flat")
@@ -114,9 +132,10 @@ def _build_page(service: ApplicationService, output_directory: Path) -> None:
                 button.props("flat")
         menu_drawer.hide()
 
+    training_menu_button.on_click(lambda: select_page("training"))
     inference_menu_button.on_click(lambda: select_page("inference"))
     experiments_menu_button.on_click(lambda: select_page("experiments"))
-    select_page("inference")
+    select_page("training")
 
 
 def run_ui(
@@ -124,6 +143,7 @@ def run_ui(
     output_directory: Path,
     results_directory: Path = Path("results"),
     *,
+    training_config_directory: Path = Path("config/runs/local"),
     host: str = "0.0.0.0",
     port: int = 8080,
 ) -> None:
@@ -132,6 +152,7 @@ def run_ui(
         checkpoint_directory,
         output_directory,
         results_directory,
+        training_config_directory=training_config_directory,
     )
 
     @ui.page("/")
