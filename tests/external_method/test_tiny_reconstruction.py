@@ -26,7 +26,7 @@ from tests.external_method.tiny_reconstruction import (
 from tests.image_helpers import write_rgb_image
 from tests.manifest_helpers import make_manifest_record, manifest_metadata
 from virtual_staining.applications.infer import infer
-from virtual_staining.applications.infer_images import infer_images
+from virtual_staining.applications.infer_images import SingleInferenceResult, infer_images
 from virtual_staining.applications.train import train
 from virtual_staining.checkpoint_contract import CheckpointCompatibilityError
 from virtual_staining.config.run import RunConfig
@@ -462,7 +462,11 @@ def test_tracked_train_and_infer_applications_run_the_external_method(tmp_path: 
 
     assert result.best_checkpoint_path is not None
     assert produced.num_samples == 1
-    assert single.output_path.is_file()  # type: ignore[union-attr]
+    assert isinstance(single, SingleInferenceResult)
+    assert single.output_path.is_file()
+    # The checkpoint-backed adapter hands the definition's model to the generic runtime.
+    assert single.checkpoint_path is not None and single.checkpoint_path.is_file()
+    assert single.predictor_identity == "tiny_reconstruction"
     resolved = yaml.safe_load(
         next(run.config_dir.glob("**/resolved*.yaml")).read_text(encoding="utf-8")
     )

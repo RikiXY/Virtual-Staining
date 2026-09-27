@@ -238,8 +238,9 @@ class MethodDefinition(ABC):
         """Build only the prediction network and restore it from a validated checkpoint.
 
         The module maps ``{input_name: NCHW tensor in [-1, 1]}`` to one RGB tensor in
-        [-1, 1] and exposes ``input_names``. No optimizer, scheduler, objective or unused
-        network may be constructed.
+        [-1, 1] on the same pixel grid; the framework supplies the input names from
+        ``prediction_inputs``. No optimizer, scheduler, objective or unused network may
+        be constructed.
         """
 
 

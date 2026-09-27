@@ -16,6 +16,7 @@ from virtual_staining.inference.single import (
     SUPPORTED_OUTPUT_FORMATS,
     DirectoryInferenceResult,
     InferenceRuntime,
+    PredictionContract,
     SingleInferenceMode,
     SingleInferenceResult,
     run_image_path_inference,
@@ -76,16 +77,20 @@ def _create_runtime(config: RunConfig) -> InferenceRuntime:
     layout = RunLayout.from_project(config.project)
     ensure_run_directories(layout)
     device = resolve_inference_device()
-    generator, checkpoint_path = load_inference_generator(config, layout, device)
+    predictor, checkpoint_path = load_inference_generator(config, layout, device)
     output_dir = config.inference.output_dir
     return InferenceRuntime(
-        generator=generator,
-        checkpoint_path=checkpoint_path,
-        image_size=config.project.image_size,
+        predictor=predictor,
+        contract=PredictionContract(
+            input_names=inference_input_names(config),
+            image_size=config.project.image_size,
+            artifact_direction=inference_direction(config),
+        ),
         device=device,
+        checkpoint_path=checkpoint_path,
+        predictor_identity=config.method.name,
         default_single_output_dir=output_dir or layout.artifacts_dir / "output_single",
         default_directory_output_dir=output_dir or layout.artifacts_dir / "output_images",
-        artifact_direction=inference_direction(config),
     )
 
 

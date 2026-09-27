@@ -722,7 +722,17 @@ one output directory without collisions:
 
 `vs infer-images --recursive` uses the same suffixes and preserves the input's relative
 directory structure under the output root, so equal filenames in different source folders
-do not collide.
+do not collide. Inputs that would map to the same output file (for example `a.png` and
+`a.tif` with `--output-format png`) are rejected before prediction. An existing output
+file is replaced atomically only after its prediction succeeds. Without `--output`,
+files go to `inference.output_dir` or the run's `artifacts/output_single/` (one file)
+or `artifacts/output_images/` (directories). Library callers without run defaults
+must pass an output path (see [`library_api.md`](library_api.md#direct-predictor-inference)).
+
+Full-resolution WSI outputs are pyramidal BigTIFFs with the input's pixel dimensions.
+They carry the source MPP only when the inputs' metadata provide it (conflicting
+known values fail). Unknown MPP stays unknown. The run first requires at least
+`width x height x 15` bytes of free scratch space next to the output.
 
 ## Evaluation outputs
 

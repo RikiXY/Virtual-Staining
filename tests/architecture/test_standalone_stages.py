@@ -47,6 +47,7 @@ from virtual_staining.experiment import session as session_module
 from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.inference.single import (
     InferenceRuntime,
+    PredictionContract,
     SingleInferenceResult,
     run_image_path_inference,
 )
@@ -215,10 +216,10 @@ def test_image_path_inference_runs_from_runtime_factory_and_named_paths(
     def runtime_factory() -> InferenceRuntime:
         # checkpoint_path is identity metadata carried by the injected runtime, never read.
         return InferenceRuntime(
-            generator=generator,
-            checkpoint_path=sentinel / "run/checkpoints/ep000.pth",
-            image_size=(32, 32),
+            predictor=generator,
+            contract=PredictionContract(("LF",), (32, 32)),
             device=torch.device("cpu"),
+            checkpoint_path=sentinel / "run/checkpoints/ep000.pth",
             default_single_output_dir=sentinel / "absent_single",
             default_directory_output_dir=sentinel / "absent_directory",
         )

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 import math
-from dataclasses import dataclass
+import struct
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -14,6 +16,10 @@ VALID_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
     {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff"}
 )
 SUPPORTED_IMAGE_BACKENDS: frozenset[str] = frozenset({"auto", "pillow", "openslide"})
+_TIFF_RESOLUTION_UNIT_TAG = 296
+_TIFF_RESUNIT_NONE = 1
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -285,6 +291,31 @@ def _pyramid_options(metadata: ImageMetadata | None = None) -> dict[str, object]
     return options
 
 
+def _clear_bigtiff_resolution_unit(path: Path) -> None:
+    """Mark a libvips BigTIFF's resolution as unitless in every IFD, in place.
+
+    libvips always writes a resolution tag (1 px/mm by default), which OpenSlide would
+    report as a fabricated 1000 um/px; a unitless resolution reads back as unknown MPP.
+    """
+    with path.open("r+b") as handle:
+        order = {b"II": "<", b"MM": ">"}[handle.read(2)]
+        magic, _, _, offset = struct.unpack(order + "HHHQ", handle.read(14))
+        if magic != 43:
+            raise RuntimeError(f"Expected a BigTIFF: {path}")
+        while offset:
+            handle.seek(offset)
+            (count,) = struct.unpack(order + "Q", handle.read(8))
+            for index in range(count):
+                entry = offset + 8 + index * 20
+                handle.seek(entry)
+                (tag,) = struct.unpack(order + "H", handle.read(2))
+                if tag == _TIFF_RESOLUTION_UNIT_TAG:
+                    handle.seek(entry + 12)
+                    handle.write(struct.pack(order + "H", _TIFF_RESUNIT_NONE))
+            handle.seek(offset + 8 + count * 20)
+            (offset,) = struct.unpack(order + "Q", handle.read(8))
+
+
 def convert_to_pyramidal_tiff(source_path: str | Path, output_path: str | Path) -> None:
     source = Path(source_path)
     output = Path(output_path)
@@ -295,6 +326,7 @@ def convert_to_pyramidal_tiff(source_path: str | Path, output_path: str | Path) 
         image.tiffsave(str(output), **_pyramid_options())
     except pyvips.Error as exc:
         raise RuntimeError(f"Could not convert {source}: {exc}") from exc
+    _clear_bigtiff_resolution_unit(output)
 
     actual = read_image_metadata(output, backend="openslide")
     expected_size = (expected.width, expected.height)
@@ -308,10 +340,19 @@ def convert_to_pyramidal_tiff(source_path: str | Path, output_path: str | Path) 
 def write_pyramidal_tiff_from_raw_rgb(
     raw_path: str | Path, output_path: str | Path, metadata: ImageMetadata
 ) -> None:
+    """Write, reopen and verify a pyramidal TIFF, then atomically replace ``output_path``.
+
+    Verification reads headers (geometry, pyramid levels, MPP) and three sample pixels,
+    never the whole slide. MPP is written only when both axes are known; TIFF has one
+    resolution unit, so a half-known MPP is published as unknown rather than fabricated.
+    """
     raw = Path(raw_path)
     output = Path(output_path)
     pyvips = _load_pyvips()
     width, height = metadata.width, metadata.height
+    if (metadata.mpp_x is None) != (metadata.mpp_y is None):
+        logger.warning("Only one MPP axis is known; the output MPP is left unknown")
+        metadata = replace(metadata, mpp_x=None, mpp_y=None)
     generated_path = raw.with_suffix(".tif")
     try:
         image = pyvips.Image.rawload(
@@ -325,6 +366,8 @@ def write_pyramidal_tiff_from_raw_rgb(
         image.tiffsave(str(generated_path), **_pyramid_options(metadata))
     except pyvips.Error as exc:
         raise RuntimeError(f"Could not write pyramidal TIFF: {exc}") from exc
+    if metadata.mpp_x is None:
+        _clear_bigtiff_resolution_unit(generated_path)
 
     generated = OpenSlideRegionImageReader(generated_path)
     raw_pixels: np.memmap | None = None
@@ -352,9 +395,11 @@ def write_pyramidal_tiff_from_raw_rgb(
 
         for axis in ("x", "y"):
             expected_mpp = getattr(metadata, f"mpp_{axis}")
-            if expected_mpp is None:
-                continue
             actual_mpp = getattr(generated_metadata, f"mpp_{axis}")
+            if expected_mpp is None:
+                if actual_mpp is not None:
+                    raise RuntimeError(f"Generated mpp_{axis} is {actual_mpp}, expected unknown")
+                continue
             if actual_mpp is None or not math.isclose(actual_mpp, expected_mpp, rel_tol=1e-3):
                 raise RuntimeError(
                     f"Generated mpp_{axis} differs: expected {expected_mpp}, got {actual_mpp}"

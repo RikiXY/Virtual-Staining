@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -18,6 +17,7 @@ from virtual_staining.inference.runner import predict_batch
 from virtual_staining.inference.single import (
     DirectoryInferenceResult,
     InferenceRuntime,
+    PredictionContract,
     SingleInferenceResult,
     _predict_images,
     _run_tiled_prediction,
@@ -74,7 +74,10 @@ def test_predict_images_passes_all_modalities_in_generator_order() -> None:
         return original_forward(inputs)
 
     generator.forward = recording_forward  # type: ignore[method-assign]
-    output = _predict_images(images, generator, torch.device("cpu"), transform)  # type: ignore[arg-type]
+    runtime = InferenceRuntime(
+        generator, PredictionContract(("LF", "AF"), (32, 32)), torch.device("cpu")
+    )
+    output = _predict_images(images, runtime, transform)  # type: ignore[arg-type]
 
     assert output.shape == (3, 32, 32)
     assert seen == [("LF", "AF")]
@@ -90,10 +93,7 @@ def test_tiled_prediction_uses_shared_coordinates_for_all_modalities() -> None:
     seen: list[tuple[tuple[int, int], ...]] = []
 
     def recording_predict(
-        tiles: dict[str, Image.Image],
-        model: torch.nn.Module,
-        device: torch.device,
-        transform: object,
+        tiles: dict[str, Image.Image], runtime: InferenceRuntime, transform: object
     ) -> torch.Tensor:
         seen.append(tuple(tile.size for tile in tiles.values()))
         return torch.zeros(3, 4, 4)
@@ -103,9 +103,10 @@ def test_tiled_prediction_uses_shared_coordinates_for_all_modalities() -> None:
     original = single._predict_images
     single._predict_images = recording_predict  # type: ignore[assignment]
     try:
-        output = _run_tiled_prediction(
-            images, generator, torch.device("cpu"), (4, 4), tile_overlap=0
+        runtime = InferenceRuntime(
+            generator, PredictionContract(("LF", "AF"), (4, 4)), torch.device("cpu")
         )
+        output = _run_tiled_prediction(images, runtime, tile_overlap=0)
     finally:
         single._predict_images = original
 
@@ -127,21 +128,17 @@ def test_directory_inputs_pair_exact_relative_paths_and_preserve_subdirectories(
         _write_image(root / "top.png")
         _write_image(root / "nested" / "sample.png")
 
-    runtime = SimpleNamespace(
-        generator=SimpleNamespace(input_names=("LF", "AF")),
-        checkpoint_path=tmp_path / "checkpoint.pth",
-        image_size=(4, 4),
+    runtime = InferenceRuntime(
+        predictor=lambda inputs: pytest.fail("predictor must not run"),
+        contract=PredictionContract(("LF", "AF"), (4, 4)),
         device=torch.device("cpu"),
-        default_single_output_dir=tmp_path / "artifacts" / "output_single",
-        default_directory_output_dir=tmp_path / "artifacts" / "output_images",
-        artifact_direction=None,
     )
     results: list[SingleInferenceResult] = []
 
     import virtual_staining.inference.single as single
 
     def runtime_factory() -> InferenceRuntime:
-        return cast(InferenceRuntime, runtime)
+        return runtime
 
     def fake_run_one(
         runtime: object,
@@ -154,7 +151,6 @@ def test_directory_inputs_pair_exact_relative_paths_and_preserve_subdirectories(
         result = SingleInferenceResult(
             input_paths=input_images,
             output_path=output_path,
-            checkpoint_path=Path("checkpoint.pth"),
             image_size=(4, 4),
             mode=mode,
             device="cpu",
@@ -202,18 +198,14 @@ def test_file_inputs_reject_unequal_dimensions_before_prediction(
     af_path = tmp_path / "af.png"
     _write_image(lf_path, (4, 4))
     _write_image(af_path, (5, 4))
-    runtime = SimpleNamespace(
-        generator=SimpleNamespace(input_names=("LF", "AF")),
-        checkpoint_path=tmp_path / "checkpoint.pth",
-        image_size=(4, 4),
+    runtime = InferenceRuntime(
+        predictor=lambda inputs: pytest.fail("predictor must not run"),
+        contract=PredictionContract(("LF", "AF"), (4, 4)),
         device=torch.device("cpu"),
-        default_single_output_dir=tmp_path / "artifacts" / "output_single",
-        default_directory_output_dir=tmp_path / "artifacts" / "output_images",
-        artifact_direction=None,
     )
 
     def runtime_factory() -> InferenceRuntime:
-        return cast(InferenceRuntime, runtime)
+        return runtime
 
     with pytest.raises(ValueError, match="dimensions must match"):
         run_image_path_inference(

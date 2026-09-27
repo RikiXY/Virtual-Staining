@@ -135,7 +135,8 @@ It defaults to `--mode auto`: patch-sized inputs use the standard single-patch
 path, while larger images are processed tile-by-tile and saved at the original
 size. Use `--mode resize` to force the resizing of the whole input to
 `image_size`. Use `--output-format png` to force a common output format
-for directory batches.
+for directory batches. To run an in-memory model without a checkpoint or run
+config, see [`docs/library_api.md`](docs/library_api.md#direct-predictor-inference).
 
 Queue multiple full or partial pipeline runs locally:
 

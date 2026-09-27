@@ -12,7 +12,7 @@ stage. This page only covers the standalone boundaries; see
 |---|---|---|---|---|---|
 | Prepare | `DatasetBuilder(config, slide_sets).run_all()` (`data/builder.py`) | `PreprocessingConfig` + explicit `SlideSet` tuple | Patches, manifest, manifest metadata, slide-set metadata, split assignment and dataset fingerprint under `config.dataset_root` | `applications.prepare` / `vs prepare`: resolves `SlideSet`s from the YAML inventory, snapshots config and sources, reuses unchanged datasets | Writes only under `dataset_root`; the inventory CSV is read only by `resolve_slide_sets`, not by the builder |
 | Train | `Trainer(config, run_paths, method, train_loader, val_loader, device)` then `.train(seed)` (`training/trainer.py`) | `TrainingConfig` + `TrainingMethodRuntime` + train/val `DataLoader`s + output `RunLayout`; optional `progress_reporter`, `preview_sink`, `benchmark_recorder`, `config_hash`, `experiment_session` | `metrics/epochs.csv`, `checkpoints/ep*.pth`, `checkpoints/best.json`, training/validation output dirs under the `RunLayout` root; `.resume()` reads checkpoints there | `applications.train` / `vs train`: builds loaders from the manifest or domain collections, binds the consumed-data snapshot and passes its real `ExperimentSession` | The loaders are the data boundary; the Trainer never reads manifests, dataset roots or preparation outputs. The runtime comes from `config.method.definition.build_training_runtime(config, device, seed=...)` and supplies its own checkpoint identity |
-| Infer | `run_image_path_inference(runtime_factory, named_paths, output_path)` (`inference/single.py`) | A `RuntimeFactory` returning an `InferenceRuntime` + named input files or directories + explicit output path | Generated images at the output path (or at the runtime's default output dir when none is given) | `applications.infer` / `vs infer`: test-split manifest inference with consumed/produced snapshots; `applications.infer_images` builds the runtime from a run's checkpoint | Accepts an injected runtime factory only; `inference.runner.load_inference_generator` builds the network through the selected method definition. A general predictor/spatial-output boundary is separate future work |
+| Infer | `run_image_path_inference(runtime, named_paths, output_path)` (`inference/single.py`) | An `InferenceRuntime` (caller-constructed predictor + `PredictionContract` + device), or a factory returning one, + named input files or directories + output path | Generated images at the output path (or at the runtime's default output dir, if it has one) | `applications.infer` / `vs infer`: test-split manifest inference with consumed/produced snapshots; `applications.infer_images` builds the runtime from a run's checkpoint | Named RGB inputs -> one RGB output on the same pixel grid only; see [Direct predictor inference](#direct-predictor-inference) |
 | Evaluate | `evaluate_samples(samples, output_dir)` / `evaluate_pair(target, generated)` (`evaluation/evaluator.py`) | Explicit `EvaluationSample` records or a pair of image paths + output directory | `per_image_metrics.csv`, `summary.csv`, `skipped.csv` in `output_dir`; `evaluate_pair` writes nothing | `applications.evaluate` / `vs evaluate`: resolves records from the manifest or run outputs and records evaluation provenance | Uses the standard metric set; grouped summaries and producer linking stay in the application |
 
 ## Notes
@@ -38,6 +38,84 @@ stage. This page only covers the standalone boundaries; see
   carry no config hash.
 - Importing these primitives does not initialize CUDA, load a model, open WSI
   readers, import UI packages or inspect project roots.
+
+## Direct predictor inference
+
+An already constructed predictor runs through the same file/directory/resize/tile/WSI
+transport as checkpoint-backed inference, without a checkpoint, `RunConfig`, run
+directory, manifest or `ExperimentSession`:
+
+```python
+from virtual_staining.inference.single import (
+    InferenceRuntime,
+    PredictionContract,
+    run_image_path_inference,
+)
+
+model = MyModel().to(device).eval()  # caller-owned and caller-prepared
+runtime = InferenceRuntime(
+    predictor=model,
+    contract=PredictionContract(input_names=("AF", "LF"), image_size=(256, 256)),
+    device=device,
+)
+run_image_path_inference(runtime, {"AF": af_path, "LF": lf_path}, Path("out/sample.png"))
+run_image_path_inference(runtime, {"AF": af_dir, "LF": lf_dir}, Path("out/batch"), recursive=True)
+```
+
+- **Contract.** `PredictionContract` declares the ordered `input_names`, the
+  predictor/tile input `image_size` as `(width, height)`, `output_semantics`
+  (only `"same_grid_rgb"`), `value_range` (only `(-1, 1)`) and an optional
+  `artifact_direction` used for output names. The predictor is any callable taking
+  `{name: (N, 3, H, W) float tensor in [-1, 1]}` in contract order and returning one
+  `(N, 3, H, W)` float tensor in [-1, 1] on exactly the input grid. It needs no
+  `input_names` attribute. Transport converts images to that range and back.
+- **Validation before publication.** Every prediction is checked before it is
+  accumulated or written: one tensor (tuples/dicts are rejected), same batch size,
+  exactly 3 channels, the same height and width as the input tile, floating dtype,
+  finite values, and values within [-1, 1] (±1e-3). Nothing is cropped, padded,
+  resized, selected or clamped to make a bad output fit. N-to-M translation, several
+  outputs, and scalar or segmentation outputs are not supported.
+- **Ownership.** The caller owns the predictor and the device. Transport only calls it
+  under `torch.no_grad` (with CUDA autocast on CUDA devices) after moving the inputs
+  to `runtime.device`. It never moves, rebuilds, switches the train/eval mode of, or
+  closes the predictor, and the runtime stays usable afterwards. The checkpoint
+  adapter puts its model in eval mode when it builds it.
+- **Provenance is optional.** `InferenceRuntime.checkpoint_path` and
+  `predictor_identity` default to `None`, and results report them as they are. The
+  checkpoint adapter fills in the real checkpoint path and the method name.
+- **Output paths.** Without `default_single_output_dir` /
+  `default_directory_output_dir`, every call needs an explicit output path. A call
+  without one fails before any prediction and never writes to the working directory.
+  `run_image_path_inference` also accepts a zero-argument factory. Directory pairing
+  is checked before the factory is called, so a checkpoint is only loaded when the
+  inputs are valid.
+- **Modes.** `auto` runs one pass when the input already has the contract size and
+  tiles otherwise. `resize` resizes the input to `image_size` and writes an output at
+  that size, with no claim about the source's physical resolution. `tile` uses
+  `image_size` tiles with stride `image_size - tile_overlap`. The last tile is anchored
+  at the image edge, partial tiles are padded with white, all inputs are read at the
+  same coordinates, overlaps are averaged with equal weight, and only the unpadded
+  region contributes. `tile_overlap` must be smaller than both tile dimensions.
+- **Outputs.** A single-file output is written to a hidden temporary file next to
+  the destination and atomically renamed over it, replacing any existing file. A
+  failed run leaves an existing output untouched. An output may not overwrite an
+  input. In directory mode, two inputs that map to the same output name (for example
+  `a.png` and `a.tif` with `output_format="png"`) are rejected before prediction.
+  Names are `<stem>_target_generated<ext>`, or `<stem>_<direction>_generated<ext>`
+  when a direction is set.
+- **WSI.** When every input opens with OpenSlide and tiling is needed, inputs are read
+  region by region. The output has exactly the shared input pixel dimensions and is
+  written as a pyramidal BigTIFF by libvips. MPP is copied only from source metadata.
+  One known value is kept, known values from several inputs must agree (relative
+  tolerance 1e-4) or the run fails before prediction, and MPP missing from every
+  input stays unknown in the output. MPP is never derived from sizes. Before
+  prediction, the free space on the output's filesystem must cover at least
+  `width x height x 3 x 5` bytes (float32 accumulator plus raw RGB). The compressed
+  TIFF needs space on top of that estimate. This is disk-backed scratch space, not
+  zero-disk execution, and there is no resumable WSI job. Scratch files live in a
+  temporary directory next to the output and are always removed. The TIFF is reopened
+  and its geometry, pyramid levels, MPP and sample pixels are checked (headers, not a
+  full reread) before it atomically replaces the destination.
 
 `tests/architecture/test_standalone_stages.py` exercises each boundary from a fresh
 temporary directory and asserts that unrelated predecessor paths (manifest, run
@@ -115,7 +193,7 @@ Public modules for extension code: `virtual_staining.definitions` (`MethodDefini
 (`reject_unknown_keys`, `parse_bool_strict`), `virtual_staining.config.run.RunConfig`,
 `virtual_staining.training.trainer.Trainer`, `virtual_staining.inference.runner`
 (`load_inference_generator`) and `virtual_staining.inference.single`
-(`run_image_path_inference`, `InferenceRuntime`). The application entry points
+(`run_image_path_inference`, `InferenceRuntime`, `PredictionContract`). The application entry points
 `applications.train.train`, `applications.infer.infer` and
 `applications.infer_images.infer_images(..., definitions=...)` /
 `applications.pipeline.run_stages(..., definitions=...)` accept an externally resolved

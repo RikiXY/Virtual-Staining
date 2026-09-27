@@ -78,7 +78,8 @@ def _build_parser() -> argparse.ArgumentParser:
 def _print_file_result(result: SingleInferenceResult) -> None:
     for name, path in result.input_paths.items():
         print_info(f"Input {name}", str(path))
-    print_info("Checkpoint", str(result.checkpoint_path))
+    if result.checkpoint_path is not None:
+        print_info("Checkpoint", str(result.checkpoint_path))
     print_info("Mode", result.mode)
     print_info("Generated", style(str(result.output_path), "bold", "magenta"))
 
@@ -86,7 +87,8 @@ def _print_file_result(result: SingleInferenceResult) -> None:
 def _print_directory_result(result: DirectoryInferenceResult) -> None:
     for name, path in result.input_dirs.items():
         print_info(f"Input dir {name}", str(path))
-    print_info("Checkpoint", str(result.checkpoint_path))
+    if result.checkpoint_path is not None:
+        print_info("Checkpoint", str(result.checkpoint_path))
     print_info("Images", str(len(result.results)))
     print_info("Output dir", style(str(result.output_dir), "bold", "magenta"))
 

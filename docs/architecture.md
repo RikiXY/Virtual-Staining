@@ -153,7 +153,15 @@ provenance lives in `experiment/snapshots.py`.
 its `ProgressUpdate` callback is silent unless an adapter supplies a reporter.
 The CLI supplies terminal rendering, while application/library callers remain
 presentation-neutral. Infer-images runtime creation belongs to `applications/`;
-`inference/single.py` accepts an already-loaded `InferenceRuntime`.
+`inference/single.py` accepts an already-loaded `InferenceRuntime` (a caller-owned
+predictor plus an explicit `PredictionContract`: ordered input names, tile size,
+same-grid single RGB output, [-1, 1] range, optional direction) or a factory for one.
+This is the only image-inference transport. `applications/infer_images.py` builds
+the predictor from a checkpoint through the method definition, fills in the same
+contract and optional checkpoint provenance, and delegates to it. The manifest
+`applications/infer.py` loop keeps its own provenance-owning loop but calls the same
+`predict_batch`, which enforces the same-grid output check. Transport never names a
+method, network topology, optimizer or loss.
 
 Within training, `trainer.py` owns epoch orchestration, `validator.py` owns validation
 inference, `preview.py` owns the optional validation preview sink (methods hand it
