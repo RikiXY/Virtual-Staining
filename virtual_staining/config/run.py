@@ -100,6 +100,16 @@ class RunConfig:
                 "evaluation.protocol='unpaired' requires data.pairing='unpaired' "
                 "(independent data.domains collections)"
             )
+        if self.evaluation is not None and (self.evaluation.protocol or self.data.pairing) == (
+            "unpaired"
+        ):
+            if self.evaluation.metrics is not None:
+                raise ValueError(
+                    "evaluation.metrics applies to the paired protocol only; the unpaired "
+                    "protocol reports fixed appearance-distribution diagnostics"
+                )
+            if self.evaluation.input_failures != "strict":
+                raise ValueError("evaluation.input_failures applies to the paired protocol only")
         definition.validate(self)
         if self.preprocessing is None:
             return
@@ -186,7 +196,7 @@ class RunConfig:
                 else None
             ),
             evaluation=(
-                EvaluationConfig.from_mapping(_section(raw, "evaluation"))
+                EvaluationConfig.from_mapping(_section(raw, "evaluation"), definitions.metrics)
                 if "evaluation" in raw
                 else None
             ),

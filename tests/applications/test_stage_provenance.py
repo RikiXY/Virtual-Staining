@@ -29,6 +29,7 @@ from virtual_staining.data.consumption import DataLeakageError, load_snapshot
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.manifest import DatasetManifest
 from virtual_staining.data.provenance import save_dataset_fingerprint
+from virtual_staining.evaluation.evaluator import EvaluationCoverageError
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.methods.cyclegan import CycleGANMethod
 from virtual_staining.training.checkpoints import MethodCheckpointManager
@@ -532,9 +533,12 @@ def test_paired_evaluation_persists_correspondence_and_links_tracked_inference(
     assert _producer(layout)["status"] == "unlinked"
     assert _producer(layout)["changed"] == [generated.name]
 
-    # Deleted generated file: requested, recorded missing, and skipped by the evaluator.
+    # Deleted generated file: requested, recorded missing; strict evaluation fails and
+    # permissive evaluation excludes it.
     generated.unlink()
-    _run(tmp_path, "evaluate")
+    with pytest.raises(EvaluationCoverageError, match="1 of 2 samples had input failures"):
+        _run(tmp_path, "evaluate")
+    _run(tmp_path, "evaluate", input_failures="permissive")
     evaluate_record = _stage(layout, "evaluate")
     missing = [
         row
@@ -544,12 +548,15 @@ def test_paired_evaluation_persists_correspondence_and_links_tracked_inference(
     assert [(row.role, row.locator, row.sha256) for row in missing] == [
         ("generated", generated.name, None)
     ]
-    assert evaluate_record["details"]["skipped_count"] == 1
+    assert evaluate_record["details"]["excluded_count"] == 1
     assert evaluate_record["details"]["evaluated_count"] == 1
     assert _producer(layout)["missing"] == [generated.name]
 
     # Wrong direction: the tracked inference produced A_to_B, evaluation asks for B_to_A.
-    _run(tmp_path, "evaluate", "B_to_A")
+    # Nothing can be evaluated, so the stage fails, but the producer link is still recorded.
+    with pytest.raises(EvaluationCoverageError, match="2 of 2 samples"):
+        _run(tmp_path, "evaluate", "B_to_A")
+    assert _stage(layout, "evaluate")["status"] == "failed"
     assert _producer(layout)["status"] == "unlinked"
     assert _producer(layout)["reason"] == "inference direction differs"
 

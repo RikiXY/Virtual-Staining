@@ -16,7 +16,6 @@ from virtual_staining.evaluation.selection import (
     build_selection_summary_row,
     infer_source_path_from_row,
 )
-from virtual_staining.metrics import is_higher_better_metric
 from virtual_staining.utils.image_io import open_rgb
 
 DiagnosticPathKey = Literal[
@@ -43,16 +42,18 @@ def build_metric_case_artifacts(
     row: dict[str, str],
     metric_summary: dict[str, float],
     metric_dir: Path,
+    *,
+    higher_is_better: bool,
 ) -> tuple[dict[str, object], DiagnosticEntry]:
     sample_id = row["sample_id"]
     metric_value = float(row[metric_name])
 
     if kind == "best":
-        summary_key = "max" if is_higher_better_metric(metric_name) else "min"
+        summary_key = "finite_max" if higher_is_better else "finite_min"
     elif kind == "worst":
-        summary_key = "min" if is_higher_better_metric(metric_name) else "max"
+        summary_key = "finite_min" if higher_is_better else "finite_max"
     elif kind == "median":
-        summary_key = "median"
+        summary_key = "finite_median"
     else:
         raise ValueError(f"Unsupported representative kind: {kind}")
 

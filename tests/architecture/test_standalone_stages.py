@@ -249,17 +249,18 @@ def test_evaluation_runs_from_explicit_records_and_output_dir(
 
     with _recorded_access() as accessed:
         metrics, shape = evaluate_pair(target, generated)
-        result = evaluate_samples(samples, output_dir)
+        result = evaluate_samples(samples, output_dir, input_failures="permissive")
 
     _assert_untouched(accessed, sentinel, before)
     assert shape == (16, 16, 3)
-    assert metrics["mae"] > 0
-    assert (result.num_evaluated, result.num_skipped) == (1, 1)
-    assert result.skipped_rows[0]["reason"] == "missing_generated"
+    assert metrics["mae"].status == "finite" and (metrics["mae"].value or 0) > 0
+    assert (result.num_evaluated, result.num_excluded) == (1, 1)
+    assert result.coverage_rows[1]["reason"] == "missing_generated"
     assert {path.name for path in output_dir.iterdir()} == {
         "per_image_metrics.csv",
         "summary.csv",
-        "skipped.csv",
+        "coverage.csv",
+        "evaluation_result.json",
     }
 
 

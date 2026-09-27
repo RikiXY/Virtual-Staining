@@ -15,7 +15,14 @@ from pathlib import Path
 import pytest
 
 from virtual_staining.definitions import ComponentDefinition, MethodDefinition
-from virtual_staining.methods.builtin import builtin_definitions, builtin_method_definitions
+from virtual_staining.methods.builtin import (
+    PIX2PIX_CHECKPOINT_METRICS,
+    PIX2PIX_VALIDATION_METRICS,
+    CycleGANDefinition,
+    builtin_definitions,
+    builtin_method_definitions,
+)
+from virtual_staining.metrics import BUILTIN_METRICS
 
 _PACKAGE = Path(__file__).resolve().parents[2] / "virtual_staining"
 _RUNTIMES = ("virtual_staining.methods.pix2pix", "virtual_staining.methods.cyclegan")
@@ -103,6 +110,9 @@ _SEAM = (
     "config/model.py",
     "config/training.py",
     "config/scheduler.py",
+    "config/evaluation.py",
+    "metrics.py",
+    "evaluation",
 )
 
 
@@ -151,7 +161,29 @@ def test_default_definitions_register_each_builtin_once_through_the_public_api()
     assert all(isinstance(d, MethodDefinition) for d in definitions.methods.values())
     assert set(definitions.components) == {"concat_unet", "resnet", "patchgan"}
     assert all(isinstance(d, ComponentDefinition) for d in definitions.components.values())
+    assert tuple(definitions.metrics.values()) == BUILTIN_METRICS
     assert builtin_definitions() is definitions
+
+
+def test_pix2pix_explicitly_owns_its_reused_validation_image_metrics() -> None:
+    assert {name: metric.name for name, metric in PIX2PIX_VALIDATION_METRICS.items()} == {
+        "val_ssim": "ssim",
+        "val_psnr": "psnr",
+        "val_mae": "mae",
+        "val_rmse": "rmse",
+        "val_pcc_rgb_mean": "pcc_rgb_mean",
+        "val_pcc_gray": "pcc_gray",
+    }
+    assert list(PIX2PIX_CHECKPOINT_METRICS.items()) == [
+        ("loss_G_val", "min"),
+        ("val_ssim", "max"),
+        ("val_psnr", "max"),
+        ("val_mae", "min"),
+        ("val_rmse", "min"),
+        ("val_pcc_rgb_mean", "max"),
+        ("val_pcc_gray", "max"),
+    ]
+    assert dict(CycleGANDefinition.checkpoint_metrics) == {"loss_G_val": "min"}
 
 
 @pytest.mark.parametrize(

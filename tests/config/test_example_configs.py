@@ -411,11 +411,32 @@ _PUBLIC_OPTIONS: dict[str, tuple[frozenset[str], set[str]]] = {
             "bootstrap_iterations",
             "bootstrap_seed",
             "protocol",
+            "metrics",
+            "input_failures",
         },
     ),
     "evaluation protocols": (
         frozenset(get_args(evaluation.EvaluationProtocol)),
         {"paired", "unpaired"},
+    ),
+    "evaluation input failures": (
+        frozenset(get_args(evaluation.InputFailureMode)),
+        {"strict", "permissive"},
+    ),
+    "evaluation metrics": (
+        frozenset(builtin_definitions().metrics),
+        {
+            "mae",
+            "mse",
+            "rmse",
+            "psnr",
+            "ssim",
+            "pcc_gray",
+            "pcc_r",
+            "pcc_g",
+            "pcc_b",
+            "pcc_rgb_mean",
+        },
     ),
     "queue keys": (queue_module._QUEUE_KEYS, {"name", "continue_on_failure", "jobs", "ablation"}),
     "queue job keys": (queue_module._QUEUE_JOB_KEYS, {"config_path", "label", "notes", "stages"}),
@@ -477,6 +498,7 @@ _CYCLEGAN_FAMILIES = (
     "inference directions",
     "evaluation keys",
     "evaluation protocols",
+    "evaluation input failures",
 )
 
 
@@ -710,6 +732,16 @@ _VALID_VARIANTS: list[tuple[str, dict[str, Any]]] = [
         },
     ),
     ("cyclegan", {"evaluation.protocol": "paired"}),
+    (
+        "cyclegan",
+        {
+            "evaluation.protocol": "paired",
+            "evaluation.metrics": [{"name": "mae"}],
+            "evaluation.input_failures": "permissive",
+        },
+    ),
+    ("pix2pix", {"evaluation.metrics": [{"name": "ssim"}, {"name": "pcc_r"}, {"name": "mae"}]}),
+    ("pix2pix", {"evaluation.input_failures": "permissive"}),
 ]
 
 
@@ -785,6 +817,17 @@ _INVALID_VARIANTS: list[tuple[str, dict[str, Any], str]] = [
     ("pix2pix", {"inference.direction": "A_to_B"}, "not supported by method.name='pix2pix'"),
     ("cyclegan", {"inference.direction": "sideways"}, r"direction must be one of \['A_to_B'"),
     ("pix2pix", {"evaluation.protocol": "unpaired"}, "requires data.pairing='unpaired'"),
+    ("pix2pix", {"evaluation.metrics": [{"name": "fid"}]}, "not a registered metric"),
+    ("pix2pix", {"evaluation.metrics": [{"name": "mae"}, {"name": "mae"}]}, "more than once"),
+    ("pix2pix", {"evaluation.metrics": [{"name": "ssim", "options": {"win": 3}}]}, "unknown"),
+    ("pix2pix", {"evaluation.metrics": [{"name": "ssim", "weight": 1}]}, "unknown keys"),
+    ("pix2pix", {"evaluation.metrics": [{"name": "ssim", "options": [3]}]}, "mapping"),
+    ("pix2pix", {"evaluation.metrics": ["ssim"]}, "must be a mapping"),
+    ("pix2pix", {"evaluation.metrics": "ssim"}, "list of mappings"),
+    ("pix2pix", {"evaluation.metrics": []}, "at least one metric"),
+    ("pix2pix", {"evaluation.input_failures": "skip"}, "input_failures"),
+    ("cyclegan", {"evaluation.metrics": [{"name": "mae"}]}, "paired protocol only"),
+    ("cyclegan", {"evaluation.input_failures": "permissive"}, "paired protocol only"),
     ("pix2pix", {"inference.checkpoint_metric": "val_loss"}, "not a checkpoint metric"),
     ("pix2pix", {"method.options": {}}, "Unknown key.*in method: options"),
     ("pix2pix", {"method.name": "stylegan"}, "not a registered method definition"),

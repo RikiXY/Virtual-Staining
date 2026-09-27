@@ -15,8 +15,8 @@ upper layers may import from lower layers, never the reverse.
 
 | Package | Responsibility |
 |---|---|
-| `metrics.py` | Image metric computations, directions, quality thresholds, and validation image metric names |
-| `definitions.py` | The torch-free extension seam: `MethodDefinition`, `ComponentDefinition`, and the immutable `Definitions` set callers supply explicitly |
+| `metrics.py` | The evaluation metric contract (`MetricDefinition`, `MetricResult`, request resolution, grouped computation) and the built-in numerical definitions with their directions and presentation-only thresholds |
+| `definitions.py` | The torch-free extension seam: `MethodDefinition`, `ComponentDefinition`, and the immutable `Definitions` set (methods, components, evaluation metrics) callers supply explicitly |
 | `checkpoint_contract.py` | Topology-neutral v4 checkpoint payload and strict method-aware compatibility validation |
 | `checkpoint_selection.py` | Neutral `best.json` ranking, policy, and metric-direction selection |
 | `loss_definitions.py` | Canonical built-in loss definitions: name, allowed roles, supported methods, parameter contract and validation, and primitive tensor math, shared by the built-in definitions and runtimes |
@@ -28,7 +28,7 @@ upper layers may import from lower layers, never the reverse.
 | `methods/` | The built-in definitions (`builtin.py`: `Pix2PixDefinition`, `CycleGANDefinition`, `builtin_definitions()`) and runtimes (`Pix2PixMethod`, `CycleGANMethod`), each owning its options, topology, optimizers, losses, checkpoint state and inference-only generator |
 | `training/` | The `TrainingMethodRuntime` protocol, method-agnostic `Trainer`, generic `MethodCheckpointManager`, validation, history, the Pix2Pix configured-loss evaluator, and callback-driven progress events |
 | `inference/` | Checkpoint resolution, definition-driven inference model construction, prediction-direction resolution, generic single/directory/tiled/WSI inference, and output naming |
-| `evaluation/` | Paired per-image metrics and grouped summaries, unpaired collection diagnostics, diagnostic plots, representative selection, and comparison panels |
+| `evaluation/` | Paired evaluation of a resolved metric request (input-failure coverage, valid-region support, per-image reports, summaries, `evaluation_result.json`), unpaired collection diagnostics, diagnostic plots, representative selection, and comparison panels |
 | `applications/` | User-visible stage lifecycle owners and infer-images runtime composition; no `argparse` |
 | `cli/` | The `argparse` entrypoint, terminal rendering, and thin adapters over `applications/` |
 
@@ -107,7 +107,12 @@ Evaluation protocol selection belongs to `applications/evaluate.py`; it defaults
 run's `data.pairing`. `paired` maps aligned manifest records to references and reuses `evaluation/evaluator.py`
 and `metrics.py`; `unpaired` (default for CycleGAN) collects the active direction's
 generated images and the real test collection of the reference domain and delegates to
-`evaluation/unpaired.py` (it requires `data.pairing: unpaired`). Method code contains no evaluation metrics.
+`evaluation/unpaired.py` (it requires `data.pairing: unpaired`). The paired metric
+request (`evaluation.metrics`, default the built-in set) is resolved from the caller's
+`Definitions` during config resolution. Standalone evaluation metrics and method-owned
+training metrics are separate: a `MethodDefinition` declares its own validation and
+checkpoint metrics; Pix2Pix explicitly reuses built-in metric definitions for its
+`val_*` columns, and CycleGAN reports none.
 
 ## Purity and I/O Boundaries
 
@@ -196,14 +201,16 @@ methods -> checkpoint_contract, checkpoint_selection, config, definitions,
            loss_definitions, metrics, models, training
 training -> checkpoint_contract, checkpoint_selection, config, experiment,
             loss_definitions, metrics, models
-definitions -> checkpoint_selection (+ type-only/lazy: checkpoint_contract, config, training)
-evaluation -> metrics, utils
+definitions -> checkpoint_selection (+ type-only/lazy: checkpoint_contract, config, metrics,
+               training)
+evaluation -> config, metrics, utils
 experiment -> config, data, utils
 data -> config, split_contract, utils
 models -> config, definitions
 checkpoint_contract -> models
 config -> checkpoint_selection, definitions, loss_definitions, split_contract, utils
-          (+ one lazy import of methods.builtin for the default definition set)
+          (+ one lazy import of methods.builtin for the default definition set and
+          type-only/lazy imports of metrics for metric requests)
 loss_definitions -> config
 checkpoint_selection, metrics, split_contract, utils -> (none)
 ```

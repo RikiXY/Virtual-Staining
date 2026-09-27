@@ -16,7 +16,6 @@ from virtual_staining.checkpoint_contract import CheckpointIdentity, ValidatedCh
 from virtual_staining.config.losses import configured_loss_names
 from virtual_staining.config.run import RunConfig
 from virtual_staining.methods.builtin import GanOptions, GanTrainingOptions
-from virtual_staining.metrics import VALIDATION_IMAGE_METRIC_NAMES
 from virtual_staining.training.helpers import (
     TRAINING_STATE_KEYS,
     LossComponentAccumulator,
@@ -194,8 +193,8 @@ class CycleGANMethod:
 
     metric_names: tuple[str, ...] = ("loss_G", "loss_D")
     component_total_names: tuple[str, ...] = ("generator", "discriminator")
-    # Kept as empty columns so the history header matches every built-in method.
-    validation_metric_names: tuple[str, ...] = VALIDATION_IMAGE_METRIC_NAMES
+    # CycleGAN has no paired validation target, so it reports no image-fidelity columns.
+    validation_metric_names: tuple[str, ...] = ()
 
     def __init__(self, config: RunConfig, device: torch.device, *, seed: int) -> None:
         options: GanOptions = config.method.options

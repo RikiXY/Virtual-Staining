@@ -3,10 +3,8 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from virtual_staining.metrics import DEFAULT_METRICS, is_higher_better_metric
 from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS
 
-METRIC_SELECTION_ORDER = list(DEFAULT_METRICS)
 SELECTION_SUMMARY_FIELDNAMES = [
     "metric",
     "kind",
@@ -61,21 +59,28 @@ def select_representative_rows(
     metric_name: str,
     metric_summary: dict[str, float],
     per_image_rows: list[dict[str, str]],
+    *,
+    higher_is_better: bool,
 ) -> dict[str, dict[str, str]]:
-    if not per_image_rows:
-        raise ValueError("No per-image rows available for representative selection.")
+    """Best, finite-median-nearest and worst rows among those with a numeric value."""
+    rows = [
+        row
+        for row in per_image_rows
+        if row[f"{metric_name}_status"] in ("finite", "positive_infinity")
+    ]
+    if not rows:
+        raise ValueError(f"No numeric per-image values of {metric_name!r} to select from.")
 
     def metric_value(row: dict[str, str]) -> float:
         return float(row[metric_name])
 
-    higher_is_better = is_higher_better_metric(metric_name)
     return {
-        "best": (max if higher_is_better else min)(per_image_rows, key=metric_value),
+        "best": (max if higher_is_better else min)(rows, key=metric_value),
         "median": min(
-            per_image_rows,
-            key=lambda row: abs(metric_value(row) - metric_summary["median"]),
+            rows,
+            key=lambda row: abs(metric_value(row) - metric_summary["finite_median"]),
         ),
-        "worst": (min if higher_is_better else max)(per_image_rows, key=metric_value),
+        "worst": (min if higher_is_better else max)(rows, key=metric_value),
     }
 
 

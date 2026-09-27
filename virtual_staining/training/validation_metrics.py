@@ -1,40 +1,39 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 import numpy as np
 import torch
 
-from virtual_staining.metrics import (
-    VALIDATION_IMAGE_METRIC_NAMES as _VALIDATION_IMAGE_METRIC_NAMES,
-)
-from virtual_staining.metrics import (
-    VALIDATION_METRIC_TO_BASE,
-    compute_standard_metrics,
-)
+from virtual_staining.metrics import ResolvedMetric, compute_metrics
 from virtual_staining.models.io_contract import denormalize_model_output
-
-VALIDATION_IMAGE_METRIC_NAMES = list(_VALIDATION_IMAGE_METRIC_NAMES)
 
 
 class ValidationImageMetricAccumulator:
-    """Aggregates validation image metrics computed on [0, 1] NumPy arrays."""
+    """Aggregates method-selected image metrics computed on [0, 1] NumPy arrays.
 
-    def __init__(self) -> None:
-        self._values = {name: [] for name in VALIDATION_IMAGE_METRIC_NAMES}
+    ``metrics`` maps each validation column the method reports to the evaluation metric
+    it reuses. Non-finite per-image results (infinite, undefined, unavailable) are left
+    out of the finite mean.
+    """
+
+    def __init__(self, metrics: Mapping[str, ResolvedMetric]) -> None:
+        self._metrics = dict(metrics)
+        self._requested = tuple(self._metrics.values())
+        self._values: dict[str, list[float]] = {name: [] for name in self._metrics}
 
     def add_batch(self, generated: torch.Tensor, target: torch.Tensor) -> None:
+        if not self._metrics:
+            return
         for generated_image, target_image in zip(
             _normalized_tensor_batch_to_images(generated),
             _normalized_tensor_batch_to_images(target),
             strict=True,
         ):
-            metrics = compute_standard_metrics(target_image, generated_image)
-            values = {
-                name: metrics[base_name] for name, base_name in VALIDATION_METRIC_TO_BASE.items()
-            }
-            for name, value in values.items():
-                self._values[name].append(value)
+            results = compute_metrics(self._requested, target_image, generated_image)
+            for name, metric in self._metrics.items():
+                value = results[metric.name].value
+                self._values[name].append(float("nan") if value is None else value)
 
     def mean(self) -> dict[str, float]:
         return {name: _finite_mean(values) for name, values in self._values.items()}

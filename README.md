@@ -254,7 +254,7 @@ From H&E staining to label-free:
 
 ## Package Structure
 
-- `metrics.py` - image metric computations and metric metadata
+- `metrics.py` - evaluation metric definitions, result statuses and built-in metrics
 - `utils/` - shared primitives: dimensions and image I/O
 - `config/` - YAML loading, validation, typed config sections
 - `experiment/` - run paths, metadata, stage lifecycle, and environment snapshots
@@ -305,7 +305,7 @@ Virtual-Staining/
 │   ├── training/
 │   └── utils/
 ├── virtual_staining/           # installable package
-│   ├── metrics.py              # metric computations and metadata
+│   ├── metrics.py              # metric definitions and built-in metrics
 │   ├── applications/           # use-case orchestrators
 │   ├── cli/                    # argparse entry points
 │   ├── config/
@@ -383,8 +383,9 @@ from the same slide. For independent generalization evidence, configure `split.u
   optional identity L1 losses, fake-image replay pools.
 - **Evaluation** - two distinct protocols:
   - *paired* (Pix2Pix default; CycleGAN opt-in) - per-image MAE, MSE, RMSE, PSNR, SSIM,
-    and PCC against aligned references, with set/specimen/patient summaries. Requires an
-    aligned held-out test manifest.
+    and PCC (or any requested metric, including ones supplied in Python) against aligned
+    references, with explicit result statuses, input coverage and set/specimen/patient
+    summaries. Requires an aligned held-out test manifest.
   - *unpaired* (CycleGAN default) - compares the generated and real test collections
     through per-image RGB/luminance feature distributions. No pairs are formed and no
     pairwise fidelity metric is reported.

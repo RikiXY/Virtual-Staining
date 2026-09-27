@@ -1,50 +1,58 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
-from virtual_staining.evaluation.plotting import METRIC_NAMES, save_dataset_plots
+from virtual_staining.evaluation.plotting import histogram_edges, save_dataset_plots
+from virtual_staining.evaluation.reports import build_metric_row
+from virtual_staining.metrics import (
+    BUILTIN_METRIC_DEFINITIONS,
+    MetricDefinition,
+    MetricResult,
+    ResolvedMetric,
+)
+
+_METRICS = tuple(
+    BUILTIN_METRIC_DEFINITIONS[name].resolve({}, name) for name in ("mae", "psnr", "pcc_gray")
+)
 
 
-def _row(value: float) -> dict[str, object]:
-    return {metric: value for metric in METRIC_NAMES}
+def _row(value: float, **overrides: MetricResult) -> dict[str, object]:
+    results = {metric.name: MetricResult.of(value) for metric in _METRICS} | overrides
+    return build_metric_row("s", "t.png", "g.png", (8, 8, 3), results, set_id="S")
 
 
-def test_save_dataset_plots_creates_expected_files(tmp_path: Path) -> None:
-    rows = [_row(0.5), _row(0.6), _row(0.7)]
+def test_save_dataset_plots_writes_one_histogram_per_requested_metric(tmp_path: Path) -> None:
+    saved_paths = save_dataset_plots([_row(0.5), _row(0.6), _row(0.7)], _METRICS, tmp_path)
 
-    saved_paths = save_dataset_plots(rows, tmp_path)
-
-    expected_names = {f"{metric}_histogram.png" for metric in METRIC_NAMES}
-    expected_names.add("metrics_boxplot.png")
-
-    assert {path.name for path in saved_paths} == expected_names
+    assert {path.name for path in saved_paths} == {
+        "mae_histogram.png",
+        "psnr_histogram.png",
+        "pcc_gray_histogram.png",
+        "metrics_boxplot.png",
+    }
     assert all(path.is_file() for path in saved_paths)
 
 
-# ---------------------------------------------------------------------------
-# Non-finite value handling in plots
-# ---------------------------------------------------------------------------
-
-
-def test_save_dataset_plots_skips_inf_psnr_without_crashing(tmp_path: Path) -> None:
-    """save_dataset_plots must not crash when PSNR is inf (identical images)."""
-    row = dict(_row(0.5))
-    row["psnr"] = float("inf")
-    saved_paths = save_dataset_plots([row, _row(0.6)], tmp_path / "inf_psnr")
+def test_save_dataset_plots_ignores_non_finite_results(tmp_path: Path) -> None:
+    rows = [
+        _row(0.5, psnr=MetricResult.of(math.inf), pcc_gray=MetricResult.undefined("constant")),
+        _row(0.6, pcc_gray=MetricResult.undefined("constant")),
+    ]
+    saved_paths = save_dataset_plots(rows, _METRICS, tmp_path)
     assert all(p.is_file() for p in saved_paths)
 
 
-def test_save_dataset_plots_skips_nan_pcc_without_crashing(tmp_path: Path) -> None:
-    """save_dataset_plots must not crash when PCC metrics are nan (constant images)."""
-    row = dict(_row(0.5))
-    row["pcc_gray"] = float("nan")
-    row["pcc_rgb_mean"] = float("nan")
-    saved_paths = save_dataset_plots([row, _row(0.6)], tmp_path / "nan_pcc")
-    assert all(p.is_file() for p in saved_paths)
+def test_unknown_metric_histogram_uses_data_not_an_invented_range(tmp_path: Path) -> None:
+    custom = MetricDefinition("custom", "1", "tests", lambda *_: {}, higher_is_better=None).resolve(
+        {}, "custom"
+    )
+    assert isinstance(custom, ResolvedMetric)
 
+    edges = histogram_edges([3.0, 7.0], custom.definition.plot_range)
 
-def test_save_dataset_plots_all_non_finite_without_crashing(tmp_path: Path) -> None:
-    """save_dataset_plots must not crash when every value for a metric is non-finite."""
-    rows: list[dict[str, object]] = [{metric: float("inf") for metric in METRIC_NAMES}]
-    saved_paths = save_dataset_plots(rows, tmp_path / "all_nonfinite")
-    assert all(p.is_file() for p in saved_paths)
+    assert (edges[0], edges[-1]) == (3.0, 7.0)
+    assert (histogram_edges([0.2], (0.0, 1.0))[0], histogram_edges([0.2], (0.0, 1.0))[-1]) == (
+        0.0,
+        1.0,
+    )

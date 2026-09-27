@@ -9,13 +9,13 @@ from virtual_staining.evaluation.io import (
 )
 from virtual_staining.evaluation.reports import (
     build_metric_row,
-    write_single_case_csv,
+    metric_fieldnames,
+    write_per_image_metrics_csv,
 )
 from virtual_staining.experiment.run_layout import RunLayout
-from virtual_staining.metrics import DEFAULT_METRICS
+from virtual_staining.metrics import MetricResult
 
 __all__ = [
-    "DEFAULT_METRICS",
     "SingleEvalResult",
     "evaluate_pair",
 ]
@@ -33,7 +33,7 @@ class _EvaluateRequest:
 class SingleEvalResult:
     target: str | Path
     generated: str | Path
-    metrics: dict[str, float]
+    metrics: dict[str, MetricResult]
     shape: tuple[int, int, int]
     single_case_csv: Path
 
@@ -94,7 +94,9 @@ def _run_single(request: _EvaluateRequest) -> SingleEvalResult:
         set_id=request.sample_id,
     )
     single_case_csv = individual_cases_dir / f"{request.sample_id}_evaluation.csv"
-    write_single_case_csv(row, single_case_csv)
+    write_per_image_metrics_csv(
+        [row], metric_fieldnames(list(metrics), support=False), single_case_csv
+    )
 
     return SingleEvalResult(
         target=target_path,

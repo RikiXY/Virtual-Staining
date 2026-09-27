@@ -28,7 +28,7 @@ from virtual_staining.definitions import (
     ResolutionContext,
 )
 from virtual_staining.loss_definitions import method_loss_names
-from virtual_staining.metrics import VALIDATION_IMAGE_METRIC_NAMES, is_higher_better_metric
+from virtual_staining.metrics import BUILTIN_METRIC_DEFINITIONS, BUILTIN_METRICS, ResolvedMetric
 from virtual_staining.models.components import BUILTIN_COMPONENTS, BUILTIN_SOURCE
 
 if TYPE_CHECKING:
@@ -43,6 +43,7 @@ __all__ = [
     "CycleGANDefinition",
     "GanOptions",
     "GanTrainingOptions",
+    "PIX2PIX_VALIDATION_METRICS",
     "Pix2PixDefinition",
     "builtin_definitions",
     "builtin_method_definitions",
@@ -55,12 +56,20 @@ _LOSS_MONITOR_PATTERN = re.compile(
     r"^loss_val_(?:total_(?:generator|discriminator)|"
     r"(?:raw|weighted|current_weight)_(?:generator|discriminator)_[a-z0-9_]+)$"
 )
+# Pix2Pix deliberately reuses these built-in evaluation metrics for validation; the
+# definition below, not the evaluation subsystem, owns which exist and how they rank.
+PIX2PIX_VALIDATION_METRICS: Mapping[str, ResolvedMetric] = MappingProxyType(
+    {
+        f"val_{name}": BUILTIN_METRIC_DEFINITIONS[name].resolve({}, name)
+        for name in ("ssim", "psnr", "mae", "rmse", "pcc_rgb_mean", "pcc_gray")
+    }
+)
 PIX2PIX_CHECKPOINT_METRICS: Mapping[str, CheckpointMode] = MappingProxyType(
     {
         "loss_G_val": "min",
         **{
-            name: "max" if is_higher_better_metric(name.removeprefix("val_")) else "min"
-            for name in VALIDATION_IMAGE_METRIC_NAMES
+            name: "max" if metric.definition.higher_is_better else "min"
+            for name, metric in PIX2PIX_VALIDATION_METRICS.items()
         },
     }
 )
@@ -384,5 +393,9 @@ def builtin_method_definitions() -> tuple[MethodDefinition, ...]:
 
 @cache
 def builtin_definitions() -> Definitions:
-    """The default definition set: the built-in methods and components, nothing else."""
-    return Definitions().extend(methods=builtin_method_definitions(), components=BUILTIN_COMPONENTS)
+    """The default definition set: the built-in methods, components and metrics."""
+    return Definitions().extend(
+        methods=builtin_method_definitions(),
+        components=BUILTIN_COMPONENTS,
+        metrics=BUILTIN_METRICS,
+    )

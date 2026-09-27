@@ -20,7 +20,7 @@ from virtual_staining.evaluation.comparison import (
     save_unpaired_report_txt,
     save_unpaired_summary_json,
 )
-from virtual_staining.evaluation.plotting import get_metric_plot_range
+from virtual_staining.evaluation.reports import MetricInfo, metric_info
 from virtual_staining.evaluation.statistics import (
     PairedSummary,
     UnpairedComparison,
@@ -33,7 +33,6 @@ from virtual_staining.evaluation.statistics import (
     resolve_input_csv,
 )
 from virtual_staining.experiment.run_layout import ResultsLayout, RunLayout
-from virtual_staining.metrics import get_metric_thresholds, is_higher_better_metric
 
 
 @dataclass(frozen=True)
@@ -99,7 +98,30 @@ def _resolve_request(request: CompareRequest) -> _ResolvedCompareRequest:
     csv_b = _resolve_csv(request.run_b, request.csv_b, "B")
     label_a = request.label_a or _infer_label(request.run_a, request.csv_a, "A")
     label_b = request.label_b or _infer_label(request.run_b, request.csv_b, "B")
-    default_min, default_max = get_metric_plot_range(request.column)
+    info = _column_info(csv_a, csv_b, request.column)
+    higher_is_better = (
+        request.higher_is_better
+        if request.higher_is_better is not None
+        else info.higher_is_better
+        if info is not None
+        else None
+    )
+    if higher_is_better is None:
+        raise ValueError(
+            f"Ranking direction of {request.column!r} is unknown (no evaluation result "
+            "metadata declares it and it is not a built-in metric); pass it explicitly."
+        )
+    if info is not None and info.plot_range is not None:
+        default_min, default_max = info.plot_range
+    else:
+        # Plain data-driven axis: no scientific range is assumed for an unknown metric.
+        values = np.concatenate(
+            [load_metric_values(csv_a, request.column), load_metric_values(csv_b, request.column)]
+        )
+        values = values[np.isfinite(values)]
+        default_min, default_max = (
+            (float(values.min()), float(values.max())) if values.size else (0.0, 1.0)
+        )
     min_value = request.min_value if request.min_value is not None else default_min
     max_value = request.max_value if request.max_value is not None else default_max
     if min_value == max_value:
@@ -115,22 +137,28 @@ def _resolve_request(request: CompareRequest) -> _ResolvedCompareRequest:
         label_b=label_b,
         column=request.column,
         output_dir=output_dir,
-        higher_is_better=(
-            request.higher_is_better
-            if request.higher_is_better is not None
-            else is_higher_better_metric(request.column)
-        ),
+        higher_is_better=higher_is_better,
         bins=request.bins,
         min_value=float(min_value),
         max_value=float(max_value),
+        # Presentation heuristics only; none are assumed for an unknown metric.
         thresholds=(
             request.thresholds
             if request.thresholds is not None
-            else tuple(get_metric_thresholds(request.column))
+            else tuple(sorted(info.thresholds))
+            if info is not None
+            else ()
         ),
         tolerance=request.tolerance,
         sample_id_column=request.sample_id_column,
     )
+
+
+def _column_info(csv_a: Path, csv_b: Path, column: str) -> MetricInfo | None:
+    info_a, info_b = metric_info(csv_a, column), metric_info(csv_b, column)
+    if info_a and info_b and info_a.higher_is_better != info_b.higher_is_better:
+        raise ValueError(f"The two results declare different ranking directions for {column!r}")
+    return info_a or info_b
 
 
 def _resolve_csv(run_path: Path | None, csv_path: str | Path | None, label: str) -> Path:

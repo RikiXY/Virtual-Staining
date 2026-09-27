@@ -3,9 +3,11 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 
 from tests.config_helpers import (
@@ -28,12 +30,14 @@ from virtual_staining.applications.evaluate import (
 )
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.layout import DatasetLayout
+from virtual_staining.evaluation.evaluator import EvaluationCoverageError
 from virtual_staining.evaluation.unpaired import (
     UNPAIRED_FEATURE_COMPARISON_CSV,
     UNPAIRED_FEATURE_PLOT,
     UNPAIRED_IMAGE_STATISTICS_CSV,
 )
-from virtual_staining.metrics import METRIC_SPECS
+from virtual_staining.methods.builtin import builtin_definitions
+from virtual_staining.metrics import DEFAULT_METRIC_NAMES, MetricDefinition, MetricResult
 from virtual_staining.utils.artifacts import generated_filename
 
 
@@ -215,7 +219,8 @@ def test_evaluate_records_from_manifest_test_split(tmp_path: Path) -> None:
     rows = per_image_metrics.read_text(encoding="utf-8").splitlines()
     assert len(rows) == 3
     assert "99999_99999" not in per_image_metrics.read_text(encoding="utf-8")
-    assert not (output_dir / "skipped.csv").exists()
+    with (output_dir / "coverage.csv").open(newline="", encoding="utf-8") as handle:
+        assert [row["status"] for row in csv.DictReader(handle)] == ["evaluated", "evaluated"]
 
 
 def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
@@ -261,10 +266,10 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
     assert snapshot["sources"]["manifest_sha256"] == expected_manifest_hash
     assert "dataset" not in metadata
     assert metadata["details"]["evaluated_count"] == 1
-    assert metadata["details"]["skipped_count"] == 0
+    assert metadata["details"]["excluded_count"] == 0
     assert metadata["details"]["metrics_csv_path"] == str(output_dir / "per_image_metrics.csv")
     assert metadata["details"]["summary_csv_path"] == str(output_dir / "summary.csv")
-    assert metadata["details"]["metric_config"] == {name: True for name in METRIC_SPECS}
+    assert metadata["details"]["requested_metrics"] == list(DEFAULT_METRIC_NAMES)
 
     events = [
         json.loads(line)
@@ -276,7 +281,7 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
     assert all(event["stage"] == "evaluate" for event in events)
 
 
-def test_evaluate_writes_skipped_csv_for_missing_generated(tmp_path: Path) -> None:
+def test_evaluate_strict_fails_on_missing_generated_with_coverage(tmp_path: Path) -> None:
     dataset_root = tmp_path / "data"
     target_dir = dataset_root / "splits" / "test"
     generated_dir = tmp_path / "generated"
@@ -296,14 +301,17 @@ def test_evaluate_writes_skipped_csv_for_missing_generated(tmp_path: Path) -> No
     )
 
     run_config = RunConfig.from_yaml(yaml_file)
-    evaluate(run_config, yaml_file)
+    with pytest.raises(EvaluationCoverageError, match="input failures"):
+        evaluate(run_config, yaml_file)
 
-    skipped_csv = output_dir / "skipped.csv"
-    assert skipped_csv.exists()
-    assert "missing_generated" in skipped_csv.read_text(encoding="utf-8")
+    coverage_csv = output_dir / "coverage.csv"
+    assert "missing_generated" in coverage_csv.read_text(encoding="utf-8")
+    assert not (output_dir / "per_image_metrics.csv").exists()
+    stage = tmp_path / "results" / "eval_run" / "metadata" / "stages" / "evaluate.json"
+    assert json.loads(stage.read_text(encoding="utf-8"))["status"] == "failed"
 
 
-def test_evaluate_skipped_csv_has_correct_columns(tmp_path: Path) -> None:
+def test_evaluate_coverage_csv_has_correct_columns(tmp_path: Path) -> None:
     dataset_root = tmp_path / "data"
     target_dir = dataset_root / "splits" / "test"
     generated_dir = tmp_path / "generated"
@@ -323,16 +331,33 @@ def test_evaluate_skipped_csv_has_correct_columns(tmp_path: Path) -> None:
     )
 
     run_config = RunConfig.from_yaml(yaml_file)
-    evaluate(run_config, yaml_file)
+    with pytest.raises(EvaluationCoverageError):
+        evaluate(run_config, yaml_file)
 
-    with (output_dir / "skipped.csv").open(encoding="utf-8", newline="") as handle:
+    with (output_dir / "coverage.csv").open(encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
-        assert reader.fieldnames == ["sample_id", "reason", "target_path", "generated_path"]
+        assert reader.fieldnames == [
+            "sample_id",
+            "set_id",
+            "status",
+            "reason",
+            "detail",
+            "target_path",
+            "generated_path",
+            "support_path",
+        ]
 
 
 _SOURCE_COLOR = (10, 20, 30)
 _TARGET_COLOR = (200, 150, 100)
-_PAIRED_OUTPUTS = ("per_image_metrics.csv", "summary.csv", "summary_set.csv", "set_metrics.csv")
+_PAIRED_OUTPUTS = (
+    "per_image_metrics.csv",
+    "summary.csv",
+    "summary_set.csv",
+    "set_metrics.csv",
+    "coverage.csv",
+    "evaluation_result.json",
+)
 
 
 def _cyclegan_eval_config(
@@ -437,14 +462,15 @@ def test_cyclegan_paired_evaluation_uses_direction_reference(
     assert (output_dir / "summary_set.csv").exists()
     assert (output_dir / "summary_patient.csv").exists()
     metadata = _metadata(output_dir)
-    assert metadata["schema_version"] == 1
+    assert metadata["schema_version"] == 2
     assert metadata["method"] == "cyclegan"
     assert metadata["training_pairing"] == "unpaired"
     assert metadata["evaluation_protocol"] == "paired"
     assert metadata["inference_direction"] == direction
     assert metadata["reference_domain"] == reference_domain
     assert metadata["pairwise_metrics_available"] is True
-    assert metadata["counts"] == {"requested_count": 2, "evaluated_count": 2, "skipped_count": 0}
+    assert metadata["counts"] == {"requested_count": 2, "evaluated_count": 2, "excluded_count": 0}
+    assert metadata["artifacts"]["evaluation_result"] == str(output_dir / "evaluation_result.json")
     assert "limitations" not in metadata
 
 
@@ -552,13 +578,15 @@ def test_protocol_switches_remove_stale_reports(tmp_path: Path) -> None:
     unrelated = output_dir / "notes.txt"
     output_dir.mkdir()
     unrelated.write_text("keep")
-    (output_dir / "skipped.csv").write_text("stale")
+    (output_dir / "coverage.csv").write_text("stale")
+    (output_dir / "removed_metric_histogram.png").write_text("stale")
 
     evaluate(*_cyclegan_eval_config(tmp_path, protocol="paired", save_graphs=True))
     assert (output_dir / "per_image_metrics.csv").exists()
     assert (output_dir / "metrics_boxplot.png").exists()
     assert (output_dir / "mae_histogram.png").exists()
-    assert not (output_dir / "skipped.csv").exists()
+    assert not (output_dir / "removed_metric_histogram.png").exists()
+    assert "stale" not in (output_dir / "coverage.csv").read_text(encoding="utf-8")
 
     evaluate(*_cyclegan_eval_config(tmp_path, protocol="unpaired", save_graphs=True))
     assert not any((output_dir / name).exists() for name in _PAIRED_OUTPUTS)
@@ -592,7 +620,8 @@ def test_pix2pix_evaluation_writes_paired_metadata(tmp_path: Path) -> None:
     yaml_file = _write_evaluate_config(
         tmp_path,
         dataset_root,
-        f"generated_dir: {tmp_path / 'generated'}\noutput_dir: {output_dir}",
+        f"generated_dir: {tmp_path / 'generated'}\noutput_dir: {output_dir}\n"
+        "input_failures: permissive",
     )
 
     evaluate(RunConfig.from_yaml(yaml_file), yaml_file)
@@ -605,5 +634,59 @@ def test_pix2pix_evaluation_writes_paired_metadata(tmp_path: Path) -> None:
     assert metadata["source_domains"] == ["label_free"]
     assert metadata["reference_domain"] == "stained"
     assert metadata["pairwise_metrics_available"] is True
-    assert metadata["counts"] == {"requested_count": 2, "evaluated_count": 1, "skipped_count": 1}
-    assert metadata["artifacts"]["skipped_csv"] == str(output_dir / "skipped.csv")
+    assert metadata["counts"] == {"requested_count": 2, "evaluated_count": 1, "excluded_count": 1}
+    assert metadata["artifacts"]["coverage_csv"] == str(output_dir / "coverage.csv")
+    result = json.loads((output_dir / "evaluation_result.json").read_text(encoding="utf-8"))
+    assert result["input_failures"] == "permissive"
+    assert result["counts"] == {"requested": 2, "evaluated": 1, "excluded": 1, "failed": 0}
+    assert [metric["name"] for metric in result["metrics"]] == list(DEFAULT_METRIC_NAMES)
+
+
+def _mean_rgb(
+    target: np.ndarray,
+    generated: np.ndarray,
+    support: np.ndarray | None,
+    requested: Mapping[str, Mapping[str, Any]],
+) -> dict[str, MetricResult]:
+    return {"mean_rgb": MetricResult.of(float(generated.mean()))}
+
+
+def test_configured_external_metric_runs_through_the_evaluate_stage(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "data"
+    target_dir = dataset_root / "splits" / "test"
+    write_aligned_test_manifest(dataset_root, ["00000_00000"])
+    write_rgb_pair(target_dir, "00000_00000")
+    write_rgb_image(tmp_path / "generated" / "00000_00000_target_generated.png", color=(51, 51, 51))
+    output_dir = tmp_path / "evaluation"
+    yaml_file = _write_evaluate_config(
+        tmp_path,
+        dataset_root,
+        f"generated_dir: {tmp_path / 'generated'}\noutput_dir: {output_dir}\n"
+        "metrics:\n  - name: mean_rgb\n  - name: mae\nsave_graphs: true",
+    )
+    definitions = builtin_definitions().extend(
+        metrics=[MetricDefinition("mean_rgb", "1", "tests", _mean_rgb, higher_is_better=None)]
+    )
+
+    config = RunConfig.from_yaml(yaml_file, definitions)
+    evaluate(config, yaml_file)
+
+    assert config.to_dict()["evaluation"]["metrics"] == [{"name": "mean_rgb"}, {"name": "mae"}]
+    with (output_dir / "per_image_metrics.csv").open(newline="", encoding="utf-8") as handle:
+        row = next(csv.DictReader(handle))
+    assert float(row["mean_rgb"]) == pytest.approx(0.2)
+    assert "ssim" not in row
+    assert (output_dir / "mean_rgb_histogram.png").exists()
+    with (output_dir / "set_metrics.csv").open(newline="", encoding="utf-8") as handle:
+        assert "mean_rgb_finite_mean" in next(csv.DictReader(handle))
+    result = json.loads((output_dir / "evaluation_result.json").read_text(encoding="utf-8"))
+    assert result["metrics"][0]["name"] == "mean_rgb"
+    assert result["metrics"][0]["higher_is_better"] is None
+    assert _metadata(output_dir)["schema_version"] == 2
+
+
+def test_unknown_configured_metric_fails_before_evaluation(tmp_path: Path) -> None:
+    yaml_file = _write_evaluate_config(tmp_path, tmp_path / "data", "metrics:\n  - name: mean_rgb")
+
+    with pytest.raises(ValueError, match="'mean_rgb' is not a registered metric definition"):
+        RunConfig.from_yaml(yaml_file)

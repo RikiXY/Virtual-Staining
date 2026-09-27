@@ -112,8 +112,8 @@ class RunLayout:
         return self.evaluation_dir / "summary.csv"
 
     @property
-    def skipped_csv(self) -> Path:
-        return self.evaluation_dir / "skipped.csv"
+    def coverage_csv(self) -> Path:
+        return self.evaluation_dir / "coverage.csv"
 
     @property
     def run_metadata(self) -> Path:

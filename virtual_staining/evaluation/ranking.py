@@ -3,12 +3,14 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-from virtual_staining.metrics import DEFAULT_METRICS, is_higher_better_metric
+from virtual_staining.evaluation.reports import ranking_direction, recorded_metrics
+from virtual_staining.metrics import DEFAULT_METRIC_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +105,7 @@ def _export_ranked_subset(
 def _organize_metric(
     df: pd.DataFrame,
     metric: str,
+    higher_is_better: bool,
     output_dir: Path,
     image_columns: list[str],
     top_k: int,
@@ -110,16 +113,6 @@ def _organize_metric(
     overwrite: bool,
     include_all_ranked: bool,
 ) -> dict[str, Any] | None:
-    if metric not in df.columns:
-        logger.warning("Metric %r not found in CSV; skipping", metric)
-        return None
-
-    try:
-        higher_is_better = is_higher_better_metric(metric)
-    except ValueError:
-        logger.warning("Unknown metric direction for %r; skipping", metric)
-        return None
-
     metric_values = pd.to_numeric(df[metric], errors="coerce")
     valid_df = df.loc[metric_values.notna()].copy()
     valid_df[metric] = metric_values[metric_values.notna()]
@@ -184,7 +177,14 @@ def organize_by_metrics(
     mode: str = "hardlink",
     overwrite: bool = False,
     include_all_ranked: bool = False,
+    directions: Mapping[str, bool] | None = None,
 ) -> tuple[list[dict[str, Any]], Path | None, tuple[str, ...]]:
+    """Rank samples per metric; ``directions`` (higher is better) override recorded ones.
+
+    Without ``metrics``, ranks every recorded metric that declares a direction, or the
+    built-in default set when the CSV has no evaluation result metadata. An unknown
+    metric without an explicit direction is an error, never a guess.
+    """
     df = pd.read_csv(csv_path)
     image_columns = _get_existing_image_columns(df)
 
@@ -196,14 +196,26 @@ def organize_by_metrics(
     if "sample_id" not in df.columns:
         logger.warning("Column 'sample_id' not found; ranking will use fallback names")
 
-    selected_metrics = metrics if metrics is not None else list(DEFAULT_METRICS)
+    recorded = recorded_metrics(csv_path)
+    selected_metrics = (
+        metrics
+        if metrics is not None
+        else [info.name for info in recorded if info.higher_is_better is not None]
+        if recorded is not None
+        else list(DEFAULT_METRIC_NAMES)
+    )
+    explicit = directions or {}
 
     summary_rows: list[dict[str, Any]] = []
 
     for metric in selected_metrics:
+        if metric not in df.columns:
+            logger.warning("Metric %r not found in CSV; skipping", metric)
+            continue
         result = _organize_metric(
             df=df,
             metric=metric,
+            higher_is_better=ranking_direction(csv_path, metric, explicit.get(metric)),
             output_dir=output_dir,
             image_columns=image_columns,
             top_k=top_n,

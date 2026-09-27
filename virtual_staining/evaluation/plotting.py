@@ -7,63 +7,43 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from virtual_staining.metrics import DEFAULT_METRICS
+from virtual_staining.evaluation.summaries import finite_values
+from virtual_staining.metrics import ResolvedMetric
 
-METRIC_NAMES = list(DEFAULT_METRICS)
 PLOT_FIXED_BINS = 30
-METRIC_PLOT_RANGES = {
-    "mae": (0.0, 1.0),
-    "mse": (0.0, 1.0),
-    "rmse": (0.0, 1.0),
-    "ssim": (0.0, 1.0),
-    "pcc_gray": (-1.0, 1.0),
-    "pcc_rgb_mean": (-1.0, 1.0),
-    "pcc_r": (-1.0, 1.0),
-    "pcc_g": (-1.0, 1.0),
-    "pcc_b": (-1.0, 1.0),
-    "psnr": (0.0, 60.0),
-}
 
 
-def _metric_value(row: dict[str, object], metric: str) -> float:
-    value = row[metric]
-    if isinstance(value, str | int | float):
-        return float(value)
-    raise TypeError(f"Metric '{metric}' must be a scalar value, got {type(value).__name__}.")
+def histogram_edges(values: Sequence[float], plot_range: tuple[float, float] | None) -> np.ndarray:
+    """Fixed bins over the definition's presentation range, else over the data."""
+    if plot_range is not None:
+        return np.linspace(plot_range[0], plot_range[1], PLOT_FIXED_BINS + 1)
+    return np.histogram_bin_edges(values if len(values) else [0.0, 1.0], bins=PLOT_FIXED_BINS)
 
 
-def _finite_metric_values(rows: list[dict[str, object]], metric: str) -> list[float]:
-    return [v for row in rows if math.isfinite(v := _metric_value(row, metric))]
-
-
-def get_metric_plot_range(metric: str) -> tuple[float, float]:
-    try:
-        return METRIC_PLOT_RANGES[metric]
-    except KeyError:
-        raise ValueError(
-            f"Unsupported metric '{metric}'. Supported metrics: {', '.join(METRIC_PLOT_RANGES)}"
-        ) from None
-
-
-def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) -> list[Path]:
+def save_dataset_plots(
+    rows: Sequence[Mapping[str, object]],
+    metrics: Sequence[ResolvedMetric],
+    output_dir: str | Path,
+) -> list[Path]:
+    """Histogram per requested metric and one boxplot, over finite values only."""
     output_directory = Path(output_dir)
     output_directory.mkdir(parents=True, exist_ok=True)
     saved_paths: list[Path] = []
+    names = [metric.name for metric in metrics]
 
-    for metric in METRIC_NAMES:
-        values = _finite_metric_values(rows, metric)
-        histogram_path = output_directory / f"{metric}_histogram.png"
-        min_value, max_value = get_metric_plot_range(metric)
-        bin_edges = np.linspace(min_value, max_value, PLOT_FIXED_BINS + 1)
+    for metric in metrics:
+        values = finite_values(rows, metric.name)
+        histogram_path = output_directory / f"{metric.name}_histogram.png"
+        bin_edges = histogram_edges(values, metric.definition.plot_range)
 
         plt.figure(figsize=(6, 4))
         if values:
             weights = np.ones(len(values), dtype=float) / len(values)
             plt.hist(values, bins=bin_edges.tolist(), weights=weights)
-        plt.title(f"{metric.upper()} Histogram")
-        plt.xlabel(metric.upper())
-        plt.ylabel("Share of samples")
-        plt.xlim(min_value, max_value)
+        plt.title(f"{metric.name.upper()} Histogram (finite values)")
+        plt.xlabel(metric.name.upper())
+        plt.ylabel("Share of finite samples")
+        plt.xlim(float(bin_edges[0]), float(bin_edges[-1]))
         plt.tight_layout()
         plt.savefig(histogram_path, dpi=200, bbox_inches="tight")
         plt.close()
@@ -72,13 +52,13 @@ def save_dataset_plots(rows: list[dict[str, object]], output_dir: str | Path) ->
 
     boxplot_path = output_directory / "metrics_boxplot.png"
     plt.figure(figsize=(8, 5))
-    bp_data = [_finite_metric_values(rows, m) for m in METRIC_NAMES]
-    bp_labels = [m.upper() for m in METRIC_NAMES]
+    bp_data = [finite_values(rows, name) for name in names]
+    bp_labels = [name.upper() for name in names]
     non_empty = [(d, lbl) for d, lbl in zip(bp_data, bp_labels, strict=True) if d]
     if non_empty:
         plot_data, plot_labels = zip(*non_empty, strict=True)
         plt.boxplot(list(plot_data), tick_labels=list(plot_labels))
-    plt.title("Metrics Boxplot")
+    plt.title("Metrics Boxplot (finite values)")
     plt.ylabel("Value")
     plt.tight_layout()
     plt.savefig(boxplot_path, dpi=200, bbox_inches="tight")

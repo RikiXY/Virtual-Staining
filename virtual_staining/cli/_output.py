@@ -57,15 +57,16 @@ _FORMATS = {
 
 
 def color_for_metric(metric_name: str, value: float) -> str:
-    from virtual_staining.metrics import METRIC_SPECS
+    """Terminal colour from a built-in metric's presentation thresholds (a display aid only)."""
+    from virtual_staining.metrics import BUILTIN_METRIC_DEFINITIONS
 
-    spec = METRIC_SPECS.get(metric_name)
-    if spec is None:
+    definition = BUILTIN_METRIC_DEFINITIONS.get(metric_name)
+    if definition is None or definition.higher_is_better is None or not definition.thresholds:
         return "cyan"
-    for threshold, color in zip(spec.thresholds, _COLORS, strict=True):
-        if spec.higher_is_better and value >= threshold:
+    for threshold, color in zip(definition.thresholds, _COLORS, strict=True):
+        if definition.higher_is_better and value >= threshold:
             return color
-        if not spec.higher_is_better and value <= threshold:
+        if not definition.higher_is_better and value <= threshold:
             return color
     return "red"
 

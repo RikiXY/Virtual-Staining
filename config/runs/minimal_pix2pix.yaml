@@ -54,3 +54,5 @@ inference:
 
 evaluation:
   protocol: paired
+  # metrics: [{name: mae}, {name: ssim}]  # default: the built-in default metric set
+  # input_failures: permissive             # default strict: fail on missing/bad inputs

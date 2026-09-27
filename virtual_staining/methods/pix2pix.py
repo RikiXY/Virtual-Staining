@@ -12,8 +12,11 @@ from torch.amp import GradScaler
 from virtual_staining.checkpoint_contract import CheckpointIdentity, ValidatedCheckpoint
 from virtual_staining.config.losses import configured_loss_names
 from virtual_staining.config.run import RunConfig
-from virtual_staining.methods.builtin import GanOptions, GanTrainingOptions
-from virtual_staining.metrics import VALIDATION_IMAGE_METRIC_NAMES
+from virtual_staining.methods.builtin import (
+    PIX2PIX_VALIDATION_METRICS,
+    GanOptions,
+    GanTrainingOptions,
+)
 from virtual_staining.training.helpers import (
     TRAINING_STATE_KEYS,
     OptimizationRole,
@@ -61,7 +64,7 @@ class Pix2PixMethod:
 
     metric_names: tuple[str, ...] = ("loss_G", "loss_D")
     component_total_names: tuple[str, ...] = ("generator", "discriminator")
-    validation_metric_names: tuple[str, ...] = VALIDATION_IMAGE_METRIC_NAMES
+    validation_metric_names: tuple[str, ...] = tuple(PIX2PIX_VALIDATION_METRICS)
 
     def __init__(
         self,
@@ -193,6 +196,7 @@ class Pix2PixMethod:
             losses=self.loss_config,
             device=self.device,
             amp_enabled=self._amp_enabled,
+            image_metrics=PIX2PIX_VALIDATION_METRICS,
             preview_sink=preview_sink,
         )
         has_components = bool(result.raw or result.weighted or result.current_weight)

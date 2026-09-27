@@ -370,6 +370,18 @@ evaluation:
   #              (target for A_to_B, domain-A input for B_to_A), plus set/specimen/
   #              patient summaries. data.domains images are never treated as pairs.
   protocol: unpaired
+  # Optional; paired protocol only (rejected with unpaired). Ordered list of
+  # {name, options} metric requests; omitted, the built-in default set mae, mse, rmse,
+  # psnr, ssim, pcc_gray, pcc_rgb_mean. Each result is finite, positive_infinity,
+  # undefined or unavailable; summaries average finite values only.
+  # metrics:
+  #   - name: mae
+  #   - name: ssim
+  # Optional; default strict. strict fails the paired evaluation on a known input failure
+  # (missing/unreadable/non-RGB file, shape mismatch), recording it in coverage.csv;
+  # permissive excludes such samples and continues. Only strict is accepted with the
+  # unpaired protocol, which always fails on unreadable images.
+  input_failures: strict
   # Optional; default false. true also writes plots (unpaired: feature distributions).
   save_graphs: false
   # Optional; defaults <run>/artifacts/output_test (where infer writes) and

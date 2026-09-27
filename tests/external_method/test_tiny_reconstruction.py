@@ -33,6 +33,7 @@ from virtual_staining.config.run import RunConfig
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.manifest import DatasetManifest
 from virtual_staining.definitions import DefinitionNotAvailableError, Definitions
+from virtual_staining.evaluation.unpaired import FEATURE_NAMES, evaluate_unpaired_collections
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.inference.runner import load_inference_generator
 from virtual_staining.methods.builtin import builtin_definitions
@@ -232,6 +233,20 @@ def test_custom_metric_is_a_valid_monitor_with_the_methods_direction(tmp_path: P
     data["inference"]["checkpoint_metric"] = "val_ssim"
     with pytest.raises(ValueError, match="'val_ssim' is not a checkpoint metric"):
         RunConfig.from_mapping(data, definitions)
+
+
+def test_method_owned_validation_metric_needs_no_evaluation_definition(
+    tmp_path: Path,
+) -> None:
+    definitions = Definitions().extend(
+        methods=[TinyReconstruction()], components=[TINY_CONV, TINY_RESIDUAL]
+    )
+
+    config = RunConfig.from_mapping(_mapping(tmp_path), definitions)
+
+    assert dict(definitions.metrics) == {}
+    assert config.inference is not None and config.inference.checkpoint_metric == "val_abs_bias"
+    assert config.method.definition.checkpoint_metric_mode("val_abs_bias", "monitor") == "min"
 
 
 # --- training, ranking, resume ------------------------------------------------------------
@@ -480,3 +495,16 @@ def test_tracked_train_and_infer_applications_run_the_external_method(tmp_path: 
     }
     with pytest.raises(DefinitionNotAvailableError):
         infer_images(config_path, (str(image),), tmp_path / "builtin.png", mode="resize")
+
+    # Collection-level appearance diagnostics need neither a method, a checkpoint nor a
+    # target pair: only the predictions and an independent reference collection.
+    references = [
+        write_rgb_image(tmp_path / "reference" / f"real_{i}.png", size=(16, 16), color=(i, 50, 90))
+        for i in range(3)
+    ]
+    unpaired = evaluate_unpaired_collections(
+        [single.output_path], references, tmp_path / "unpaired", save_graphs=False
+    )
+    assert (unpaired.generated_count, unpaired.reference_count) == (1, 3)
+    with unpaired.feature_comparison_csv.open(newline="", encoding="utf-8") as handle:
+        assert [row["feature"] for row in csv.DictReader(handle)] == list(FEATURE_NAMES)

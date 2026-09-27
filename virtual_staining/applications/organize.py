@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from virtual_staining.evaluation.ranking import organize_by_metrics
 from virtual_staining.experiment.run_layout import RunLayout
-from virtual_staining.metrics import DEFAULT_METRICS
 
 
 @dataclass(frozen=True)
@@ -15,7 +15,10 @@ class OrganizeRequest:
     metrics_csv: Path | None = None
     output_dir: Path | None = None
     top_k: int = 20
-    metrics: tuple[str, ...] = tuple(DEFAULT_METRICS)
+    # None ranks the metrics recorded with the evaluation result (or the built-in defaults).
+    metrics: tuple[str, ...] | None = None
+    # Explicit ranking directions (True: higher is better); required for unknown metrics.
+    directions: Mapping[str, bool] = field(default_factory=dict)
     mode: str = "hardlink"
     overwrite: bool = False
     include_all_ranked: bool = False
@@ -39,10 +42,11 @@ def organize(request: OrganizeRequest) -> OrganizeResult:
         csv_path=metrics_csv,
         output_dir=output_dir,
         top_n=request.top_k,
-        metrics=list(request.metrics),
+        metrics=list(request.metrics) if request.metrics is not None else None,
         mode=request.mode,
         overwrite=request.overwrite,
         include_all_ranked=request.include_all_ranked,
+        directions=request.directions,
     )
     return OrganizeResult(
         metrics_csv=metrics_csv,

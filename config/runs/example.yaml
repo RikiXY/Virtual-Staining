@@ -483,11 +483,37 @@ inference:
 
 evaluation:
   # Optional; default follows the method (pix2pix -> paired, cyclegan -> unpaired).
-  #   paired   - per-image fidelity metrics (MAE, RMSE, PSNR, SSIM, PCC) of each generated
-  #              test image against its aligned manifest target, plus set/specimen/patient
+  #   paired   - per-image metrics (evaluation.metrics) of each generated test image
+  #              against its aligned manifest target, plus set/specimen/patient
   #              summaries with bootstrap confidence intervals.
   #   unpaired - CycleGAN only; Pix2Pix rejects it.
   protocol: paired
+  # Optional; paired protocol only. Ordered list of {name, options} mappings; each name
+  # is a registered metric definition and becomes one per-image column group. Omitted,
+  # it is the built-in default set, in this order:
+  # metrics:
+  #   - name: mae
+  #   - name: mse
+  #   - name: rmse
+  #   - name: psnr
+  #   - name: ssim
+  #   - name: pcc_gray
+  #   - name: pcc_rgb_mean
+  # Also built in: pcc_r, pcc_g, pcc_b. Built-in metrics take no options (an external
+  # metric definition, supplied in Python, validates its own). All metrics read the full
+  # RGB image in [0, 1] as written: no resize, crop, clip or channel conversion. SSIM uses
+  # fixed scikit-image parameters (7x7 uniform window, K1=0.01, K2=0.03) and is reported
+  # unavailable for images smaller than 7 px. Every result has a status: finite,
+  # positive_infinity (e.g. PSNR of identical images), undefined (e.g. PCC of constant
+  # data) or unavailable; summaries count each and average finite values only. Unknown or
+  # repeated names and unknown options fail before anything is evaluated.
+  # Optional; paired protocol only; default strict. Known input failures (missing or
+  # unreadable file, non-RGB image, target/generated shape mismatch):
+  #   strict     - record them in coverage.csv and fail the evaluation.
+  #   permissive - exclude those samples (reason recorded in coverage.csv) and continue;
+  #                fails if nothing could be evaluated.
+  # Metric implementation or programming errors always fail, in either mode.
+  input_failures: strict
   # Optional; default false. true also writes metric/feature plots.
   save_graphs: false
   # Optional; defaults <run>/artifacts/output_test and <run>/evaluation. Used as written

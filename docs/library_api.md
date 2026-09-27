@@ -13,7 +13,7 @@ stage. This page only covers the standalone boundaries; see
 | Prepare | `DatasetBuilder(config, slide_sets).run_all()` (`data/builder.py`) | `PreprocessingConfig` + explicit `SlideSet` tuple | Patches, manifest, manifest metadata, slide-set metadata, split assignment and dataset fingerprint under `config.dataset_root` | `applications.prepare` / `vs prepare`: resolves `SlideSet`s from the YAML inventory, snapshots config and sources, reuses unchanged datasets | Writes only under `dataset_root`; the inventory CSV is read only by `resolve_slide_sets`, not by the builder |
 | Train | `Trainer(config, run_paths, method, train_loader, val_loader, device)` then `.train(seed)` (`training/trainer.py`) | `TrainingConfig` + `TrainingMethodRuntime` + train/val `DataLoader`s + output `RunLayout`; optional `progress_reporter`, `preview_sink`, `benchmark_recorder`, `config_hash`, `experiment_session` | `metrics/epochs.csv`, `checkpoints/ep*.pth`, `checkpoints/best.json`, training/validation output dirs under the `RunLayout` root; `.resume()` reads checkpoints there | `applications.train` / `vs train`: builds loaders from the manifest or domain collections, binds the consumed-data snapshot and passes its real `ExperimentSession` | The loaders are the data boundary; the Trainer never reads manifests, dataset roots or preparation outputs. The runtime comes from `config.method.definition.build_training_runtime(config, device, seed=...)` and supplies its own checkpoint identity |
 | Infer | `run_image_path_inference(runtime, named_paths, output_path)` (`inference/single.py`) | An `InferenceRuntime` (caller-constructed predictor + `PredictionContract` + device), or a factory returning one, + named input files or directories + output path | Generated images at the output path (or at the runtime's default output dir, if it has one) | `applications.infer` / `vs infer`: test-split manifest inference with consumed/produced snapshots; `applications.infer_images` builds the runtime from a run's checkpoint | Named RGB inputs -> one RGB output on the same pixel grid only; see [Direct predictor inference](#direct-predictor-inference) |
-| Evaluate | `evaluate_samples(samples, output_dir)` / `evaluate_pair(target, generated)` (`evaluation/evaluator.py`) | Explicit `EvaluationSample` records or a pair of image paths + output directory | `per_image_metrics.csv`, `summary.csv`, `skipped.csv` in `output_dir`; `evaluate_pair` writes nothing | `applications.evaluate` / `vs evaluate`: resolves records from the manifest or run outputs and records evaluation provenance | Uses the standard metric set; grouped summaries and producer linking stay in the application |
+| Evaluate | `evaluate_samples(samples, output_dir, metrics=..., input_failures=...)` / `evaluate_pair(target, generated, metrics=..., support_path=...)` (`evaluation/evaluator.py`) | Explicit `EvaluationSample` records (optional `support_path`) or a pair of image paths + output directory; an optional resolved metric request | `per_image_metrics.csv`, `summary.csv`, `coverage.csv`, `evaluation_result.json` in `output_dir`; `evaluate_pair` writes nothing | `applications.evaluate` / `vs evaluate`: resolves records from the manifest or run outputs and records evaluation provenance | Default request is the built-in default metric set; grouped summaries and producer linking stay in the application; see [Evaluation metrics](#evaluation-metrics) |
 
 ## Notes
 
@@ -178,8 +178,9 @@ model:
   the method name and its option spelling; `MethodConfig.definition` is a live
   reference and is never serialized.
 - **Contract: named N RGB inputs -> one RGB output**, normalized to [-1, 1], matching
-  `model.inputs` / `model.target`. N-to-M translation, other output kinds, generalized
-  metric registration and registration backends are separate work.
+  `model.inputs` / `model.target`. N-to-M translation, other output kinds and
+  registration backends are separate work. Evaluation metrics are supplied the same
+  way; see [Evaluation metrics](#evaluation-metrics).
 - **Ownership.** A `MethodDefinition` owns its options and their validation, its
   pairing, prediction directions, the validation metrics it ranks and their direction
   (`checkpoint_metrics`, `monitor_mode`), training-runtime construction, inference-only
@@ -192,7 +193,10 @@ model:
 Public modules for extension code: `virtual_staining.definitions` (`MethodDefinition`,
 `ComponentDefinition`, `Component`, `ComponentContext`, `ResolutionContext`,
 `Definitions`, `DefinitionNotAvailableError`), `virtual_staining.methods.builtin`
-(`builtin_definitions`), `virtual_staining.training.runtime` (`TrainingMethodRuntime`,
+(`builtin_definitions`), `virtual_staining.metrics` (`MetricDefinition`,
+`MetricResult`, `ResolvedMetric`, `resolve_metrics`, `BUILTIN_METRICS`),
+`virtual_staining.evaluation.evaluator` (`evaluate_samples`, `evaluate_pair`,
+`EvaluationSample`, `EvaluationInputError`, `EvaluationCoverageError`), `virtual_staining.training.runtime` (`TrainingMethodRuntime`,
 `MethodMetrics`), `virtual_staining.checkpoint_contract` (`CheckpointIdentity`,
 `ValidatedCheckpoint`, `CheckpointCompatibilityError`), `virtual_staining.config`
 (`reject_unknown_keys`, `parse_bool_strict`), `virtual_staining.config.run.RunConfig`,
@@ -211,3 +215,86 @@ optional. `objective_metadata()` may return JSON-compatible objective provenance
 `best.json`. `tests/external_method/` is a complete non-GAN example (one network, one
 optimizer, an L1 objective, a custom `val_abs_bias` checkpoint metric, two registered
 architectures) that uses only these modules.
+
+## Evaluation metrics
+
+Paired evaluation computes an explicit, ordered request of metric definitions. A
+`MetricDefinition` is immutable and owns its `name` (also the output column),
+`version`, `source`, an `evaluator` (metrics sharing one evaluator callable form a
+group computed once per image pair), a strict `parse_options(raw, field)` returning
+JSON-compatible options, `higher_is_better` (`None` when ranking is meaningless),
+`supports_valid_region`, and presentation-only `thresholds` / `plot_range`. Every
+evaluator receives two float `H x W x 3` RGB arrays in [0, 1] on the same grid; inputs
+are never resized, cropped, clipped, rescaled or channel-converted.
+
+```python
+import numpy as np
+
+from virtual_staining.config.run import RunConfig
+from virtual_staining.methods.builtin import builtin_definitions
+from virtual_staining.metrics import MetricDefinition, MetricResult
+
+
+def max_error(target, generated, support, requested):
+    scale = requested["max_error"]["scale"]
+    return {"max_error": MetricResult.of(scale * float(np.abs(target - generated).max()))}
+
+
+def parse(raw, field):
+    if set(raw) - {"scale"}:
+        raise ValueError(f"{field} has unknown keys {sorted(set(raw) - {'scale'})}")
+    return {"scale": float(raw.get("scale", 1.0))}
+
+
+definitions = builtin_definitions().extend(
+    metrics=[MetricDefinition("max_error", "1", "my_package", max_error, False, parse)]
+)
+config = RunConfig.from_yaml("my_run.yaml", definitions)  # evaluation.metrics may name it
+```
+
+- **Requests.** `evaluation.metrics` (or `resolve_metrics(request, definitions.metrics)`
+  for the library path) is an ordered list of `{name, options}` mappings, resolved once
+  before anything is read. Unknown or duplicate names, unknown or malformed options and
+  non-JSON options fail. Omitted, it is the built-in default set `mae`, `mse`, `rmse`,
+  `psnr`, `ssim`, `pcc_gray`, `pcc_rgb_mean`; `pcc_r`, `pcc_g`, `pcc_b` are also
+  built in. Only requested evaluator groups run, and only requested outputs are
+  reported, so a custom metric gets its per-image columns, summary row, grouped columns,
+  histogram and result-metadata entry without any report code changes.
+- **Results.** Evaluators return one `MetricResult` per requested name with status
+  `finite`, `positive_infinity`, `undefined` or `unavailable` (the last two carry a
+  reason). `MetricResult.of(x)` classifies a number and rejects NaN and negative
+  infinity. Missing outputs, non-`MetricResult` values and invalid states raise
+  `MetricEvaluatorError`. Built-in PSNR of identical images is `positive_infinity`, PCC of
+  constant data is `undefined`, and SSIM (fixed scikit-image parameters: 7x7 uniform
+  window, sample covariance, `K1=0.01`, `K2=0.03`, `data_range=1`) is `unavailable` for
+  images smaller than 7 px rather than recomputed with another window.
+- **Coverage.** Only known input problems (`EvaluationInputError`: missing, unreadable
+  or non-RGB file, shape mismatch, bad support) are per-sample coverage events.
+  `input_failures="strict"` (default) writes `coverage.csv` and raises
+  `EvaluationCoverageError`; `"permissive"` excludes those samples. No samples, no
+  metrics, or zero evaluated samples never produce a result. Any other exception,
+  including a metric bug, propagates in both modes.
+- **Valid-region support.** `EvaluationSample.support_path` (for every sample or none)
+  restricts the support-capable metrics (built-in `mae`, `mse`, `rmse`, `psnr`) to the
+  valid pixels, all RGB channels, and adds `<m>_support_count` /
+  `<m>_support_fraction` columns. The mask must be explicitly binary (PNG mode `1`, or
+  mode `L` holding only 0 and 255) on exactly the image grid; soft masks are rejected,
+  never thresholded. An empty region yields `undefined`. Requests with support and a
+  metric without support (SSIM, PCC) fail before reading any file. Support is
+  evaluation input only: it is not a tissue mask, registration confidence or
+  preparation mask, and none is discovered or generated; the configured `evaluate`
+  stage does not use one.
+- **Result metadata.** `evaluation_result.json` records each resolved identity,
+  direction and presentation metadata. Downstream ranking (`vs organize`,
+  `vs compare`, `vs panels`) takes directions from it, else from a built-in
+  definition of the same name, else from explicit caller input, and fails otherwise.
+- **Training metrics are separate.** A `MethodDefinition` owns its validation and
+  checkpoint metrics (`validation_metric_names`, `checkpoint_metrics`); they never need a
+  `MetricDefinition`. Pix2Pix explicitly reuses the built-in `ssim`, `psnr`, `mae`,
+  `rmse`, `pcc_rgb_mean` and `pcc_gray` definitions for its `val_*` columns
+  (`PIX2PIX_VALIDATION_METRICS`); CycleGAN reports none.
+- **Unpaired diagnostics** (`evaluation/unpaired.py`,
+  `evaluate_unpaired_collections(generated_paths, reference_paths, output_dir, ...)`)
+  compare per-image RGB/luminance feature distributions of two independent collections
+  and need no model, checkpoint, method or target pair. They are appearance
+  diagnostics, not sample-level fidelity metrics, and do not use metric definitions.

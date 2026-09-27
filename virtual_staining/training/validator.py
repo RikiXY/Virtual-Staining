@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import cast
 
 import torch
@@ -8,6 +9,7 @@ import torch.nn as nn
 from torch.amp import autocast
 
 from virtual_staining.config.losses import LossConfig, configured_loss_names
+from virtual_staining.metrics import ResolvedMetric
 from virtual_staining.models.generator import concat_inputs
 from virtual_staining.training.helpers import LossComponentAccumulator, unpack_batch
 from virtual_staining.training.losses import ConfiguredLossEvaluator, LossEvaluationContext
@@ -28,6 +30,7 @@ def validate_epoch(
     losses: LossConfig | None,
     device: torch.device,
     amp_enabled: bool,
+    image_metrics: Mapping[str, ResolvedMetric],
     preview_sink: ValidationPreviewSink | None = None,
 ) -> EpochMetrics:
     generator_was_training = generator.training
@@ -40,7 +43,7 @@ def validate_epoch(
         total_loss_D = 0.0
         component_totals = LossComponentAccumulator(configured_loss_names(losses))
         needs_discriminator = loss_evaluator.needs_discriminator_logits
-        image_metric_totals = ValidationImageMetricAccumulator()
+        image_metric_totals = ValidationImageMetricAccumulator(image_metrics)
         count = 0
         with torch.no_grad():
             input_names = cast(tuple[str, ...], generator.input_names)

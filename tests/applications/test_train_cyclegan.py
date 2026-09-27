@@ -92,7 +92,8 @@ def test_cyclegan_trains_checkpoints_and_resumes_through_generic_trainer(
         assert float(row["loss_G_val"]) > 0
         assert float(row["loss_train_raw_generator_cycle_l1"]) > 0
         assert float(row["loss_val_raw_discriminator_adversarial_lsgan"]) > 0
-        assert row["val_ssim"] == row["val_psnr"] == ""
+        # CycleGAN owns no paired image-fidelity validation metrics, so none are reported.
+        assert "val_ssim" not in row and "val_psnr" not in row
 
 
 def test_resume_rejects_a_changed_linear_decay_horizon(

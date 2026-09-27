@@ -10,6 +10,7 @@ from tests.config_helpers import write_run_config
 from virtual_staining import cli
 from virtual_staining.applications.evaluate_single import SingleEvalResult
 from virtual_staining.cli import compare, compare_panels, evaluate, infer_images, organize
+from virtual_staining.metrics import MetricResult
 
 COMMANDS = (
     "prepare",
@@ -150,13 +151,10 @@ def test_evaluate_pair_dispatches_paths(tmp_path: Path, monkeypatch: pytest.Monk
             target=a,
             generated=b,
             metrics={
-                "mae": 0.1,
-                "mse": 0.01,
-                "rmse": 0.1,
-                "psnr": 20.0,
-                "ssim": 0.9,
-                "pcc_gray": 0.9,
-                "pcc_rgb_mean": 0.9,
+                "mae": MetricResult.of(0.1),
+                "psnr": MetricResult.of(float("inf")),
+                "ssim": MetricResult.unavailable("image smaller than the SSIM window"),
+                "pcc_gray": MetricResult.undefined("constant input"),
             },
             shape=(16, 16, 3),
             single_case_csv=output_dir / "sample.csv",

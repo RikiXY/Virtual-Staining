@@ -11,8 +11,8 @@ from virtual_staining.evaluation.panels import (
     save_comparison_panel,
     save_metric_diagnostics_summary,
 )
+from virtual_staining.evaluation.reports import metric_info, ranking_direction
 from virtual_staining.evaluation.selection import (
-    METRIC_SELECTION_ORDER,
     select_representative_rows,
     write_metric_selection_summary,
 )
@@ -125,13 +125,17 @@ def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
     metrics_dir.mkdir(parents=True, exist_ok=True)
     selection_summary_rows: list[dict[str, object]] = []
     saved_aggregated_paths: list[Path] = []
-    available_metrics = [metric for metric in METRIC_SELECTION_ORDER if metric in summary_rows]
+    # Metrics without a declared ranking direction have no best/worst and are skipped.
+    # An unknown metric (no metadata, not built-in) fails in ranking_direction.
+    directions: dict[str, bool] = {}
+    for metric, summary in summary_rows.items():
+        info = metric_info(per_image_csv, metric)
+        if summary["finite_count"] > 0 and (info is None or info.higher_is_better is not None):
+            directions[metric] = ranking_direction(per_image_csv, metric)
+    available_metrics = list(directions)
 
     if not available_metrics:
-        raise ValueError(
-            f"No supported metrics found in {summary_csv}. "
-            f"Expected one of: {', '.join(METRIC_SELECTION_ORDER)}"
-        )
+        raise ValueError(f"No rankable metric with finite values found in {summary_csv}.")
 
     per_metric_representative_rows: dict[str, dict[str, dict[str, str]]] = {}
 
@@ -143,6 +147,7 @@ def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
             metric_name,
             metric_summary,
             per_image_rows,
+            higher_is_better=directions[metric_name],
         )
         per_metric_representative_rows[metric_name] = representative_rows
         metric_selection_rows: list[dict[str, object]] = []
@@ -155,6 +160,7 @@ def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
                 row=row,
                 metric_summary=metric_summary,
                 metric_dir=metric_dir,
+                higher_is_better=directions[metric_name],
             )
             selection_summary_rows.append(selection_row)
             metric_selection_rows.append(selection_row)

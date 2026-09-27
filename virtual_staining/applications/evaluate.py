@@ -29,7 +29,12 @@ from virtual_staining.data.manifest import (
 )
 from virtual_staining.data.unpaired import resolve_domain_images
 from virtual_staining.evaluation.evaluator import EvaluationSample, evaluate_samples
-from virtual_staining.evaluation.plotting import METRIC_NAMES, save_dataset_plots
+from virtual_staining.evaluation.plotting import save_dataset_plots
+from virtual_staining.evaluation.reports import (
+    COVERAGE_CSV,
+    EVALUATION_RESULT_JSON,
+    PER_IMAGE_METRICS_CSV,
+)
 from virtual_staining.evaluation.summaries import write_grouped_summaries
 from virtual_staining.evaluation.unpaired import (
     FEATURE_DEFINITIONS,
@@ -43,31 +48,39 @@ from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.inference.outputs import generated_path_for_record
 from virtual_staining.inference.runner import inference_direction, inference_input_names
-from virtual_staining.metrics import METRIC_SPECS
+from virtual_staining.metrics import ResolvedMetric, resolve_metrics
 from virtual_staining.split_contract import TEST_SPLIT
 from virtual_staining.utils.artifacts import collect_generated_artifacts
 
 logger = logging.getLogger(__name__)
 
 EVALUATION_METADATA_JSON = "evaluation_metadata.json"
-EVALUATION_METADATA_SCHEMA_VERSION = 1
+EVALUATION_METADATA_SCHEMA_VERSION = 2
 PAIRED_EVALUATION_ADAPTER = "paired_evaluation/1"
 UNPAIRED_EVALUATION_ADAPTER = "unpaired_evaluation/1"
 _GROUP_UNITS = ("set", "specimen", "patient")
-# Every file the evaluate stage may write; nothing else in output_dir is ever removed.
+# Every file the evaluate stage may write, plus ``*_histogram.png`` (one per requested
+# metric); nothing else in output_dir is ever removed.
 EVALUATION_OWNED_OUTPUTS: tuple[str, ...] = (
-    "per_image_metrics.csv",
+    PER_IMAGE_METRICS_CSV,
     "summary.csv",
-    "skipped.csv",
+    COVERAGE_CSV,
+    EVALUATION_RESULT_JSON,
     *(f"{unit}_metrics.csv" for unit in _GROUP_UNITS),
     *(f"summary_{unit}.csv" for unit in _GROUP_UNITS),
-    *(f"{metric}_histogram.png" for metric in METRIC_NAMES),
     "metrics_boxplot.png",
     UNPAIRED_IMAGE_STATISTICS_CSV,
     UNPAIRED_FEATURE_COMPARISON_CSV,
     UNPAIRED_FEATURE_PLOT,
     EVALUATION_METADATA_JSON,
 )
+
+
+def requested_metrics(config: RunConfig) -> tuple[ResolvedMetric, ...]:
+    """The configured metric request, or the built-in default set, resolved once."""
+    if config.evaluation is not None and config.evaluation.metrics is not None:
+        return config.evaluation.metrics
+    return resolve_metrics(None, config.definitions.metrics)
 
 
 def evaluation_protocol(config: RunConfig) -> EvaluationProtocol:
@@ -306,6 +319,8 @@ def remove_evaluation_outputs(output_dir: Path) -> None:
     """Delete known evaluate-stage reports so none from an earlier run appears current."""
     for name in EVALUATION_OWNED_OUTPUTS:
         (output_dir / name).unlink(missing_ok=True)
+    for path in output_dir.glob("*_histogram.png"):
+        path.unlink()
 
 
 def _write_metadata(
@@ -329,6 +344,7 @@ def _write_metadata(
         "generated_dir": str(generated_dir),
         "counts": counts,
         "artifacts": artifacts,
+        # Metric identities, statuses and coverage live in the evaluation result record.
         "consumed_data": session.consumed_data,
         "generated_producer": session.details.get("generated_producer"),
     }
@@ -336,7 +352,7 @@ def _write_metadata(
         metadata["features"] = FEATURE_DEFINITIONS
         metadata["limitations"] = list(UNPAIRED_LIMITATIONS)
     path = output_dir / EVALUATION_METADATA_JSON
-    path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(metadata, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     return path
 
 
@@ -345,54 +361,59 @@ def _evaluate_paired(
 ) -> tuple[dict[str, int], dict[str, object]]:
     eval_cfg = config.evaluation
     direction = inference_direction(config)
+    metrics = requested_metrics(config)
     manifest = _load_paired_manifest(config)
-    session.result(metric_config={name: True for name in METRIC_SPECS})
+    session.result(requested_metrics=[metric.name for metric in metrics])
     records = manifest.filter_split("test").records
     samples = tuple(paired_sample(config, record, generated_dir) for record in records)
     # The evaluator receives exactly the samples the snapshot describes.
     snapshot = paired_evaluation_snapshot(config, samples, records, generated_dir)
     session.bind_inputs(snapshot)
     session.result(generated_producer=generated_producer(session.paths, snapshot, direction))
-    result = evaluate_samples(samples, output_dir)
-    grouped_paths: list[Path] = []
-    if result.rows:
-        slide_sets_path = DatasetLayout.from_project(config.project).slide_sets_path
-        with slide_sets_path.open(newline="", encoding="utf-8") as handle:
-            set_rows = {row["set_id"]: row for row in csv.DictReader(handle)}
-        grouped_paths = write_grouped_summaries(
-            list(result.rows),
-            set_rows,
-            output_dir,
-            bootstrap_iterations=eval_cfg.bootstrap_iterations if eval_cfg else 10_000,
-            bootstrap_seed=eval_cfg.bootstrap_seed if eval_cfg else 0,
-        )
-        session.result(grouped_summary_paths=[str(path) for path in grouped_paths])
+    result = evaluate_samples(
+        samples,
+        output_dir,
+        metrics=metrics,
+        input_failures=eval_cfg.input_failures if eval_cfg else "strict",
+    )
+    slide_sets_path = DatasetLayout.from_project(config.project).slide_sets_path
+    with slide_sets_path.open(newline="", encoding="utf-8") as handle:
+        set_rows = {row["set_id"]: row for row in csv.DictReader(handle)}
+    grouped_paths = write_grouped_summaries(
+        result.rows,
+        [metric.name for metric in metrics],
+        set_rows,
+        output_dir,
+        bootstrap_iterations=eval_cfg.bootstrap_iterations if eval_cfg else 10_000,
+        bootstrap_seed=eval_cfg.bootstrap_seed if eval_cfg else 0,
+    )
+    session.result(grouped_summary_paths=[str(path) for path in grouped_paths])
 
-    if eval_cfg is not None and eval_cfg.save_graphs and result.rows:
-        save_dataset_plots(list(result.rows), output_dir)
+    if eval_cfg is not None and eval_cfg.save_graphs:
+        save_dataset_plots(result.rows, metrics, output_dir)
 
-    summary_csv = str(result.summary_csv) if result.summary_csv is not None else None
     session.result(
         evaluated_count=result.num_evaluated,
-        skipped_count=result.num_skipped,
+        excluded_count=result.num_excluded,
         metrics_csv_path=str(result.metrics_csv),
-        summary_csv_path=summary_csv,
+        summary_csv_path=str(result.summary_csv),
     )
     logger.info(
-        "Paired evaluation: %s evaluated, %s skipped -> %s",
+        "Paired evaluation: %s evaluated, %s excluded -> %s",
         result.num_evaluated,
-        result.num_skipped,
+        result.num_excluded,
         output_dir,
     )
     counts = {
-        "requested_count": len(samples),
+        "requested_count": result.num_requested,
         "evaluated_count": result.num_evaluated,
-        "skipped_count": result.num_skipped,
+        "excluded_count": result.num_excluded,
     }
     artifacts = {
+        "evaluation_result": str(result.result_json),
         "per_image_metrics_csv": str(result.metrics_csv),
-        "summary_csv": summary_csv,
-        "skipped_csv": str(result.skipped_csv) if result.skipped_csv is not None else None,
+        "summary_csv": str(result.summary_csv),
+        "coverage_csv": str(result.coverage_csv),
         "grouped_summaries": [str(path) for path in grouped_paths],
     }
     return counts, artifacts

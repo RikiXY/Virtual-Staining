@@ -168,6 +168,33 @@ The default follows the method: Pix2Pix -> `paired`, CycleGAN -> `unpaired`.
 aligned held-out test manifest exists; `data.domains` collections are never treated as
 pairs. See [Evaluation outputs](#evaluation-outputs).
 
+### `evaluation.metrics` and `evaluation.input_failures`
+
+```yaml
+evaluation:
+  metrics:              # optional; omitted = mae, mse, rmse, psnr, ssim, pcc_gray, pcc_rgb_mean
+    - name: mae
+    - name: ssim
+    - name: my_metric   # registered in Python; see docs/library_api.md
+      options: {scale: 2.0}
+  input_failures: strict  # strict (default) | permissive
+```
+
+Both apply to the paired protocol only; the unpaired protocol rejects an explicit
+`metrics` list and `permissive`. `metrics` is an ordered list of `{name, options}`
+mappings resolved once, before any image is read, against the metric definitions the
+caller supplied (`builtin_definitions()` by default). Unknown or repeated names, unknown
+or malformed options, and unknown keys fail preflight. Only requested metrics are
+computed and reported, in request order. The resolved config records `metrics` only when
+it was configured.
+
+`input_failures` covers known input problems: a missing or unreadable target or
+generated file, a non-RGB image, a target/generated shape mismatch, and a missing,
+non-binary or mismatched valid-region support mask. `strict` records them in
+`coverage.csv` and fails the stage. `permissive` excludes those samples, records the
+reasons and continues, but still fails when nothing could be evaluated. Metric
+implementation, backend and programming errors always fail the stage in either mode.
+
 ## Directory Layout
 
 All outputs for an experiment run are written under:
@@ -218,7 +245,8 @@ local_workspace/results/<run_name>/
     ├── per_image_metrics.csv      # paired protocol
     ├── summary.csv                # paired protocol
     ├── summary_<unit>.csv         # paired protocol, unit = set | specimen | patient
-    ├── skipped.csv                # paired protocol, when applicable
+    ├── coverage.csv               # paired protocol: one row per requested sample
+    ├── evaluation_result.json     # paired protocol: metric identities, statuses, counts
     ├── unpaired_image_statistics.csv    # unpaired protocol
     └── unpaired_feature_comparison.csv  # unpaired protocol
 ```
@@ -599,8 +627,8 @@ Per stage:
   content identity and references the consumed snapshot and checkpoint.
 - **evaluate** (paired): one `reference` and one `generated` row per evaluated
   sample, sharing its `sample_id` - the explicit correspondence the evaluator used.
-  Missing generated files keep `status=missing`; evaluated/skipped counts stay in
-  stage `details` and `skipped.csv`.
+  Missing generated files keep `status=missing`; evaluated/excluded counts stay in
+  stage `details` and `coverage.csv`.
 - **evaluate** (unpaired): the generated and reference collections, without
   correspondence.
 
@@ -622,7 +650,9 @@ Training loss/component columns use `step_mean`: the unweighted mean over the
 epoch's optimization steps, so a smaller final batch counts as much as a full one.
 Validation loss/component columns are likewise means over validation batches, while
 validation image metrics (`val_ssim`, `val_mae`, ...) are means over individual
-images, skipping non-finite values.
+images, skipping non-finite values. Validation-image columns are those the method
+declares: Pix2Pix reports `val_ssim`, `val_psnr`, `val_mae`, `val_rmse`,
+`val_pcc_rgb_mean` and `val_pcc_gray`; CycleGAN reports none.
 Rows flush after every epoch. Resume requires a matching header and complete
 epochs `0..resume_at-1`; stale rows at or after `resume_at` are discarded before
 new rows append. Missing, malformed, gapped, duplicate, or incompatible history
@@ -738,19 +768,24 @@ unknown (never zero and never inferred from pixel counts). The run first require
 
 ## Evaluation outputs
 
-Every evaluation writes `evaluation/evaluation_metadata.json` recording `method`,
-`training_pairing`, `evaluation_protocol`, `inference_direction` (`null` for Pix2Pix),
-`source_domains`, `reference_domain`, `generated_dir`, `counts`, the written `artifacts`,
-the `consumed_data` reference and `generated_producer` lineage,
+Every evaluation writes `evaluation/evaluation_metadata.json` (`schema_version` 2)
+recording `method`, `training_pairing`, `evaluation_protocol`, `inference_direction`
+(`null` for Pix2Pix), `source_domains`, `reference_domain`, `generated_dir`, `counts`,
+the written `artifacts`, the `consumed_data` reference and `generated_producer` lineage,
 and `pairwise_metrics_available`: `true` for `paired`, `false` for `unpaired`. Unpaired
-metadata also records the feature definitions and explicit `limitations`. Switching
-protocol removes the other protocol's stale reports from the output directory.
+metadata also records the feature definitions and explicit `limitations`. For the paired
+protocol, `artifacts.evaluation_result` points to `evaluation_result.json`, which owns
+the metric and coverage semantics. Switching protocol removes the other protocol's stale
+reports (including every `*_histogram.png`) from the output directory. Earlier schema
+versions are not read or migrated.
 
-The **paired** protocol writes `per_image_metrics.csv`, `summary.csv`, `skipped.csv` when
-applicable, and grouped `<unit>_metrics.csv` / `summary_<unit>.csv` for `set`,
-`specimen`, and `patient` (bootstrap confidence intervals). Each generated image is
-compared with its aligned manifest reference: the target for Pix2Pix and CycleGAN
-`A_to_B`, the domain-A input for CycleGAN `B_to_A`.
+The **paired** protocol writes `per_image_metrics.csv`, `summary.csv`, `coverage.csv`,
+`evaluation_result.json`, and grouped `<unit>_metrics.csv` / `summary_<unit>.csv` for
+`set`, `specimen`, and `patient` (bootstrap confidence intervals). Each generated image
+is compared with its aligned manifest reference: the target for Pix2Pix and CycleGAN
+`A_to_B`, the domain-A input for CycleGAN `B_to_A`. With `save_graphs: true` it also
+writes one `<metric>_histogram.png` per requested metric and `metrics_boxplot.png`,
+both over finite values only.
 
 The **unpaired** protocol (CycleGAN) compares the active direction's generated images
 with the real `test` collection of the reference domain from `data.domains`. No pairs
@@ -764,46 +799,97 @@ are formed. Each image is reduced to per-image RGB mean/std and luminance mean/s
 
 These are low-order appearance/distribution diagnostics only. They carry no pairwise
 fidelity metrics and no ranking of generated against real images, and they do not
-establish sample-level fidelity, biological correctness, or clinical validity.
+establish sample-level fidelity, biological correctness, or clinical validity. They do
+not use `evaluation.metrics`.
+
+### Metric result statuses
+
+Every requested metric of every evaluated image has exactly one status:
+
+| Status | Value | Example |
+|---|---|---|
+| `finite` | a finite number | MAE of two images |
+| `positive_infinity` | `inf` | PSNR of identical images |
+| `undefined` | none, with a reason | PCC when either image is constant; any metric over an empty valid region |
+| `unavailable` | none, with a reason | SSIM for an image smaller than its 7 px window |
+
+A negative infinity, NaN or any other value outside these states is an evaluator
+defect and fails the evaluation; nothing is silently normalized.
 
 ### `evaluation/per_image_metrics.csv`
 
-Paired protocol only. One row per evaluated test image.
+Paired protocol only. One row per evaluated test image. The base columns are
+`sample_id`, `set_id`, `target_path`, `generated_path`, `width`, `height`, `channels`
+(plus `support_path` when valid-region support was used). Then, for each requested
+metric `<m>` in request order:
 
 | Column | Description |
 |---|---|
-| `sample_id` | Sample identifier from the manifest |
-| `target_path` | Absolute path to the ground-truth image |
-| `generated_path` | Absolute path to the generated image |
-| `width` | Image width in pixels |
-| `height` | Image height in pixels |
-| `channels` | Number of image channels |
-| `mae` | Mean Absolute Error |
-| `mse` | Mean Squared Error |
-| `rmse` | Root Mean Squared Error |
-| `psnr` | Peak Signal-to-Noise Ratio (dB) |
-| `ssim` | Structural Similarity Index |
-| `pcc_gray` | Pearson Correlation Coefficient (grayscale) |
-| `pcc_r` | Pearson Correlation Coefficient (red channel) |
-| `pcc_g` | Pearson Correlation Coefficient (green channel) |
-| `pcc_b` | Pearson Correlation Coefficient (blue channel) |
-| `pcc_rgb_mean` | Mean PCC across RGB channels |
+| `<m>` | Finite value, `inf` for `positive_infinity`, empty for `undefined`/`unavailable` |
+| `<m>_status` | One of the statuses above |
+| `<m>_reason` | Why the value is undefined or unavailable; otherwise empty |
+| `<m>_support_count` | With valid-region support only: valid pixels used |
+| `<m>_support_fraction` | With valid-region support only: valid pixels / all pixels |
+
+The built-in metrics (all over the full RGB image in [0, 1], all channels):
+
+| Metric | Description | Better |
+|---|---|---|
+| `mae`, `mse`, `rmse` | Mean absolute / mean squared / root mean squared error | lower |
+| `psnr` | `20 log10(1 / sqrt(mse))` dB | higher |
+| `ssim` | scikit-image `structural_similarity` with `data_range=1`, `channel_axis=2`, `win_size=7`, `gaussian_weights=False`, `use_sample_covariance=True`, `K1=0.01`, `K2=0.03` | higher |
+| `pcc_gray` | Pearson correlation of BT.601 luminance | higher |
+| `pcc_r`, `pcc_g`, `pcc_b` | Pearson correlation per channel (not in the default request) | higher |
+| `pcc_rgb_mean` | Mean of the defined per-channel PCCs | higher |
+
+Evaluation SSIM is fixed as above and is independent of the training SSIM loss.
 
 ### `evaluation/summary.csv`
 
-Aggregate statistics (mean, std, min, max) for each metric across the full
-test split.
+One row per requested metric: `count` (evaluated images), `finite_count`,
+`positive_infinity_count`, `undefined_count`, `unavailable_count` (these four sum to
+`count`), and `finite_mean`, `finite_median`, `finite_std`, `finite_min`, `finite_max`
+computed from finite values only (empty when there are none).
 
-### `evaluation/skipped.csv`
+### Grouped summaries
 
-Written when one or more test samples could not be evaluated. Contains one row
-per skipped sample.
+`<unit>_metrics.csv` has one row per group (`unit`, `group_id`, `patch_count`) with
+`<m>_finite_count` and `<m>_finite_mean` per requested metric. `summary_<unit>.csv`
+bootstraps groups with replacement: `resampling_unit`, `metric`, `group_count` (groups
+with a finite mean), `finite_mean` and `ci95_low`/`ci95_high`. Groups come from the
+supplied `set_id` and the slide-set `specimen_id`/`patient_id`; a level is skipped when
+any row lacks it. Each metric has its own seeded resampling stream, so adding a metric
+never changes another metric's interval. Outputs of different stains are never averaged
+together (one output per run).
+
+### `evaluation/coverage.csv`
+
+One row per requested sample, the single source of coverage truth:
 
 | Column | Description |
 |---|---|
-| `sample_id` | Sample identifier from the manifest |
-| `reason` | Why the sample was skipped (`missing_generated`, `missing_target`, or an exception message) |
-| `target_path` | Absolute path to the ground-truth target image |
-| `generated_path` | Absolute path to the expected generated image |
+| `sample_id`, `set_id` | Sample and slide-set identifiers |
+| `status` | `evaluated`, `excluded` (permissive) or `failed` (strict) |
+| `reason` | Stable code: `missing_target`, `missing_generated`, `missing_support`, `unreadable_<role>`, `unsupported_<role>_mode`, `shape_mismatch`, `malformed_support`, `support_shape_mismatch` |
+| `detail` | Human-readable message |
+| `target_path`, `generated_path`, `support_path` | Input paths (`support_path` empty without support) |
 
-This file is not written when all test samples are evaluated successfully.
+It is written even when the evaluation fails, and no other paired report is published
+then.
+
+### `evaluation/evaluation_result.json`
+
+The paired result contract (`schema_version` 1): the ordered `metrics` with their
+resolved identity (`name`, `version`, `source`, `options`, `applicability`, `input`,
+`supports_valid_region`, `higher_is_better`, and `presentation` `thresholds` /
+`plot_range`), the `statuses`, `input_failures`, `valid_region_support`, and `counts`
+(`requested` = `evaluated` + `excluded` + `failed`). Strict JSON: non-finite numbers
+never appear.
+
+`vs organize`, `vs compare` and `vs panels` read ranking directions,
+presentation thresholds and plot ranges from this file next to the CSV, else from the
+built-in definition of the same name. For any other metric they require an explicit
+direction (`--direction METRIC=higher|lower`, `--higher-is-better`/`--lower-is-better`)
+and use data-driven plot ranges and no thresholds. Thresholds are presentation
+heuristics for colouring and share statistics only; they are not biological,
+diagnostic, clinical or scientific acceptance criteria.

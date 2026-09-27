@@ -1,4 +1,4 @@
-"""Explicit method and component definitions: the Python extension seam.
+"""Explicit method, component and metric definitions: the Python extension seam.
 
 A caller makes an implementation available by importing it and passing its definitions
 in a :class:`Definitions` value; configuration then selects registered names. Nothing is
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from virtual_staining.checkpoint_contract import CheckpointIdentity, ValidatedCheckpoint
     from virtual_staining.config.run import RunConfig
     from virtual_staining.config.training import TrainingConfig
+    from virtual_staining.metrics import MetricDefinition
     from virtual_staining.training.benchmarking import TrainingBenchmarkRecorder
     from virtual_staining.training.runtime import TrainingMethodRuntime
 
@@ -260,23 +261,31 @@ def _merge(existing: Mapping[str, Any], added: Iterable[Any], kind: str) -> Mapp
 
 @dataclass(frozen=True)
 class Definitions:
-    """Immutable set of method and component definitions supplied by the caller."""
+    """Immutable set of method, component and metric definitions supplied by the caller.
+
+    ``metrics`` are standalone evaluation metrics selected by ``evaluation.metrics``. A
+    method's training validation and checkpoint metrics are owned by its
+    :class:`MethodDefinition` and never need to be registered here.
+    """
 
     methods: Mapping[str, MethodDefinition] = field(default_factory=lambda: MappingProxyType({}))
     components: Mapping[str, ComponentDefinition] = field(
         default_factory=lambda: MappingProxyType({})
     )
+    metrics: Mapping[str, MetricDefinition] = field(default_factory=lambda: MappingProxyType({}))
 
     def extend(
         self,
         *,
         methods: Iterable[MethodDefinition] = (),
         components: Iterable[ComponentDefinition] = (),
+        metrics: Iterable[MetricDefinition] = (),
     ) -> Definitions:
         """Return a new set with the given definitions added; duplicate names are rejected."""
         return Definitions(
             methods=_merge(self.methods, methods, "method"),
             components=_merge(self.components, components, "component"),
+            metrics=_merge(self.metrics, metrics, "metric"),
         )
 
     def method(self, name: str, *, field: str = "method.name") -> MethodDefinition:

@@ -53,3 +53,4 @@ inference:
 
 evaluation:
   protocol: unpaired      # appearance-distribution diagnostics, not pairwise fidelity
+  # evaluation.metrics and input_failures: permissive apply to the paired protocol only.

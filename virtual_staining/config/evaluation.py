@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from virtual_staining.config.validation import (
     parse_bool_strict,
@@ -10,7 +11,11 @@ from virtual_staining.config.validation import (
     reject_unknown_keys,
 )
 
+if TYPE_CHECKING:
+    from virtual_staining.metrics import MetricDefinition, ResolvedMetric
+
 EvaluationProtocol = Literal["paired", "unpaired"]
+InputFailureMode = Literal["strict", "permissive"]
 
 _EVALUATION_KEYS: frozenset[str] = frozenset(
     {
@@ -20,6 +25,8 @@ _EVALUATION_KEYS: frozenset[str] = frozenset(
         "bootstrap_iterations",
         "bootstrap_seed",
         "protocol",
+        "metrics",
+        "input_failures",
     }
 )
 
@@ -33,13 +40,20 @@ class EvaluationConfig:
     bootstrap_seed: int = 0
     # None resolves per method: pix2pix -> paired, cyclegan -> unpaired.
     protocol: EvaluationProtocol | None = None
+    # None requests the built-in default metric set of the paired protocol.
+    metrics: tuple[ResolvedMetric, ...] | None = None
+    input_failures: InputFailureMode = "strict"
 
     def __post_init__(self) -> None:
         if self.bootstrap_iterations < 0:
             raise ValueError("evaluation.bootstrap_iterations must be >= 0")
 
     @classmethod
-    def from_mapping(cls, data: dict[str, Any]) -> EvaluationConfig:
+    def from_mapping(
+        cls, data: dict[str, Any], metric_definitions: Mapping[str, MetricDefinition]
+    ) -> EvaluationConfig:
+        from virtual_staining.metrics import resolve_metrics
+
         reject_unknown_keys(data, _EVALUATION_KEYS, "evaluation")
         return cls(
             save_graphs=parse_bool_strict(data.get("save_graphs", False), "evaluation.save_graphs"),
@@ -55,6 +69,19 @@ class EvaluationConfig:
                 if data.get("protocol") is not None
                 else None
             ),
+            metrics=(
+                resolve_metrics(data["metrics"], metric_definitions)
+                if data.get("metrics") is not None
+                else None
+            ),
+            input_failures=cast(
+                InputFailureMode,
+                parse_choice(
+                    data.get("input_failures", "strict"),
+                    "evaluation.input_failures",
+                    {"strict", "permissive"},
+                ),
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -67,6 +94,12 @@ class EvaluationConfig:
                 "bootstrap_iterations": self.bootstrap_iterations,
                 "bootstrap_seed": self.bootstrap_seed,
                 "protocol": self.protocol,
+                "metrics": (
+                    [metric.request() for metric in self.metrics]
+                    if self.metrics is not None
+                    else None
+                ),
+                "input_failures": self.input_failures,
             }.items()
             if value is not None
         }

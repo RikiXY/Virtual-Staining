@@ -1,153 +1,92 @@
+"""Dataset and grouped summaries of the requested per-image metrics.
+
+Every count column covers all evaluated samples; ``finite_*`` statistics use only results
+whose status is ``finite``, so positive infinity, undefined and unavailable results are
+counted but never averaged.
+"""
+
 from __future__ import annotations
 
 import csv
 import math
 import random
 import statistics
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
 
-from virtual_staining.metrics import DEFAULT_METRICS
+SUMMARY_FIELDNAMES = [
+    "metric",
+    "count",
+    "finite_count",
+    "positive_infinity_count",
+    "undefined_count",
+    "unavailable_count",
+    "finite_mean",
+    "finite_median",
+    "finite_std",
+    "finite_min",
+    "finite_max",
+]
+_STATUS_COUNTS = {
+    "finite": "finite_count",
+    "positive_infinity": "positive_infinity_count",
+    "undefined": "undefined_count",
+    "unavailable": "unavailable_count",
+}
 
-SUMMARY_METRIC_NAMES = list(DEFAULT_METRICS)
+
+def finite_values(rows: Sequence[Mapping[str, object]], metric: str) -> list[float]:
+    """Numbers of the rows whose ``<metric>_status`` is ``finite``."""
+    return [float(str(row[metric])) for row in rows if row[f"{metric}_status"] == "finite"]
 
 
-def _metric_value(row: dict[str, object], metric: str) -> float:
-    value = row[metric]
-    if isinstance(value, str | int | float):
-        return float(value)
-    raise TypeError(f"Metric '{metric}' must be a scalar value, got {type(value).__name__}.")
-
-
-def _build_summary_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
-    summary_rows: list[dict[str, object]] = []
-
-    for metric in SUMMARY_METRIC_NAMES:
-        values = [_metric_value(row, metric) for row in rows]
-        finite = [v for v in values if math.isfinite(v)]
-        non_finite_count = len(values) - len(finite)
-
-        if finite:
-            mean: float = statistics.mean(finite)
-            median: float = statistics.median(finite)
-            std: float = statistics.stdev(finite) if len(finite) > 1 else 0.0
-            min_val: float = min(finite)
-            max_val: float = max(finite)
-        else:
-            mean = median = std = min_val = max_val = float("nan")
-
-        summary_rows.append(
-            {
-                "metric": metric,
-                "count": len(values),
-                "finite_count": len(finite),
-                "non_finite_count": non_finite_count,
-                "mean": mean,
-                "median": median,
-                "std": std,
-                "min": min_val,
-                "max": max_val,
-            }
-        )
-
-    return summary_rows
+def _summary_row(rows: Sequence[Mapping[str, object]], metric: str) -> dict[str, object]:
+    counts = dict.fromkeys(_STATUS_COUNTS.values(), 0)
+    for row in rows:
+        counts[_STATUS_COUNTS[str(row[f"{metric}_status"])]] += 1
+    values = finite_values(rows, metric)
+    stats: dict[str, object] = dict.fromkeys(
+        ("finite_mean", "finite_median", "finite_std", "finite_min", "finite_max"), ""
+    )
+    if values:
+        stats = {
+            "finite_mean": statistics.mean(values),
+            "finite_median": statistics.median(values),
+            "finite_std": statistics.stdev(values) if len(values) > 1 else 0.0,
+            "finite_min": min(values),
+            "finite_max": max(values),
+        }
+    return {"metric": metric, "count": len(rows), **counts, **stats}
 
 
 def write_summary_csv(
-    rows: list[dict[str, object]],
+    rows: Sequence[Mapping[str, object]],
+    metric_names: Sequence[str],
     output_dir: Path,
     filename: str = "summary.csv",
-    *,
-    num_targets_found: int | None = None,
-    num_generated_found: int | None = None,
-    num_pairs_evaluated: int | None = None,
-    num_skipped: int | None = None,
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / filename
-    summary_rows = _build_summary_rows(rows)
-    fieldnames = [
-        "metric",
-        "count",
-        "finite_count",
-        "non_finite_count",
-        "mean",
-        "median",
-        "std",
-        "min",
-        "max",
-    ]
-
     with path.open("w", newline="", encoding="utf-8") as file:
-        if None not in (
-            num_targets_found,
-            num_generated_found,
-            num_pairs_evaluated,
-            num_skipped,
-        ):
-            writer = csv.writer(file)
-            writer.writerow(["num_targets_found", num_targets_found])
-            writer.writerow(["num_generated_found", num_generated_found])
-            writer.writerow(["num_pairs_evaluated", num_pairs_evaluated])
-            writer.writerow(["num_skipped", num_skipped])
-            writer.writerow([])
-            writer.writerow(fieldnames)
-            dict_writer = csv.DictWriter(file, fieldnames=fieldnames)
-            dict_writer.writerows(summary_rows)
-        else:
-            dict_writer = csv.DictWriter(file, fieldnames=fieldnames)
-            dict_writer.writeheader()
-            dict_writer.writerows(summary_rows)
-
+        writer = csv.DictWriter(file, fieldnames=SUMMARY_FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(_summary_row(rows, metric) for metric in metric_names)
     return path
 
 
 def read_summary_csv(path: str | Path) -> dict[str, dict[str, float]]:
+    """Summary statistics by metric; empty cells (no finite values) read as NaN."""
     summary_path = Path(path)
-
     if not summary_path.is_file():
         raise FileNotFoundError(f"Summary CSV not found: {summary_path}")
-
-    rows: dict[str, dict[str, float]] = {}
-    fieldnames = [
-        "metric",
-        "count",
-        "finite_count",
-        "non_finite_count",
-        "mean",
-        "median",
-        "std",
-        "min",
-        "max",
-    ]
-
     with summary_path.open("r", newline="", encoding="utf-8") as file:
-        raw_reader = csv.reader(file)
-
-        for row in raw_reader:
-            if row and row[0] == "metric":
-                break
-        else:
-            return rows
-
-        dict_reader = csv.DictReader(file, fieldnames=fieldnames)
-        for row in dict_reader:
-            if not row["metric"]:
-                continue
-
-            metric_name = row["metric"].strip().lower()
-            rows[metric_name] = {
-                "count": float(row["count"]),
-                "finite_count": float(row["finite_count"]),
-                "non_finite_count": float(row["non_finite_count"]),
-                "mean": float(row["mean"]),
-                "median": float(row["median"]),
-                "std": float(row["std"]),
-                "min": float(row["min"]),
-                "max": float(row["max"]),
+        return {
+            row["metric"]: {
+                key: float(row[key]) if row[key] != "" else math.nan
+                for key in SUMMARY_FIELDNAMES[1:]
             }
-
-    return rows
+            for row in csv.DictReader(file)
+        }
 
 
 def read_per_image_metrics_csv(path: str | Path) -> list[dict[str, str]]:
@@ -161,16 +100,24 @@ def read_per_image_metrics_csv(path: str | Path) -> list[dict[str, str]]:
 
 
 def write_grouped_summaries(
-    rows: list[dict[str, object]],
-    set_rows: dict[str, dict[str, str]],
+    rows: Sequence[Mapping[str, object]],
+    metric_names: Sequence[str],
+    set_rows: Mapping[str, Mapping[str, str]],
     output_dir: Path,
     *,
     bootstrap_iterations: int,
     bootstrap_seed: int,
 ) -> list[Path]:
+    """Per-group finite means and a group-level bootstrap of their mean.
+
+    ``<unit>_metrics.csv`` holds one row per group (set, specimen or patient, from the
+    supplied slide-set metadata) with ``<m>_finite_count`` and ``<m>_finite_mean``.
+    ``summary_<unit>.csv`` resamples groups (``resampling_unit``) with replacement; only
+    groups with a finite mean for that metric take part.
+    """
     written: list[Path] = []
     for unit, field in (("set", "set_id"), ("specimen", "specimen_id"), ("patient", "patient_id")):
-        groups: dict[str, list[dict[str, object]]] = {}
+        groups: dict[str, list[Mapping[str, object]]] = {}
         incomplete = False
         for row in rows:
             set_id = str(row["set_id"])
@@ -182,50 +129,65 @@ def write_grouped_summaries(
             groups.setdefault(group_id, []).append(row)
         if incomplete or not groups:
             continue
-        unit_rows: list[dict[str, Any]] = []
+        unit_rows: list[dict[str, object]] = []
         for group_id, group_rows in sorted(groups.items()):
-            unit_rows.append(
-                {
-                    "unit": unit,
-                    "group_id": group_id,
-                    "patch_count": len(group_rows),
-                    **{
-                        metric: statistics.mean(_metric_value(row, metric) for row in group_rows)
-                        for metric in SUMMARY_METRIC_NAMES
-                    },
-                }
-            )
+            unit_row: dict[str, object] = {
+                "unit": unit,
+                "group_id": group_id,
+                "patch_count": len(group_rows),
+            }
+            for metric in metric_names:
+                values = finite_values(group_rows, metric)
+                unit_row[f"{metric}_finite_count"] = len(values)
+                unit_row[f"{metric}_finite_mean"] = statistics.mean(values) if values else ""
+            unit_rows.append(unit_row)
         metrics_path = output_dir / f"{unit}_metrics.csv"
         with metrics_path.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(
-                handle, fieldnames=["unit", "group_id", "patch_count", *SUMMARY_METRIC_NAMES]
-            )
+            fieldnames = ["unit", "group_id", "patch_count"]
+            for metric in metric_names:
+                fieldnames += [f"{metric}_finite_count", f"{metric}_finite_mean"]
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(unit_rows)
         written.append(metrics_path)
-        rng = random.Random(bootstrap_seed)
         summary_path = output_dir / f"summary_{unit}.csv"
         with summary_path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(
-                handle, fieldnames=["unit", "metric", "count", "mean", "ci95_low", "ci95_high"]
+                handle,
+                fieldnames=[
+                    "resampling_unit",
+                    "metric",
+                    "group_count",
+                    "finite_mean",
+                    "ci95_low",
+                    "ci95_high",
+                ],
             )
             writer.writeheader()
-            for metric in SUMMARY_METRIC_NAMES:
-                values = [float(row[metric]) for row in unit_rows]
+            for metric in metric_names:
+                values = [
+                    float(str(row[f"{metric}_finite_mean"]))
+                    for row in unit_rows
+                    if row[f"{metric}_finite_mean"] != ""
+                ]
+                # Seeded per metric so adding or reordering metrics never moves another CI.
+                rng = random.Random(f"{bootstrap_seed}:{metric}")
                 bootstrap = sorted(
                     statistics.mean(rng.choice(values) for _ in values)
-                    for _ in range(bootstrap_iterations)
+                    for _ in range(bootstrap_iterations if values else 0)
                 )
-                low = bootstrap[int(0.025 * (len(bootstrap) - 1))] if bootstrap else float("nan")
-                high = bootstrap[int(0.975 * (len(bootstrap) - 1))] if bootstrap else float("nan")
                 writer.writerow(
                     {
-                        "unit": unit,
+                        "resampling_unit": unit,
                         "metric": metric,
-                        "count": len(values),
-                        "mean": statistics.mean(values),
-                        "ci95_low": low,
-                        "ci95_high": high,
+                        "group_count": len(values),
+                        "finite_mean": statistics.mean(values) if values else "",
+                        "ci95_low": bootstrap[int(0.025 * (len(bootstrap) - 1))]
+                        if bootstrap
+                        else "",
+                        "ci95_high": bootstrap[int(0.975 * (len(bootstrap) - 1))]
+                        if bootstrap
+                        else "",
                     }
                 )
         written.append(summary_path)

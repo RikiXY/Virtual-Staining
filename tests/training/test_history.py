@@ -5,10 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from virtual_staining.methods.builtin import PIX2PIX_VALIDATION_METRICS
 from virtual_staining.training.helpers import metrics_fieldnames
 from virtual_staining.training.history import TrainingHistory
 from virtual_staining.training.runtime import MethodMetrics
-from virtual_staining.training.validation_metrics import VALIDATION_IMAGE_METRIC_NAMES
+
+VALIDATION_IMAGE_METRIC_NAMES = list(PIX2PIX_VALIDATION_METRICS)
 
 
 def _metrics(epoch: int, *, validation: bool = True) -> tuple[MethodMetrics, MethodMetrics | None]:
