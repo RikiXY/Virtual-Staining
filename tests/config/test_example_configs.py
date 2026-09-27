@@ -8,7 +8,8 @@ choices are exercised as variants of the committed references.
 from __future__ import annotations
 
 import copy
-from dataclasses import fields
+import re
+from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any, get_args
 
@@ -31,6 +32,7 @@ from virtual_staining.config import evaluation, experiment_data, inference, loss
 from virtual_staining.config import run as run_module
 from virtual_staining.config import training as training_module
 from virtual_staining.config.run import RunConfig
+from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.experiment.stages import VALID_STAGES
 from virtual_staining.loss_definitions import (
     _LOSS_MASK_KEYS,
@@ -423,6 +425,72 @@ def test_public_option_family_matches_reviewed_map(family: str) -> None:
 )
 def test_every_public_option_appears_in_a_reference(token: str) -> None:
     assert token in _REFERENCE_TEXT
+
+
+# Families that apply to a CycleGAN run; its reference must explain them on its own.
+_CYCLEGAN_FAMILIES = (
+    "method keys",
+    "data keys",
+    "hash policies",
+    "group validation",
+    "model keys",
+    "resnet keys",
+    "norms",
+    "discriminator keys",
+    "training keys",
+    "scheduler keys",
+    "scheduler names",
+    "early stopping keys",
+    "augmentation keys",
+    "augmentation intensities",
+    "loss term keys",
+    "loss schedule keys",
+    "loss schedule types",
+    "inference keys",
+    "checkpoint policies",
+    "inference directions",
+    "evaluation keys",
+    "evaluation protocols",
+)
+
+
+@pytest.mark.parametrize(
+    "token",
+    sorted(
+        {"dataset_root", "manifest_path", "results_path", "run_name", "image_size"}
+        | {"adversarial_lsgan", "cycle_l1", "identity_l1", "loss_G_val"}
+        | {token for family in _CYCLEGAN_FAMILIES for token in _PUBLIC_OPTIONS[family][1]}
+    ),
+)
+def test_cyclegan_reference_documents_applicable_option_itself(token: str) -> None:
+    assert token in _FULL["cyclegan"].read_text(encoding="utf-8")
+
+
+_PLACEHOLDER = re.compile(
+    r"same (?:as|rules as|keys and rules as)|as in example|documented (?:elsewhere|in full in)"
+    r"|see (?:the )?docs|see (?:config/runs/)?example\.yaml",
+    re.IGNORECASE,
+)
+
+
+@pytest.mark.parametrize("method_name", sorted(_FULL))
+def test_full_reference_does_not_defer_to_another_file(method_name: str) -> None:
+    text = _FULL[method_name].read_text(encoding="utf-8")
+
+    assert _PLACEHOLDER.findall(text) == []
+
+
+def test_manifest_path_is_a_consumer_override_not_a_preparation_output() -> None:
+    root = Path("dataset")
+    override = Path("elsewhere/manifest.csv")
+    project = RunConfig.from_yaml(_FULL["pix2pix"]).project
+    project = replace(project, dataset_root=root, manifest_path_override=override)
+
+    # prepare builds its layout from dataset_root alone; consumers use the project layout.
+    assert DatasetLayout(root).manifest_path == root / "manifests" / "manifest.csv"
+    assert DatasetLayout.from_project(project).manifest_path == override
+    for path in _FULL.values():
+        assert "not a preparation output" in path.read_text(encoding="utf-8").lower()
 
 
 # --- 5. Valid choice variants ----------------------------------------------------

@@ -44,10 +44,21 @@
 dataset_root: local_workspace/datasets/your_sample
 
 # Optional; default (omitted or null) is <dataset_root>/manifests/manifest.csv.
-# Prepared manifest read by train/infer/evaluate, and written by prepare. An override
-# is used exactly as written (relative to the working directory, NOT to dataset_root);
-# the paths inside the manifest are still relative to dataset_root.
-# manifest_path: local_workspace/datasets/your_sample/manifests/manifest.csv
+# Consumer-side override only: the manifest CSV read by paired training, inference and
+# paired evaluation. It is NOT a preparation output: `prepare` always writes
+# <dataset_root>/manifests/manifest.csv and never creates the file named here, so in a
+# prepare -> train -> infer -> evaluate run an override must already exist (or be
+# omitted to consume what prepare wrote). The value is used exactly as written, so a
+# relative path resolves from the working directory, NOT from dataset_root.
+# Only the CSV is replaced: record paths inside it stay relative to dataset_root, and
+# manifests/manifest_metadata.json (required; declares the modalities), manifests/
+# slide_sets.csv (set/specimen/patient IDs; required by paired evaluation),
+# metadata/split_assignment.csv and metadata/dataset_fingerprint.json are still read
+# from <dataset_root>. An externally produced manifest is valid when it follows the
+# current manifest schema, is consistent with those files, every file it references
+# exists, and it has the splits the stage reads (train+val for training, test for
+# inference and evaluation).
+# manifest_path: local_workspace/manifests/manifest_subset.csv
 
 # Required. Parent of every run directory; this run writes to <results_path>/<run_name>/.
 results_path: local_workspace/results
