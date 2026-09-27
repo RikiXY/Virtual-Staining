@@ -1,0 +1,55 @@
+# Minimal CycleGAN (unpaired) starter. Everything omitted takes its documented default;
+# config/runs/example_cyclegan.yaml is the same experiment with every field written out.
+# No preparation section: run the stages explicitly (see that file for what `infer`
+# needs):
+#   vs run --config config/runs/local/my_cyclegan.yaml --stages train infer evaluate
+
+dataset_root: local_workspace/datasets/your_sample  # base of data.domains
+results_path: local_workspace/results
+run_name: example_cyclegan_run
+image_size: [256, 256]  # [width, height]; multiples of 4
+
+method:
+  name: cyclegan          # replay_buffer_size defaults to 50
+
+data:
+  pairing: unpaired
+  domains:                # keys = model.inputs[0] (A) and model.target (B)
+    label_free: domains/label_free                   # holds train/ val/ test/
+    stained: "prepared/{split}/stained/**/*.tif"     # {split} pattern
+  hash_policy: content
+  group_validation: unavailable   # no group metadata: independence is NOT claimed
+
+model:
+  inputs: [label_free]
+  target: stained
+  generator:
+    architecture: resnet  # 9 blocks, instance norm by default
+
+training:
+  batch_size: 1
+  epochs: 200
+  seed: 42                # also seeds the unpaired domain-B draw
+  num_workers: 4          # default depends on the machine's CPU count
+  scheduler:
+    name: linear_decay
+    decay_start_epoch: 100
+  losses:
+    generator:
+      - name: adversarial_lsgan
+        weight: 1.0
+      - name: cycle_l1
+        weight: 10.0
+      - name: identity_l1
+        weight: 5.0
+    discriminator:
+      - name: adversarial_lsgan
+        weight: 1.0
+
+inference:
+  checkpoint_policy: best
+  checkpoint_metric: loss_G_val   # CycleGAN reports no val_* image metrics
+  direction: A_to_B
+
+evaluation:
+  protocol: unpaired      # appearance-distribution diagnostics, not pairwise fidelity

@@ -1,0 +1,56 @@
+# Minimal Pix2Pix (paired) starter. Everything omitted takes its documented default;
+# config/runs/example.yaml is the same experiment with every field and choice written
+# out and explained. Weights and split are illustrative, not recommendations.
+#   vs run --config config/runs/local/my_run.yaml   # prepare -> train -> infer -> evaluate
+
+dataset_root: local_workspace/datasets/your_sample  # working-directory relative
+results_path: local_workspace/results
+run_name: example_run
+image_size: [256, 256]  # [width, height]
+
+method:
+  name: pix2pix
+
+data:
+  pairing: paired
+  hash_policy: content      # hash every consumed file
+  group_validation: auto    # validate patient/specimen/set independence of the split
+
+model:
+  inputs: [autofluorescence, label_free]
+  target: H&E
+
+preprocessing:
+  inputs:
+    inventory: inputs/slide_sets.csv  # relative to dataset_root
+    modalities: [autofluorescence, label_free]
+    reference: label_free
+    target_modality: H&E
+  split:
+    unit: patient           # patch | set | specimen | patient
+    train: 0.8
+    val: 0.1
+    test: 0.1
+    seed: 42
+
+training:
+  batch_size: 8
+  epochs: 100
+  seed: 42                  # omit only if an unrepeatable random seed is acceptable
+  num_workers: 4            # default depends on the machine's CPU count
+  losses:
+    generator:
+      - name: adversarial_bce
+        weight: 1.0
+      - name: l1
+        weight: 25.0
+    discriminator:
+      - name: adversarial_bce
+        weight: 1.0
+
+inference:
+  checkpoint_policy: best
+  checkpoint_metric: val_ssim
+
+evaluation:
+  protocol: paired

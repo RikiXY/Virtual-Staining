@@ -1,0 +1,57 @@
+# Ablation arm for config/queues/example_ablation.yaml: config/runs/minimal_pix2pix.yaml
+# plus an SSIM generator term. Only run_name and training.losses.generator differ, as
+# the queue's ablation.variable_fields declares; any other edit fails queue preflight.
+
+dataset_root: local_workspace/datasets/your_sample
+results_path: local_workspace/results
+run_name: example_run_ssim
+image_size: [256, 256]
+
+method:
+  name: pix2pix
+
+data:
+  pairing: paired
+  hash_policy: content
+  group_validation: auto
+
+model:
+  inputs: [autofluorescence, label_free]
+  target: H&E
+
+preprocessing:
+  inputs:
+    inventory: inputs/slide_sets.csv
+    modalities: [autofluorescence, label_free]
+    reference: label_free
+    target_modality: H&E
+  split:
+    unit: patient
+    train: 0.8
+    val: 0.1
+    test: 0.1
+    seed: 42
+
+training:
+  batch_size: 8
+  epochs: 100
+  seed: 42
+  num_workers: 4
+  losses:
+    generator:
+      - name: adversarial_bce
+        weight: 1.0
+      - name: l1
+        weight: 25.0
+      - name: ssim
+        weight: 1.0
+    discriminator:
+      - name: adversarial_bce
+        weight: 1.0
+
+inference:
+  checkpoint_policy: best
+  checkpoint_metric: val_ssim
+
+evaluation:
+  protocol: paired

@@ -45,8 +45,9 @@ nix develop
 # 2. Install the mandatory Python dependencies
 uv sync --frozen
 
-# 3. Copy and edit the example run config
-cp config/runs/example.yaml config/runs/local/my_run.yaml
+# 3. Copy and edit a run config (minimal starter; config/runs/example.yaml is the
+#    fully annotated reference of every option)
+cp config/runs/minimal_pix2pix.yaml config/runs/local/my_run.yaml
 
 # 4. Run the full pipeline
 vs run --config config/runs/local/my_run.yaml
@@ -82,7 +83,7 @@ vs run --config config/runs/local/my_run.yaml --stages train infer evaluate
 vs status
 ```
 
-Convert one or more large TIFFs—or a whole directory recursively—without loading them fully
+Convert one or more large TIFFs-or a whole directory recursively-without loading them fully
 into memory. Directory inputs keep their relative layout under the output directory:
 
 ```bash
@@ -167,13 +168,18 @@ For controlled ablations, add an optional `ablation` block to the queue. The
 queue preflight compares resolved configs and fails before training if a field
 differs outside the declared `variable_fields`. Summary metadata is written to
 `local_workspace/queues/<queue-name>.ablation.summary.json`.
+[`config/queues/example.yaml`](config/queues/example.yaml) and
+[`config/queues/example_ablation.yaml`](config/queues/example_ablation.yaml) document
+every queue and ablation key.
 
 ## Configuration
 
-All experiment parameters live in a single YAML file. Copy
-[`config/runs/example.yaml`](config/runs/example.yaml) (Pix2Pix) or
-[`config/runs/example_cyclegan.yaml`](config/runs/example_cyclegan.yaml) (CycleGAN) and
-edit it. A condensed Pix2Pix config:
+All experiment parameters live in a single YAML file. Start from a short starter,
+[`config/runs/minimal_pix2pix.yaml`](config/runs/minimal_pix2pix.yaml) or
+[`config/runs/minimal_cyclegan.yaml`](config/runs/minimal_cyclegan.yaml). The annotated
+references [`config/runs/example.yaml`](config/runs/example.yaml) (Pix2Pix) and
+[`config/runs/example_cyclegan.yaml`](config/runs/example_cyclegan.yaml) (CycleGAN) are
+the same experiments with every supported option, default, and path base written out. A condensed Pix2Pix config:
 
 ```yaml
 dataset_root: local_workspace/datasets/your_sample
@@ -271,8 +277,8 @@ See [`docs/architecture.md`](docs/architecture.md) for the full description and 
 ```text
 Virtual-Staining/
 ├── config/
-│   ├── queues/                 # queue YAML files (example.yaml template)
-│   └── runs/                   # run YAML files (example.yaml template)
+│   ├── queues/                 # queue YAMLs (example.yaml, example_ablation.yaml references)
+│   └── runs/                   # run YAMLs (minimal_*.yaml starters, example*.yaml references)
 ├── docs/
 │   ├── assets/                 # qualitative result images
 │   ├── notebooks/

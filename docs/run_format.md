@@ -4,7 +4,9 @@
 
 Queue definitions are stored as YAML files under `config/queues/`. Runtime
 queue state is written under `local_workspace/queues/`. Queue execution is
-explicitly local, sequential, and single-worker in v1.
+explicitly local, sequential, and single-worker in v1. Every queue and ablation key
+is documented in [`config/queues/example.yaml`](../config/queues/example.yaml) and
+[`config/queues/example_ablation.yaml`](../config/queues/example_ablation.yaml).
 
 Example queue file:
 
@@ -77,9 +79,11 @@ contracts.
 
 ## Method-Specific Configuration
 
-A run selects one of the two built-in methods. Complete examples are
+A run selects one of the two built-in methods. The annotated references
 [`config/runs/example.yaml`](../config/runs/example.yaml) (Pix2Pix) and
-[`config/runs/example_cyclegan.yaml`](../config/runs/example_cyclegan.yaml) (CycleGAN).
+[`config/runs/example_cyclegan.yaml`](../config/runs/example_cyclegan.yaml) (CycleGAN)
+document every supported option; `config/runs/minimal_pix2pix.yaml` and
+`config/runs/minimal_cyclegan.yaml` are the same experiments with defaults omitted.
 
 ### `method`
 
