@@ -489,8 +489,17 @@ def test_manifest_path_is_a_consumer_override_not_a_preparation_output() -> None
     # prepare builds its layout from dataset_root alone; consumers use the project layout.
     assert DatasetLayout(root).manifest_path == root / "manifests" / "manifest.csv"
     assert DatasetLayout.from_project(project).manifest_path == override
+    # Only the CSV moves; its metadata stays under dataset_root.
+    assert DatasetLayout.from_project(project).manifest_metadata_path == (
+        root / "manifests" / "manifest_metadata.json"
+    )
     for path in _FULL.values():
-        assert "not a preparation output" in path.read_text(encoding="utf-8").lower()
+        text = path.read_text(encoding="utf-8")
+        assert "not a preparation output" in text.lower()
+        # Provenance/split companions are optional; never document them as required.
+        for companion in ("split_assignment.csv", "dataset_fingerprint.json"):
+            lines = [line for line in text.splitlines() if companion in line]
+            assert lines and all("optional" in line for line in lines), companion
 
 
 # --- 5. Valid choice variants ----------------------------------------------------

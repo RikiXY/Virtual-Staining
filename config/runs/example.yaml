@@ -50,14 +50,21 @@ dataset_root: local_workspace/datasets/your_sample
 # prepare -> train -> infer -> evaluate run an override must already exist (or be
 # omitted to consume what prepare wrote). The value is used exactly as written, so a
 # relative path resolves from the working directory, NOT from dataset_root.
-# Only the CSV is replaced: record paths inside it stay relative to dataset_root, and
-# manifests/manifest_metadata.json (required; declares the modalities), manifests/
-# slide_sets.csv (set/specimen/patient IDs; required by paired evaluation),
-# metadata/split_assignment.csv and metadata/dataset_fingerprint.json are still read
-# from <dataset_root>. An externally produced manifest is valid when it follows the
-# current manifest schema, is consistent with those files, every file it references
-# exists, and it has the splits the stage reads (train+val for training, test for
-# inference and evaluation).
+# Only the CSV is replaced; record paths inside it stay relative to dataset_root.
+# Companion files are still read from <dataset_root>:
+#   manifests/manifest_metadata.json - REQUIRED (declares the schema and modalities).
+#   manifests/slide_sets.csv         - optional: adds specimen_id/patient_id to each
+#                                      set_id; without it only set_id is available.
+#                                      Exception: paired evaluation currently opens it
+#                                      for its grouped summaries whenever a sample was
+#                                      evaluated, so that stage fails without it.
+#   metadata/split_assignment.csv    - optional: lets training detect a prepared
+#                                      patch-level split.
+#   metadata/dataset_fingerprint.json - optional provenance, recorded as null if absent.
+# An external manifest therefore needs: the current manifest CSV schema, the metadata
+# file above, every referenced file present, and the splits the stage reads (train+val
+# for training, test for inference and evaluation). No earlier `prepare` run is
+# required. The usual file-existence, data.hash_policy and group-leakage checks still apply.
 # manifest_path: local_workspace/manifests/manifest_subset.csv
 
 # Required. Parent of every run directory; this run writes to <results_path>/<run_name>/.
