@@ -163,10 +163,30 @@ evaluation:
   protocol: unpaired  # paired | unpaired
 ```
 
-The default follows the method: Pix2Pix -> `paired`, CycleGAN -> `unpaired`.
-`unpaired` is available only for CycleGAN. CycleGAN may explicitly select `paired` when an
-aligned held-out test manifest exists; `data.domains` collections are never treated as
-pairs. See [Evaluation outputs](#evaluation-outputs).
+The default follows the method's training pairing: Pix2Pix -> `paired`, CycleGAN ->
+`unpaired`. The protocol chooses how evaluation inputs are read, never how the model was
+trained. `paired` is the normal/default protocol for paired-training methods. CycleGAN
+may explicitly select `paired` when an aligned held-out test manifest exists;
+`data.domains` collections are never treated as pairs.
+
+`unpaired` compares independent generated and real reference collections and is
+method-independent. The reference collection is resolved as:
+
+1. `evaluation.reference_collection`, when set;
+2. otherwise the reference domain's `data.domains` entry (CycleGAN normally has one);
+3. otherwise the configuration is rejected.
+
+```yaml
+evaluation:
+  protocol: unpaired
+  reference_collection: reference/stained  # unpaired only
+```
+
+`reference_collection` uses the `data.domains` spec semantics: a directory holding
+`test/` (searched recursively) or a path/glob containing the literal `{split}`; relative
+values resolve against `dataset_root`. It is rejected with the paired protocol, is never
+inferred from the paired manifest, and `data.group_metadata` is not applied to it. See
+[Evaluation outputs](#evaluation-outputs).
 
 ### `evaluation.metrics` and `evaluation.input_failures`
 
@@ -630,7 +650,7 @@ Per stage:
   Missing generated files keep `status=missing`; evaluated/excluded counts stay in
   stage `details` and `coverage.csv`.
 - **evaluate** (unpaired): the generated and reference collections, without
-  correspondence.
+  correspondence; `selection.reference_spec` records the reference collection used.
 
 Evaluation lineage: `details.generated_producer` (also in
 `evaluation_metadata.json`) is `linked` only when the consumed generated files match
@@ -787,9 +807,10 @@ is compared with its aligned manifest reference: the target for Pix2Pix and Cycl
 writes one `<metric>_histogram.png` per requested metric and `metrics_boxplot.png`,
 both over finite values only.
 
-The **unpaired** protocol (CycleGAN) compares the active direction's generated images
-with the real `test` collection of the reference domain from `data.domains`. No pairs
-are formed. Each image is reduced to per-image RGB mean/std and luminance mean/std:
+The **unpaired** protocol (CycleGAN default, any method opt-in) compares the active
+direction's generated images with the real `test` collection of
+`evaluation.reference_collection`, else of the reference domain from `data.domains`. No
+pairs are formed. Each image is reduced to per-image RGB mean/std and luminance mean/std:
 
 - `unpaired_image_statistics.csv`: `collection` (`generated` or `reference`), `path`,
   and the per-image features.

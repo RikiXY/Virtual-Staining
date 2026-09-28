@@ -482,12 +482,26 @@ inference:
 # --- Evaluation (`evaluate` stage) ----------------------------------------------
 
 evaluation:
-  # Optional; default follows the method (pix2pix -> paired, cyclegan -> unpaired).
-  #   paired   - per-image metrics (evaluation.metrics) of each generated test image
-  #              against its aligned manifest target, plus set/specimen/patient
-  #              summaries with bootstrap confidence intervals.
-  #   unpaired - CycleGAN only; Pix2Pix rejects it.
+  # Optional; default follows the method's training pairing (pix2pix -> paired,
+  # cyclegan -> unpaired). It chooses how evaluation inputs are read, never how the model
+  # was trained.
+  #   paired   - the normal/default protocol for paired-training methods: per-image
+  #              metrics (evaluation.metrics) of each generated test image against its
+  #              aligned manifest target, plus set/specimen/patient summaries with
+  #              bootstrap confidence intervals.
+  #   unpaired - method-independent: compares per-image RGB/luminance mean and std
+  #              distributions of the generated collection with an independent real
+  #              reference collection (Wasserstein distance, two-sample KS test). No pairs
+  #              are formed and no per-image fidelity metrics are reported. These are
+  #              appearance-distribution diagnostics only; they do not establish
+  #              sample-level, biological or clinical fidelity. A Pix2Pix run must set
+  #              reference_collection, since it has no data.domains collection.
   protocol: paired
+  # Optional; unpaired protocol only (rejected with paired). The independent real
+  # reference collection: a directory holding test/ (searched recursively) or a path/glob
+  # containing the literal {split}; relative values resolve against dataset_root. Never
+  # inferred from the paired manifest. Required for unpaired evaluation of a Pix2Pix run.
+  # reference_collection: reference/stained
   # Optional; paired protocol only. Ordered list of {name, options} mappings; each name
   # is a registered metric definition and becomes one per-image column group. Omitted,
   # it is the built-in default set, in this order:

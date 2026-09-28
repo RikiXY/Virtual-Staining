@@ -27,6 +27,7 @@ _EVALUATION_KEYS: frozenset[str] = frozenset(
         "protocol",
         "metrics",
         "input_failures",
+        "reference_collection",
     }
 )
 
@@ -38,11 +39,13 @@ class EvaluationConfig:
     output_dir: Path | None = None
     bootstrap_iterations: int = 10_000
     bootstrap_seed: int = 0
-    # None resolves per method: pix2pix -> paired, cyclegan -> unpaired.
+    # None resolves to the method's training pairing: pix2pix -> paired, cyclegan -> unpaired.
     protocol: EvaluationProtocol | None = None
     # None requests the built-in default metric set of the paired protocol.
     metrics: tuple[ResolvedMetric, ...] | None = None
     input_failures: InputFailureMode = "strict"
+    # Unpaired only: independent real reference collection, same spec as a data.domains entry.
+    reference_collection: str | None = None
 
     def __post_init__(self) -> None:
         if self.bootstrap_iterations < 0:
@@ -55,6 +58,13 @@ class EvaluationConfig:
         from virtual_staining.metrics import resolve_metrics
 
         reject_unknown_keys(data, _EVALUATION_KEYS, "evaluation")
+        reference_collection = data.get("reference_collection")
+        if reference_collection is not None and (
+            not isinstance(reference_collection, str) or not reference_collection.strip()
+        ):
+            raise TypeError(
+                "evaluation.reference_collection must be a non-empty path or pattern string"
+            )
         return cls(
             save_graphs=parse_bool_strict(data.get("save_graphs", False), "evaluation.save_graphs"),
             generated_dir=Path(data["generated_dir"]) if data.get("generated_dir") else None,
@@ -82,6 +92,7 @@ class EvaluationConfig:
                     {"strict", "permissive"},
                 ),
             ),
+            reference_collection=reference_collection,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -100,6 +111,7 @@ class EvaluationConfig:
                     else None
                 ),
                 "input_failures": self.input_failures,
+                "reference_collection": self.reference_collection,
             }.items()
             if value is not None
         }

@@ -144,9 +144,33 @@ def test_pix2pix_protocol_defaults_to_paired_and_accepts_explicit_paired(tmp_pat
     assert evaluation_protocol(explicit) == "paired"
 
 
-def test_pix2pix_rejects_unpaired_protocol(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="protocol='unpaired' requires data.pairing='unpaired'"):
+def test_pix2pix_accepts_unpaired_protocol_with_reference_collection(tmp_path: Path) -> None:
+    config = _pix2pix_config(
+        tmp_path, "evaluation:\n  protocol: unpaired\n  reference_collection: real/{split}/*.png"
+    )
+    assert config.data.pairing == "paired"
+    assert evaluation_protocol(config) == "unpaired"
+    assert config.evaluation is not None
+    assert config.evaluation.to_dict()["reference_collection"] == "real/{split}/*.png"
+
+
+def test_pix2pix_unpaired_protocol_requires_reference_collection(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="set evaluation.reference_collection"):
         _pix2pix_config(tmp_path, "evaluation:\n  protocol: unpaired")
+
+
+@pytest.mark.parametrize("protocol", ["", "\n  protocol: paired"])
+def test_reference_collection_rejected_for_paired_protocol(tmp_path: Path, protocol: str) -> None:
+    with pytest.raises(ValueError, match="reference_collection applies to the unpaired protocol"):
+        _pix2pix_config(tmp_path, f"evaluation:\n  reference_collection: real{protocol}")
+    with pytest.raises(ValueError, match="reference_collection applies to the unpaired protocol"):
+        _cyclegan_config(tmp_path, {"protocol": "paired", "reference_collection": "real"})
+
+
+@pytest.mark.parametrize("value", ["", "  ", 3, ["real"]])
+def test_reference_collection_must_be_non_empty_string(tmp_path: Path, value: object) -> None:
+    with pytest.raises(TypeError, match="evaluation.reference_collection must be a non-empty"):
+        _cyclegan_config(tmp_path, {"reference_collection": value})
 
 
 def test_cyclegan_protocol_defaults_to_unpaired_and_accepts_overrides(tmp_path: Path) -> None:

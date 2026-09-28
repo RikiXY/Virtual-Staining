@@ -571,6 +571,7 @@ def test_unpaired_evaluation_persists_independent_collections(tmp_path: Path) ->
     snapshot = load_snapshot(layout.consumed_data("evaluate"))
     assert snapshot.context["protocol"] == "unpaired"
     assert snapshot.selection["correspondence"] is None
+    assert snapshot.selection["reference_spec"] == "domains/stained"
     assert all(row.sample_id == "" for row in snapshot.rows)
     assert sorted(row.locator for row in snapshot.rows if row.role == "reference") == [
         "domains/stained/test/0.png",
@@ -591,6 +592,36 @@ def test_unpaired_evaluation_persists_independent_collections(tmp_path: Path) ->
     write_rgb_image(root / "domains" / "stained" / "test" / "2.png", size=(32, 32))
     _run(tmp_path, "evaluate", protocol="unpaired")
     assert _stage(layout, "evaluate")["consumed_data"]["snapshot_id"] != before
+
+
+def test_unpaired_evaluation_records_explicit_reference_without_training_groups(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "dataset"
+    _write_domains(root, ("test",))
+    _write_group_sidecar(root, {("label_free", "test"): "p1", ("stained", "test"): "p2"})
+    write_rgb_image(tmp_path / "generated" / "x_A_to_B_generated.png", size=(32, 32))
+    data = cyclegan_config_data(tmp_path)
+    data["data"]["group_metadata"] = "groups.csv"
+    data["evaluation"] = {
+        "generated_dir": str(tmp_path / "generated"),
+        "bootstrap_iterations": 10,
+        "reference_collection": "domains/stained/{split}/*.png",
+    }
+    path = write_config_data(tmp_path / "explicit_reference.yaml", data)
+    config = RunConfig.from_yaml(path)
+
+    evaluate(config, path)
+
+    snapshot = load_snapshot(RunLayout.from_project(config.project).consumed_data("evaluate"))
+    assert snapshot.selection["reference_spec"] == "domains/stained/{split}/*.png"
+    references = [row for row in snapshot.rows if row.role == "reference"]
+    assert [row.locator for row in references] == [
+        "domains/stained/test/0.png",
+        "domains/stained/test/1.png",
+    ]
+    # The training sidecar is not attached to an explicitly configured evaluation collection.
+    assert all(row.patient_id == row.set_id == "" for row in references)
 
 
 def test_external_generated_images_remain_valid_but_unlinked(tmp_path: Path) -> None:

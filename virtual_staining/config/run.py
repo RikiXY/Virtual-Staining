@@ -91,18 +91,21 @@ class RunConfig:
                 f"method.name={definition.name!r} requires data.pairing={definition.pairing!r}"
             )
         self._validate_inference(definition)
-        if (
-            self.evaluation is not None
-            and self.evaluation.protocol == "unpaired"
-            and self.data.pairing != "unpaired"
-        ):
-            raise ValueError(
-                "evaluation.protocol='unpaired' requires data.pairing='unpaired' "
-                "(independent data.domains collections)"
-            )
-        if self.evaluation is not None and (self.evaluation.protocol or self.data.pairing) == (
-            "unpaired"
-        ):
+        # The protocol defaults to the training pairing but may be overridden independently.
+        protocol = (self.evaluation.protocol if self.evaluation else None) or self.data.pairing
+        if self.evaluation is not None and protocol == "paired":
+            if self.evaluation.reference_collection is not None:
+                raise ValueError(
+                    "evaluation.reference_collection applies to the unpaired protocol only"
+                )
+        elif self.evaluation is not None:
+            if self.evaluation.reference_collection is None and not self.data.domains:
+                raise ValueError(
+                    "evaluation.protocol='unpaired' requires an independent real reference "
+                    "collection: set evaluation.reference_collection (a directory holding "
+                    "test/ or a path/glob containing {split}); a paired manifest is never "
+                    "used as one"
+                )
             if self.evaluation.metrics is not None:
                 raise ValueError(
                     "evaluation.metrics applies to the paired protocol only; the unpaired "

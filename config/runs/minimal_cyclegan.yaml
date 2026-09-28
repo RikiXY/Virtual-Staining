@@ -54,3 +54,4 @@ inference:
 evaluation:
   protocol: unpaired      # appearance-distribution diagnostics, not pairwise fidelity
   # evaluation.metrics and input_failures: permissive apply to the paired protocol only.
+  # reference_collection defaults to data.domains; set it to use another real collection.

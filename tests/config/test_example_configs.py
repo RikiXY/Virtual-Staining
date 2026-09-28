@@ -413,6 +413,7 @@ _PUBLIC_OPTIONS: dict[str, tuple[frozenset[str], set[str]]] = {
             "protocol",
             "metrics",
             "input_failures",
+            "reference_collection",
         },
     ),
     "evaluation protocols": (
@@ -742,6 +743,11 @@ _VALID_VARIANTS: list[tuple[str, dict[str, Any]]] = [
     ),
     ("pix2pix", {"evaluation.metrics": [{"name": "ssim"}, {"name": "pcc_r"}, {"name": "mae"}]}),
     ("pix2pix", {"evaluation.input_failures": "permissive"}),
+    (
+        "pix2pix",
+        {"evaluation.protocol": "unpaired", "evaluation.reference_collection": "real/{split}"},
+    ),
+    ("cyclegan", {"evaluation.reference_collection": "held_out/stained"}),
 ]
 
 
@@ -816,7 +822,36 @@ _INVALID_VARIANTS: list[tuple[str, dict[str, Any], str]] = [
     ("cyclegan", {"training.augmentation.enabled": True}, "augmentation.enabled=false"),
     ("pix2pix", {"inference.direction": "A_to_B"}, "not supported by method.name='pix2pix'"),
     ("cyclegan", {"inference.direction": "sideways"}, r"direction must be one of \['A_to_B'"),
-    ("pix2pix", {"evaluation.protocol": "unpaired"}, "requires data.pairing='unpaired'"),
+    ("pix2pix", {"evaluation.protocol": "unpaired"}, "set evaluation.reference_collection"),
+    ("pix2pix", {"evaluation.reference_collection": "real"}, "unpaired protocol only"),
+    (
+        "pix2pix",
+        {"evaluation.protocol": "unpaired", "evaluation.reference_collection": ""},
+        "non-empty path or pattern",
+    ),
+    (
+        "pix2pix",
+        {
+            "evaluation.protocol": "unpaired",
+            "evaluation.reference_collection": "real",
+            "evaluation.metrics": [{"name": "mae"}],
+        },
+        "paired protocol only",
+    ),
+    (
+        "pix2pix",
+        {
+            "evaluation.protocol": "unpaired",
+            "evaluation.reference_collection": "real",
+            "evaluation.input_failures": "permissive",
+        },
+        "paired protocol only",
+    ),
+    (
+        "cyclegan",
+        {"evaluation.protocol": "paired", "evaluation.reference_collection": "real"},
+        "unpaired protocol only",
+    ),
     ("pix2pix", {"evaluation.metrics": [{"name": "fid"}]}, "not a registered metric"),
     ("pix2pix", {"evaluation.metrics": [{"name": "mae"}, {"name": "mae"}]}, "more than once"),
     ("pix2pix", {"evaluation.metrics": [{"name": "ssim", "options": {"win": 3}}]}, "unknown"),

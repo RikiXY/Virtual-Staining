@@ -29,6 +29,7 @@ from virtual_staining.applications.evaluate import (
     paired_sample,
 )
 from virtual_staining.config.run import RunConfig
+from virtual_staining.data.consumption import load_snapshot
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.evaluation.evaluator import EvaluationCoverageError
 from virtual_staining.evaluation.unpaired import (
@@ -36,6 +37,7 @@ from virtual_staining.evaluation.unpaired import (
     UNPAIRED_FEATURE_PLOT,
     UNPAIRED_IMAGE_STATISTICS_CSV,
 )
+from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.methods.builtin import builtin_definitions
 from virtual_staining.metrics import DEFAULT_METRIC_NAMES, MetricDefinition, MetricResult
 from virtual_staining.utils.artifacts import generated_filename
@@ -548,6 +550,78 @@ def test_cyclegan_unpaired_evaluation_compares_collections(
     assert stage["reference_count"] == 3
     assert stage["evaluation_metadata_path"] == str(output_dir / EVALUATION_METADATA_JSON)
     assert "metric_config" not in stage
+
+
+def test_pix2pix_unpaired_evaluation_uses_explicit_reference_collection(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "data"
+    sample_ids = ["00000_00000", "00256_00000"]
+    # An aligned manifest exists, but unpaired evaluation must never draw references from it.
+    write_aligned_test_manifest(dataset_root, sample_ids)
+    for sample_id in sample_ids:
+        write_rgb_pair(dataset_root / "splits" / "test", sample_id)
+        write_rgb_image(tmp_path / "generated" / f"{sample_id}_target_generated.png")
+    reference = [
+        write_rgb_image(dataset_root / "real_he" / "test" / f"he_{i}.png", color=(i * 60, 9, 9))
+        for i in range(3)
+    ]
+    output_dir = tmp_path / "evaluation"
+    yaml_file = _write_evaluate_config(
+        tmp_path,
+        dataset_root,
+        f"protocol: unpaired\nreference_collection: real_he\n"
+        f"generated_dir: {tmp_path / 'generated'}\noutput_dir: {output_dir}\n",
+    )
+    config = RunConfig.from_yaml(yaml_file)
+    assert config.data.pairing == "paired"
+
+    evaluate(config, yaml_file)
+
+    with (output_dir / UNPAIRED_IMAGE_STATISTICS_CSV).open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["path"] for row in rows if row["collection"] == "reference"] == [
+        str(path) for path in reference
+    ]
+    assert len([row for row in rows if row["collection"] == "generated"]) == 2
+    assert (output_dir / UNPAIRED_FEATURE_COMPARISON_CSV).exists()
+    assert not any((output_dir / name).exists() for name in _PAIRED_OUTPUTS)
+    metadata = _metadata(output_dir)
+    assert metadata["method"] == "pix2pix"
+    assert metadata["training_pairing"] == "paired"
+    assert metadata["evaluation_protocol"] == "unpaired"
+    assert metadata["pairwise_metrics_available"] is False
+    assert metadata["counts"] == {"generated_count": 2, "reference_count": 3}
+    assert metadata["limitations"]
+
+    snapshot = load_snapshot(RunLayout.from_project(config.project).consumed_data("evaluate"))
+    assert snapshot.selection["reference_spec"] == "real_he"
+    assert snapshot.selection["correspondence"] is None
+    assert all(row.sample_id == "" for row in snapshot.rows)
+    assert sorted(row.locator for row in snapshot.rows if row.role == "reference") == [
+        f"real_he/test/he_{i}.png" for i in range(3)
+    ]
+
+
+def test_explicit_reference_collection_overrides_data_domains(tmp_path: Path) -> None:
+    _write_domains(tmp_path, {"stained": 3, "label_free": 1})
+    held_out = [
+        write_rgb_image(tmp_path / "dataset" / "held_out" / "test" / f"h{i}.png") for i in range(2)
+    ]
+    write_rgb_image(tmp_path / "generated" / "x_A_to_B_generated.png")
+    config, path = _cyclegan_eval_config(
+        tmp_path, "A_to_B", reference_collection="held_out/{split}/*.png"
+    )
+
+    evaluate(config, path)
+
+    with (tmp_path / "evaluation" / UNPAIRED_IMAGE_STATISTICS_CSV).open(
+        newline="", encoding="utf-8"
+    ) as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["path"] for row in rows if row["collection"] == "reference"] == [
+        str(path) for path in held_out
+    ]
+    snapshot = load_snapshot(RunLayout.from_project(config.project).consumed_data("evaluate"))
+    assert snapshot.selection["reference_spec"] == "held_out/{split}/*.png"
 
 
 def test_cyclegan_unpaired_evaluation_rejects_empty_generated(tmp_path: Path) -> None:

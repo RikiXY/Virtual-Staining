@@ -106,8 +106,9 @@ apart from choosing the input names and the direction-aware output filename
 Evaluation protocol selection belongs to `applications/evaluate.py`; it defaults to the
 run's `data.pairing`. `paired` maps aligned manifest records to references and reuses `evaluation/evaluator.py`
 and `metrics.py`; `unpaired` (default for CycleGAN) collects the active direction's
-generated images and the real test collection of the reference domain and delegates to
-`evaluation/unpaired.py` (it requires `data.pairing: unpaired`). The paired metric
+generated images and an independent real reference collection
+(`evaluation.reference_collection`, else the reference domain's `data.domains` entry) and
+delegates to `evaluation/unpaired.py`; it is independent of the training pairing. The paired metric
 request (`evaluation.metrics`, default the built-in set) is resolved from the caller's
 `Definitions` during config resolution. Standalone evaluation metrics and method-owned
 training metrics are separate: a `MethodDefinition` declares its own validation and

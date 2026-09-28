@@ -53,6 +53,7 @@ inference:
   checkpoint_metric: val_ssim
 
 evaluation:
-  protocol: paired
+  protocol: paired        # default; unpaired also needs reference_collection
+  # reference_collection: reference/stained  # unpaired only: independent real images
   # metrics: [{name: mae}, {name: ssim}]  # default: the built-in default metric set
   # input_failures: permissive             # default strict: fail on missing/bad inputs

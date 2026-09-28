@@ -359,9 +359,10 @@ inference:
 
 evaluation:
   # Optional; default unpaired for cyclegan.
-  #   unpaired - compares per-image RGB/luminance mean and std distributions of the
-  #              generated images with the real test/ collection of the reference domain
-  #              in data.domains (target domain for A_to_B, domain A for B_to_A):
+  #   unpaired - method-independent: compares per-image RGB/luminance mean and std
+  #              distributions of the generated images with an independent real
+  #              reference collection (by default the test/ collection of the reference
+  #              domain in data.domains: target domain for A_to_B, domain A for B_to_A):
   #              Wasserstein distance, two-sample KS test. No pairs are formed. These are
   #              low-order appearance diagnostics only; they do not establish
   #              sample-level, biological or clinical fidelity.
@@ -370,6 +371,11 @@ evaluation:
   #              (target for A_to_B, domain-A input for B_to_A), plus set/specimen/
   #              patient summaries. data.domains images are never treated as pairs.
   protocol: unpaired
+  # Optional; unpaired protocol only (rejected with paired). Overrides the data.domains
+  # reference collection above: a directory holding test/ (searched recursively) or a
+  # path/glob containing the literal {split}; relative values resolve against
+  # dataset_root. data.group_metadata is not applied to it.
+  # reference_collection: held_out/stained
   # Optional; paired protocol only (rejected with unpaired). Ordered list of
   # {name, options} metric requests; omitted, the built-in default set mae, mse, rmse,
   # psnr, ssim, pcc_gray, pcc_rgb_mean. Each result is finite, positive_infinity,

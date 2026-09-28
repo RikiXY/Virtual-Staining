@@ -386,9 +386,11 @@ from the same slide. For independent generalization evidence, configure `split.u
     and PCC (or any requested metric, including ones supplied in Python) against aligned
     references, with explicit result statuses, input coverage and set/specimen/patient
     summaries. Requires an aligned held-out test manifest.
-  - *unpaired* (CycleGAN default) - compares the generated and real test collections
-    through per-image RGB/luminance feature distributions. No pairs are formed and no
-    pairwise fidelity metric is reported.
+  - *unpaired* (CycleGAN default; any method opt-in) - compares the generated collection
+    with an independent real reference collection through per-image RGB/luminance
+    feature distributions. No pairs are formed and no pairwise fidelity metric is
+    reported. Methods without a `data.domains` reference collection (e.g. Pix2Pix) set
+    `evaluation.reference_collection`; this changes evaluation only, not training.
 
 ### Scientific scope
 

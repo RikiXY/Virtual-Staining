@@ -153,11 +153,28 @@ def collect_unpaired_collections(
             f"No {direction} generated images found under {generated_dir}; run inference "
             f"with inference.direction={direction} or set evaluation.generated_dir."
         )
-    domain = reference_domain(config)
     reference = resolve_domain_images(
-        config.data.domains[domain], TEST_SPLIT, config.project.dataset_root
+        unpaired_reference_spec(config), TEST_SPLIT, config.project.dataset_root
     )
     return generated, reference
+
+
+def unpaired_reference_spec(config: RunConfig) -> str:
+    """Return the independent real reference collection spec for unpaired evaluation.
+
+    ``evaluation.reference_collection`` wins; otherwise the reference domain's
+    ``data.domains`` entry. A paired manifest is never used as a collection.
+    """
+    if config.evaluation is not None and config.evaluation.reference_collection is not None:
+        return config.evaluation.reference_collection
+    domain = reference_domain(config)
+    if domain not in config.data.domains:
+        raise ValueError(
+            f"Unpaired evaluation requires an independent real reference collection for "
+            f"domain {domain!r}: set evaluation.reference_collection (a directory holding "
+            "test/ or a path/glob containing {split})."
+        )
+    return config.data.domains[domain]
 
 
 def _evaluation_context(config: RunConfig, protocol: EvaluationProtocol) -> dict[str, object]:
@@ -233,6 +250,7 @@ def unpaired_evaluation_snapshot(
     """Snapshot two independent collections; no per-image correspondence is created."""
     domain = reference_domain(config)
     root = config.project.dataset_root
+    reference_spec = unpaired_reference_spec(config)
     reference_rows = [
         AssetRow(
             root="dataset",
@@ -243,7 +261,9 @@ def unpaired_evaluation_snapshot(
         )
         for path in reference
     ]
-    if config.data.group_metadata is not None:
+    # Training-domain group metadata never describes an explicit evaluation collection.
+    from_domains = config.evaluation is None or config.evaluation.reference_collection is None
+    if from_domains and config.data.group_metadata is not None:
         sidecar = config.data.group_metadata
         reference_rows = enrich_with_groups(
             reference_rows,
@@ -269,7 +289,7 @@ def unpaired_evaluation_snapshot(
         selection={
             "split": TEST_SPLIT,
             "correspondence": None,
-            "reference_spec": config.data.domains[domain],
+            "reference_spec": reference_spec,
         },
         context=_evaluation_context(config, "unpaired"),
     )
