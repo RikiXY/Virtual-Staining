@@ -34,6 +34,7 @@ there is no plugin discovery, and translation is always to exactly one target.
 | `vs convert` | Convert TIFF images to OpenSlide-compatible pyramidal BigTIFFs |
 | `vs panels` | Build source / generated / target comparison panels |
 | `vs organize` | Organise run outputs |
+| `vs export-model` | Export selected run checkpoints as a portable local model bundle |
 | `vs queue` | Execute full or staged runs sequentially from a queue file |
 | `vs status` | Check required Python/native dependencies, system memory, and GPU support |
 
@@ -91,6 +92,23 @@ into memory. Directory inputs keep their relative layout under the output direct
 vs convert raw/source.tif raw/target.tif --output-dir converted
 vs convert raw/slides --output-dir converted
 ```
+
+Export selected checkpoints of a finished run, with their exact tracked training
+configs, as a verified local bundle that can be moved and reconstructed without the
+original run or dataset:
+
+```bash
+vs export-model \
+  --run-path local_workspace/results/my_run \
+  --output local_workspace/bundles/my_run \
+  --best val_ssim --top-k val_ssim 2 --latest
+```
+
+Selectors are `--checkpoint PATH`, `--latest`, `--best METRIC` and
+`--top-k METRIC RANK` (repeatable). The CLI knows the built-in methods only; external
+methods are exported from Python with explicit definitions. A bundle is a local
+research artifact, not a redistribution approval; see
+[`docs/run_format.md`](docs/run_format.md#model-bundles).
 
 Evaluate one generated image without adding another top-level command:
 

@@ -29,7 +29,7 @@ upper layers may import from lower layers, never the reverse.
 | `training/` | The `TrainingMethodRuntime` protocol, method-agnostic `Trainer`, generic `MethodCheckpointManager`, validation, history, the Pix2Pix configured-loss evaluator, and callback-driven progress events |
 | `inference/` | Checkpoint resolution, definition-driven inference model construction, prediction-direction resolution, generic single/directory/tiled/WSI inference, and output naming |
 | `evaluation/` | Paired evaluation of a resolved metric request (input-failure coverage, valid-region support, per-image reports, summaries, `evaluation_result.json`), unpaired collection diagnostics, diagnostic plots, representative selection, and comparison panels |
-| `applications/` | User-visible stage lifecycle owners and infer-images runtime composition; no `argparse` |
+| `applications/` | User-visible stage lifecycle owners, infer-images runtime composition, and the model-bundle exporter/verifier (`export_model.py`); no `argparse` |
 | `cli/` | The `argparse` entrypoint, terminal rendering, and thin adapters over `applications/` |
 
 ## Translation Methods
@@ -169,6 +169,11 @@ contract and optional checkpoint provenance, and delegates to it. The manifest
 `predict_batch`, which enforces the same-grid output check. Transport never names a
 method, network topology, optimizer or loss.
 
+`applications/export_model.py` is a utility, not a stage: it composes the existing
+owners (checkpoint selection and validation, `RunConfig` resolution with explicit
+definitions, `RunLayout` tracked paths, SHA-256 hashing) to publish a verified model
+bundle, and defines no checkpoint reader, model loader or registry of its own.
+
 Within training, `trainer.py` owns epoch orchestration, `validator.py` owns validation
 inference, `preview.py` owns the optional validation preview sink (methods hand it
 detached semantic tensors; `applications/train.py` injects the default TIFF writer),
@@ -194,8 +199,9 @@ The current direct package dependencies (excluding self-imports) are:
 
 ```text
 cli -> applications, metrics, training
-applications -> config, data, definitions, evaluation, experiment, inference, metrics,
-                models, split_contract, training, utils
+applications -> checkpoint_contract, checkpoint_selection, config, data, definitions,
+                evaluation, experiment, inference, metrics, models, split_contract,
+                training, utils
 inference -> checkpoint_contract, checkpoint_selection, config, data, experiment, models,
              utils
 methods -> checkpoint_contract, checkpoint_selection, config, definitions,

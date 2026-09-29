@@ -914,3 +914,91 @@ direction (`--direction METRIC=higher|lower`, `--higher-is-better`/`--lower-is-b
 and use data-driven plot ranges and no thresholds. Thresholds are presentation
 heuristics for colouring and share statistics only; they are not biological,
 diagnostic, clinical or scientific acceptance criteria.
+
+## Model Bundles
+
+`vs export-model` (or `applications.export_model.export_model_bundle`) copies selected
+checkpoints of one tracked run, with the configuration needed to interpret them, into
+a small versioned directory. It is a utility, not a pipeline stage, and it is not a new
+checkpoint format: the bundled checkpoints are the run's v4 files, byte for byte.
+
+```text
+<bundle>/
+├── bundle.json
+├── checkpoints/
+│   └── ep010.pth                     # each selected physical checkpoint, once
+├── config/
+│   ├── input.yaml                    # exact copy of config/train/input.yaml
+│   └── resolved.yaml                 # exact copy of config/train/resolved.yaml
+└── metadata/
+    └── training_environment.json     # exact copy of metadata/environments/train.json
+```
+
+### Source run contract
+
+The source must be a tracked run with `config/train/input.yaml`,
+`config/train/resolved.yaml`, `metadata/environments/train.json` and `checkpoints/`;
+none may be (or pass through) a symlink. The resolved training config is parsed with
+`RunConfig.from_yaml(..., definitions)`, so it must resolve through the same method and
+component definitions as normal reconstruction. Every selected checkpoint's
+`config_hash` must equal the SHA-256 of that tracked resolved config; a missing or
+different hash is rejected (the binding is never inferred from file location).
+
+Selectors:
+
+| Selector | Source |
+|---|---|
+| explicit (`--checkpoint PATH`) | A regular, non-symlink file directly in the run's `checkpoints/`; relative paths are relative to it. `..`, absolute paths elsewhere, nested paths and symlinks are rejected |
+| `latest` (`--latest`) | `checkpoint_selection` latest-checkpoint resolution |
+| `best` (`--best METRIC`) | Rank 1 of `METRIC` in `checkpoints/best.json` |
+| `top_k` (`--top-k METRIC RANK`) | Rank `RANK` of `METRIC` in `checkpoints/best.json` |
+
+Ranked selections read metric, rank, value, mode and epoch from `best.json`; nothing is
+re-ranked or re-scored. Every selected file is read with the weights-only
+`read_checkpoint`, checked with `Definitions.require_checkpoint`, validated against
+`config.method.definition.checkpoint_identity(config)`, bound to the config hash and
+hashed before anything is written. Unsupported, corrupt, unversioned and pre-v4
+checkpoints fail through the normal checkpoint policy. Selectors that resolve to the
+same physical file (same device and inode, including hard links) share one bundled copy.
+
+### `bundle.json` (schema version 1)
+
+Strict JSON (no `NaN`/`Infinity`); every path is relative to the bundle root.
+
+| Key | Content |
+|---|---|
+| `schema_version` | `1` |
+| `notice` | Local-artifact and non-redistribution notice |
+| `config` | `input` and `resolved`, each `{path, sha256, role}`; roles `training_input` / `training_resolved` |
+| `environment` | `{path, sha256}` of the copied training environment snapshot |
+| `requirements` | `methods` and `components`: sorted `{name, source, version}` a reader must supply as definitions, derived from the checkpoints' metadata |
+| `checkpoints` | Unique checkpoints sorted by path: `path`, `sha256`, and the v4 payload's `format_version`, `epoch`, `config_hash`, `method` (name, implementation, pairing, inputs, outputs, prediction directions, options, components), `image_size`, `normalization` embedded verbatim |
+| `selections` | One record per request, in request order: `policy`, `metric`, `rank`, `metric_value`, `mode` (all `null` for `latest`/`explicit`), `epoch`, `checkpoint` (bundle-relative path) |
+
+The source run directory is not recorded, and no Python module path or source code is
+bundled.
+
+### Publication and verification
+
+The bundle is built in a hidden `.<name>.*.staging` directory beside the destination
+and verified there with `verify_model_bundle`: exact index schema, every path strictly
+inside the bundle with no absolute path, `..` or symlink, every SHA-256, and every
+checkpoint re-read and re-validated against the bundled resolved config, its config
+hash and the supplied definitions. Only then is the staging directory renamed to the
+destination. The destination must not exist and must not lie inside the source run
+(directly or through a symlink). On failure only the staging directory is removed; the
+source run and any existing destination are never modified.
+
+### Portability semantics
+
+A bundle stays verifiable and reconstructable after it is moved and the original run
+and dataset directories are gone: `RunConfig.from_yaml(bundle/"config/resolved.yaml",
+definitions)` plus `load_inference_generator(config, RunLayout(bundle), device,
+bundle/"checkpoints/<file>")` rebuilds the prediction network for new inference inputs.
+The bundled configs are unmodified research provenance; their `dataset_root`,
+`results_path`, `run_name` and manifest paths still name the original locations, so
+the resolved config is not a runnable reproduction of training once those are gone.
+
+A successful export does not imply permission to redistribute the weights or configs.
+Rights and privacy approval, attribution, release naming and publication are outside
+this exporter.

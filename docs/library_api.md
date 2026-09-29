@@ -216,6 +216,54 @@ optional. `objective_metadata()` may return JSON-compatible objective provenance
 optimizer, an L1 objective, a custom `val_abs_bias` checkpoint metric, two registered
 architectures) that uses only these modules.
 
+## Exporting model bundles
+
+`virtual_staining.applications.export_model` packages selected checkpoints of one
+tracked run as a portable local bundle (format: [`run_format.md`](run_format.md#model-bundles)):
+
+```python
+from virtual_staining.applications.export_model import (
+    ExportCheckpointSelection,
+    export_model_bundle,
+    verify_model_bundle,
+)
+
+bundle = export_model_bundle(
+    Path("local_workspace/results/my_run"),
+    Path("bundles/my_run"),
+    [
+        ExportCheckpointSelection("best", metric="val_abs_bias"),
+        ExportCheckpointSelection("top_k", metric="val_abs_bias", rank=2),
+        ExportCheckpointSelection("latest"),
+        ExportCheckpointSelection("explicit", checkpoint_path=Path("ep010.pth")),
+    ],
+    definitions,  # optional; defaults to builtin_definitions()
+)
+
+# Later, anywhere the bundle was moved to:
+verify_model_bundle(moved, definitions)
+config = RunConfig.from_yaml(moved / "config" / "resolved.yaml", definitions)
+model, _ = load_inference_generator(config, RunLayout(moved), device, moved / "checkpoints" / "ep010.pth")
+```
+
+- **Explicit providers.** External methods and components are exported and verified
+  only with their `Definitions` supplied; without them export, verification and
+  reconstruction fail with `DefinitionNotAvailableError`. `vs export-model` knows the
+  built-ins only. `bundle.json` records each required definition's `name`, `source` and
+  `version`, never code to import.
+- **Owners reused.** Selection goes through `checkpoint_selection`, reading and
+  validation through `checkpoint_contract` and the method definition's checkpoint
+  identity, configuration through `RunConfig.from_yaml`, hashing through
+  `utils.hashing`. There is no bundle-specific loader: reconstruction is the normal
+  `load_inference_generator` with an explicit checkpoint path.
+- **Verification.** `export_model_bundle` runs `verify_model_bundle` on the staged
+  bundle before publishing it and returns the verified `ModelBundle` (`root`, `index`,
+  `config`). Call `verify_model_bundle` again before using a bundle received from
+  elsewhere.
+- **Not a distribution decision.** The bundled configs are exact research provenance
+  and may name private local paths. Export does not decide whether weights may be
+  redistributed.
+
 ## Evaluation metrics
 
 Paired evaluation computes an explicit, ordered request of metric definitions. A
