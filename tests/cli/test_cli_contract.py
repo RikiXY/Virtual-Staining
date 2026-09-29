@@ -33,6 +33,7 @@ COMMANDS = (
     "organize",
     "export-model",
     "queue",
+    "config",
     "status",
 )
 

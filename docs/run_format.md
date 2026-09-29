@@ -301,6 +301,9 @@ The fully expanded effective configuration after all defaults have been applied
 and all derived paths resolved. Differences from `input.yaml` reflect default
 values that were not explicitly set by the user.
 
+`vs config resolve --config ...` prints these exact bytes without running a stage, and
+`vs config check` prints their SHA-256 as `config_sha256` (the stage's `config_hash`).
+
 Training losses are recorded under `training.losses.generator` and
 `training.losses.discriminator` lists. Training requires explicit loss terms. A term is
 active only when it is explicitly listed, `enabled` is `true`, and its scheduled current

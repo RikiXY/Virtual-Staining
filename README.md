@@ -36,6 +36,7 @@ there is no plugin discovery, and translation is always to exactly one target.
 | `vs organize` | Organise run outputs |
 | `vs export-model` | Export selected run checkpoints as a portable local model bundle |
 | `vs queue` | Execute full or staged runs sequentially from a queue file |
+| `vs config` | Print the resolved config, or check it (optionally read-only asset preflight) without running a stage |
 | `vs status` | Check required Python/native dependencies, system memory, and GPU support |
 
 ## Quick Start
@@ -51,7 +52,10 @@ uv sync --frozen
 #    fully annotated reference of every option)
 cp config/runs/minimal_pix2pix.yaml config/runs/local/my_run.yaml
 
-# 4. Run the full pipeline
+# 4. Check it without running anything (add --assets for read-only input checks)
+vs config check --config config/runs/local/my_run.yaml --stages prepare train infer evaluate
+
+# 5. Run the full pipeline
 vs run --config config/runs/local/my_run.yaml
 ```
 
@@ -253,6 +257,31 @@ image collection per domain under `data.domains`, a `resnet` generator, and the
 `adversarial_lsgan` / `cycle_l1` / `identity_l1` losses; see the CycleGAN example.
 
 Experiment commands accept YAML configuration directly through `--config`.
+
+### Inspecting and checking a config
+
+```bash
+vs config resolve --config my_run.yaml                      # resolved YAML on stdout
+vs config resolve --config my_run.yaml --output resolved.yaml   # never overwrites
+vs config check --config my_run.yaml                        # config only; no assets needed
+vs config check --config my_run.yaml --stages prepare train infer evaluate --assets
+```
+
+The *authored* config is what you wrote; the *resolved* config is every effective value
+after the owners filled their defaults, exactly the `config/<stage>/resolved.yaml` a
+tracked stage records (same bytes, same SHA-256, printed as `config_sha256`). Each
+resolved field is either *supplied* by you or *defaulted* by its owner
+(`inspect_run_yaml`/`inspect_run_mapping` in
+[`docs/library_api.md`](docs/library_api.md#inspecting-and-checking-configs)).
+
+`check` without `--assets` only resolves the config, so it works on a machine without
+the data. `--assets` adds read-only checks of the selected stages' inputs (inventory,
+masks, manifest, domain collections, supplied group metadata, checkpoint selection,
+expected generated files) in the given stage order. An input that an earlier selected
+stage produces is reported `planned`, which is not verified. Nothing is hashed, decoded,
+loaded, or written (`content_verified: false`), no content-level leakage or scientific
+validity is claimed, and a passing check is not a frozen input snapshot: running the
+stages repeats every required validation and freezes what they actually consume.
 
 See [`docs/run_format.md`](docs/run_format.md) for the method-specific config fields and
 run output layout, [`docs/architecture.md`](docs/architecture.md) for package boundaries, and

@@ -14,6 +14,7 @@ from virtual_staining.data.manifest import (
     load_manifest_or_raise,
     load_set_groups,
     manifest_sources,
+    require_model_modalities,
 )
 from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.inference.outputs import generated_path_for_record
@@ -22,6 +23,7 @@ from virtual_staining.inference.runner import (
     build_inference_transform,
     inference_direction,
     inference_input_names,
+    inference_output_dir,
     load_inference_generator,
     predict_batch,
     resolve_inference_checkpoint,
@@ -49,13 +51,10 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
         raise ValueError("RunConfig.inference is required to run inference.")
 
     with ExperimentSession.open(config=config, config_path=config_path, stage="infer") as session:
-        output_dir = config.inference.output_dir or session.paths.output_test_dir
+        output_dir = inference_output_dir(config, session.paths)
         direction = inference_direction(config)
         manifest = load_manifest_or_raise(config.project)
-        if not set(config.model.inputs).issubset(manifest.metadata.input_modalities):
-            raise ValueError("model.inputs must be a subset of manifest input modalities")
-        if config.model.target != manifest.metadata.target_modality:
-            raise ValueError("model.target must equal manifest target modality")
+        require_model_modalities(manifest, config.model.inputs, config.model.target)
         manifest.validate(check_files_exist=True, require_splits={"test"})
         test_manifest = manifest.filter_split("test")
         checkpoint_path = resolve_inference_checkpoint(config, session.paths)

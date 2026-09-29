@@ -4,8 +4,7 @@ import json
 import shutil
 from pathlib import Path
 
-import yaml
-
+from virtual_staining.config.loader import dump_yaml_mapping
 from virtual_staining.config.run import RunConfig
 from virtual_staining.experiment.environment import collect_environment
 from virtual_staining.utils.hashing import sha256_file
@@ -18,14 +17,7 @@ def _save_input_config(src_yaml: Path, dest: Path) -> None:
 
 def _save_resolved_config(config_dict: dict[str, object], dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with dest.open("w", encoding="utf-8") as handle:
-        yaml.safe_dump(
-            config_dict,
-            handle,
-            default_flow_style=False,
-            allow_unicode=True,
-            sort_keys=True,
-        )
+    dest.write_bytes(dump_yaml_mapping(config_dict, sort_keys=True).encode("utf-8"))
 
 
 def save_config_hash(hash_str: str, dest: Path) -> None:

@@ -89,6 +89,12 @@ def evaluation_protocol(config: RunConfig) -> EvaluationProtocol:
     return configured or cast(EvaluationProtocol, config.data.pairing)
 
 
+def evaluation_generated_dir(config: RunConfig, paths: RunLayout) -> Path:
+    """Return ``evaluation.generated_dir``, defaulting to the run's inference test outputs."""
+    configured = config.evaluation.generated_dir if config.evaluation is not None else None
+    return configured or paths.output_test_dir
+
+
 def reference_domain(config: RunConfig) -> str:
     """Return the real domain the generated images are compared against."""
     return (
@@ -116,7 +122,7 @@ def paired_sample(
     )
 
 
-def _load_paired_manifest(config: RunConfig) -> DatasetManifest:
+def load_paired_evaluation_manifest(config: RunConfig) -> DatasetManifest:
     try:
         manifest = load_manifest_or_raise(config.project)
         if config.data.pairing == "unpaired" and (
@@ -140,10 +146,8 @@ def _load_paired_manifest(config: RunConfig) -> DatasetManifest:
     return manifest
 
 
-def collect_unpaired_collections(
-    config: RunConfig, generated_dir: Path
-) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
-    """Return (generated, reference) image collections with no assumed correspondence."""
+def unpaired_generated_collection(config: RunConfig, generated_dir: Path) -> tuple[Path, ...]:
+    """Return the direction-specific generated images under ``generated_dir``; none fails."""
     direction = inference_direction(config)
     generated = (
         collect_generated_artifacts(generated_dir, direction) if generated_dir.is_dir() else ()
@@ -153,10 +157,23 @@ def collect_unpaired_collections(
             f"No {direction} generated images found under {generated_dir}; run inference "
             f"with inference.direction={direction} or set evaluation.generated_dir."
         )
-    reference = resolve_domain_images(
+    return generated
+
+
+def unpaired_reference_collection(config: RunConfig) -> tuple[Path, ...]:
+    """Return the independent real reference images of the held-out test split."""
+    return resolve_domain_images(
         unpaired_reference_spec(config), TEST_SPLIT, config.project.dataset_root
     )
-    return generated, reference
+
+
+def collect_unpaired_collections(
+    config: RunConfig, generated_dir: Path
+) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    """Return (generated, reference) image collections with no assumed correspondence."""
+    return unpaired_generated_collection(config, generated_dir), unpaired_reference_collection(
+        config
+    )
 
 
 def unpaired_reference_spec(config: RunConfig) -> str:
@@ -382,7 +399,7 @@ def _evaluate_paired(
     eval_cfg = config.evaluation
     direction = inference_direction(config)
     metrics = requested_metrics(config)
-    manifest = _load_paired_manifest(config)
+    manifest = load_paired_evaluation_manifest(config)
     session.result(requested_metrics=[metric.name for metric in metrics])
     records = manifest.filter_split("test").records
     samples = tuple(paired_sample(config, record, generated_dir) for record in records)
@@ -483,11 +500,7 @@ def evaluate(config: RunConfig, config_path: Path) -> None:
         config=config, config_path=config_path, stage="evaluate"
     ) as session:
         eval_cfg = config.evaluation
-        generated_dir = (
-            eval_cfg.generated_dir
-            if eval_cfg and eval_cfg.generated_dir
-            else session.paths.output_test_dir
-        )
+        generated_dir = evaluation_generated_dir(config, session.paths)
         output_dir = (
             eval_cfg.output_dir
             if eval_cfg and eval_cfg.output_dir

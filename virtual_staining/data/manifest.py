@@ -325,6 +325,14 @@ def load_manifest_or_raise(project: ProjectConfig) -> DatasetManifest:
     )
 
 
+def require_model_modalities(manifest: DatasetManifest, inputs: Sequence[str], target: str) -> None:
+    """Fail unless the manifest provides every model input and exactly the model target."""
+    if not set(inputs).issubset(manifest.metadata.input_modalities):
+        raise ValueError("model.inputs must be a subset of manifest input modalities")
+    if target != manifest.metadata.target_modality:
+        raise ValueError("model.target must equal manifest target modality")
+
+
 def load_set_groups(project: ProjectConfig) -> dict[str, tuple[str, str]]:
     """Map prepared ``set_id`` to ``(specimen_id, patient_id)`` from ``slide_sets.csv``.
 

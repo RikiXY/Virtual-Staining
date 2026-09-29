@@ -216,6 +216,45 @@ optional. `objective_metadata()` may return JSON-compatible objective provenance
 optimizer, an L1 objective, a custom `val_abs_bias` checkpoint metric, two registered
 architectures) that uses only these modules.
 
+## Inspecting and checking configs
+
+`virtual_staining.applications.config_authoring` is the one read-only seam for
+authoring and checking a run config (`vs config resolve` / `vs config check` call it):
+
+```python
+from virtual_staining.applications.config_authoring import (
+    inspect_run_mapping, inspect_run_yaml, preflight, write_config_yaml,
+)
+
+inspection = inspect_run_mapping(raw, definitions=my_definitions)  # or inspect_run_yaml(path, ...)
+inspection.authored_yaml     # the caller's mapping, key order and every valid field kept
+inspection.resolved_yaml     # RunConfig.to_dict(), byte-identical to a tracked resolved.yaml
+inspection.resolved_sha256   # the config hash a tracked stage records for this config
+inspection.origins           # {"training.losses.generator[0].weight": "supplied", ...}
+
+report = preflight(inspection.config, ["prepare", "train"], depth="assets")
+report.valid                 # False only when a check is "invalid"
+write_config_yaml(inspection.authored_yaml, Path("run.yaml"))  # FileExistsError if present
+```
+
+- Resolution always goes through `RunConfig.from_mapping`; `definitions` defaults to the
+  built-in set, and external methods/components keep their options in both forms.
+- `authored` is the caller's mapping (plain dicts/lists), never `to_dict()`. A starter is
+  one of the committed `config/runs/minimal_*.yaml` files; there is no generated starter.
+- `origins` is explanatory only: `supplied` for leaves present in the authored mapping
+  (including a value its owner normalized), `defaulted` for owner-filled leaves.
+- `preflight(config, stages, depth=...)` checks the stages in the given order. `config`
+  depth inspects no path. `assets` depth reuses the stage owners read-only
+  (`resolve_slide_sets`, manifest validation, `resolve_domain_collections`,
+  `validate_groups`, `resolve_inference_checkpoint`, the evaluation protocol and
+  generated-file naming). Check statuses: `valid`, `invalid`, `planned` (an earlier
+  selected stage produces the input; not verified), `unverified` (deliberately not
+  established), `not_applicable`.
+- Preflight never opens a session, runs a stage, hashes or decodes a file, deserializes a
+  checkpoint, builds a model or probes a device, and writes nothing. `content_verified`
+  is always `false`, and a report does not freeze or lock its inputs; tracked execution
+  re-resolves, re-validates, and snapshots what it consumes.
+
 ## Exporting model bundles
 
 `virtual_staining.applications.export_model` packages selected checkpoints of one

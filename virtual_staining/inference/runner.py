@@ -108,6 +108,12 @@ def resolve_inference_checkpoint(config: RunConfig, paths: RunLayout) -> Path:
     )
 
 
+def inference_output_dir(config: RunConfig, paths: RunLayout) -> Path:
+    """Return ``inference.output_dir``, defaulting to the run's test output directory."""
+    configured = config.inference.output_dir if config.inference is not None else None
+    return configured or paths.output_test_dir
+
+
 def inference_direction(config: RunConfig) -> str | None:
     """Return the selected prediction direction, or None for single-direction methods.
 

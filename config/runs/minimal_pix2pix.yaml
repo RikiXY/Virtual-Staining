@@ -2,6 +2,7 @@
 # config/runs/example.yaml is the same experiment with every field and choice written
 # out and explained. Weights and split are illustrative, not recommendations.
 #   vs run --config config/runs/local/my_run.yaml   # prepare -> train -> infer -> evaluate
+#   vs config check --config config/runs/local/my_run.yaml --stages prepare train infer evaluate --assets
 
 dataset_root: local_workspace/datasets/your_sample  # working-directory relative
 results_path: local_workspace/results

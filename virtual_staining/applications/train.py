@@ -22,6 +22,7 @@ from virtual_staining.data.manifest import (
     manifest_sources,
     paired_record_rows,
     prepared_split_unit,
+    require_model_modalities,
 )
 from virtual_staining.data.unpaired import UnpairedImageDataset, resolve_domain_collections
 from virtual_staining.experiment.session import ExperimentSession
@@ -67,10 +68,7 @@ def _paired_datasets(
     assert config.training is not None
     training = config.training
     manifest = load_manifest_or_raise(config.project)
-    if not set(config.model.inputs).issubset(manifest.metadata.input_modalities):
-        raise ValueError("model.inputs must be a subset of manifest input modalities")
-    if config.model.target != manifest.metadata.target_modality:
-        raise ValueError("model.target must equal manifest target modality")
+    require_model_modalities(manifest, config.model.inputs, config.model.target)
     manifest.validate(check_files_exist=True, require_splits={"train", "val"})
     train_manifest = manifest.filter_split("train")
     val_manifest = manifest.filter_split("val")

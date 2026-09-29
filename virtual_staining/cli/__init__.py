@@ -38,6 +38,7 @@ _COMMAND_HELP = {
     "organize": "Organize run outputs by metric ranking.",
     "export-model": "Export selected run checkpoints as a portable local model bundle.",
     "queue": "Execute pipeline runs from a queue file.",
+    "config": "Resolve or check a run config without running any stage.",
     "status": "Check the runtime environment and optional hardware support.",
 }
 
@@ -155,6 +156,7 @@ def _commands() -> dict[str, Command]:
         "organize": lambda argv: _run_cli_module("organize", argv),
         "export-model": lambda argv: _run_cli_module("export_model", argv),
         "queue": _run_queue,
+        "config": lambda argv: _run_cli_module("config", argv),
         "status": lambda argv: _run_cli_module("status", argv),
     }
 

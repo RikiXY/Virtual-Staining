@@ -3,6 +3,7 @@
 # No preparation section: run the stages explicitly (see that file for what `infer`
 # needs):
 #   vs run --config config/runs/local/my_cyclegan.yaml --stages train infer evaluate
+#   vs config check --config config/runs/local/my_cyclegan.yaml --stages train infer evaluate --assets
 
 dataset_root: local_workspace/datasets/your_sample  # base of data.domains
 results_path: local_workspace/results

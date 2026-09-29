@@ -29,7 +29,7 @@ upper layers may import from lower layers, never the reverse.
 | `training/` | The `TrainingMethodRuntime` protocol, method-agnostic `Trainer`, generic `MethodCheckpointManager`, validation, history, the Pix2Pix configured-loss evaluator, and callback-driven progress events |
 | `inference/` | Checkpoint resolution, definition-driven inference model construction, prediction-direction resolution, generic single/directory/tiled/WSI inference, and output naming |
 | `evaluation/` | Paired evaluation of a resolved metric request (input-failure coverage, valid-region support, per-image reports, summaries, `evaluation_result.json`), unpaired collection diagnostics, diagnostic plots, representative selection, and comparison panels |
-| `applications/` | User-visible stage lifecycle owners, infer-images runtime composition, and the model-bundle exporter/verifier (`export_model.py`); no `argparse` |
+| `applications/` | User-visible stage lifecycle owners, infer-images runtime composition, the model-bundle exporter/verifier (`export_model.py`), and the read-only config inspection/preflight seam (`config_authoring.py`); no `argparse` |
 | `cli/` | The `argparse` entrypoint, terminal rendering, and thin adapters over `applications/` |
 
 ## Translation Methods
