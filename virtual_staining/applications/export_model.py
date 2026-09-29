@@ -13,11 +13,14 @@ redistribute the weights, configs or environment metadata it contains.
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import json
 import logging
 import os
 import shutil
 import stat
+import sys
 import tempfile
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
@@ -133,8 +136,9 @@ def export_model_bundle(
 
     ``definitions`` defaults to the built-ins; external methods must be supplied here.
     The bundle is built and verified in a hidden staging directory beside
-    ``output_dir`` and renamed into place only when verification passes. The source run
-    is never modified and an existing destination is never touched.
+    ``output_dir`` and atomically renamed into place, never replacing anything, only
+    when verification passes. The source run is never modified and an existing
+    destination is never touched.
     """
     if not selections:
         raise ValueError("At least one checkpoint selection is required")
@@ -209,16 +213,42 @@ def export_model_bundle(
             json.dumps(index, indent=2, allow_nan=False) + "\n", encoding="utf-8"
         )
         bundle = verify_model_bundle(staging, config.definitions)
-        # ponytail: check-then-rename; a directory created concurrently in this window
-        # could be replaced if empty. renameat2(RENAME_NOREPLACE) closes it if it matters.
-        if destination.exists() or destination.is_symlink():
-            raise FileExistsError(f"Export destination already exists: {destination}")
-        os.rename(staging, destination)
+        _publish_directory_no_replace(staging, destination)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
     logger.info("Model bundle exported: %s", destination)
     return replace(bundle, root=destination)
+
+
+def _publish_directory_no_replace(staging: Path, destination: Path) -> None:
+    """Atomically rename ``staging`` to ``destination``; ``FileExistsError`` if it exists.
+
+    The kernel enforces no-replace, so a destination created concurrently (even an empty
+    directory) is never replaced. Platforms without such a primitive are refused.
+    """
+    if sys.platform == "win32":
+        os.rename(staging, destination)  # MoveFileExW without REPLACE_EXISTING never replaces
+        return
+    source, target = os.fsencode(staging), os.fsencode(destination)
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "linux" and hasattr(libc, "renameat2"):
+        at_fdcwd, rename_noreplace = -100, 1
+        result = libc.renameat2(at_fdcwd, source, at_fdcwd, target, rename_noreplace)
+    elif sys.platform == "darwin" and hasattr(libc, "renamex_np"):
+        rename_excl = 0x4
+        result = libc.renamex_np(source, target, rename_excl)
+    else:
+        raise RuntimeError(f"No atomic no-replace directory rename on platform {sys.platform}")
+    if result == 0:
+        return
+    code = ctypes.get_errno()
+    error = OSError(code, os.strerror(code), os.fspath(staging), None, os.fspath(destination))
+    if code in (errno.EINVAL, errno.ENOSYS, errno.ENOTSUP):
+        raise RuntimeError(
+            f"Filesystem does not support atomic no-replace rename into {destination.parent}"
+        ) from error
+    raise error  # EEXIST becomes FileExistsError
 
 
 def _source_file(root: Path, path: Path) -> Path:

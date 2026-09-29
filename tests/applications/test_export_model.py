@@ -402,6 +402,58 @@ def test_failed_verification_removes_only_staging(
     _assert_fails_cleanly(run, tmp_path / "out" / "bundle", [_LATEST], ValueError, "verification")
 
 
+def test_destination_created_during_publication_is_never_replaced(
+    run: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import virtual_staining.applications.export_model as export_model
+
+    output = tmp_path / "out" / "bundle"
+
+    def verify_then_race(root: Path, definitions: Definitions | None = None) -> ModelBundle:
+        bundle = verify_model_bundle(root, definitions)
+        output.mkdir()  # another process wins the name after the up-front check
+        (output / "sentinel.txt").write_text("theirs", encoding="utf-8")
+        return bundle
+
+    monkeypatch.setattr(export_model, "verify_model_bundle", verify_then_race)
+    before = _snapshot(run)
+    with pytest.raises(FileExistsError):
+        _export(run, output, _LATEST)
+    assert _snapshot(run) == before
+    assert list(output.iterdir()) == [output / "sentinel.txt"]
+    assert (output / "sentinel.txt").read_text(encoding="utf-8") == "theirs"
+    assert list(output.parent.iterdir()) == [output]  # no staging directory remains
+
+
+@pytest.mark.parametrize("kind", ["empty directory", "file", "symlink"])
+def test_publish_never_replaces_an_existing_destination(tmp_path: Path, kind: str) -> None:
+    from virtual_staining.applications.export_model import _publish_directory_no_replace
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "bundle.json").write_text("{}", encoding="utf-8")
+    destination = tmp_path / "bundle"
+    if kind == "empty directory":
+        destination.mkdir()  # plain POSIX rename() would silently replace this
+    elif kind == "file":
+        destination.write_text("theirs", encoding="utf-8")
+    else:
+        destination.symlink_to(tmp_path / "elsewhere")
+
+    with pytest.raises(FileExistsError):
+        _publish_directory_no_replace(staging, destination)
+    assert (staging / "bundle.json").is_file()
+    if kind == "empty directory":
+        assert destination.is_dir() and not any(destination.iterdir())
+    elif kind == "file":
+        assert destination.read_text(encoding="utf-8") == "theirs"
+    else:
+        assert destination.readlink() == tmp_path / "elsewhere"
+
+    _publish_directory_no_replace(staging, tmp_path / "fresh")
+    assert (tmp_path / "fresh" / "bundle.json").is_file() and not staging.exists()
+
+
 # --- bundle verification -----------------------------------------------------------------
 
 

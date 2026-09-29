@@ -985,7 +985,10 @@ and verified there with `verify_model_bundle`: exact index schema, every path st
 inside the bundle with no absolute path, `..` or symlink, every SHA-256, and every
 checkpoint re-read and re-validated against the bundled resolved config, its config
 hash and the supplied definitions. Only then is the staging directory renamed to the
-destination. The destination must not exist and must not lie inside the source run
+destination with an atomic no-replace rename (`renameat2(RENAME_NOREPLACE)` on Linux,
+`renamex_np(RENAME_EXCL)` on macOS, `MoveFileExW` without replace on Windows), so a
+destination created concurrently is never replaced; other platforms are refused. The
+destination must not exist and must not lie inside the source run
 (directly or through a symlink). On failure only the staging directory is removed; the
 source run and any existing destination are never modified.
 
