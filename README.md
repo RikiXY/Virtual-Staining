@@ -37,6 +37,7 @@ there is no plugin discovery, and translation is always to exactly one target.
 | `vs export-model` | Export selected run checkpoints as a portable local model bundle |
 | `vs queue` | Execute full or staged runs sequentially from a queue file |
 | `vs config` | Print the resolved config, or check it (optionally read-only asset preflight) without running a stage |
+| `vs inventory` | Preview or write the raw paired slide-set inventory from explicit asset mappings |
 | `vs status` | Check required Python/native dependencies, system memory, and GPU support |
 
 ## Quick Start
@@ -282,6 +283,24 @@ stage produces is reported `planned`, which is not verified. Nothing is hashed, 
 loaded, or written (`content_verified: false`), no content-level leakage or scientific
 validity is claimed, and a passing check is not a frozen input snapshot: running the
 stages repeats every required validation and freezes what they actually consume.
+
+### Authoring the paired slide-set inventory
+
+```bash
+vs inventory preview --dataset-root DATASET \
+  --input LF=raw/LF --input 'AF=raw/AF/**/*.svs' \
+  --target-modality HE --target raw/HE --reference LF
+vs inventory write ...   # publishes DATASET/inputs/slide_sets.csv; never overwrites
+```
+
+Files are matched across the explicit input/target mappings by their path relative to
+each mapping (`--key relative-stem` ignores the final extension). `preview` lists every
+incomplete, duplicate, or colliding key and writes nothing; `write` publishes only a valid
+preview after the canonical loader has read it back. Alignment of non-reference inputs,
+patient/specimen IDs, and masks come only from an optional `--metadata` CSV and mask
+mappings; nothing is inferred from names or image content. Unpaired (CycleGAN)
+`data.domains` do not use this inventory. See
+[`docs/dataset_format.md`](docs/dataset_format.md#authoring-the-inventory).
 
 See [`docs/run_format.md`](docs/run_format.md) for the method-specific config fields and
 run output layout, [`docs/architecture.md`](docs/architecture.md) for package boundaries, and

@@ -39,6 +39,7 @@ _COMMAND_HELP = {
     "export-model": "Export selected run checkpoints as a portable local model bundle.",
     "queue": "Execute pipeline runs from a queue file.",
     "config": "Resolve or check a run config without running any stage.",
+    "inventory": "Preview or write the raw paired slide-set inventory from explicit mappings.",
     "status": "Check the runtime environment and optional hardware support.",
 }
 
@@ -157,6 +158,7 @@ def _commands() -> dict[str, Command]:
         "export-model": lambda argv: _run_cli_module("export_model", argv),
         "queue": _run_queue,
         "config": lambda argv: _run_cli_module("config", argv),
+        "inventory": lambda argv: _run_cli_module("inventory", argv),
         "status": lambda argv: _run_cli_module("status", argv),
     }
 

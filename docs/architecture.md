@@ -20,7 +20,7 @@ upper layers may import from lower layers, never the reverse.
 | `checkpoint_contract.py` | Topology-neutral v4 checkpoint payload and strict method-aware compatibility validation |
 | `checkpoint_selection.py` | Neutral `best.json` ranking, policy, and metric-direction selection |
 | `loss_definitions.py` | Canonical built-in loss definitions: name, allowed roles, supported methods, parameter contract and validation, and primitive tensor math, shared by the built-in definitions and runtimes |
-| `utils/` | Shared primitives: artifact naming, image dimensions, and image I/O helpers |
+| `utils/` | Shared primitives: artifact naming, image dimensions, image I/O helpers, and no-replace file publication |
 | `config/` | Framework-common YAML-facing dataclasses and strict parsers, `RunConfig.from_mapping` resolution against supplied definitions, and reusable option blocks (losses, LR scheduler) that definitions parse |
 | `experiment/` | Canonical `RunLayout` for one run, `ResultsLayout` for shared comparisons, stage snapshots, run metadata, manifest/config hashing, and environment snapshots |
 | `models/` | Network implementations (`ConcatUNetGenerator`, `ResnetGenerator`, `PatchGANDiscriminator`), their `ComponentDefinition`s (`components.py`), and the model-I/O normalization contract; no training state |
@@ -29,7 +29,7 @@ upper layers may import from lower layers, never the reverse.
 | `training/` | The `TrainingMethodRuntime` protocol, method-agnostic `Trainer`, generic `MethodCheckpointManager`, validation, history, the Pix2Pix configured-loss evaluator, and callback-driven progress events |
 | `inference/` | Checkpoint resolution, definition-driven inference model construction, prediction-direction resolution, generic single/directory/tiled/WSI inference, and output naming |
 | `evaluation/` | Paired evaluation of a resolved metric request (input-failure coverage, valid-region support, per-image reports, summaries, `evaluation_result.json`), unpaired collection diagnostics, diagnostic plots, representative selection, and comparison panels |
-| `applications/` | User-visible stage lifecycle owners, infer-images runtime composition, the model-bundle exporter/verifier (`export_model.py`), and the read-only config inspection/preflight seam (`config_authoring.py`); no `argparse` |
+| `applications/` | User-visible stage lifecycle owners, infer-images runtime composition, the model-bundle exporter/verifier (`export_model.py`), the read-only config inspection/preflight seam (`config_authoring.py`), and the raw slide-set inventory authoring seam (`inventory_authoring.py`); no `argparse` |
 | `cli/` | The `argparse` entrypoint, terminal rendering, and thin adapters over `applications/` |
 
 ## Translation Methods

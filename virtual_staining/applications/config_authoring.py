@@ -9,9 +9,7 @@ requested config file, published without ever replacing an existing path.
 from __future__ import annotations
 
 import csv
-import os
 import re
-import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +46,7 @@ from virtual_staining.inference.runner import (
     resolve_inference_checkpoint,
 )
 from virtual_staining.split_contract import TEST_SPLIT, TRAIN_SPLIT, VAL_SPLIT
+from virtual_staining.utils.files import publish_file_no_replace
 from virtual_staining.utils.hashing import sha256_bytes
 
 FieldOrigin = Literal["supplied", "defaulted"]
@@ -164,21 +163,8 @@ def inspect_run_yaml(
 
 
 def write_config_yaml(text: str, destination: Path) -> Path:
-    """Publish already-rendered YAML at ``destination``; ``FileExistsError`` if it exists.
-
-    The bytes are written to a sibling temporary file first and hard-linked into place,
-    which never replaces an existing path and never exposes a partial file.
-    """
-    temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        with temporary.open("xb") as handle:
-            handle.write(text.encode("utf-8"))
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.link(temporary, destination)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return destination
+    """Publish already-rendered YAML at ``destination``; ``FileExistsError`` if it exists."""
+    return publish_file_no_replace(text.encode("utf-8"), destination)
 
 
 @dataclass(frozen=True)

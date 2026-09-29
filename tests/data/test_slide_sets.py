@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 
 from virtual_staining.config.data import InputConfig, PreprocessingConfig
-from virtual_staining.data.slide_sets import SlideSet, resolve_slide_sets
+from virtual_staining.data.slide_sets import (
+    SlideSet,
+    load_slide_set_inventory,
+    resolve_slide_sets,
+)
 
 
 def _inventory(root: Path) -> Path:
@@ -51,3 +55,15 @@ def test_inventory_rejects_unsafe_paths(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="relative and non-traversing"):
         _resolve_inventory(tmp_path, path, ("LF",))
+
+
+def test_public_loader_is_the_resolver(tmp_path: Path) -> None:
+    path = _inventory(tmp_path)
+    loaded = load_slide_set_inventory(
+        Path("slides.csv"),
+        tmp_path,
+        modalities=("LF", "AF"),
+        reference_modality="LF",
+        target_modality="target",
+    )
+    assert loaded == _resolve_inventory(tmp_path, path, ("LF", "AF"))

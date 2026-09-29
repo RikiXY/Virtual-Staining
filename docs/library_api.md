@@ -255,6 +255,50 @@ write_config_yaml(inspection.authored_yaml, Path("run.yaml"))  # FileExistsError
   is always `false`, and a report does not freeze or lock its inputs; tracked execution
   re-resolves, re-validates, and snapshots what it consumes.
 
+## Authoring the slide-set inventory
+
+`virtual_staining.applications.inventory_authoring` builds the canonical wide
+`inputs/slide_sets.csv` from explicit asset mappings (`vs inventory preview|write` call
+it); no `RunConfig` is needed:
+
+```python
+from virtual_staining.applications.inventory_authoring import (
+    InventoryRequest, preview_inventory, render_inventory_csv, write_inventory,
+)
+
+request = InventoryRequest(
+    dataset_root=Path("DATASET"),
+    inputs=(("LF", "raw/LF"), ("AF", "raw/AF/**/*.svs")),   # ordered (name, spec)
+    target_modality="HE",
+    target="raw/HE",
+    reference="LF",
+    input_masks=(("AF", "masks/AF"),),   # optional
+    target_mask=None,
+    metadata=None,                       # optional CSV joined on its `key` column
+    key_rule="relative-path",            # or "relative-stem"
+)
+preview = preview_inventory(request)     # read-only; opens no image
+preview.valid, preview.matched_count
+preview.matches                          # InventoryMatch(key, slide_set: SlideSet)
+preview.issues                           # InventoryIssue(kind, message, key)
+preview.limitations
+render_inventory_csv(preview)            # the exact bytes write_inventory publishes
+write_inventory(preview)                 # -> DATASET/inputs/slide_sets.csv
+```
+
+- An invalid request (duplicate or invalid input names, unknown reference, a target
+  named like an input, a mask for an unknown input) raises `ValueError` before scanning.
+- Issue kinds: `spec`, `duplicate`, `incomplete`, `conflict`, `set_id`, `metadata`,
+  `mask`. Every issue is collected; `valid` is true only without issues.
+- `write_inventory` raises `FileExistsError` for an existing destination and
+  `ValueError` for an invalid or stale preview, an output outside `dataset_root`, or a
+  CSV the canonical loader does not resolve to the previewed `SlideSet`s.
+- `virtual_staining.data.slide_sets.load_slide_set_inventory(path, dataset_root, *,
+  modalities, reference_modality, target_modality)` is that canonical loader;
+  `resolve_slide_sets(config)` delegates to it.
+- Matching, set-ID, metadata, alignment, and mask rules are in
+  [`dataset_format.md`](dataset_format.md#authoring-the-inventory).
+
 ## Exporting model bundles
 
 `virtual_staining.applications.export_model` packages selected checkpoints of one

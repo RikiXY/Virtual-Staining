@@ -73,7 +73,7 @@ def _resolve_relative_path(
     return resolved.relative_to(root)
 
 
-def _load_slide_set_inventory(
+def load_slide_set_inventory(
     path: Path,
     dataset_root: Path,
     *,
@@ -81,6 +81,10 @@ def _load_slide_set_inventory(
     reference_modality: str,
     target_modality: str,
 ) -> tuple[SlideSet, ...]:
+    """Read and validate the canonical wide slide-set inventory, sorted by ``set_id``.
+
+    A relative ``path`` is relative to ``dataset_root``, as are the paths inside it.
+    """
     inventory_path = path if path.is_absolute() else dataset_root / path
     if not inventory_path.is_file():
         raise FileNotFoundError(f"Slide-set inventory not found: {inventory_path}")
@@ -190,7 +194,7 @@ def _load_slide_set_inventory(
 
 
 def resolve_slide_sets(config: PreprocessingConfig) -> tuple[SlideSet, ...]:
-    return _load_slide_set_inventory(
+    return load_slide_set_inventory(
         config.inputs.inventory,
         config.dataset_root,
         modalities=config.inputs.modalities,

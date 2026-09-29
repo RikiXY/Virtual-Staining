@@ -21,6 +21,87 @@ are rejected.
 dataset paths. `ProjectConfig` supplies YAML values only; it does not construct
 persistent dataset paths.
 
+## Authoring the inventory
+
+`vs inventory preview|write` (library: `applications.inventory_authoring`) builds this
+same wide CSV from explicit asset mappings. It is a raw-input authoring aid only: it
+never writes a prepared manifest, manifest metadata, split assignment, patches,
+fingerprints, or consumed-data snapshots, and CycleGAN `data.domains` collections are
+not paired inventory and never need it.
+
+```bash
+vs inventory preview --dataset-root DATASET \
+  --input LF=raw/LF --input 'AF=raw/AF/**/*.svs' \
+  --target-modality HE --target raw/HE --reference LF \
+  [--input-mask AF=masks/AF] [--target-mask masks/HE] \
+  [--key relative-path|relative-stem] [--metadata meta.csv]
+vs inventory write ... [--output inputs/slide_sets.csv]
+```
+
+**Mappings.** Every input (ordered, one per `--input NAME=SPEC`), the target, and each
+optional mask is named explicitly; nothing is inferred from folder names and no other
+directory is scanned. A spec is relative to `dataset_root` and is either:
+
+- a *directory*: every regular file below it, recursively; or
+- a *glob* (`*`, `?`, `[...]`, `**` for any number of directories): its *anchor* is the
+  longest leading path without glob characters (`raw/AF` for `raw/AF/**/*.svs`).
+
+Keys are paths relative to the directory or glob anchor (`raw/LF/case1/S001.svs` under
+`raw/LF` is `case1/S001.svs`), listed in sorted POSIX order. Absolute specs, `..`,
+symlinked files, symlinked directories (below the anchor or on the way to it), glob
+matches that are directories, non-regular files, and required mappings that match no
+file are errors. No image is opened.
+
+**Key rule.** `relative-path` (default) matches the full relative path including the
+extension: `case1/S001.svs` matches only `case1/S001.svs`. `relative-stem` removes only
+the final extension, so `case1/S001.svs` and `case1/S001.tif` both become `case1/S001`
+(but `S001.ome.tiff` becomes `S001.ome`). A key forms a set only when every input and
+the target have exactly one file with that key. A key missing from any required mapping,
+two files with the same key in one mapping (e.g. `S001.svs` and `S001.tif` under
+`relative-stem`), or a target that is the same file as an input is an error. All
+discrepancies are listed together; incomplete keys are never silently dropped, and files
+are never paired by position, even when every mapping holds the same number of files.
+
+**Set IDs.** By default `set_id` is the key's file name without its final extension
+(`case1/S001.svs` → `S001`). It is never sanitized: it must already match
+`[A-Za-z0-9][A-Za-z0-9._-]*`, and all set IDs must be unique, so
+`patient1/S001.tif` and `patient2/S001.tif` match as distinct sets but collide on
+`S001` until the metadata CSV supplies explicit `set_id`s.
+
+**Metadata CSV** (optional, relative to `dataset_root`). Joined on a required `key`
+column holding keys in the selected key rule's form. Other allowed columns are only
+existing inventory fields: `set_id`, `patient_id`, `specimen_id`,
+`input__<modality>_aligned`, `input__<modality>_slide_id`, `target_aligned`,
+`target_slide_id`. Duplicate keys, keys matching no discovered asset key, unknown
+columns, mask columns, modalities not in the request, and alignment values other than
+`true`/`false`/blank are errors. Patient, specimen and slide IDs are never invented.
+
+**Alignment.** The reference input is written `true` unless metadata says otherwise, and
+metadata declaring it `false` is an error; `true` means identity to the declared reference
+coordinate system only, not correspondence certification. Every other input and the
+target keep an explicitly supplied `true`/`false`, otherwise the field stays blank
+(unknown). Alignment is never inferred from names, keys, directories, or dimensions.
+
+**Masks.** `--input-mask NAME=SPEC` and `--target-mask SPEC` use the same key rule and
+fill `input__<modality>_mask` / `target_mask`; a set without a mask leaves it blank.
+Duplicate mask keys and mask keys matching no set are errors. Masks are never generated.
+
+**Rendering and publication.** Columns are `set_id`, each input's path and alignment in
+request order, `target_path`, `target_aligned`, then only the optional columns that
+carry a value, in the order per-input mask and slide ID, `target_mask`,
+`target_slide_id`, `patient_id`, `specimen_id`. Rows are sorted by `set_id` and all
+paths are `dataset_root`-relative POSIX paths, so the same request yields the same
+bytes. `preview` writes nothing. `write` refuses an invalid preview, reruns discovery
+and requires the same membership and rows, writes a sibling temporary file, loads it
+with the canonical slide-set loader, and only publishes it (by hard link) when it
+resolves to the previewed sets. The default output is `inputs/slide_sets.csv`; another
+`--output` must stay inside `dataset_root` (relative paths are relative to it). An
+existing destination is never replaced and there is no overwrite option; only the output's
+parent directory may be created.
+
+Name matching establishes no biological independence, patient or specimen identity,
+spatial correspondence, or registration validity beyond metadata you supply.
+
 ## Prepared layout
 
 ```text

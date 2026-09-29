@@ -34,6 +34,7 @@ COMMANDS = (
     "export-model",
     "queue",
     "config",
+    "inventory",
     "status",
 )
 
