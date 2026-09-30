@@ -160,10 +160,12 @@ or observation-validity evidence. Candidate estimation does not certify correspo
 
 ### Persisted alignment geometry and results
 
-`virtual_staining.alignment/1` identifies the JSON objects emitted by
-`AlignmentTransform.to_dict()` and `AlignmentResult.metadata`. `kind` distinguishes
-`transform` from `result`; their `from_dict()` methods accept only this representation.
-Superseded 2×3 geometry and unknown fields/families are rejected.
+Transforms retain `virtual_staining.alignment/1` (`kind: transform`). Results emitted
+by `AlignmentResult.metadata` and their attempt records use
+`virtual_staining.alignment.result/2`, with `kind: result` and `kind: attempt`
+respectively. Their `from_dict()` methods accept only these canonical representations;
+results using the superseded `virtual_staining.alignment/1` schema are rejected.
+Superseded 2×3 geometry and unknown fields/families are also rejected.
 
 A transform contains `direction: moving_level0_to_reference_level0`, a finite float64
 homogeneous 3×3 `matrix`, `family` (`identity`, `similarity`, or `affine`), and explicit
@@ -176,12 +178,29 @@ coefficients retain double precision through JSON round trips. No physical scale
 inferred from dimensions; reflection and deformation are unsupported.
 
 A result contains `backend_status`, `method`, nullable `candidate`, backend
-`diagnostics`, nullable `qc`, `reason`, and the `request` declarations. The request
+`diagnostics`, nullable `qc`, a required `attempt`, a nullable success/provenance
+`reason`, and the `request` declarations. The request
 keeps relationship, transform permissions, existing alignment, purpose, diagnostic
 region and correspondence evidence separate. QC records `status` (`accepted`,
 `rejected`, `insufficient_evidence`), nullable metrics, missing evidence and reasons.
-Backend failure is separate and has no QC decision. Reader handles and image/evidence
-arrays are not serialized.
+Backend failure has no candidate or QC decision and requires a typed
+`attempt.failure`: validated `category`, optional stable `subcode`, and a nonempty
+human-readable `message`. Success has no failure. QC rejection remains independent
+of backend outcome. A `same_coordinate_frame` declaration requires equal native
+shape and compatible known per-axis MPP, including when loading a supplied result.
+
+`RegistrationAttempt` records stage, outcome, optional run/case/attempt IDs, UTC Unix
+start/end seconds, monotonic duration seconds, and `RegistrationRuntime` evidence.
+Runtime fields cover backend/version, model/checkpoint identity and hash, supplied
+input metadata/fingerprint references, requested/resolved moving/reference grids,
+support mode, device, precision, determinism, seed, scientific parameter hash, and
+optional resource measurements (CPU/GPU/temp-disk peak bytes and reader count).
+Resolution reuses the explicit grid-to-level-0 maps rather than inferring physical
+spacing. An optional attempt QC snapshot must agree with result QC when supplied.
+Fallback decisions and next-attempt IDs record caller decisions without executing
+retries. Diagnostic artifacts are references only: at most 16, each at most 2048
+characters. Unavailable runtime evidence is null; reader handles and image/evidence
+arrays are never serialized.
 
 ## Patch manifest v4
 

@@ -167,7 +167,10 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
 
 @pytest.mark.parametrize("tiled", [False, True])
 @pytest.mark.parametrize("unit", ["set", "patch"])
-def test_build_outputs_are_stable_with_an_excluded_set(tmp_path, tiled, unit):
+def test_build_outputs_are_stable_with_an_excluded_set(tmp_path, tiled, unit, monkeypatch):
+    # Hold observed attempt timing fixed while comparing every persisted output.
+    monkeypatch.setattr("virtual_staining.data.alignment.registration.time", lambda: 100.0)
+    monkeypatch.setattr("virtual_staining.data.alignment.registration.perf_counter", lambda: 10.0)
     config = replace(
         _config(tmp_path),
         io=IOConfig(tiled=tiled, backend="pillow"),

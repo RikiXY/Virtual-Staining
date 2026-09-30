@@ -23,7 +23,9 @@ from virtual_staining.data.alignment import (
     AlignmentResult,
     AlignmentTransform,
     ImageGeometry,
+    RegistrationAttempt,
     RegistrationRequest,
+    RegistrationRuntime,
     identity_alignment,
 )
 from virtual_staining.data.slide_set_processor import SlideSetProcessor
@@ -209,6 +211,11 @@ def test_affine_extraction_handles_downsampled_masks_in_both_io_paths(tmp_path, 
                 ImageGeometry("LF", (8, 16)),
                 "affine",
                 np.array([[1.0, 0.0, -2.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+            ),
+            attempt=RegistrationAttempt(
+                stage="registration",
+                outcome="succeeded",
+                runtime=RegistrationRuntime(backend="test"),
             ),
         )
         image, mask = processor.extract_asset_patch(state, x=0, y=0, width=8, height=8)
@@ -437,3 +444,28 @@ def test_alignment_retains_known_mpp_after_reader_cleanup(tmp_path, monkeypatch,
             assert state.alignment.candidate.moving.mpp == (0.25, 0.5)
     finally:
         processor.close()
+
+
+def test_preparation_retains_typed_backend_failure(tmp_path, monkeypatch):
+    from virtual_staining.data.alignment import RegistrationFailure
+
+    config = replace(_config(tmp_path), alignment=AlignmentConfig(on_failure="skip_set"))
+    failure = RegistrationFailure("optimizer_failed", "No transform returned")
+    attempt = RegistrationAttempt(
+        stage="optimizer",
+        outcome="failed",
+        runtime=RegistrationRuntime(backend="test"),
+        failure=failure,
+    )
+    failed = AlignmentResult(
+        "failed",
+        "affine_sift",
+        RegistrationRequest("same_section_restained", "affine"),
+        None,
+        attempt=attempt,
+    )
+    monkeypatch.setattr(processor_module, "resolve_alignment", Mock(return_value=failed))
+    result = SlideSetProcessor(config, _slide_set(tmp_path)).process()
+    assert result.error == failure.message
+    saved = AlignmentResult.from_dict(json.loads(result.metadata["AF__alignment_metadata"]))
+    assert saved.attempt.failure == failure and saved.qc is None and saved.candidate is None

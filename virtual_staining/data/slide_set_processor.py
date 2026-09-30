@@ -215,22 +215,7 @@ class SlideSetProcessor:
             if policy.mode == "never" and declared is False:
                 raise AlignmentError("alignment.mode=never contradicts already_aligned=false")
             if not estimate and policy.validate_declared:
-                if reference.geometry.shape != moving.geometry.shape:
-                    raise AlignmentError(
-                        f"identity alignment requires equal geometry for {moving.geometry.name}"
-                    )
-                for axis, left, right in zip(
-                    ("x", "y"), reference.geometry.mpp, moving.geometry.mpp, strict=True
-                ):
-                    if (
-                        left is not None
-                        and right is not None
-                        and not np.isclose(left, right, rtol=0.01)
-                    ):
-                        raise AlignmentError(
-                            f"identity alignment has incompatible mpp_{axis} "
-                            f"for {moving.geometry.name}"
-                        )
+                reference.geometry.validate_shared_frame(moving.geometry)
             # Inventory alignment flags make no biological declaration or QC claim.
             request = RegistrationRequest(
                 "unknown",
@@ -244,7 +229,9 @@ class SlideSetProcessor:
             )
             result = resolve_alignment(reference, moving, request)
             if result.backend_status == "failed":
-                raise AlignmentError(result.reason)
+                state.alignment = result
+                assert result.attempt.failure is not None
+                raise AlignmentError(result.attempt.failure.message)
             state.alignment = replace(
                 result,
                 reason=(None if estimate else "declared_aligned" if declared else "policy_never"),

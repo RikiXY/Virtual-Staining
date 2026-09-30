@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
-from typing import Any, Literal
+from dataclasses import asdict, replace
+from typing import Any, Literal, get_args
 from unittest.mock import Mock
 
 import cv2
@@ -14,10 +14,15 @@ from virtual_staining.data.alignment import (
     AlignmentImage,
     AlignmentResult,
     AlignmentTransform,
+    FailureCategory,
     GridGeometry,
     ImageGeometry,
     QCPolicy,
+    RegistrationAttempt,
+    RegistrationFailure,
     RegistrationRequest,
+    RegistrationResources,
+    RegistrationRuntime,
     SpatialEvidence,
     evaluate_alignment_qc,
     identity_alignment,
@@ -226,7 +231,11 @@ def test_qc_states_identity_missing_and_backend_separation(frames, monkeypatch):
         image(frames[1]), image(frames[0]), replace(request, family="affine")
     )
     assert failure.backend_status == "failed" and failure.qc is None and failure.candidate is None
-    assert AlignmentResult.from_dict(failure.metadata).reason == "backend down"
+    restored_failure = AlignmentResult.from_dict(failure.metadata).attempt.failure
+    assert restored_failure is not None
+    assert (
+        restored_failure.category == "internal_error" and restored_failure.message == "backend down"
+    )
 
 
 def test_qc_geometry_permissions_overlap_identity_comparison(frames):
@@ -472,6 +481,7 @@ def test_family_must_match_geometry(frames, matrix, family):
 
 
 def test_identity_does_not_assume_tissue_or_validity(frames):
+    frames = (frames[0], replace(frames[1], mpp=frames[0].mpp))
     request = RegistrationRequest("same_coordinate_frame", "identity")
     qc = evaluate_alignment_qc(
         transform(frames, family="identity"),
@@ -616,3 +626,382 @@ def test_sift_similarity_fits_native_coordinates_on_anisotropic_grids(frames, mo
     np.testing.assert_allclose(result.candidate.matrix, native, atol=1e-12)
     np.testing.assert_array_equal(fit.call_args.args[0][0], [5.5, 11.0])
     np.testing.assert_array_equal(fit.call_args.args[1][0], [10.5, 18.0])
+
+
+@pytest.mark.parametrize(
+    "shape,mpp,axis",
+    [
+        ((120, 100), (0.25, 0.5), "geometry"),
+        ((100, 100), (0.5, 0.5), "mpp_x"),
+        ((100, 100), (0.25, 1.0), "mpp_y"),
+        ((100, 100), (None, 1.0), "mpp_y"),
+    ],
+)
+def test_shared_frame_rejects_incompatible_geometry_on_all_routes(shape, mpp, axis):
+    reference = ImageGeometry("reference", (100, 100), (0.25, 0.5))
+    moving = ImageGeometry("moving", shape, mpp)
+    request = RegistrationRequest("same_coordinate_frame", "identity")
+    candidate = AlignmentTransform(moving, reference, "identity", np.eye(3))
+    with pytest.raises(AlignmentError, match=axis):
+        identity_alignment(reference, moving, request)
+    with pytest.raises(AlignmentError, match=axis):
+        resolve_alignment(image(reference), image(moving), request)
+    with pytest.raises(AlignmentError, match=axis):
+        evaluate_alignment_qc(candidate, request, QCPolicy({"overlap": (0.9, None)}))
+    valid = identity_alignment(reference, reference, request)
+    with pytest.raises(AlignmentError, match=axis):
+        replace(valid, candidate=candidate)
+    metadata = valid.metadata
+    metadata["candidate"] = candidate.to_dict()
+    with pytest.raises(AlignmentError, match=axis):
+        AlignmentResult.from_dict(metadata)
+
+
+@pytest.mark.parametrize(
+    "reference_mpp,moving_mpp",
+    [
+        ((0.25, 0.5), (0.25, 0.5)),
+        ((0.25, 0.5), (0.252, 0.504)),
+        ((0.25, 0.5), (None, 0.5)),
+        ((None, 0.5), (0.25, 0.5)),
+        ((0.25, None), (0.25, 0.5)),
+        ((0.25, 0.5), (0.25, None)),
+        ((None, None), (0.25, 0.5)),
+        ((0.25, 0.5), (None, None)),
+        ((None, None), (None, None)),
+    ],
+)
+def test_shared_frame_accepts_compatible_and_unknown_spacing(reference_mpp, moving_mpp):
+    reference = ImageGeometry("reference", (100, 100), reference_mpp)
+    moving = ImageGeometry("moving", (100, 100), moving_mpp)
+    request = RegistrationRequest("same_coordinate_frame", "identity")
+    result = identity_alignment(reference, moving, request)
+    assert result.candidate is not None and result.qc is None
+    manual = AlignmentTransform(moving, reference, "identity", np.eye(3))
+    for candidate in (result.candidate, manual):
+        qc = evaluate_alignment_qc(candidate, request, QCPolicy({"overlap": (0.9, None)}))
+        assert qc.status == "accepted"
+        assert (
+            qc.metrics["support_iou"] is None and qc.metrics["observation_valid_fraction"] is None
+        )
+        assert candidate.moving.mpp == moving_mpp and candidate.reference.mpp == reference_mpp
+
+
+def test_identity_for_other_relationship_does_not_require_equal_native_frames():
+    reference = ImageGeometry("reference", (100, 100), (0.25, 0.25))
+    moving = ImageGeometry("moving", (120, 100), (0.5, 0.5))
+    request = RegistrationRequest("same_section_restained", "identity")
+    result = identity_alignment(reference, moving, request)
+    assert result.candidate is not None
+    assert (
+        evaluate_alignment_qc(result.candidate, request, QCPolicy({"overlap": (0.9, None)})).status
+        == "accepted"
+    )
+
+
+@pytest.mark.parametrize("category", get_args(FailureCategory))
+def test_all_failure_categories_round_trip(category):
+    failure = RegistrationFailure(category, "Observed failure", subcode="stable_study_subcode")
+    assert RegistrationFailure.from_dict(json.loads(json.dumps(asdict(failure)))) == failure
+    assert RegistrationFailure(category, "Observed failure").subcode is None
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"category": "unknown", "message": "failure", "subcode": None},
+        {"category": "optimizer_failed", "message": "", "subcode": None},
+        {"category": "optimizer_failed", "message": None, "subcode": None},
+        {"category": "optimizer_failed", "message": "failure", "subcode": ""},
+        {"category": "optimizer_failed", "message": "failure", "subcode": 1},
+        {"category": "optimizer_failed", "message": "failure"},
+        {"category": "optimizer_failed", "message": "failure", "subcode": None, "extra": 1},
+        [],
+        None,
+    ],
+)
+def test_malformed_failures_rejected(data):
+    with pytest.raises(AlignmentError):
+        RegistrationFailure.from_dict(data)
+
+
+def test_attempt_and_result_round_trip_with_supplied_runtime_evidence(frames):
+    grid = GridGeometry.resized_crop((5, 6), origin=(3, 7), scale=(2, 3))
+    runtime = RegistrationRuntime(
+        backend="external_backend",
+        backend_version="1.2",
+        model_id="model-a",
+        checkpoint_id="checkpoint-a",
+        checkpoint_hash="sha256:checkpoint",
+        input_metadata_ref="metadata.json",
+        input_fingerprint_ref="sha256:inputs",
+        requested_moving_grid=grid,
+        requested_reference_grid=grid,
+        resolved_moving_grid=grid,
+        resolved_reference_grid=grid,
+        support_mode="supplied",
+        device="cpu",
+        precision="float64",
+        determinism_mode="seeded",
+        seed=17,
+        scientific_parameter_hash="sha256:parameters",
+        resources=RegistrationResources(
+            peak_cpu_memory_bytes=1024,
+            peak_gpu_memory_bytes=0,
+            peak_temp_disk_bytes=2048,
+            reader_count=2,
+        ),
+    )
+    attempt = RegistrationAttempt(
+        stage="optimizer",
+        runtime=runtime,
+        outcome="failed",
+        run_id="run-a",
+        case_id="case-a",
+        attempt_id="attempt-a",
+        started_at=100.0,
+        ended_at=102.0,
+        duration_seconds=2.0,
+        failure=RegistrationFailure("resource_exhausted", "Allocation failed", "cpu_memory"),
+        fallback_decision="use_alternative_backend",
+        next_attempt_id="attempt-b",
+        diagnostic_artifacts=("diagnostics/attempt-a.txt",),
+    )
+    encoded = json.loads(json.dumps(attempt.to_dict(), allow_nan=False))
+    restored = RegistrationAttempt.from_dict(encoded)
+    assert restored.to_dict() == attempt.to_dict()
+    result = AlignmentResult(
+        "failed",
+        "external",
+        RegistrationRequest("same_section_restained", "affine"),
+        None,
+        attempt=attempt,
+    )
+    assert (
+        AlignmentResult.from_dict(json.loads(json.dumps(result.metadata))).metadata
+        == result.metadata
+    )
+    identity = identity_alignment(
+        frames[1], frames[0], RegistrationRequest("same_section_restained", "identity")
+    )
+    assert identity.candidate is not None
+    qc = evaluate_alignment_qc(
+        identity.candidate, identity.request, QCPolicy({"overlap": (0.9, None)})
+    )
+    accepted = replace(identity, qc=qc, attempt=replace(identity.attempt, qc_status=qc.status))
+    assert AlignmentResult.from_dict(json.loads(json.dumps(accepted.metadata))).qc == qc
+    assert identity.metadata["format"] == "virtual_staining.alignment.result/2"
+    assert identity.metadata["candidate"]["format"] == "virtual_staining.alignment/1"
+    # No identity, model, precision, determinism or resource evidence is fabricated.
+    assert identity.attempt.attempt_id is None and identity.attempt.run_id is None
+    assert identity.attempt.runtime.model_id is None and identity.attempt.runtime.resources is None
+    assert identity.attempt.runtime.precision is None and identity.attempt.runtime.seed is None
+    assert identity.attempt.started_at is not None and identity.attempt.ended_at is not None
+    assert identity.attempt.duration_seconds is not None and identity.attempt.duration_seconds >= 0
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"failure": "raw exception"},
+        {"runtime": {}},
+        {"stage": ""},
+        {"outcome": "unknown"},
+        {"outcome": []},
+        {"duration_seconds": -1},
+        {"duration_seconds": float("nan")},
+        {"started_at": "today"},
+        {"qc_status": "unknown"},
+        {"qc_status": {}},
+        {"diagnostic_artifacts": "not-an-array"},
+        {"diagnostic_artifacts": ["x"] * 17},
+        {"diagnostic_artifacts": ["x" * 2049]},
+        {"diagnostic_artifacts": [None]},
+        {"unknown_field": None},
+    ],
+)
+def test_malformed_attempt_structures_rejected(change):
+    attempt = RegistrationAttempt(
+        stage="registration", runtime=RegistrationRuntime(backend="test"), outcome="succeeded"
+    )
+    with pytest.raises(AlignmentError):
+        RegistrationAttempt.from_dict(attempt.to_dict() | change)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"backend": None},
+        {"backend_version": 1},
+        {"seed": True},
+        {"resources": {"peak_cpu_memory_bytes": -1}},
+        {"precision": []},
+        {"resolved_moving_grid": {"shape": [2, 3], "grid_to_level0": [[1, 0], [0, 1]]}},
+    ],
+)
+def test_malformed_runtime_structures_rejected(change):
+    with pytest.raises(AlignmentError):
+        RegistrationRuntime.from_dict(RegistrationRuntime(backend="test").to_dict() | change)
+
+
+def test_result_attempt_failure_invariants_and_version_cutover(frames):
+    request = RegistrationRequest("same_section_restained", "identity")
+    result = identity_alignment(frames[1], frames[0], request)
+    failure = RegistrationFailure("internal_error", "Unexpected error")
+    with pytest.raises(AlignmentError, match="typed failure"):
+        replace(result.attempt, outcome="failed")
+    with pytest.raises(AlignmentError, match="success has none"):
+        replace(result.attempt, failure=failure)
+    failed_attempt = replace(result.attempt, outcome="failed", failure=failure)
+    with pytest.raises(AlignmentError, match="no QC"):
+        replace(failed_attempt, qc_status="rejected")
+    with pytest.raises(AlignmentError, match="disagree"):
+        replace(result, attempt=failed_attempt)
+    with pytest.raises(AlignmentError, match="candidate"):
+        replace(result, backend_status="failed", attempt=failed_attempt)
+    assert result.candidate is not None
+    rejected = evaluate_alignment_qc(result.candidate, request, QCPolicy({"overlap": (None, 0.5)}))
+    with pytest.raises(AlignmentError, match="not QC/reason"):
+        replace(
+            result, backend_status="failed", candidate=None, qc=rejected, attempt=failed_attempt
+        )
+    with pytest.raises(AlignmentError, match="not QC/reason"):
+        replace(
+            result,
+            backend_status="failed",
+            candidate=None,
+            reason="raw text",
+            attempt=failed_attempt,
+        )
+    with pytest.raises(AlignmentError, match="non-QC"):
+        replace(
+            result,
+            backend_status="failed",
+            candidate=None,
+            attempt=replace(
+                failed_attempt, failure=RegistrationFailure("qc_rejected", "Not backend failure")
+            ),
+        )
+    with pytest.raises(AlignmentError, match="QC disagree"):
+        replace(result, qc=rejected, attempt=replace(result.attempt, qc_status="accepted"))
+    qc_result = replace(result, qc=rejected)
+    assert qc_result.backend_status == "succeeded" and qc_result.attempt.failure is None
+    for old in (
+        result.metadata | {"format": "virtual_staining.alignment/1"},
+        {k: v for k, v in result.metadata.items() if k != "attempt"},
+    ):
+        with pytest.raises(AlignmentError):
+            AlignmentResult.from_dict(old)
+
+
+@pytest.mark.parametrize(
+    "operation,error,category,stage",
+    [
+        (
+            "extractor",
+            cv2.error("extractor failed"),
+            "feature_extraction_failed",
+            "feature_extraction",
+        ),
+        ("no_features", None, "insufficient_content", "feature_extraction"),
+        ("matcher", cv2.error("matcher failed"), "matching_failed", "matching"),
+        ("no_matches", None, "matching_failed", "matching"),
+        ("optimizer", cv2.error("optimizer failed"), "optimizer_failed", "optimizer"),
+        ("no_transform", None, "optimizer_failed", "optimizer"),
+        ("singular_transform", None, "geometry_invalid", "geometry"),
+        ("malformed_transform", None, "geometry_invalid", "geometry"),
+        (
+            "unexpected",
+            RuntimeError("qc_rejected or unsupported_device text is not a category"),
+            "internal_error",
+            "registration",
+        ),
+    ],
+)
+def test_owned_backend_failures_are_typed(frames, monkeypatch, operation, error, category, stage):
+    import virtual_staining.data.alignment.registration as registration
+
+    keys = [cv2.KeyPoint(float(i), float(i), 1.0) for i in range(4)]
+    extractor = Mock(detectAndCompute=Mock(return_value=(keys, np.ones((4, 128), np.float32))))
+    matcher = Mock(
+        knnMatch=Mock(
+            return_value=[
+                [
+                    cv2.DMatch(_queryIdx=i, _trainIdx=i, _distance=1),
+                    cv2.DMatch(_queryIdx=i, _trainIdx=i, _distance=3),
+                ]
+                for i in range(4)
+            ]
+        )
+    )
+    optimizer = Mock(return_value=(np.eye(2, 3), np.ones((4, 1), np.uint8)))
+    monkeypatch.setattr(registration.cv2, "SIFT_create", Mock(return_value=extractor))
+    monkeypatch.setattr(registration.cv2, "BFMatcher", Mock(return_value=matcher))
+    monkeypatch.setattr(registration.cv2, "estimateAffine2D", optimizer)
+    if operation == "extractor":
+        extractor.detectAndCompute.side_effect = error
+    elif operation == "no_features":
+        extractor.detectAndCompute.return_value = ([], None)
+    elif operation == "matcher":
+        matcher.knnMatch.side_effect = error
+    elif operation == "no_matches":
+        matcher.knnMatch.return_value = []
+    elif operation == "optimizer":
+        optimizer.side_effect = error
+    elif operation == "no_transform":
+        optimizer.return_value = (None, None)
+    elif operation == "singular_transform":
+        optimizer.return_value = (np.zeros((2, 3)), None)
+    elif operation == "malformed_transform":
+        optimizer.return_value = (np.eye(2), None)
+    else:
+        optimizer.side_effect = error
+    result = resolve_alignment(
+        image(frames[1]), image(frames[0]), RegistrationRequest("same_section_restained", "affine")
+    )
+    assert result.backend_status == "failed" and result.candidate is None and result.qc is None
+    assert result.reason is None and result.attempt.stage == stage
+    assert result.attempt.failure is not None
+    assert result.attempt.failure.category == category
+    assert result.attempt.failure.message
+    assert result.attempt.runtime.backend == "opencv_sift"
+    assert result.attempt.runtime.backend_version == cv2.__version__
+    assert result.attempt.runtime.resources is None
+    assert (
+        AlignmentResult.from_dict(json.loads(json.dumps(result.metadata))).attempt.failure
+        == result.attempt.failure
+    )
+
+
+@pytest.mark.parametrize(
+    "error,category,subcode",
+    [
+        (MemoryError(), "resource_exhausted", "cpu_memory"),
+        (ImportError("Dependency unavailable"), "backend_unavailable", "missing_dependency"),
+        (KeyboardInterrupt(), "interrupted", None),
+        (OSError("missing_checkpoint"), "internal_error", None),
+        (ValueError("unexpected input to an internal helper"), "internal_error", None),
+    ],
+)
+def test_resource_and_unexpected_failures_do_not_parse_exception_messages(
+    frames, monkeypatch, error, category, subcode
+):
+    monkeypatch.setattr(
+        "virtual_staining.data.alignment.registration._estimate_affine", Mock(side_effect=error)
+    )
+    result = resolve_alignment(
+        image(frames[1]), image(frames[0]), RegistrationRequest("same_section_restained", "affine")
+    )
+    assert result.attempt.failure is not None
+    assert result.attempt.failure.category == category and result.attempt.failure.subcode == subcode
+    assert result.candidate is None and result.qc is None
+
+
+def test_unavailable_sift_is_a_backend_failure(frames, monkeypatch):
+    monkeypatch.setattr("virtual_staining.data.alignment.registration.cv2.SIFT_create", None)
+    result = resolve_alignment(
+        image(frames[1]), image(frames[0]), RegistrationRequest("same_section_restained", "affine")
+    )
+    assert result.attempt.failure is not None
+    assert result.attempt.failure.category == "backend_unavailable"
+    assert result.attempt.failure.subcode == "missing_dependency"

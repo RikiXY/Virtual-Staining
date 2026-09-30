@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
-from typing import Any, Literal
+from dataclasses import asdict, dataclass, field, fields
+from typing import Any, Literal, get_args
 
 import numpy as np
 
 Family = Literal["identity", "similarity", "affine"]
 _FAMILIES = {"identity", "similarity", "affine"}
 _FORMAT = "virtual_staining.alignment/1"
+_RESULT_FORMAT = "virtual_staining.alignment.result/2"
 
 
 class AlignmentError(ValueError):
@@ -59,6 +60,20 @@ class ImageGeometry:
     def from_dict(cls, data: dict[str, Any]) -> ImageGeometry:
         _fields(data, "name shape mpp")
         return cls(data["name"], tuple(data["shape"]), tuple(data["mpp"]))
+
+    def validate_shared_frame(self, moving: ImageGeometry) -> None:
+        """Require equal native shape and compatible known per-axis MPP.
+
+        Unknown spacing is unavailable evidence, not an inferred physical scale.
+        The reference-first comparison preserves the established alignment tolerance.
+        """
+        if self.shape != moving.shape:
+            raise AlignmentError(f"identity alignment requires equal geometry for {moving.name}")
+        for axis, left, right in zip(("x", "y"), self.mpp, moving.mpp, strict=True):
+            if left is not None and right is not None and not np.isclose(left, right, rtol=0.01):
+                raise AlignmentError(
+                    f"identity alignment has incompatible mpp_{axis} for {moving.name}"
+                )
 
 
 @dataclass(frozen=True, eq=False)
@@ -357,6 +372,227 @@ class QCDecision:
     reasons: tuple[str, ...]
 
 
+FailureCategory = Literal[
+    "image_invalid",
+    "metadata_invalid",
+    "geometry_invalid",
+    "insufficient_content",
+    "insufficient_overlap",
+    "support_generation_failed",
+    "feature_extraction_failed",
+    "matching_failed",
+    "optimizer_failed",
+    "qc_rejected",
+    "affine_implausible",
+    "deformation_implausible",
+    "deformation_folding",
+    "resource_exhausted",
+    "backend_unavailable",
+    "interrupted",
+    "output_corrupt",
+    "internal_error",
+]
+
+
+def _optional_text(name: str, value: str | None) -> None:
+    if value is not None and (not isinstance(value, str) or not value.strip()):
+        raise AlignmentError(f"{name} must be a nonempty string or null")
+
+
+def _nonnegative_number(name: str, value: float | None) -> None:
+    if value is not None and (
+        type(value) not in (int, float) or not np.isfinite(value) or value < 0
+    ):
+        raise AlignmentError(f"{name} must be a finite nonnegative number or null")
+
+
+@dataclass(frozen=True)
+class RegistrationFailure:
+    """Stable failure identity; subcodes are caller-defined nonempty strings."""
+
+    category: FailureCategory
+    message: str
+    subcode: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.category not in get_args(FailureCategory):
+            raise AlignmentError("Unsupported registration failure category")
+        if not isinstance(self.message, str) or not self.message.strip():
+            raise AlignmentError("Failure message must be a nonempty string")
+        _optional_text("Failure subcode", self.subcode)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RegistrationFailure:
+        _fields(data, "category message subcode")
+        return cls(**data)
+
+
+@dataclass(frozen=True, kw_only=True)
+class RegistrationResources:
+    """Optional observed resource measurements; unavailable measurements stay null."""
+
+    peak_cpu_memory_bytes: int | None = None
+    peak_gpu_memory_bytes: int | None = None
+    peak_temp_disk_bytes: int | None = None
+    reader_count: int | None = None
+
+    def __post_init__(self) -> None:
+        for item in fields(self):
+            value = getattr(self, item.name)
+            if value is not None and (type(value) is not int or value < 0):
+                raise AlignmentError(f"{item.name} must be a nonnegative integer or null")
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RegistrationResources:
+        _fields(data, " ".join(item.name for item in fields(cls)))
+        return cls(**data)
+
+
+_RUNTIME_GRIDS = (
+    "requested_moving_grid",
+    "requested_reference_grid",
+    "resolved_moving_grid",
+    "resolved_reference_grid",
+)
+
+
+@dataclass(frozen=True, kw_only=True)
+class RegistrationRuntime:
+    """Runtime evidence, not runtime configuration or an instrumentation manager.
+
+    Requested/resolved resolution uses the existing grids: per-axis native pixels
+    per grid pixel, with explicit centre offsets. Physical MPP is never inferred.
+    """
+
+    backend: str
+    backend_version: str | None = None
+    model_id: str | None = None
+    checkpoint_id: str | None = None
+    checkpoint_hash: str | None = None
+    input_metadata_ref: str | None = None
+    input_fingerprint_ref: str | None = None
+    requested_moving_grid: GridGeometry | None = None
+    requested_reference_grid: GridGeometry | None = None
+    resolved_moving_grid: GridGeometry | None = None
+    resolved_reference_grid: GridGeometry | None = None
+    support_mode: str | None = None
+    device: str | None = None
+    precision: str | None = None
+    determinism_mode: str | None = None
+    seed: int | None = None
+    scientific_parameter_hash: str | None = None
+    resources: RegistrationResources | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.backend, str) or not self.backend.strip():
+            raise AlignmentError("Runtime backend must be a nonempty identifier")
+        for item in fields(self):
+            value = getattr(self, item.name)
+            if item.name in _RUNTIME_GRIDS:
+                if value is not None and not isinstance(value, GridGeometry):
+                    raise AlignmentError("Runtime resolution must use explicit GridGeometry")
+            elif item.name not in {"seed", "resources"}:
+                _optional_text(item.name, value)
+        if self.seed is not None and (type(self.seed) is not int or self.seed < 0):
+            raise AlignmentError("Seed must be a nonnegative integer or null")
+        if self.resources is not None and not isinstance(self.resources, RegistrationResources):
+            raise AlignmentError("Invalid resource measurements")
+
+    def to_dict(self) -> dict[str, Any]:
+        data = {item.name: getattr(self, item.name) for item in fields(self)}
+        for name in _RUNTIME_GRIDS:
+            data[name] = data[name].to_dict() if data[name] is not None else None
+        data["resources"] = asdict(self.resources) if self.resources is not None else None
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RegistrationRuntime:
+        _fields(data, " ".join(item.name for item in fields(cls)))
+        values = dict(data)
+        for name in _RUNTIME_GRIDS:
+            if values[name] is not None:
+                values[name] = GridGeometry.from_dict(values[name])
+        if values["resources"] is not None:
+            values["resources"] = RegistrationResources.from_dict(values["resources"])
+        return cls(**values)
+
+
+@dataclass(frozen=True, kw_only=True)
+class RegistrationAttempt:
+    """One attempt's evidence. Times are UTC Unix seconds; duration is monotonic seconds.
+
+    Optional QC status is a recorded snapshot, not a decision made by the backend.
+    At most 16 diagnostic references of at most 2048 characters are retained; no
+    artifact contents, runtime handles, or retry execution belong in this record.
+    """
+
+    stage: str
+    runtime: RegistrationRuntime
+    outcome: Literal["succeeded", "failed"]
+    run_id: str | None = None
+    case_id: str | None = None
+    attempt_id: str | None = None
+    started_at: float | None = None
+    ended_at: float | None = None
+    duration_seconds: float | None = None
+    qc_status: Literal["accepted", "rejected", "insufficient_evidence"] | None = None
+    failure: RegistrationFailure | None = None
+    fallback_decision: str | None = None
+    next_attempt_id: str | None = None
+    diagnostic_artifacts: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.stage, str) or not self.stage.strip():
+            raise AlignmentError("Attempt stage must be a nonempty identifier")
+        if not isinstance(self.runtime, RegistrationRuntime):
+            raise AlignmentError("Attempt requires typed runtime evidence")
+        if self.outcome not in ("succeeded", "failed"):
+            raise AlignmentError("Unsupported attempt outcome")
+        if self.failure is not None and not isinstance(self.failure, RegistrationFailure):
+            raise AlignmentError("Attempt requires a typed failure")
+        if (self.outcome == "failed") != (self.failure is not None):
+            raise AlignmentError("Failed attempts require a typed failure; success has none")
+        if self.qc_status not in (None, "accepted", "rejected", "insufficient_evidence"):
+            raise AlignmentError("Unsupported attempt QC status")
+        if self.outcome == "failed" and self.qc_status is not None:
+            raise AlignmentError("Backend failure has no QC outcome")
+        for name in ("run_id", "case_id", "attempt_id", "fallback_decision", "next_attempt_id"):
+            _optional_text(name, getattr(self, name))
+        for name in ("started_at", "ended_at", "duration_seconds"):
+            _nonnegative_number(name, getattr(self, name))
+        # Duration uses a monotonic clock; wall-clock adjustments need not match it.
+        if not isinstance(self.diagnostic_artifacts, tuple) or len(self.diagnostic_artifacts) > 16:
+            raise AlignmentError("Diagnostic artifacts require at most 16 references")
+        for reference in self.diagnostic_artifacts:
+            if not isinstance(reference, str) or not reference.strip() or len(reference) > 2048:
+                raise AlignmentError("Diagnostic artifact references must be 1..2048 characters")
+
+    def to_dict(self) -> dict[str, Any]:
+        data = {item.name: getattr(self, item.name) for item in fields(self)}
+        data.update(
+            format=_RESULT_FORMAT,
+            kind="attempt",
+            runtime=self.runtime.to_dict(),
+            failure=asdict(self.failure) if self.failure is not None else None,
+            diagnostic_artifacts=list(self.diagnostic_artifacts),
+        )
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RegistrationAttempt:
+        _fields(data, "format kind " + " ".join(item.name for item in fields(cls)))
+        if (data["format"], data["kind"]) != (_RESULT_FORMAT, "attempt"):
+            raise AlignmentError("Unsupported attempt identity")
+        values = {item.name: data[item.name] for item in fields(cls)}
+        values["runtime"] = RegistrationRuntime.from_dict(values["runtime"])
+        if values["failure"] is not None:
+            values["failure"] = RegistrationFailure.from_dict(values["failure"])
+        if not isinstance(values["diagnostic_artifacts"], list):
+            raise AlignmentError("Diagnostic artifacts must be an array of references")
+        values["diagnostic_artifacts"] = tuple(values["diagnostic_artifacts"])
+        return cls(**values)
+
+
 @dataclass(frozen=True)
 class AlignmentResult:
     """Backend outcome, candidate, independent QC and declarations remain separate."""
@@ -365,6 +601,7 @@ class AlignmentResult:
     method: str
     request: RegistrationRequest
     candidate: AlignmentTransform | None
+    attempt: RegistrationAttempt = field(kw_only=True)
     diagnostics: dict[str, float | int | None] = field(default_factory=dict)
     qc: QCDecision | None = None
     reason: str | None = None
@@ -374,8 +611,23 @@ class AlignmentResult:
             raise AlignmentError("Unsupported backend outcome")
         if (self.backend_status == "succeeded") != (self.candidate is not None):
             raise AlignmentError("Backend outcome and candidate disagree")
-        if self.backend_status == "failed" and (self.qc is not None or not self.reason):
-            raise AlignmentError("Backend failure requires a reason and has no QC decision")
+        if not isinstance(self.attempt, RegistrationAttempt):
+            raise AlignmentError("Result requires a typed registration attempt")
+        if self.attempt.outcome != self.backend_status:
+            raise AlignmentError("Backend outcome and attempt disagree")
+        if self.backend_status == "failed":
+            if self.qc is not None or self.reason is not None:
+                raise AlignmentError(
+                    "Backend failure uses typed failure information, not QC/reason"
+                )
+            if self.attempt.failure is None or self.attempt.failure.category == "qc_rejected":
+                raise AlignmentError("Backend failure requires a non-QC typed failure")
+        if self.attempt.qc_status is not None and (
+            self.qc is None or self.attempt.qc_status != self.qc.status
+        ):
+            raise AlignmentError("Recorded attempt QC outcome and result QC disagree")
+        if self.candidate is not None and self.request.relationship == "same_coordinate_frame":
+            self.candidate.reference.validate_shared_frame(self.candidate.moving)
         if any(v is not None and not np.isfinite(v) for v in self.diagnostics.values()):
             raise AlignmentError("Backend diagnostics must be finite or null")
         if self.qc is not None:
@@ -387,8 +639,9 @@ class AlignmentResult:
     @property
     def metadata(self) -> dict[str, Any]:
         return dict(
-            format=_FORMAT,
+            format=_RESULT_FORMAT,
             kind="result",
+            attempt=self.attempt.to_dict(),
             backend_status=self.backend_status,
             method=self.method,
             request=asdict(self.request),
@@ -400,8 +653,11 @@ class AlignmentResult:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AlignmentResult:
-        _fields(data, "format kind backend_status method request candidate diagnostics qc reason")
-        if (data["format"], data["kind"]) != (_FORMAT, "result"):
+        _fields(
+            data,
+            "format kind backend_status method request candidate diagnostics qc reason attempt",
+        )
+        if (data["format"], data["kind"]) != (_RESULT_FORMAT, "result"):
             raise AlignmentError("Unsupported result identity")
         request = dict(data["request"])
         _fields(
@@ -431,4 +687,5 @@ class AlignmentResult:
             dict(data["diagnostics"]),
             qc,
             data["reason"],
+            attempt=RegistrationAttempt.from_dict(data["attempt"]),
         )

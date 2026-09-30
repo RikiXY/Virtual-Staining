@@ -420,7 +420,9 @@ target modalities, each in any order; model order is authoritative.
 
 `virtual_staining.data.alignment` exposes `ImageGeometry`, `GridGeometry`,
 `AlignmentTransform`, `AlignmentImage`, `SpatialEvidence`, `RegistrationRequest`,
-`AlignmentResult`, `QCPolicy`, and `QCDecision`. `GridGeometry.resized_crop()` binds
+`AlignmentResult`, `RegistrationAttempt`, `RegistrationRuntime`, `RegistrationResources`,
+`RegistrationFailure`, `FailureCategory`, `QCPolicy`, and `QCDecision`.
+`GridGeometry.resized_crop()` binds
 an explicitly specified crop/resize to native pixel centres; `AlignmentTransform.from_estimated()`
 composes both grid maps with the estimated forward transform. `map_points()`,
 `inverse()` and `then()` use explicit moving/reference frames. The
@@ -429,11 +431,26 @@ defines coordinates and serialization.
 
 `resolve_alignment(reference, moving, request)` returns a direct identity or SIFT
 candidate and backend outcome, without QC acceptance. Same-coordinate-frame requests
-permit identity only; same-section modality/restaining requests permit identity,
+permit identity only and require equal native shape and compatible known per-axis
+MPP. `ImageGeometry.validate_shared_frame(moving)` applies the established
+reference-first `np.isclose(..., rtol=0.01)` comparison; unknown spacing is permitted
+without inference. Contradictory shared-frame declarations raise `AlignmentError`
+in identity construction, supplied results, and direct QC. Identity candidates under
+other relationships are not globally restricted to equal shapes.
+Same-section modality/restaining requests permit identity,
 similarity and affine. Serial sections permit spatial association, not dense
 correspondence. Unknown relationships require an explicit bounded diagnostic region;
 non-corresponding assets cannot register. Explicit restrictions may narrow these
 permissions. Existing alignment declarations never establish biological relationships.
+
+Every result has a typed attempt; backend failures carry
+`result.attempt.failure.category`, optional `subcode`, and `message` instead of requiring
+exception-text parsing. SIFT distinguishes insufficient content, extraction, matching,
+optimizer and geometry failures; unexpected handled exceptions use `internal_error`.
+Runtime/attempt records accept caller-supplied identity and evidence without creating
+runs, collecting resources, or scheduling retries. The current backends record known
+execution details and timing; unavailable measurements, hashes and determinism remain
+null. See the persisted contract for the result version and record fields.
 
 `evaluate_alignment_qc(candidate, request, policy, ...)` evaluates supplied independent
 landmarks, tissue-support and observation-validity evidence against caller-supplied

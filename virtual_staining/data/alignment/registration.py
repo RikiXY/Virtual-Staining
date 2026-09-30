@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import replace
+from time import perf_counter, time
 
 import cv2
 import numpy as np
@@ -11,14 +12,28 @@ from virtual_staining.data.alignment.models import (
     AlignmentImage,
     AlignmentResult,
     AlignmentTransform,
+    FailureCategory,
     GridGeometry,
     ImageGeometry,
     QCDecision,
     QCPolicy,
+    RegistrationAttempt,
+    RegistrationFailure,
     RegistrationRequest,
+    RegistrationRuntime,
     SpatialEvidence,
 )
 from virtual_staining.data.alignment.warping import _coordinates, _sample_evidence
+
+
+class _BackendFailure(AlignmentError):
+    def __init__(
+        self, stage: str, category: FailureCategory, message: str, subcode: str | None = None
+    ) -> None:
+        message = message or f"Backend execution failed during {stage}"
+        super().__init__(message)
+        self.stage = stage
+        self.failure = RegistrationFailure(category, message, subcode)
 
 
 def _ratio_test_matches(
@@ -42,18 +57,35 @@ def _estimate_affine(
     moving_grid: GridGeometry,
 ) -> tuple[np.ndarray, dict[str, int | float | None]]:
     """SIFT/RANSAC execution diagnostics are never QC acceptance evidence."""
-    clahe = cv2.createCLAHE(clipLimit=18.0, tileGridSize=(8, 8))
-    sift = cv2.SIFT_create(nfeatures=10000)  # type: ignore[attr-defined]
-    features = []
-    for image in (reference, moving):
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
-        features.append(sift.detectAndCompute(clahe.apply(gray), None))
+    if not callable(getattr(cv2, "SIFT_create", None)):
+        raise _BackendFailure(
+            "feature_extraction",
+            "backend_unavailable",
+            "OpenCV SIFT is unavailable",
+            "missing_dependency",
+        )
+    try:
+        clahe = cv2.createCLAHE(clipLimit=18.0, tileGridSize=(8, 8))
+        sift = cv2.SIFT_create(nfeatures=10000)  # type: ignore[attr-defined]
+        features = []
+        for image in (reference, moving):
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+            features.append(sift.detectAndCompute(clahe.apply(gray), None))
+    except cv2.error as exc:
+        raise _BackendFailure("feature_extraction", "feature_extraction_failed", str(exc)) from exc
     (ref_keys, ref_desc), (mov_keys, mov_desc) = features
     if ref_desc is None or mov_desc is None or min(len(ref_keys), len(mov_keys)) < 4:
-        raise AlignmentError("Not enough features for alignment")
-    matches = _ratio_test_matches(cv2.BFMatcher(cv2.NORM_L2).knnMatch(ref_desc, mov_desc, k=2))
+        raise _BackendFailure(
+            "feature_extraction", "insufficient_content", "Not enough features for alignment"
+        )
+    try:
+        matches = _ratio_test_matches(cv2.BFMatcher(cv2.NORM_L2).knnMatch(ref_desc, mov_desc, k=2))
+    except cv2.error as exc:
+        raise _BackendFailure("matching", "matching_failed", str(exc)) from exc
     if len(matches) < 4:
-        raise AlignmentError("Not enough good descriptor matches for alignment")
+        raise _BackendFailure(
+            "matching", "matching_failed", "Not enough good descriptor matches for alignment"
+        )
     ref_points = np.array([ref_keys[m.queryIdx].pt for m in matches], dtype=np.float64)
     mov_points = np.array([mov_keys[m.trainIdx].pt for m in matches], dtype=np.float64)
     if family == "similarity":
@@ -63,17 +95,22 @@ def _estimate_affine(
         ref_points = ref_points @ ref_map[:2, :2].T + ref_map[:2, 2]
         mov_points = mov_points @ mov_map[:2, :2].T + mov_map[:2, 2]
     estimate = cv2.estimateAffinePartial2D if family == "similarity" else cv2.estimateAffine2D
-    matrix, inliers = estimate(
-        mov_points,
-        ref_points,
-        method=cv2.RANSAC,
-        ransacReprojThreshold=5.0,
-        maxIters=2000,
-        confidence=0.99,
-        refineIters=10,
-    )
+    try:
+        matrix, inliers = estimate(
+            mov_points,
+            ref_points,
+            method=cv2.RANSAC,
+            ransacReprojThreshold=5.0,
+            maxIters=2000,
+            confidence=0.99,
+            refineIters=10,
+        )
+    except cv2.error as exc:
+        raise _BackendFailure("optimizer", "optimizer_failed", str(exc)) from exc
     if matrix is None:
-        raise AlignmentError("Affine estimation failed")
+        raise _BackendFailure("optimizer", "optimizer_failed", "Affine estimation failed")
+    if np.asarray(matrix).shape != (2, 3):
+        raise AlignmentError("Estimator returned malformed affine geometry")
     count = int(inliers.sum()) if inliers is not None else None
     homogeneous = np.vstack((matrix, [0, 0, 1]))
     if family == "similarity":
@@ -95,6 +132,7 @@ def identity_alignment(
     request: RegistrationRequest,
     reason: str | None = None,
 ) -> AlignmentResult:
+    started_at, started = time(), perf_counter()
     request.reference_region(reference)
     if request.family != "identity":
         raise AlignmentError("Identity candidate requires identity permission")
@@ -104,6 +142,14 @@ def identity_alignment(
         request,
         AlignmentTransform(moving, reference, "identity", np.eye(3)),
         reason=reason,
+        attempt=RegistrationAttempt(
+            stage="identity",
+            runtime=RegistrationRuntime(backend="identity"),
+            outcome="succeeded",
+            started_at=started_at,
+            ended_at=time(),
+            duration_seconds=perf_counter() - started,
+        ),
     )
 
 
@@ -121,6 +167,21 @@ def resolve_alignment(
     request.reference_region(reference.geometry)
     if request.family == "identity":
         return identity_alignment(reference.geometry, moving.geometry, request)
+    started_at, started = time(), perf_counter()
+    runtime = RegistrationRuntime(
+        backend="opencv_sift",
+        backend_version=cv2.__version__,
+        device="cpu",
+        support_mode="unused",
+        requested_moving_grid=moving.grid,
+        requested_reference_grid=reference.grid,
+        resolved_moving_grid=moving.grid,
+        resolved_reference_grid=reference.grid,
+    )
+    failure = None
+    stage = "registration"
+    candidate = None
+    diagnostics = {}
     try:
         matrix, diagnostics = _estimate_affine(
             reference.preview,
@@ -135,9 +196,38 @@ def resolve_alignment(
         if request.family == "similarity" and candidate.family == "affine":
             raise AlignmentError("Grid conversion exceeds requested native similarity family")
         candidate = replace(candidate, family=request.family)
-        return AlignmentResult("succeeded", "affine_sift", request, candidate, diagnostics)
-    except (AlignmentError, cv2.error, RuntimeError, OSError) as exc:
-        return AlignmentResult("failed", "affine_sift", request, None, reason=str(exc))
+    except _BackendFailure as exc:
+        failure, stage = exc.failure, exc.stage
+    except AlignmentError as exc:
+        failure = RegistrationFailure("geometry_invalid", str(exc))
+        stage = "geometry"
+    except (Exception, KeyboardInterrupt) as exc:
+        category: FailureCategory = "internal_error"
+        subcode = None
+        if isinstance(exc, MemoryError):
+            category, subcode = "resource_exhausted", "cpu_memory"
+        elif isinstance(exc, ImportError):
+            category, subcode = "backend_unavailable", "missing_dependency"
+        elif isinstance(exc, KeyboardInterrupt):
+            category = "interrupted"
+        failure = RegistrationFailure(category, str(exc) or type(exc).__name__, subcode)
+    outcome = "failed" if failure is not None else "succeeded"
+    return AlignmentResult(
+        outcome,
+        "affine_sift",
+        request,
+        candidate if failure is None else None,
+        diagnostics,
+        attempt=RegistrationAttempt(
+            stage=stage,
+            runtime=runtime,
+            outcome=outcome,
+            failure=failure,
+            started_at=started_at,
+            ended_at=time(),
+            duration_seconds=perf_counter() - started,
+        ),
+    )
 
 
 def _overlap(transform: AlignmentTransform, region: tuple[int, int, int, int]) -> float:
@@ -194,6 +284,8 @@ def evaluate_alignment_qc(
     correspondence declarations remain separate from this geometric QC decision.
     """
     region = request.reference_region(candidate.reference)
+    if request.relationship == "same_coordinate_frame":
+        candidate.reference.validate_shared_frame(candidate.moving)
     singular = np.linalg.svd(candidate.matrix[:2, :2], compute_uv=False)
     metrics: dict[str, float | None] = dict(
         min_scale=float(singular.min()),
