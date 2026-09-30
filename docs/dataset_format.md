@@ -5,37 +5,34 @@
 `inputs/slide_sets.csv` is a wide inventory, symmetric in named inputs and named
 targets. Paths are relative to `dataset_root`. Every input and target name is a machine
 identifier matching `[A-Za-z][A-Za-z0-9_-]*` (`HE` for H&E); names are never sanitized.
+Input and target name sets are disjoint; the reference names an input, and mask
+mappings name their corresponding input or target.
 
 Each input `<name>` has the columns `input__<name>_path`, `input__<name>_aligned`,
 `input__<name>_mask`, `input__<name>_slide_id`, and each target `<name>` the columns
 `target__<name>_path`, `target__<name>_aligned`, `target__<name>_mask`,
 `target__<name>_slide_id`; the `_path` and `_aligned` columns are required, the others
-optional. `set_id`, `patient_id`, and `specimen_id` complete the row. For inputs `LF,AF`
-and targets `HE,PAS`:
+optional. `set_id` is required; `patient_id` and `specimen_id` are optional. For inputs
+`LF,AF` and targets `HE,PAS`:
 
 ```text
 set_id,input__LF_path,input__LF_aligned,input__AF_path,input__AF_aligned,target__HE_path,target__HE_aligned,target__PAS_path,target__PAS_aligned
 S001,raw/lf/S001.svs,true,raw/af/S001.svs,false,raw/he/S001.svs,false,raw/pas/S001.svs,
 ```
 
-One target is the one-item case of the same columns. Every configured target is required
-for every set. The configured reference input must be marked aligned. Missing,
-duplicate, unknown, or superseded columns (the singular `target_path`, `target_aligned`,
-`target_mask`, `target_slide_id`) are rejected, as are unsafe or symlink-escaping paths,
-malformed set IDs, and any two assets of one set that are the same physical file
-(input/target or target/target reuse, including through symlinks and hard links).
-
-`DatasetLayout` in `virtual_staining.data.layout` is the single owner of these
-dataset paths. `ProjectConfig` supplies YAML values only; it does not construct
-persistent dataset paths.
+Every configured input and target is required for every set; the reference input must
+be marked aligned. Headers must be unique and use only the fields above. Set IDs must
+be unique and match `[A-Za-z0-9][A-Za-z0-9._-]*`. Paths must be relative,
+non-traversing, and remain inside `dataset_root` after symlink resolution. Input and
+target images within a set must be distinct physical files, including through symlinks
+and hard links.
 
 ## Authoring the inventory
 
-`vs inventory preview|write` (library: `applications.inventory_authoring`) builds this
-same wide CSV from explicit asset mappings. It is a raw-input authoring aid only: it
-never writes a prepared manifest, manifest metadata, split assignment, patches,
-fingerprints, or consumed-data snapshots, and CycleGAN `data.domains` collections are
-not paired inventory and never need it.
+`vs inventory preview|write` builds the raw inventory from explicit asset mappings;
+it does not prepare a dataset. Unpaired `data.domains` collections do not use this
+inventory. The [Python API](library_api.md#authoring-the-slide-set-inventory) exposes
+the same authoring operation.
 
 ```bash
 vs inventory preview --dataset-root DATASET \
@@ -44,18 +41,6 @@ vs inventory preview --dataset-root DATASET \
   [--input-mask AF=masks/AF] [--target-mask HE=masks/HE] [--target-mask PAS=masks/PAS] \
   [--key relative-path|relative-stem] [--metadata meta.csv]
 vs inventory write ... [--output inputs/slide_sets.csv]
-```
-
-The library request has the same shape:
-
-```python
-InventoryRequest(
-    dataset_root=root,
-    inputs=(("LF", "raw/LF"), ("AF", "raw/AF")),
-    targets=(("HE", "raw/HE"), ("PAS", "raw/PAS")),
-    reference="LF",
-    target_masks=(("HE", "masks/HE"), ("PAS", "masks/PAS")),
-)
 ```
 
 **Mappings.** Every input (ordered, one per `--input NAME=SPEC`), every target (ordered,
@@ -68,10 +53,9 @@ inferred from folder names and no other directory is scanned. A spec is relative
   longest leading path without glob characters (`raw/AF` for `raw/AF/**/*.svs`).
 
 Keys are paths relative to the directory or glob anchor (`raw/LF/case1/S001.svs` under
-`raw/LF` is `case1/S001.svs`), listed in sorted POSIX order. Absolute specs, `..`,
-symlinked files, symlinked directories (below the anchor or on the way to it), glob
-matches that are directories, non-regular files, and required mappings that match no
-file are errors. No image is opened.
+`raw/LF` is `case1/S001.svs`), listed in sorted POSIX order. Specs must be relative and
+non-traversing, with no symlinks along the path or below the anchor. Matches must be regular files, and every required mapping must be
+non-empty. No image is opened.
 
 **Key rule.** `relative-path` (default) matches the full relative path including the
 extension: `case1/S001.svs` matches only `case1/S001.svs`. `relative-stem` removes only
@@ -93,10 +77,10 @@ are never paired by position, even when every mapping holds the same number of f
 column holding keys in the selected key rule's form. Other allowed columns are only
 existing inventory fields: `set_id`, `patient_id`, `specimen_id`,
 `input__<name>_aligned`, `input__<name>_slide_id`, `target__<name>_aligned`,
-`target__<name>_slide_id` (target-specific, e.g. `target__PAS_slide_id`). Duplicate
-keys, keys matching no discovered asset key, unknown
-columns, mask columns, modalities not in the request, and alignment values other than
-`true`/`false`/blank are errors. Patient, specimen and slide IDs are never invented.
+`target__<name>_slide_id` (target-specific, e.g. `target__PAS_slide_id`). Keys must be unique
+and refer to discovered asset keys; modality fields must name requested modalities. Alignment values are `true`, `false`, or blank; masks come
+from the mask mappings, not metadata columns. Patient, specimen and slide IDs are
+never invented.
 
 **Alignment.** The reference input is written `true` unless metadata says otherwise, and
 metadata declaring it `false` is an error; `true` means identity to the declared reference
@@ -112,14 +96,12 @@ Duplicate mask keys and mask keys matching no set are errors. Masks are never ge
 **Rendering and publication.** Columns are `set_id`, each input's then each target's path
 and alignment in request order, then only the optional columns that carry a value, in
 the order per-input mask and slide ID, per-target mask and slide ID, `patient_id`,
-`specimen_id`. Rows are sorted by `set_id` and all
-paths are `dataset_root`-relative POSIX paths, so the same request yields the same
-bytes. `preview` writes nothing. `write` refuses an invalid preview, reruns discovery
-and requires the same membership and rows, writes a sibling temporary file, loads it
-with the canonical slide-set loader, and only publishes it (by hard link) when it
-resolves to the previewed sets. The default output is `inputs/slide_sets.csv`; another
-`--output` must stay inside `dataset_root` (relative paths are relative to it). An
-existing destination is never replaced and there is no overwrite option; only the output's
+`specimen_id`. Rows are sorted by `set_id`; paths are `dataset_root`-relative POSIX paths.
+The same request yields the same bytes. `preview` writes nothing. `write` requires a
+valid preview with unchanged source membership and metadata, and the published CSV
+must resolve to the previewed sets. The default output is `inputs/slide_sets.csv`;
+`--output` must stay inside `dataset_root` without traversing symlinks (relative paths
+resolve from that root). Existing destinations are never replaced; only the output's
 parent directory may be created.
 
 Name matching establishes no biological independence, patient or specimen identity,
@@ -129,6 +111,7 @@ spatial correspondence, or registration validity beyond metadata you supply.
 
 ```text
 dataset_root/
+├── config/{input.yaml,resolved.yaml}
 ├── inputs/slide_sets.csv
 ├── splits/{train,val,test}/<set_id>/
 ├── manifests/
@@ -137,6 +120,8 @@ dataset_root/
 │   ├── manifest_metadata.json
 │   └── slide_sets.csv
 ├── metadata/
+│   ├── config_hash.txt
+│   ├── environment.json
 │   ├── split_assignment.csv
 │   ├── excluded_sets.csv
 │   ├── dataset_build.json
@@ -150,29 +135,32 @@ dataset_root/
 `metadata/dataset_fingerprint.json` stores the semantic preprocessing,
 canonical inventory, source-file hashes, and a `sha256:` fingerprint. It is
 preparation lineage: it answers what dataset this configuration and these sources
-build, and it decides whether an existing complete dataset can be reused. These
-dataset-owned artifacts are built by `data/provenance.py`.
+build, and it decides whether an existing complete dataset can be reused.
 
 `metadata/consumed_data/prepare/` is the consumed-data snapshot of the raw assets the
 last preparation attempt selected: every input slide, every target slide, and supplied mask
 with its modality and set/specimen/patient IDs (format in
 [Run Output Format](run_format.md#consumed-data-snapshots)). It is written before any
-reuse decision or build. Under `data.hash_policy: content` its verified digests feed
-the fingerprint in place of the size/mtime hash cache, so reuse is claimed only after
-the selected sources were re-verified; the fingerprint records the snapshot as
-`source_snapshot_id`. Splits are assigned during preparation, so this snapshot makes
+reuse decision or build. Under `data.hash_policy: content`, reuse requires re-verified
+source digests; the fingerprint records the snapshot as `source_snapshot_id`. Splits are assigned during preparation, so this snapshot makes
 no cross-split claim. Experiment runs record the manifest hash and fingerprint as
 `sources` of their own stage snapshots; they do not write generic run, event, or stage
 metadata into the dataset directory.
 
-Every non-reference input and every target is aligned directly to the reference
-coordinate frame with the existing alignment code. No full aligned whole-slide image is
-created. All inputs and targets are extracted at the same reference-grid position; a
-sample is committed to a split only after every one of its images (and, with
-`masks.save_patch_masks`, every target's foreground mask) has been written and its
-dimensions verified; a sample that fails leaves none of its files behind. Rejected positions are recorded in `discarded_manifest.csv` with
-split `discarded`. A rebuild first withdraws `dataset_build.json` and the manifests, so a
-preparation that fails part way never looks consumable.
+Every non-reference input and every target is aligned directly to the reference frame.
+No full aligned whole-slide image is created. Patches share reference-grid positions;
+each accepted sample contains all named images and, when requested, every target's
+foreground mask with verified dimensions. Failed samples leave no partial files.
+Rejected positions appear in `discarded_manifest.csv` with split `discarded`; an
+incomplete rebuild does not leave a consumable manifest or successful build record.
+
+Alignment matrices map moving full-resolution `(x, y)` to reference full-resolution
+`(x, y)`. Array shapes are `(height, width)` and output sizes `(width, height)`.
+Preview estimation accounts for each image's actual per-axis scale, including resize
+rounding; masks use nearest-neighbor resampling. Mask IoU measures estimation-space
+overlap and is diagnostic, with no
+rejection threshold. Serialized keypoint fields `n_keypoints_src` and
+`n_keypoints_tgt` mean reference and moving keypoints respectively.
 
 ## Patch manifest v4
 
@@ -205,28 +193,15 @@ fields `created_at`, `record_count`, and `splits`:
 }
 ```
 
-The loader enforces the exact header order and rejects duplicate headers, rows with
-missing or extra cells, malformed metadata types and unknown metadata fields, unsafe
-identifiers, missing or extra named images, absolute or traversing paths, paths whose
-symlink resolution leaves the dataset root (when files are checked), duplicate sample
-IDs, cross-split sample conflicts, duplicate input paths, duplicate target paths,
-input/target path reuse, invalid coordinates or extents, and missing files when
-requested.
+The CSV must use the exact metadata-defined header order with one cell per column;
+metadata permits only the canonical fields above and the typed producer fields
+(`created_at`: string, `record_count`: integer, `splits`: mapping). Named modalities
+must be unique safe identifiers. Retained sample IDs must be unique across splits
+(`train`, `val`, `test`); a `discarded` row may repeat a retained sample ID. Input and
+target paths must not be reused, and all referenced paths must be relative,
+non-traversing, and contained in the dataset root after symlink resolution when files
+are checked. Coordinates are non-negative integers and extents positive integers;
+referenced files must exist when file validation is requested.
 
-## Named runtime samples
-
-`PairedManifestDataset` returns the selected names in configured order:
-
-```python
-{
-    "inputs": {"LF": lf_tensor, "AF": af_tensor},
-    "targets": {"PAS": pas_tensor, "HE": he_tensor},
-    "masks": {"foreground_mask": {"PAS": pas_mask, "HE": he_mask}},
-}
-```
-
-`masks` is `{}` unless a configured loss needs foreground masks; then every selected
-target carries its own `1HW` mask and a mask of one target is never used for another.
-Collation gives `NCHW` images and `N1HW` masks under the same names. Model configuration
-selects `model.inputs` from the manifest input modalities and `model.outputs` from its
-target modalities, each in any order; model order is authoritative.
+Runtime tensor shapes and model-order selection are documented in
+[Named runtime samples](library_api.md#named-runtime-samples).

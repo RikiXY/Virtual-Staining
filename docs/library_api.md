@@ -6,19 +6,22 @@ actually consumes. The YAML/application workflow (`vs prepare`, `vs train`,
 together and adds tracked-run provenance; it is not required to use any single
 stage. This page only covers the standalone boundaries; see
 [`architecture.md`](architecture.md) for package layers and
-[`run_format.md`](run_format.md) for configuration and output layouts.
+[`run_format.md`](run_format.md) for persisted output formats.
 
-| Stage | Standalone boundary | Natural inputs | Outputs / side effects | Tracked alternative | Important limitation |
-|---|---|---|---|---|---|
-| Prepare | `DatasetBuilder(config, slide_sets).run_all()` (`data/builder.py`) | `PreprocessingConfig` + explicit `SlideSet` tuple | Patches, manifest, manifest metadata, slide-set metadata, split assignment and dataset fingerprint under `config.dataset_root` | `applications.prepare` / `vs prepare`: resolves `SlideSet`s from the YAML inventory, snapshots config and sources, reuses unchanged datasets | Writes only under `dataset_root`; the inventory CSV is read only by `resolve_slide_sets`, not by the builder |
-| Train | `Trainer(config, run_paths, method, train_loader, val_loader, device)` then `.train(seed)` (`training/trainer.py`) | `TrainingConfig` + `TrainingMethodRuntime` + train/val `DataLoader`s + output `RunLayout`; optional `progress_reporter`, `preview_sink`, `benchmark_recorder`, `config_hash`, `experiment_session` | `metrics/epochs.csv`, `checkpoints/ep*.pth`, `checkpoints/best.json`, training/validation output dirs under the `RunLayout` root; `.resume()` reads checkpoints there | `applications.train` / `vs train`: builds loaders from the manifest or domain collections, binds the consumed-data snapshot and passes its real `ExperimentSession` | The loaders are the data boundary; the Trainer never reads manifests, dataset roots or preparation outputs. The runtime comes from `config.method.definition.build_training_runtime(config, device, seed=...)` and supplies its own checkpoint identity |
-| Infer | `run_image_path_inference(runtime, named_paths, output_path)` (`inference/single.py`) | An `InferenceRuntime` (caller-constructed predictor + `PredictionContract` + device), or a factory returning one, + named input files or directories + output path | Generated images at the output path (or at the runtime's default output dir, if it has one) | `applications.infer` / `vs infer`: test-split manifest inference with consumed/produced snapshots; `applications.infer_images` builds the runtime from a run's checkpoint | Named RGB inputs -> named RGB outputs on the same pixel grid only; see [Direct predictor inference](#direct-predictor-inference) |
-| Evaluate | `evaluate_samples(samples, output_dir, metrics=..., input_failures=...)` / `evaluate_pair(target, generated, metrics=..., support_path=...)` (`evaluation/evaluator.py`) | Explicit `EvaluationSample(sample_id, output_name, set_id, target_path, generated_path)` records (optional `support_path`; each `(sample_id, output_name)` pair once) or a pair of image paths + output directory; an optional resolved metric request | `per_image_metrics.csv`, `summary.csv`, `coverage.csv`, `evaluation_result.json` in `output_dir`; `evaluate_pair` writes nothing | `applications.evaluate` / `vs evaluate`: resolves records from the manifest or run outputs and records evaluation provenance | Default request is the built-in default metric set; grouped summaries and producer linking stay in the application; see [Evaluation metrics](#evaluation-metrics) |
+| Stage | Standalone boundary | Inputs and side effects |
+|---|---|---|
+| Prepare | `data.builder.DatasetBuilder(config, slide_sets).run_all()` | `PreprocessingConfig` and explicit `SlideSet` tuple; writes the [prepared dataset](dataset_format.md#prepared-layout) under `config.dataset_root` without reading an inventory |
+| Train | `training.trainer.Trainer(config, run_paths, method, train_loader, val_loader, device).train(seed)` | `TrainingConfig`, output `RunLayout`, `TrainingMethodRuntime`, and train/val `DataLoader`s; writes history, checkpoints and optional previews; `.resume()` reads checkpoints |
+| Infer | `inference.single.run_image_path_inference(runtime, named_paths, output_path)` | Predictor runtime or factory plus named files/directories; writes generated images; see [Direct predictor inference](#direct-predictor-inference) |
+| Evaluate | `evaluation.evaluator.evaluate_samples(samples, output_dir, metrics=..., input_failures=...)` / `evaluate_pair(target, generated, metrics=..., support_path=...)` | Explicit `EvaluationSample(sample_id, output_name, set_id, target_path, generated_path)` records (optional `support_path`, unique sample/output pairs) or two image paths; the sample API writes [paired reports](run_format.md#evaluation-outputs), while `evaluate_pair` writes nothing |
+
+The matching `applications.prepare`, `applications.train`, `applications.infer`, and
+`applications.evaluate` entry points add tracked provenance and resolve stage inputs.
+Grouped evaluation summaries and producer linking belong to the tracked application.
+`applications.infer_images` supplies a checkpoint-backed runtime for image-path inference.
 
 ## Notes
 
-- **The boundaries are deliberately not symmetrical.** Each primitive takes what
-  its computation needs; there is no universal stage interface.
 - **Preparation is useful, not mandatory.** A prepared manifest is a data
   contract: a compatible externally produced current-schema dataset (manifest,
   manifest metadata, referenced files, and slide-set grouping metadata when group
@@ -32,10 +35,15 @@ stage. This page only covers the standalone boundaries; see
   stage records, events or consumed-data snapshots. Their ordinary output files are
   still real side effects. When a tracked application calls the same primitive it
   owns the session and records the provenance.
-- **Trainer without a session** still writes `epochs.csv` and checkpoints; per-epoch
-  metrics are only additionally forwarded to reporters when a session is supplied.
+- **Trainer** consumes caller-supplied loaders, without reading manifests or dataset
+  roots. Its runtime is built by `config.method.definition.build_training_runtime(config,
+  device, seed=...)`. Optional integrations are `progress_reporter`, `preview_sink`,
+  `benchmark_recorder`, `config_hash`, and `experiment_session`. Without a session it
+  still writes `epochs.csv` and checkpoints; per-epoch metrics are additionally
+  forwarded to reporters when a session is supplied.
   `config_hash` is optional and, when omitted, checkpoints and `best.json` simply
-  carry no config hash.
+  carry no config hash. `resume(checkpoint)` restores state and returns the next epoch;
+  the caller passes that value to `train(seed, start_epoch=...)`.
 - Importing these primitives does not initialize CUDA, load a model, open WSI
   readers, import UI packages or inspect project roots.
 
@@ -46,6 +54,8 @@ transport as checkpoint-backed inference, without a checkpoint, `RunConfig`, run
 directory, manifest or `ExperimentSession`:
 
 ```python
+from pathlib import Path
+
 from virtual_staining.inference.single import (
     InferenceRuntime,
     PredictionContract,
@@ -64,22 +74,22 @@ run_image_path_inference(runtime, {"AF": af_path, "LF": lf_path}, Path("out"))
 run_image_path_inference(runtime, {"AF": af_dir, "LF": lf_dir}, Path("out/batch"), recursive=True)
 ```
 
-- **Contract.** `PredictionContract` declares the ordered `input_names`, the ordered
-  `output_names` (safe identifiers matching `[A-Za-z][A-Za-z0-9_-]*`, since each names
-  an output directory; anything else is rejected), the predictor/tile input `image_size` as `(width, height)`,
-  `output_semantics` (only `"same_grid_rgb"`) and `value_range` (only `(-1, 1)`). The
-  predictor is any callable taking `{name: (N, 3, H, W) float tensor in [-1, 1]}` in
-  contract order and returning `{output_name: (N, 3, H, W) float tensor in [-1, 1]}` with
-  exactly the contract's output names in order, each on exactly the input grid. One
-  output is a one-item mapping. It needs no `input_names` attribute. Transport converts
-  images to that range and back.
-- **Validation before publication.** Every prediction is checked before it is
-  accumulated or written: a mapping with exactly the ordered output names (bare
-  tensors, tuples, missing, extra or reordered names are rejected) and, per output, the
-  same batch size, exactly 3 channels, the same height and width as the input tile,
-  floating dtype, finite values, and values within [-1, 1] (±1e-3). Nothing is cropped,
-  padded, resized, selected or clamped to make a bad output fit. Scalar or segmentation
-  outputs are not supported.
+- **Contract.** `PredictionContract` takes non-empty tuples of unique `input_names` and
+  `output_names`, a positive `(width, height)` `image_size`, `output_semantics`
+  (only `"same_grid_rgb"`), and `value_range` (only `(-1, 1)`). Output names must match
+  `[A-Za-z][A-Za-z0-9_-]*`. The predictor accepts an ordered
+  `{name: (N, 3, H, W) float tensor}` mapping and returns the same shape for each
+  declared output as `{output_name: tensor}`, in exactly the declared order, on the
+  input grid. Values must be finite and within `[-1, 1]` (tolerance `1e-3`).
+  One output is a one-item mapping;
+  no predictor `input_names` attribute is required. Transport converts image values
+  to this range and back. Predictions are checked before accumulation or writing;
+  invalid outputs are never repaired by resizing, selection, or clamping. Scalar and
+  segmentation outputs are unsupported.
+- **Inputs.** Paths must all be files or all be directories. Supported extensions are
+  `.bmp`, `.jpg`, `.jpeg`, `.png`, `.tif`, and `.tiff`. Named inputs must already be
+  spatially registered and have identical pixel dimensions. Directory batches match
+  exact relative paths including extensions; `recursive=True` includes subdirectories.
 - **Ownership.** The caller owns the predictor and the device. Transport only calls it
   under `torch.no_grad` (with CUDA autocast on CUDA devices) after moving the inputs
   to `runtime.device`. It never moves, rebuilds, switches the train/eval mode of, or
@@ -88,56 +98,23 @@ run_image_path_inference(runtime, {"AF": af_dir, "LF": lf_dir}, Path("out/batch"
 - **Provenance is optional.** `InferenceRuntime.checkpoint_path` and
   `predictor_identity` default to `None`, and results report them as they are. The
   checkpoint adapter fills in the real checkpoint path and the method name.
-- **Output paths.** An explicit single output file is accepted only for a one-output
-  contract; with several outputs the output path must be a directory (an image-suffixed
-  path or an existing file is rejected before prediction), so no output is ever
-  dropped. Without `default_single_output_dir` / `default_directory_output_dir`, every
-  call needs an explicit output path. A call without one fails before any prediction
-  and never writes to the working directory.
-  `run_image_path_inference` also accepts a zero-argument factory. Directory pairing
-  is checked before the factory is called, so a checkpoint is only loaded when the
-  inputs are valid.
-- **Modes.** `auto` runs one pass when the input already has the contract size and
-  tiles otherwise. `resize` resizes the input to `image_size` and writes an output at
-  that size, with no claim about the source's physical resolution. `tile` uses
-  `image_size` tiles with stride `image_size - tile_overlap`. The last tile is anchored
-  at the image edge, partial tiles are padded with white, all inputs are read at the
-  same coordinates, overlaps are averaged with equal weight, and only the unpadded
-  region contributes. The inputs are traversed once and the predictor is called once
-  per tile for all outputs; each output has its own accumulator. `tile_overlap` must be
-  smaller than both tile dimensions.
-- **Outputs.** A single-file output is written to a hidden temporary file next to
-  the destination and atomically renamed over it, replacing any existing file. A
-  failed run leaves an existing output untouched. An output may not overwrite an
-  input. In directory mode, two inputs that map to the same output name (for example
-  `a.png` and `a.tif` with `output_format="png"`) are rejected before prediction.
-  Every generated artifact is identified by `(sample_id, output_name)` and named
-  `<output_dir>/<output_name>/<stem>_generated<ext>` (recursive inputs insert their
-  relative folder before `<output_name>`); `utils.artifacts.generated_path` builds and
-  `generated_identity` inverts it.
-- **WSI.** When every input opens with OpenSlide and tiling is needed, inputs are read
-  region by region. The output has exactly the shared input pixel dimensions and is
-  written as a pyramidal BigTIFF by libvips. MPP is copied only from source metadata,
-  per axis. For a single WSI input, known source MPP is preserved. For multi-input
-  WSI, output MPP is preserved only when every input provides compatible known MPP
-  (relative tolerance 1e-4). Conflicting known values fail before prediction, even
-  when another input lacks calibration. If any input lacks calibration, the shared
-  output MPP remains unknown (not zero). A TIFF has one resolution unit, so an output
-  with only one known axis is published with both axes unknown. MPP is never derived
-  from pixel counts, and the same-grid outputs are a pixel-grid contract, not proof
-  that the inputs are biologically registered. Every output is written on the same
-  shared grid with the same MPP. Before prediction, the free space on each output's
-  filesystem must cover at least `M x width x height x 3 x 5` bytes for M outputs
-  (a float32 accumulator plus raw RGB per output). The compressed
-  TIFF needs space on top of that estimate. This is disk-backed scratch space, not
-  zero-disk execution, and there is no resumable WSI job. Scratch files live in a
-  temporary directory next to the output and are always removed. The TIFF is reopened
-  and its geometry, pyramid levels, MPP and sample pixels are checked (headers, not a
-  full reread) before it atomically replaces the destination.
-
-`tests/architecture/test_standalone_stages.py` exercises each boundary from a fresh
-temporary directory and asserts that unrelated predecessor paths (manifest, run
-metadata, checkpoints, inventory) are never opened.
+- **Output paths.** A single output file is accepted only for a one-output contract;
+  several outputs require a directory. Without `default_single_output_dir` /
+  `default_directory_output_dir`, each call requires an explicit output path before prediction.
+  `run_image_path_inference` also accepts a zero-argument runtime factory; directory
+  pairing is checked before it is called. Naming, collision checks, replacement
+  guarantees, and WSI metadata are specified in [Generated images](run_format.md#generated-images).
+  An output may not overwrite an input.
+- **Modes.** `auto` uses one pass at the contract size and tiles otherwise. `resize`
+  writes at `image_size`, with no claim about source physical resolution. `tile`
+  preserves input dimensions, using overlap in pixels (`0 <= tile_overlap <` both
+  tile dimensions), shared input coordinates, equal-weight overlap averaging, and
+  white padding outside the image; padding does not contribute to the output.
+- **WSI.** When every input opens with OpenSlide and tiling is needed, inference reads
+  regions and writes pyramidal BigTIFFs through libvips; output must be `.tif` or `.tiff`.
+  Each output filesystem needs at least `M × width × height × 15` bytes of free scratch
+  space for M outputs, plus the compressed TIFFs. Scratch is cleaned up after the call;
+  WSI jobs are not resumable.
 
 ## Extending with explicit definitions
 
@@ -179,26 +156,18 @@ model:
   through exactly this mechanism.
 - **The stock CLI contains the built-ins only.** There is no plugin discovery: no entry
   points, directory scanning, import strings, or `class_path` in YAML.
-- **Checkpoints never import code.** A v4 checkpoint records the registered method and
-  component names, their `version`/`source`, normalized options, I/O names, directions,
-  image size and normalization. Loading compares them with definitions the caller
-  already supplied and fails with `DefinitionNotAvailableError` when a named definition
-  is missing, before anything is built.
-- **Resolution order.** `RunConfig.from_mapping` parses the framework-common fields,
-  resolves `method.name` in the supplied definitions, and only then lets the selected
-  definition validate the keys it owns (`owned_keys`; `method.options` by default). YAML
-  loading uses the same path. Unknown keys fail everywhere. The resolved config records
-  the method name and its option spelling; `MethodConfig.definition` is a live
-  reference and is never serialized.
-- **Contract: N ordered named RGB inputs -> M ordered named RGB outputs**, normalized to
-  [-1, 1], matching `model.inputs` / `model.outputs`. `build_inference_model` returns a
-  module mapping named inputs to `{output_name: tensor}` with exactly
-  `prediction_outputs(config, direction)` (default `model.outputs`); one output is a
-  one-item mapping. Paired training batches carry `inputs`, `targets` and per-target
-  `masks` (`{"foreground_mask": {output_name: N1HW}}`); there is no singular `target`.
-  A method may restrict M in `validate` (CycleGAN and the example above require one
-  output). Other output kinds and registration backends are separate work. Evaluation
-  metrics are supplied the same way; see [Evaluation metrics](#evaluation-metrics).
+- **Checkpoints never import code.** The caller must supply every referenced method
+  and component definition. Persisted identities and compatibility rules are in the
+  [checkpoint contract](run_format.md#checkpointsepnnnpth).
+- **Options.** A method validates the config keys it declares in `owned_keys`
+  (`method.options` by default). Unknown keys fail. Resolved configs preserve method
+  options; the live `MethodConfig.definition` reference is not serialized.
+- **Prediction and batches.** `build_inference_model` returns a module satisfying the
+  [named RGB prediction contract](#direct-predictor-inference), with names from
+  `prediction_inputs(config, direction)` and `prediction_outputs(config, direction)`
+  (defaulting to `model.inputs` / `model.outputs`). A method may restrict output count
+  in `validate`. Paired batches use the [named sample contract](#named-runtime-samples).
+  Evaluation extensions are described in [Evaluation metrics](#evaluation-metrics).
 - **Ownership.** A `MethodDefinition` owns its options and their validation, its
   pairing, prediction directions, the validation metrics it ranks and their direction
   (`checkpoint_metrics`, `monitor_mode`), training-runtime construction, inference-only
@@ -208,38 +177,44 @@ model:
   checkpoint, `best.json` and history lifecycle; the shared inference layer owns
   single/directory/tiled/WSI transport.
 
-Public modules for extension code: `virtual_staining.definitions` (`MethodDefinition`,
-`ComponentDefinition`, `Component`, `ComponentContext`, `ResolutionContext`,
-`Definitions`, `DefinitionNotAvailableError`), `virtual_staining.methods.builtin`
-(`builtin_definitions`), `virtual_staining.metrics` (`MetricDefinition`,
-`MetricResult`, `ResolvedMetric`, `resolve_metrics`, `BUILTIN_METRICS`),
-`virtual_staining.evaluation.evaluator` (`evaluate_samples`, `evaluate_pair`,
-`EvaluationSample`, `EvaluationInputError`, `EvaluationCoverageError`), `virtual_staining.training.runtime` (`TrainingMethodRuntime`,
-`MethodMetrics`), `virtual_staining.checkpoint_contract` (`CheckpointIdentity`,
-`ValidatedCheckpoint`, `CheckpointCompatibilityError`), `virtual_staining.config`
-(`reject_unknown_keys`, `parse_bool_strict`), `virtual_staining.config.run.RunConfig`,
-`virtual_staining.training.trainer.Trainer`, `virtual_staining.inference.runner`
-(`load_inference_generator`) and `virtual_staining.inference.single`
-(`run_image_path_inference`, `InferenceRuntime`, `PredictionContract`). The application entry points
+Public extension modules (relative to `virtual_staining`):
+
+| Module | Public API |
+|---|---|
+| `definitions` | `MethodDefinition`, `ComponentDefinition`, `Component`, `ComponentContext`, `ResolutionContext`, `Definitions`, `DefinitionNotAvailableError` |
+| `methods.builtin` | `builtin_definitions` |
+| `metrics` | `MetricDefinition`, `MetricResult`, `ResolvedMetric`, `resolve_metrics`, `BUILTIN_METRICS` |
+| `evaluation.evaluator` | `evaluate_samples`, `evaluate_pair`, `EvaluationSample`, `EvaluationInputError`, `EvaluationCoverageError` |
+| `training.runtime` | `TrainingMethodRuntime`, `MethodMetrics` |
+| `checkpoint_contract` | `CheckpointIdentity`, `ValidatedCheckpoint`, `CheckpointCompatibilityError` |
+| `config` / `config.run` | `reject_unknown_keys`, `parse_bool_strict` / `RunConfig` |
+| `training.trainer` | `Trainer` |
+| `inference.runner` | `load_inference_generator` |
+| `inference.single` | `run_image_path_inference`, `InferenceRuntime`, `PredictionContract` |
+
+The application entry points
 `applications.train.train`, `applications.infer.infer` and
 `applications.infer_images.infer_images(..., definitions=...)` /
 `applications.pipeline.run_stages(..., definitions=...)` accept an externally resolved
 configuration or definition set.
 
-A method's training runtime reports `MethodMetrics`: `losses` holds its objective
+The `TrainingMethodRuntime` protocol supplies `step()` / `validate()`, scheduling,
+learning rates, checkpoint identity, and `state_dict()` / `load_state_dict()`.
+It reports `MethodMetrics`: `losses` holds its objective
 scalars (`metric_names`, written as `<name>_train`/`<name>_val`), `image` holds further
 validation scalars (`validation_metric_names`), and the per-term component maps are
 optional. `objective_metadata()` may return JSON-compatible objective provenance for
-`best.json`. `tests/external_method/` is a complete non-GAN example (one network, one
-optimizer, an L1 objective, a custom `val_abs_bias` checkpoint metric, two registered
-architectures) that uses only these modules.
+`best.json`. [`tests/external_method/`](../tests/external_method/) contains a complete
+non-GAN extension example.
 
 ## Inspecting and checking configs
 
-`virtual_staining.applications.config_authoring` is the one read-only seam for
-authoring and checking a run config (`vs config resolve` / `vs config check` call it):
+`virtual_staining.applications.config_authoring` exposes config inspection and
+preflight for Python and `vs config resolve` / `vs config check`:
 
 ```python
+from pathlib import Path
+
 from virtual_staining.applications.config_authoring import (
     inspect_run_mapping, inspect_run_yaml, preflight, write_config_yaml,
 )
@@ -252,26 +227,23 @@ inspection.origins           # {"training.losses.generator[0].weight": "supplied
 
 report = preflight(inspection.config, ["prepare", "train"], depth="assets")
 report.valid                 # False only when a check is "invalid"
-write_config_yaml(inspection.authored_yaml, Path("run.yaml"))  # FileExistsError if present
+write_config_yaml(inspection.authored_yaml, Path("run.yaml"))  # never overwrites
 ```
 
-- Resolution always goes through `RunConfig.from_mapping`; `definitions` defaults to the
-  built-in set, and external methods/components keep their options in both forms.
-- `authored` is the caller's mapping (plain dicts/lists), never `to_dict()`. A starter is
-  one of the committed `config/runs/minimal_*.yaml` files; there is no generated starter.
-- `origins` is explanatory only: `supplied` for leaves present in the authored mapping
-  (including a value its owner normalized), `defaulted` for owner-filled leaves.
-- `preflight(config, stages, depth=...)` checks the stages in the given order. `config`
-  depth inspects no path. `assets` depth reuses the stage owners read-only
-  (`resolve_slide_sets`, manifest validation, `resolve_domain_collections`,
-  `validate_groups`, `resolve_inference_checkpoint`, the evaluation protocol and
-  generated-file naming). Check statuses: `valid`, `invalid`, `planned` (an earlier
-  selected stage produces the input; not verified), `unverified` (deliberately not
-  established), `not_applicable`.
-- Preflight never opens a session, runs a stage, hashes or decodes a file, deserializes a
-  checkpoint, builds a model or probes a device, and writes nothing. `content_verified`
-  is always `false`, and a report does not freeze or lock its inputs; tracked execution
-  re-resolves, re-validates, and snapshots what it consumes.
+`definitions` defaults to the built-in set; supplied external options are preserved in
+both authored and resolved forms. `authored` retains the caller's mapping and key order;
+`resolved_yaml` and `resolved_sha256` match tracked config snapshots. `origins` marks
+leaves `supplied` (even if normalized) or `defaulted`; it is explanatory only.
+
+`preflight(config, stages, depth=...)` respects the given stage order. `config` depth
+inspects no asset paths. `assets` adds read-only path, schema, membership, group, and
+checkpoint-selection checks. Results are `valid`, `invalid`, `planned` (an earlier
+selected stage produces the input, not yet verified), `unverified`, or `not_applicable`.
+`report.valid` means no check is `invalid`; it does not mean all inputs were verified.
+Preflight does not hash or decode files, deserialize checkpoints, build models, probe
+devices, run stages, or write artifacts. `content_verified` is always `false`.
+Execution validates and snapshots inputs again; preflight does not freeze them or
+establish scientific validity. `write_config_yaml` never replaces an existing file.
 
 ## Authoring the slide-set inventory
 
@@ -280,6 +252,8 @@ write_config_yaml(inspection.authored_yaml, Path("run.yaml"))  # FileExistsError
 it); no `RunConfig` is needed:
 
 ```python
+from pathlib import Path
+
 from virtual_staining.applications.inventory_authoring import (
     InventoryRequest, preview_inventory, render_inventory_csv, write_inventory,
 )
@@ -296,26 +270,20 @@ request = InventoryRequest(
 )
 preview = preview_inventory(request)     # read-only; opens no image
 preview.valid, preview.matched_count
-preview.matches                          # InventoryMatch(key, slide_set: SlideSet)
-preview.issues                           # InventoryIssue(kind, message, key)
-preview.limitations
+preview.issues                           # all discovered authoring problems
 render_inventory_csv(preview)            # the exact bytes write_inventory publishes
 write_inventory(preview)                 # -> DATASET/inputs/slide_sets.csv
 ```
 
-- An invalid request (duplicate or invalid input or target names, unknown reference, a
-  target named like an input, a mask for an unknown input or target) raises `ValueError`
-  before scanning.
-- Issue kinds: `spec`, `duplicate`, `incomplete`, `conflict`, `set_id`, `metadata`,
-  `mask`. Every issue is collected; `valid` is true only without issues.
-- `write_inventory` raises `FileExistsError` for an existing destination and
-  `ValueError` for an invalid or stale preview, an output outside `dataset_root`, or a
-  CSV the canonical loader does not resolve to the previewed `SlideSet`s.
-- `virtual_staining.data.slide_sets.load_slide_set_inventory(path, dataset_root, *,
-  modalities, reference_modality, target_modalities)` is that canonical loader;
-  `resolve_slide_sets(config)` delegates to it.
-- Matching, set-ID, metadata, alignment, and mask rules are in
-  [`dataset_format.md`](dataset_format.md#authoring-the-inventory).
+`preview.valid` means no authoring issues were found. Only valid, unchanged previews
+can be written. Matching, metadata, alignment, masks, output paths, and no-overwrite
+guarantees belong to the
+[inventory authoring contract](dataset_format.md#authoring-the-inventory).
+
+The CSV loader is
+`virtual_staining.data.slide_sets.load_slide_set_inventory(path, dataset_root, *,
+modalities, reference_modality, target_modalities)`; `resolve_slide_sets(config)`
+resolves the inventory configured for preparation.
 
 ## Exporting model bundles
 
@@ -323,47 +291,40 @@ write_inventory(preview)                 # -> DATASET/inputs/slide_sets.csv
 tracked run as a portable local bundle (format: [`run_format.md`](run_format.md#model-bundles)):
 
 ```python
+from pathlib import Path
+
 from virtual_staining.applications.export_model import (
     ExportCheckpointSelection,
     export_model_bundle,
     verify_model_bundle,
 )
+from virtual_staining.experiment.run_layout import RunLayout
+from virtual_staining.inference.runner import load_inference_generator
 
 bundle = export_model_bundle(
     Path("local_workspace/results/my_run"),
     Path("bundles/my_run"),
-    [
-        ExportCheckpointSelection("best", metric="val_abs_bias"),
-        ExportCheckpointSelection("top_k", metric="val_abs_bias", rank=2),
-        ExportCheckpointSelection("latest"),
-        ExportCheckpointSelection("explicit", checkpoint_path=Path("ep010.pth")),
-    ],
+    [ExportCheckpointSelection("latest")],
     definitions,  # optional; defaults to builtin_definitions()
 )
 
 # Later, anywhere the bundle was moved to:
-verify_model_bundle(moved, definitions)
-config = RunConfig.from_yaml(moved / "config" / "resolved.yaml", definitions)
-model, _ = load_inference_generator(config, RunLayout(moved), device, moved / "checkpoints" / "ep010.pth")
+bundle = verify_model_bundle(Path("moved_bundle"), definitions)
+checkpoint = bundle.root / bundle.index["checkpoints"][0]["path"]
+model, _ = load_inference_generator(
+    bundle.config, RunLayout(bundle.root), device, checkpoint
+)
 ```
 
-- **Explicit providers.** External methods and components are exported and verified
-  only with their `Definitions` supplied; without them export, verification and
-  reconstruction fail with `DefinitionNotAvailableError`. `vs export-model` knows the
-  built-ins only. `bundle.json` records each required definition's `name`, `source` and
-  `version`, never code to import.
-- **Owners reused.** Selection goes through `checkpoint_selection`, reading and
-  validation through `checkpoint_contract` and the method definition's checkpoint
-  identity, configuration through `RunConfig.from_yaml`, hashing through
-  `utils.hashing`. There is no bundle-specific loader: reconstruction is the normal
-  `load_inference_generator` with an explicit checkpoint path.
-- **Verification.** `export_model_bundle` runs `verify_model_bundle` on the staged
-  bundle before publishing it and returns the verified `ModelBundle` (`root`, `index`,
-  `config`). Call `verify_model_bundle` again before using a bundle received from
-  elsewhere.
-- **Not a distribution decision.** The bundled configs are exact research provenance
-  and may name private local paths. Export does not decide whether weights may be
-  redistributed.
+`ExportCheckpointSelection` also accepts `"best"` with `metric`, `"top_k"` with
+`metric` and `rank`, or `"explicit"` with `checkpoint_path`.
+
+External methods and components require their `Definitions` for export, verification,
+and reconstruction; the CLI supports built-ins only. Export returns a verified
+`ModelBundle` with `root`, `index`, and resolved `config`. `verify_model_bundle` returns
+the same type without building a model and should be called before using a bundle from
+elsewhere. Source requirements, publication guarantees, portability, and redistribution
+limits are specified in [Model Bundles](run_format.md#model-bundles).
 
 ## Evaluation metrics
 
@@ -401,49 +362,56 @@ definitions = builtin_definitions().extend(
 config = RunConfig.from_yaml("my_run.yaml", definitions)  # evaluation.metrics may name it
 ```
 
-- **Requests.** `evaluation.metrics` (or `resolve_metrics(request, definitions.metrics)`
-  for the library path) is an ordered list of `{name, options}` mappings, resolved once
-  before anything is read. Unknown or duplicate names, unknown or malformed options and
-  non-JSON options fail. Omitted, it is the built-in default set `mae`, `mse`, `rmse`,
-  `psnr`, `ssim`, `pcc_gray`, `pcc_rgb_mean`; `pcc_r`, `pcc_g`, `pcc_b` are also
-  built in. Only requested evaluator groups run, and only requested outputs are
-  reported, so a custom metric gets its per-image columns, summary row, grouped columns,
-  histogram and result-metadata entry without any report code changes.
-- **Results.** Evaluators return one `MetricResult` per requested name with status
-  `finite`, `positive_infinity`, `undefined` or `unavailable` (the last two carry a
-  reason). `MetricResult.of(x)` classifies a number and rejects NaN and negative
-  infinity. Missing outputs, non-`MetricResult` values and invalid states raise
-  `MetricEvaluatorError`. Built-in PSNR of identical images is `positive_infinity`, PCC of
-  constant data is `undefined`, and SSIM (fixed scikit-image parameters: 7x7 uniform
-  window, sample covariance, `K1=0.01`, `K2=0.03`, `data_range=1`) is `unavailable` for
-  images smaller than 7 px rather than recomputed with another window.
-- **Coverage.** Only known input problems (`EvaluationInputError`: missing, unreadable
-  or non-RGB file, shape mismatch, bad support) are per-sample coverage events.
-  `input_failures="strict"` (default) writes `coverage.csv` and raises
-  `EvaluationCoverageError`; `"permissive"` excludes those samples. No samples, no
-  metrics, or zero evaluated samples never produce a result. Any other exception,
-  including a metric bug, propagates in both modes.
+- **Requests.** `resolve_metrics(request, definitions.metrics)` accepts an ordered list
+  of unique `{name, options}` mappings. Options must be valid for the definition and
+  JSON-compatible. Omission uses the [default run request](../config/runs/example.yaml).
+  Only requested metrics run and receive report entries.
+- **Results.** Evaluators return one `MetricResult` per requested name, following the
+  [metric status contract](run_format.md#metric-result-statuses). `MetricResult.of(x)`
+  classifies numeric results; NaN, negative infinity, missing results, and invalid
+  states fail evaluation. Built-in numerical definitions are documented with
+  [per-image metrics](run_format.md#evaluationper_image_metricscsv).
+- **Coverage.** `input_failures="strict"` (default) records known input problems in
+  `coverage.csv` and fails; `"permissive"` excludes those samples. Empty sample or metric
+  requests and zero evaluated samples cannot produce a result. Metric implementation
+  and programming errors propagate in both modes.
 - **Valid-region support.** `EvaluationSample.support_path` (for every sample or none)
   restricts the support-capable metrics (built-in `mae`, `mse`, `rmse`, `psnr`) to the
   valid pixels, all RGB channels, and adds `<m>_support_count` /
-  `<m>_support_fraction` columns. The mask must be explicitly binary (PNG mode `1`, or
+  `<m>_support_fraction` columns. The mask must be explicitly binary (mode `1`, or
   mode `L` holding only 0 and 255) on exactly the image grid; soft masks are rejected,
   never thresholded. An empty region yields `undefined`. Requests with support and a
   metric without support (SSIM, PCC) fail before reading any file. Support is
   evaluation input only: it is not a tissue mask, registration confidence or
   preparation mask, and none is discovered or generated; the configured `evaluate`
   stage does not use one.
-- **Result metadata.** `evaluation_result.json` records each resolved identity,
-  direction and presentation metadata. Downstream ranking (`vs organize`,
-  `vs compare`, `vs panels`) takes directions from it, else from a built-in
-  definition of the same name, else from explicit caller input, and fails otherwise.
+- **Result metadata.** Metric identity, ranking direction, and presentation semantics
+  persist in [evaluation_result.json](run_format.md#evaluationevaluation_resultjson).
 - **Training metrics are separate.** A `MethodDefinition` owns its validation and
-  checkpoint metrics (`validation_metric_names`, `checkpoint_metrics`); they never need a
-  `MetricDefinition`. Pix2Pix explicitly reuses the built-in `ssim`, `psnr`, `mae`,
-  `rmse`, `pcc_rgb_mean` and `pcc_gray` definitions for its `val_*` columns
-  (`PIX2PIX_VALIDATION_METRICS`); CycleGAN reports none.
+  checkpoint metrics; these do not require a `MetricDefinition`.
 - **Unpaired diagnostics** (`evaluation/unpaired.py`,
   `evaluate_unpaired_collections(generated_paths, reference_paths, output_dir, ...)`)
   compare per-image RGB/luminance feature distributions of two independent collections
   and need no model, checkpoint, method or target pair. They are appearance
   diagnostics, not sample-level fidelity metrics, and do not use metric definitions.
+
+## Named runtime samples
+
+`virtual_staining.data.dataset.PairedManifestDataset` returns named mappings in the
+selected order. With the training transforms, samples have this tensor structure:
+
+```python
+{
+    "inputs": {"LF": lf_tensor, "AF": af_tensor},
+    "targets": {"PAS": pas_tensor, "HE": he_tensor},
+    "masks": {"foreground_mask": {"PAS": pas_mask, "HE": he_mask}},
+}
+```
+
+Without a transform, images and masks are PIL images. `include_foreground_mask=True`
+requires a mask for every selected target; otherwise `masks` is `{}`. The training
+application sets this flag when a configured loss needs masks. With training transforms,
+each target has its own `1HW` mask, never another target's mask, and collation gives
+`NCHW` images and `N1HW` masks under the same names. Model configuration
+selects `model.inputs` from the manifest input modalities and `model.outputs` from its
+target modalities, each in any order; model order is authoritative.

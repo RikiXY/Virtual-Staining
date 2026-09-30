@@ -2,293 +2,94 @@
 
 ## Layer Model
 
-The package is organised in three layers. Dependencies flow downward only -
-upper layers may import from lower layers, never the reverse.
+Dependencies flow from adapters to applications to library packages; library code
+never imports applications or the CLI.
 
-| Layer | Description | Examples |
-|---|---|---|
-| **Library** | Reusable package code with explicit, testable I/O boundaries. Some modules are pure helpers; others are side-effecting services. | `metrics.py`, `utils/`, `config/`, `experiment/`, `models/`, `data/`, `training/`, `inference/`, `evaluation/` |
-| **Application** | Use-case orchestrators that wire core modules together | `applications/` |
-| **Adapter** | Entry points that translate CLI arguments into application calls | `cli/` |
+| Layer | Responsibility |
+|---|---|
+| Library | Reusable computation and services with explicit I/O boundaries |
+| `applications/` | Use-case composition, input selection, and tracked stage lifecycles |
+| `cli/` | Argument parsing, terminal rendering, and exit codes |
+
+Library services may read and write files. Standalone stages consume their natural
+inputs without requiring a tracked run; their public boundaries are documented in
+[Library Stage API](library_api.md).
 
 ## Package Map
 
-| Package | Responsibility |
+| Package or contract | Semantic owner |
 |---|---|
-| `metrics.py` | The evaluation metric contract (`MetricDefinition`, `MetricResult`, request resolution, grouped computation) and the built-in numerical definitions with their directions and presentation-only thresholds |
-| `definitions.py` | The torch-free extension seam: `MethodDefinition`, `ComponentDefinition`, and the immutable `Definitions` set (methods, components, evaluation metrics) callers supply explicitly |
-| `checkpoint_contract.py` | Topology-neutral v4 checkpoint payload and strict method-aware compatibility validation |
-| `checkpoint_selection.py` | Neutral `best.json` ranking, policy, and metric-direction selection |
-| `loss_definitions.py` | Canonical built-in loss definitions: name, allowed roles, supported methods, parameter contract and validation, and primitive tensor math, shared by the built-in definitions and runtimes |
-| `utils/` | Shared primitives: artifact naming, image dimensions, image I/O helpers, and no-replace file publication |
-| `config/` | Framework-common YAML-facing dataclasses and strict parsers, `RunConfig.from_mapping` resolution against supplied definitions, and reusable option blocks (losses, LR scheduler) that definitions parse |
-| `experiment/` | Canonical `RunLayout` for one run, `ResultsLayout` for shared comparisons, stage snapshots, run metadata, manifest/config hashing, and environment snapshots |
-| `models/` | Network implementations (`ConcatUNetGenerator`, `ResnetGenerator`, `PatchGANDiscriminator`), their `ComponentDefinition`s (`components.py`), and the model-I/O normalization contract; no training state |
-| `data/` | Canonical `DatasetLayout`, slide sets, paired manifests, unpaired domain collections, dataset building, registration, dataset-owned provenance/fingerprints, and the versioned consumed/produced-data snapshot format (`consumption.py`) |
-| `methods/` | The built-in definitions (`builtin.py`: `Pix2PixDefinition`, `CycleGANDefinition`, `builtin_definitions()`) and runtimes (`Pix2PixMethod`, `CycleGANMethod`), each owning its options, topology, optimizers, losses, checkpoint state and inference-only generator |
-| `training/` | The `TrainingMethodRuntime` protocol, method-agnostic `Trainer`, generic `MethodCheckpointManager`, validation, history, the Pix2Pix configured-loss evaluator, and callback-driven progress events |
-| `inference/` | Checkpoint resolution, definition-driven inference model construction, prediction-direction resolution, generic single/directory/tiled/WSI inference, and output naming |
-| `evaluation/` | Paired evaluation of a resolved metric request (input-failure coverage, valid-region support, per-image reports, summaries, `evaluation_result.json`), unpaired collection diagnostics, diagnostic plots, representative selection, and comparison panels |
-| `applications/` | User-visible stage lifecycle owners, infer-images runtime composition, the model-bundle exporter/verifier (`export_model.py`), the read-only config inspection/preflight seam (`config_authoring.py`), and the raw slide-set inventory authoring seam (`inventory_authoring.py`); no `argparse` |
-| `cli/` | The `argparse` entrypoint, terminal rendering, and thin adapters over `applications/` |
+| `config/` | Framework configuration and resolution against explicit definitions |
+| `definitions.py` | Method, component, and metric registration boundary |
+| `data/` | Dataset layout, paired manifests, unpaired collections, preparation, registration, and data provenance |
+| `models/` | Network components and model-I/O normalization; no training state |
+| `methods/` | Built-in method options, topology, objectives, optimization, and restorable state |
+| `training/` | Method-independent epochs, validation cadence, history, checkpointing, and early stopping |
+| `inference/` | Definition-driven model loading and shared image/directory/tiled/WSI prediction |
+| `evaluation/` | Paired reports, unpaired diagnostics, grouping, comparisons, and panels |
+| `experiment/` | Run and comparison layouts, tracked sessions, config/environment snapshots, and events |
+| `checkpoint_contract.py`, `checkpoint_selection.py` | Checkpoint compatibility and selection semantics |
+| `metrics.py`, `loss_definitions.py` | Evaluation metric definitions and built-in loss primitives respectively |
+| `utils/`, `split_contract.py` | Shared low-level utilities and split vocabulary |
 
 ## Translation Methods
 
-Every method, built-in or external, is a registered `MethodDefinition`, and every
-network architecture a registered `ComponentDefinition` (`definitions.py`). Callers pass
-an immutable `Definitions` set explicitly; `builtin_definitions()` is the default and
-holds Pix2Pix (paired, named N-input -> M-output) and CycleGAN (unpaired, one domain
-A <-> one domain B, exactly one input and one output) plus the `concat_unet`, `resnet`
-and `patchgan` components. The framework contract is N ordered named RGB inputs -> M
-ordered named RGB outputs (`model.inputs`, `model.outputs`); one output is the one-item
-case of the same plural representation, never a separate singular path. There
-is no dynamic import, `class_path` loading, or plugin discovery, and checkpoint
-metadata is compared with, never used to import, definitions.
+Methods and network components enter through explicit definitions. Generic configuration
+resolves framework fields while each definition validates its own options and
+cross-section rules. This boundary is torch-free; config resolution does not load a
+training runtime. The built-in definition set is a default, not a dependency of the
+generic training or inference layers. Checkpoint metadata identifies supplied definitions
+and never imports code. Extension contracts and examples belong to
+[Library Stage API](library_api.md#extending-with-explicit-definitions).
 
-`RunConfig.from_mapping` (used by `from_yaml`) parses the framework-common fields,
-resolves `method.name`, splits the shared `method`/`model`/`training` sections into
-framework keys and the keys the definition declares in `owned_keys`, and lets the
-definition parse its options. Generic config knows no method, loss, metric catalogue
-or architecture: the definition validates its options and cross-section rules,
-declares its pairing, prediction directions, and each direction's named prediction
-inputs and outputs (`prediction_inputs`, `prediction_outputs`), and supplies the default,
-direction and validity of `training.early_stopping.monitor` and
-`inference.checkpoint_metric`. The
-built-ins keep the documented `model.generator`, `model.discriminator`, `training.lr_*`,
-`beta*`, `scheduler`, `losses` and `method.replay_buffer_size` spelling as keys they own;
-an external method owns `method.options` and needs none of them.
+Concrete methods depend on generic training and inference contracts, never the reverse.
+A method owns its topology, objective composition, optimization, prediction directions,
+and opaque checkpoint state. The Trainer owns the epoch and history lifecycle without
+assuming a GAN, a fixed number of networks, or how named image channels are packed.
+Inference constructs only the prediction network and shares one image-path transport
+between caller-owned predictors and checkpoint-backed models.
 
-The six built-in losses (`adversarial_bce`, `l1`, `ssim` for Pix2Pix; `adversarial_lsgan`,
-`cycle_l1`, `identity_l1` for CycleGAN) are each defined once in `loss_definitions.py`.
-Config parsing derives accepted names, roles, parameters, and method compatibility from
-those definitions, and runtimes take primitive math (BCE/LSGAN adversarial, L1, SSIM,
-foreground-mask weighting) from them. Objective composition stays method-owned: Pix2Pix's
-`ConfiguredLossEvaluator` (one per method instance, shared by training and validation)
-applies the adversarial primitive once to the joint discriminator logits and every
-reconstruction primitive to each named output with that output's own foreground mask,
-weighting the arithmetic mean over outputs (so one output keeps its exact scale), while
-`CycleGANMethod` decides which directional tensors each term compares, sums the A/B
-directions, and requires its active adversarial and cycle terms. Loss-weight schedules
-remain `LossScheduleConfig` in `config/losses.py`; definitions do not own weights.
-
-`training/runtime.py` defines the `TrainingMethodRuntime` protocol the generic training
-code consumes: `name`, the history schema (`metric_names`, optional per-term
-`loss_names`/`component_total_names`, and extra `validation_metric_names`), `step()` /
-`validate()` returning named `MethodMetrics`, checkpoint-selection metrics and modes,
-scheduler stepping, learning rates, the `checkpoint_identity()` built by its definition,
-optional JSON `objective_metadata()` for `best.json`, and opaque `state_dict()` /
-`load_state_dict()`. It exposes no generator, discriminator, optimizer, loss-config, or
-model-count accessors.
-
-- `Trainer` owns the epoch loop, validation cadence, `epochs.csv` history, checkpoint
-  cadence and `best.json` ranking, resume, and early stopping. It does not know which
-  networks a method trains, how many outputs it predicts, or how channels are packed;
-  the shared `training/helpers.unpack_batch` only validates named `inputs`, `targets`
-  and per-target `masks` of a paired batch.
-- `MethodCheckpointManager` wraps the runtime's `state_dict()` in the v4 payload from
-  `checkpoint_contract.py` and validates the definition name/version/source, component
-  identities and options, I/O names, directions, image size, and normalization before
-  calling `load_state_dict()`. It assumes no fixed number of models
-  or optimizers. Only v4 is accepted; older or unversioned payloads are rejected, with no
-  migration path.
-- `Pix2PixMethod` owns the ConcatUNet generator (`3*N` input and `3*M` output channels,
-  split back into the named outputs), one joint conditional PatchGAN over all inputs and
-  all real or generated outputs (`3*N + 3*M` channels), their two optimizers, AMP
-  scalers, schedulers, and the configured BCE/L1/SSIM objective. Its reconstruction
-  components and validation image metrics are reported per output
-  (`generator_l1__HE`, `val_ssim__HE`); adversarial terms and `loss_G`/`loss_D` stay joint.
-- `CycleGANMethod` owns `G_A_to_B`, `G_B_to_A`, `D_A`, `D_B`, joint generator and
-  discriminator optimizers, scalers, schedulers, CycleGAN weight initialization, the LSGAN
-  / cycle L1 / identity L1 objective, and the `fake_A` / `fake_B` replay pools including
-  their RNG state.
-
-`applications/train.py` builds either manifest-backed paired datasets or
-`data/unpaired.py` domain datasets according to `data.pairing`, asks the selected
-definition for the training runtime, then hands it to the `Trainer`.
-
-For inference, `inference/runner.py` resolves the checkpoint through the shared selection
-policy, rejects checkpoints naming unregistered definitions, validates the definition's
-checkpoint identity, and calls `build_inference_model`, which constructs only the
-prediction network (no optimizer, scheduler, objective, discriminator or replay pool).
-CycleGAN returns a `CycleGANInferenceAdapter` wrapping the generator for
-`inference.direction`, so every loaded model maps named inputs to a mapping of named
-outputs (a one-item mapping for one output). Single-image, directory, tiled, and WSI
-inference in `inference/single.py` and the `vs infer` test-split loop are method-agnostic
-apart from the definition's prediction input and output names; every generated artifact
-is identified by `(sample_id, output_name)` through one helper in `utils/artifacts.py`
-(`<output_dir>/<output_name>/<sample_id>_generated<ext>`).
-
-Evaluation protocol selection belongs to `applications/evaluate.py`; it defaults to the
-run's `data.pairing`. `paired` expands every aligned manifest record into one explicit
-`(sample_id, output_name)` pair per predicted output and reuses `evaluation/evaluator.py`
-and `metrics.py` for each RGB pair; rows, coverage, summaries, grouped summaries, plots
-and comparisons keep `output_name` and never average across outputs. `unpaired` (default
-for CycleGAN, and available only to one-output models) collects the active direction's
-generated images and an independent real reference collection
-(`evaluation.reference_collection`, else the reference domain's `data.domains` entry) and
-delegates to `evaluation/unpaired.py`; it is independent of the training pairing. The paired metric
-request (`evaluation.metrics`, default the built-in set) is resolved from the caller's
-`Definitions` during config resolution. Standalone evaluation metrics and method-owned
-training metrics are separate: a `MethodDefinition` declares its own validation and
-checkpoint metrics; Pix2Pix explicitly reuses built-in metric definitions for its
-`val_*` columns, and CycleGAN reports none.
+Loss primitives are shared, but their composition is method-owned. Evaluation metric
+definitions and method-owned validation/checkpoint metrics remain separate contracts.
+The application selects the evaluation protocol independently of training pairing.
+Paired reports retain output identity; unpaired diagnostics describe collection
+appearance and do not establish sample-level fidelity. Persisted score meanings are in
+[Run Output Format](run_format.md#evaluation-outputs).
 
 ## Purity and I/O Boundaries
 
-The library layer is intentionally mixed:
+Applications select the actual stage inputs and bind their provenance; sessions do not
+infer consumption from files that happen to exist. `ExperimentSession` owns tracked
+train/infer/evaluate lifecycles, local metadata, and best-effort reporters. Preparation
+is dataset-owned and emits no experiment run events. Dataset paths belong to
+`DatasetLayout`, run paths to `RunLayout`, and shared comparison paths to `ResultsLayout`.
+See [dataset provenance](dataset_format.md#prepared-layout) and
+[consumed-data snapshots](run_format.md#consumed-data-snapshots) for their distinct identities.
 
-- some modules are pure or mostly pure helpers
-- some modules are side-effecting services that read/write files, logs, checkpoints, or outputs
+Registration is isolated in `data/alignment/`, independent of stage orchestration,
+training, inference, and evaluation. It owns alignment policy, transform estimation,
+and warping; callers own readers, backend selection, cleanup, and set-failure policy.
+The public boundary exports `AlignmentImage`, `AlignmentResult`,
+`RegistrationDiagnostics`, `AlignmentError`, `identity_alignment`, `resolve_alignment`,
+`warp_aligned_patch`, and `warp_aligned_mask_patch`; reader-backed warping borrows an
+already-open reader's `read_region` callback.
+Geometry and diagnostic meanings are documented in [Dataset Format](dataset_format.md#prepared-layout).
 
-Typical examples:
-
-| Kind | Example | Notes |
-|---|---|---|
-| Pure helper | `metrics.py` | Metric computations over arrays |
-| I/O helper | `utils/image_io.py` | Reads/writes image files |
-| Mostly pure indexing/data model | `data/dataset.py` | Dataset indexing and manifest-backed lookup |
-| Dataset orchestration | `data/builder.py` | Coordinates slide-set processing and writes manifests, metadata and provenance |
-| Registration and warping | `data/alignment/` | Identity/SIFT policy, affine estimation, diagnostics, coordinate conversion and image/mask warping |
-| Slide-set processing | `data/slide_set_processor.py` | Computes masks, delegates alignment and writes patches for one set; returns `SetBuildResult` and closes readers |
-| Side-effecting training service | `training/trainer.py` | Training loop, checkpoint and epoch-history writes into a supplied `RunLayout`; an optional tracked session receives epoch metrics |
-| Side-effecting inference service | `inference/runner.py`, `inference/single.py` | Reusable model loading and prediction plus single-image output writing |
-| Side-effecting evaluation service | `evaluation/` runners/report writers | Metrics computation plus report/CSV output |
-
-The architectural boundary is not “no I/O in library code.” The actual rule is:
-
-- reusable package code should keep I/O explicit and testable
-- orchestration belongs in `applications/`
-
-Each stage is also usable as a standalone library primitive from its natural inputs,
-without a tracked run; see [`library_api.md`](library_api.md).
-
-The `ExperimentSession` owns each train/infer/evaluate lifecycle: stage snapshots,
-strict local metadata writes, and best-effort reporter callbacks. Applications decide
-what a stage consumes: they resolve inputs once, build a consumed-data snapshot from
-those objects, and bind it with `session.bind_inputs()` before the stage starts; the
-session never infers stage inputs from which dataset files happen to exist. `RunLayout` owns
-one run's paths; `ResultsLayout` owns shared cross-run comparisons under
-`results/comparisons`. `applications.prepare` orchestrates dataset-local config and
-environment snapshots through the generic experiment snapshot helpers. Preparation
-is dataset-owned, writes dataset fingerprints and source hashes, and emits no
-experiment run events. Dataset provenance lives in `data/provenance.py`; run
-provenance lives in `experiment/snapshots.py`.
-`applications/train.py` builds the method runtime and datasets and hands them to the reusable `Trainer`;
-its `ProgressUpdate` callback is silent unless an adapter supplies a reporter.
-The CLI supplies terminal rendering, while application/library callers remain
-presentation-neutral. Infer-images runtime creation belongs to `applications/`;
-`inference/single.py` accepts an already-loaded `InferenceRuntime` (a caller-owned
-predictor plus an explicit `PredictionContract`: ordered input names, ordered output
-names, tile size, same-grid RGB outputs, [-1, 1] range) or a factory for one. Tiled and
-WSI inference traverse the inputs once, call the predictor once per tile and keep one
-bounded accumulator per output; WSI scratch preflight scales with the output count.
-This is the only image-inference transport. `applications/infer_images.py` builds
-the predictor from a checkpoint through the method definition, fills in the same
-contract and optional checkpoint provenance, and delegates to it. The manifest
-`applications/infer.py` loop keeps its own provenance-owning loop but calls the same
-`predict_batch`, which enforces the named same-grid output check. Transport never names a
-method, network topology, optimizer or loss.
-
-`applications/export_model.py` is a utility, not a stage: it composes the existing
-owners (checkpoint selection and validation, `RunConfig` resolution with explicit
-definitions, `RunLayout` tracked paths, SHA-256 hashing) to publish a verified model
-bundle, and defines no checkpoint reader, model loader or registry of its own.
-
-Within training, `trainer.py` owns epoch orchestration, `validator.py` owns validation
-inference, `preview.py` owns the optional validation preview sink (methods hand it
-detached semantic tensors; `applications/train.py` injects the default TIFF writer),
-`history.py` owns metric CSV persistence, `checkpoints.py` persists opaque
-method-owned state through the generic `MethodCheckpointManager`,
-`checkpoint_contract.py` owns the topology-neutral v4 contract, and
-`checkpoint_selection.py` owns `best.json` ranking and resolution. Evaluation keeps
-plot primitives in `diagnostics.py`, representative-row policy in `selection.py`,
-and composed image layouts in `panels.py`.
+Model export is an application utility, not a pipeline stage. It uses the existing
+configuration, checkpoint, and inference contracts; it introduces no separate model
+loader or registry.
 
 ## Architectural Rules
 
-These constraints are enforced by convention and checked in code review:
+- `argparse`, `sys.exit()`, and terminal presentation belong only in `cli/`.
+  Applications accept typed inputs and raise exceptions; library and application
+  diagnostics use `logging`. Progress remains silent unless a caller supplies a reporter.
+- Library packages never import `applications/` or `cli/`; command adapters delegate
+  to applications.
+- `training/` and `inference/` never import concrete `methods/`.
+- `config/` does not depend on runtime domains; definitions provide the extension boundary.
+- `utils/`, `metrics.py`, and `split_contract.py` remain dependency leaves within the package.
 
-- **No `argparse` outside `cli/`** - application and core modules accept typed
-  dataclasses, not raw CLI strings.
-- **Core and application modules use `logging`**, never `print`, so callers can
-  suppress or redirect output.
-- **No `sys.exit()` outside `cli/`** - applications raise exceptions; the CLI
-  layer converts them to exit codes.
-
-The current direct package dependencies (excluding self-imports) are:
-
-```text
-cli -> applications, metrics, training
-applications -> checkpoint_contract, checkpoint_selection, config, data, definitions,
-                evaluation, experiment, inference, metrics, models, split_contract,
-                training, utils
-inference -> checkpoint_contract, checkpoint_selection, config, data, experiment, models,
-             utils
-methods -> checkpoint_contract, checkpoint_selection, config, definitions,
-           loss_definitions, metrics, models, training
-training -> checkpoint_contract, checkpoint_selection, config, experiment,
-            loss_definitions, metrics, models
-definitions -> checkpoint_selection (+ type-only/lazy: checkpoint_contract, config, metrics,
-               training)
-evaluation -> config, metrics, utils
-experiment -> config, data, utils
-data -> config, split_contract, utils
-models -> config, definitions
-checkpoint_contract -> models
-config -> checkpoint_selection, definitions, loss_definitions, split_contract, utils
-          (+ one lazy import of methods.builtin for the default definition set and
-          type-only/lazy imports of metrics for metric requests)
-loss_definitions -> config
-checkpoint_selection, metrics, split_contract, utils -> (none)
-```
-
-`tests/architecture/test_package_dependencies.py` resolves absolute, relative,
-nested, and `TYPE_CHECKING` imports with the standard library and enforces the
-boundaries that matter: no library package imports `applications` or `cli`;
-`utils`, `metrics`, and `split_contract` stay leaves; `config` imports no runtime
-domain; CLI command modules call only `applications`; and the registration boundary
-below. `training` and `inference` never import `methods`: concrete methods depend on
-the generic layers, not the reverse. `tests/architecture/test_method_definitions.py`
-additionally checks that config resolution loads no method runtime or torch, that the
-`Trainer` loads no loss configuration, that only definition owners name the built-in
-methods, and that no import-string or discovery mechanism exists in these layers.
-
-Registration is implemented entirely in `data/alignment/`: `models.py` defines
-`AlignmentImage`, immutable `AlignmentResult`, `RegistrationDiagnostics`, and `AlignmentError`;
-`registration.py` owns identity/declared-alignment policy, SIFT/RANSAC, validation
-and diagnostics; `warping.py` owns affine application and coordinate conversion.
-The package exports only those four types, `identity_alignment`,
-`resolve_alignment`, `warp_aligned_patch`, and `warp_aligned_mask_patch`.
-SIFT helpers are private. `preprocessing.py` retains general mask generation/sampling
-and patch filtering, with no registration dependency.
-
-Every result matrix maps moving full-resolution `(x, y)` into reference
-full-resolution `(x, y)`. Array shapes are `(height, width)`; output sizes are
-`(width, height)`. Registration normalizes whole-image masks to preview geometry
-with nearest neighbors, halves previews for estimation, then compensates for
-both images' per-axis scales using the actual SIFT input dimensions, including
-resize rounding. Mask IoU describes estimation-space overlap and is diagnostic,
-with no rejection threshold.
-Serialized keypoint fields retain their existing `src`/`tgt` names for dataset
-metadata compatibility; the implementation uses reference/moving terminology.
-
-Reader-backed warping accepts an already-open reader's `read_region` callback:
-alignment computes inverse bounds and the local matrix, IO reads the requested
-region. Opening, backend selection, cleanup and `skip_set` remain outside
-alignment. Dependency tests enforce `models <- warping <- registration`, forbid
-alignment's dependencies on orchestration/training/inference/evaluation, and
-require the processor to use the public alignment API.
-
-## Configuration Policy
-
-| Data type | Format | Example path |
-|---|---|---|
-| User experiment config | YAML | `config/runs/example.yaml` |
-| Run identity and stage events | JSON/JSONL | `results/<run>/metadata/run.json`, `events.jsonl` |
-| Stage snapshots and environment | YAML/JSON | `results/<run>/config/<stage>/`, `metadata/environments/` |
-| Per-epoch training losses | CSV | `results/<run>/metrics/epochs.csv` |
-| Per-image evaluation metrics | CSV | `results/<run>/evaluation/per_image_metrics.csv` |
-| Dataset manifest and fingerprint | CSV/JSON | `datasets/<name>/manifests/manifest.csv`, `metadata/dataset_fingerprint.json` |
-
-See [`docs/run_format.md`](run_format.md) for the full run output directory layout
-and file schemas.
+Configuration options live in the [annotated run YAMLs](../config/runs/example.yaml);
+persisted schemas live in [Run Output Format](run_format.md) and
+[Dataset Format](dataset_format.md).

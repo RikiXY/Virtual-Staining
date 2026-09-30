@@ -8,44 +8,6 @@ explicitly local, sequential, and single-worker in v1. Every queue and ablation 
 is documented in [`config/queues/example.yaml`](../config/queues/example.yaml) and
 [`config/queues/example_ablation.yaml`](../config/queues/example_ablation.yaml).
 
-Example queue file:
-
-```yaml
-name: nightly
-continue_on_failure: true
-jobs:
-  - config_path: ../runs/local/run_a.yaml
-    label: baseline
-  - config_path: ../runs/local/run_b.yaml
-    notes: retry with lower lr
-```
-
-Controlled ablation queues can add an optional `ablation` block. Queue
-preflight loads each run config, compares the resolved config dictionaries, and
-fails before running any job if a difference is not covered by
-`variable_fields`. Dot paths are compared against resolved config fields, not
-raw YAML text. Use `run_name` as a variable when each ablation arm writes to a
-separate run directory.
-
-```yaml
-name: loss_ablation
-continue_on_failure: false
-ablation:
-  fixed_fields:
-    - model.generator.base_channels
-    - training.epochs
-  variable_fields:
-    - run_name
-    - training.losses.generator
-    - training.losses.discriminator
-    - training.scheduler.name
-jobs:
-  - config_path: ../runs/local/ablation/baseline.yaml
-    label: baseline_l1_adv
-  - config_path: ../runs/local/ablation/ssim_only.yaml
-    label: ssim_only
-```
-
 Ablation summaries are written beside queue state as
 `local_workspace/queues/<queue-name>.ablation.summary.json`. The summary lists
 jobs, labels, run names, canonical resolved config hashes, declared fixed
@@ -71,173 +33,10 @@ Queue state is flattened under `local_workspace/queues/` by queue name. The
 state file records queue-level status plus per-job fields such as
 `status`, `started_at`, `completed_at`, and `error`.
 
-`RunLayout` in `virtual_staining.experiment.run_layout` owns one run's paths.
-`ResultsLayout` owns shared cross-run comparison paths under
-`local_workspace/results/comparisons/`. `ExperimentSession` is the only run-stage
-bootstrap and creates the directories; layout instances themselves are pure path
-contracts.
-
-## Method-Specific Configuration
-
-A run selects one of the two built-in methods. The annotated references
-[`config/runs/example.yaml`](../config/runs/example.yaml) (Pix2Pix) and
-[`config/runs/example_cyclegan.yaml`](../config/runs/example_cyclegan.yaml) (CycleGAN)
-document every supported option; `config/runs/minimal_pix2pix.yaml` and
-`config/runs/minimal_cyclegan.yaml` are the same experiments with defaults omitted.
-
-### `method`
-
-```yaml
-method:
-  name: pix2pix          # pix2pix (default) | cyclegan
-  replay_buffer_size: 50 # cyclegan only; default 50
-```
-
-`replay_buffer_size` is the per-domain number of previously generated images kept in the
-`fake_A` / `fake_B` replay pools. Once a pool is full, each new fake is shown to the
-discriminator directly or, with probability 0.5, swapped for a stored one. `0` disables
-the pools. Pool contents and their RNG state are checkpointed. Setting the field for
-Pix2Pix is an error.
-
-### `data`
-
-```yaml
-data:
-  pairing: unpaired            # paired (default) | unpaired
-  domains:                     # unpaired only
-    label_free: domains/label_free
-    stained: "prepared/{split}/stained/**/*.tif"
-```
-
-Pix2Pix requires `pairing: paired` (the default) and trains from the prepared manifest;
-`domains` must then be omitted. CycleGAN requires `pairing: unpaired` and exactly two
-`domains`, keyed by `model.inputs[0]` (domain A) and `model.outputs[0]` (domain B). Each entry
-is either a directory containing `train/`, `val/`, and `test/` (searched recursively) or a
-path/glob containing the literal `{split}`. Relative entries resolve from `dataset_root`.
-The two collections are independent: an epoch has `max(len(A), len(B))` samples, the
-shorter domain wraps around, and the domain-B draw is a deterministic function of the
-seed, epoch, and index.
-
-Provenance fields apply to both pairings:
-
-```yaml
-data:
-  hash_policy: content        # content (default) | membership
-  group_validation: auto      # auto (default) | patient | specimen | set | unavailable
-  group_metadata: groups.csv  # unpaired only: path,domain,split,set_id,specimen_id,patient_id
-```
-
-Domain collections must resolve inside `dataset_root` so their locators stay portable.
-See [Consumed-data snapshots](#consumed-data-snapshots).
-
-### `model.inputs` and `model.outputs`
-
-```yaml
-model:
-  inputs: [AF, LF]     # N ordered named RGB inputs
-  outputs: [PAS, HE]   # M ordered named RGB outputs; [HE] for one output
-```
-
-Both are required, ordered, non-empty lists of unique machine identifiers matching
-`[A-Za-z][A-Za-z0-9_-]*` (names are never sanitized), and they must be disjoint. One
-output is the one-item case of the same representation; the superseded singular
-`model.target` (and `preprocessing.inputs.target_modality`) is rejected with a pointer to
-the plural field. With a `preprocessing` section, `model.inputs` must be a subset of
-`preprocessing.inputs.modalities` and `model.outputs` a subset of
-`preprocessing.inputs.target_modalities`, each in any order; model order is
-authoritative. Pix2Pix accepts any M; CycleGAN requires exactly one input and one
-output.
-
-### `model.generator`
-
-| `architecture` | Method | Fields |
-|---|---|---|
-| `concat_unet` (default) | Pix2Pix only | `base_channels`, `norm` (default `batch`), `dropout`, `bilinear` |
-| `resnet` | CycleGAN only | `base_channels`, `blocks` (default 9), `norm` (must be `instance`) |
-
-The architecture is fixed by the method; it is not a free choice. Both methods use
-`model.discriminator` (`ndf`, `norm`, `use_sigmoid`) for their PatchGAN discriminators:
-one joint discriminator conditioned on all inputs and scoring all outputs together
-(`3*N + 3*M` channels) for Pix2Pix, unconditional per domain for CycleGAN. The Pix2Pix
-generator has `3*N` input and `3*M` output channels, split back into the named outputs.
-Channel counts are derived from `model.inputs`/`model.outputs`, never component options.
-CycleGAN takes exactly one `model.inputs` and one `model.outputs` entry and needs
-`image_size` dimensions that are multiples of 4 and at least 8.
-
-### `inference.direction`
-
-```yaml
-inference:
-  direction: A_to_B   # cyclegan only: A_to_B (default) | B_to_A
-```
-
-`A_to_B` translates `model.inputs[0]` into `model.outputs[0]`; `B_to_A` translates the
-reverse with the second generator of the same checkpoint. The two directions are
-alternative predictions of one checkpoint, each producing exactly one named output
-(`model.outputs[0]` for `A_to_B`, `model.inputs[0]` for `B_to_A`), never two
-simultaneous outputs. Pix2Pix rejects the field.
-CycleGAN validation reports training-objective losses only, so CycleGAN checkpoint,
-scheduler, and early-stopping monitors must be `loss_G_val` or `loss_val_*` columns,
-not `val_*` image metrics.
-
-### `evaluation.protocol`
-
-```yaml
-evaluation:
-  protocol: unpaired  # paired | unpaired
-```
-
-The default follows the method's training pairing: Pix2Pix -> `paired`, CycleGAN ->
-`unpaired`. The protocol chooses how evaluation inputs are read, never how the model was
-trained. `paired` is the normal/default protocol for paired-training methods. CycleGAN
-may explicitly select `paired` when an aligned held-out test manifest exists;
-`data.domains` collections are never treated as pairs.
-
-`unpaired` compares independent generated and real reference collections and is
-method-independent. The reference collection is resolved as:
-
-1. `evaluation.reference_collection`, when set;
-2. otherwise the reference domain's `data.domains` entry (CycleGAN normally has one);
-3. otherwise the configuration is rejected.
-
-```yaml
-evaluation:
-  protocol: unpaired
-  reference_collection: reference/stained  # unpaired only
-```
-
-`reference_collection` uses the `data.domains` spec semantics: a directory holding
-`test/` (searched recursively) or a path/glob containing the literal `{split}`; relative
-values resolve against `dataset_root`. It is rejected with the paired protocol, is never
-inferred from the paired manifest, and `data.group_metadata` is not applied to it. See
-[Evaluation outputs](#evaluation-outputs).
-
-### `evaluation.metrics` and `evaluation.input_failures`
-
-```yaml
-evaluation:
-  metrics:              # optional; omitted = mae, mse, rmse, psnr, ssim, pcc_gray, pcc_rgb_mean
-    - name: mae
-    - name: ssim
-    - name: my_metric   # registered in Python; see docs/library_api.md
-      options: {scale: 2.0}
-  input_failures: strict  # strict (default) | permissive
-```
-
-Both apply to the paired protocol only; the unpaired protocol rejects an explicit
-`metrics` list and `permissive`. `metrics` is an ordered list of `{name, options}`
-mappings resolved once, before any image is read, against the metric definitions the
-caller supplied (`builtin_definitions()` by default). Unknown or repeated names, unknown
-or malformed options, and unknown keys fail preflight. Only requested metrics are
-computed and reported, in request order. The resolved config records `metrics` only when
-it was configured.
-
-`input_failures` covers known input problems: a missing or unreadable target or
-generated file, a non-RGB image, a target/generated shape mismatch, and a missing,
-non-binary or mismatched valid-region support mask. `strict` records them in
-`coverage.csv` and fails the stage. `permissive` excludes those samples, records the
-reasons and continues, but still fails when nothing could be evaluated. Metric
-implementation, backend and programming errors always fail the stage in either mode.
+Run configuration options belong to the exhaustive
+[Pix2Pix](../config/runs/example.yaml) and
+[CycleGAN](../config/runs/example_cyclegan.yaml) YAML references. Python extensions are
+covered in [Library Stage API](library_api.md#extending-with-explicit-definitions).
 
 ## Directory Layout
 
@@ -296,234 +95,27 @@ local_workspace/results/<run_name>/
 ```
 
 Cross-run comparisons are written separately under
-`local_workspace/results/comparisons/<A>_vs_<B>/<mode>_<metric>/`; `ResultsLayout`
-owns this shared results root rather than either individual `RunLayout`.
-
-`applications.prepare` orchestrates dataset-local config and environment snapshots
-through the generic experiment snapshot helpers. `data/provenance.py` owns dataset
-fingerprints and source-file hashing. Preparation does not write experiment
-`run.json`, `events.jsonl`, or `metadata/stages/prepare.json`.
-
-Run checkpoints use the method-aware v4 `checkpoint_contract.py` and
-`checkpoint_selection.py` modules; model, optimizer, scaler, scheduler, and (for
-CycleGAN) replay-pool state are method-owned and persisted opaquely through
-`state_dict()`. Training progress is a callback event rendered by
-the CLI, not terminal output from library code. `ProgressUpdate` carries raw
-data: monotonic `elapsed_seconds`/`eta_seconds` and a wall-clock
-`estimated_end`, formatted only by `training/progress.py` helpers.
+`local_workspace/results/comparisons/<A>_vs_<B>/<mode>_<metric>/`.
+Preparation writes [dataset-local artifacts](dataset_format.md#prepared-layout),
+not experiment `run.json`, `events.jsonl`, or `metadata/stages/prepare.json`.
 
 ## File Descriptions
 
-### `config/input.yaml`
+### `config/<stage>/input.yaml`
 
-Verbatim copy of the YAML file passed to `--config`. Preserved for full
-reproducibility - re-running with this file reproduces the same experiment.
+Verbatim copy of the YAML file passed to `--config` for that stage.
 
-### `config/resolved.yaml`
+### `config/<stage>/resolved.yaml`
 
-The fully expanded effective configuration after all defaults have been applied
-and all derived paths resolved. Differences from `input.yaml` reflect default
-values that were not explicitly set by the user.
+The effective configuration with parsed values and defaults, serialized with sorted
+YAML keys. Its hash identifies these bytes only; see [Reproducibility](reproducibility.md).
 
 `vs config resolve --config ...` prints these exact bytes without running a stage, and
 `vs config check` prints their SHA-256 as `config_sha256` (the stage's `config_hash`).
 
-Training losses are recorded under `training.losses.generator` and
-`training.losses.discriminator` lists. Training requires explicit loss terms. A term is
-active only when it is explicitly listed, `enabled` is `true`, and its scheduled current
-weight is nonzero. Explicitly listed terms must declare `weight`; unlisted losses remain
-absent and inactive. Weights, schedule factors, mask weights, and SSIM numeric
-parameters must be finite; NaN and infinity are rejected.
-
-Training-only augmentation is recorded under `training.augmentation`. When
-enabled, the training split is virtually expanded in memory; no augmented patch
-files are written, and validation/test data keep deterministic preprocessing.
-
-```yaml
-training:
-  augmentation:
-    enabled: false
-    expansion_factor: 1
-    intensity: light          # light, medium, or strong
-    photometric_inputs: []    # resolved; see below
-```
-
-One sampled geometry realization (resize, flips, `RandomRotate90`, affine) is applied to
-every selected input, every selected target and every target mask; images keep
-continuous interpolation and masks use nearest-neighbour. Targets and masks never get
-photometric transforms. `light` has none (`photometric_inputs` resolves to `[]`, and a
-non-empty list with `light` is rejected); for `medium`/`strong` each input in
-`photometric_inputs` gets its own photometric stream seeded from `training.seed` and a
-SHA-256 digest of its name. Omitted, it resolves to the preparation reference input
-when that input is selected, else to the first selected model input; the resolved
-config records the effective list. Entries must be unique selected `model.inputs`.
-Because every preset includes `RandomRotate90`, `enabled: true` requires a square
-`image_size`; disabled augmentation keeps non-square support. Results repeat only under
-the same complete execution setup (seed, worker count, library versions); no
-worker-count-independent or exact-resume replay is promised. CycleGAN requires
-`enabled: false`.
-
-Optimizer learning-rate schedules are configured under `training.scheduler`.
-Omitting the section preserves a flat learning rate. Epoch numbers are
-zero-based. `linear_decay` keeps the initial optimizer LR through
-`decay_start_epoch`, then decays linearly through the final epoch. Plateau
-scheduling steps only after validation, using validation metric columns such as
-`loss_G_val` or a per-output Pix2Pix column `val_<metric>__<output>` (`val_ssim__HE`,
-`val_mae__PAS`, with `<metric>` one of `ssim`, `psnr`, `mae`, `rmse`, `pcc_gray`,
-`pcc_rgb_mean`). `loss_G_val` depends on the configured training loss terms.
-
-```yaml
-training:
-  scheduler:
-    name: linear_decay
-    decay_start_epoch: 50
-```
-
-```yaml
-training:
-  scheduler:
-    name: reduce_on_plateau
-    monitor: val_ssim__HE
-    mode: max
-    factor: 0.5
-    patience: 5
-    min_lr: 0.00002
-```
-
-Optimizer LR schedules are separate from `training.losses.*.schedule`, which changes
-loss-term weights rather than optimizer learning rates.
-
-Early stopping is configured under `training.early_stopping` and is disabled
-when omitted. `patience` counts validation events, not raw epochs, so
-`validate_rate` controls how often the monitored value can become stale. Use
-validation CSV column names such as `val_ssim__HE`, `val_mae__PAS`,
-`loss_G_val`, `loss_D_val`, or configured `loss_val_*` component columns. A Pix2Pix
-monitor that names an output must name one of `model.outputs`. With one output the
-default monitor is `val_ssim__<output>`; with several outputs `monitor` is required,
-because choosing which output decides early stopping is the user's decision.
-
-```yaml
-training:
-  early_stopping:
-    monitor: val_ssim__HE
-    mode: max
-    patience: 15
-    min_delta: 0.0
-```
-
-Accepted loss names depend on the method; a name from the other method's set is
-rejected.
-
-Pix2Pix:
-
-- `adversarial_bce`: generator or discriminator BCE-with-logits adversarial loss.
-- `l1`: generator image reconstruction loss.
-- `ssim`: generator image structural similarity loss.
-
-CycleGAN:
-
-- `adversarial_lsgan`: least-squares adversarial loss; required for the generator and
-  the discriminator.
-- `cycle_l1`: generator cycle-consistency L1 (`A -> B -> A` and `B -> A -> B`); required.
-- `identity_l1`: optional generator identity L1 (each generator applied to real images of
-  its own output domain).
-
-```yaml
-training:
-  losses:
-    generator:
-      - name: adversarial_lsgan
-        weight: 1.0
-      - name: cycle_l1
-        weight: 10.0
-      - name: identity_l1
-        weight: 5.0
-    discriminator:
-      - name: adversarial_lsgan
-        weight: 1.0
-```
-
-CycleGAN also requires `training.augmentation.enabled: false`.
-
-The Pix2Pix example below shows the SSIM options:
-
-```yaml
-training:
-  losses:
-    generator:
-      - name: adversarial_bce
-        weight: 1.0
-      - name: l1
-        weight: 25.0
-      - name: ssim
-        weight: 0.0
-        enabled: false
-        params:
-          mask:
-            enabled: false
-            source: foreground_mask
-            background_weight: 0.25
-        schedule:
-          type: linear_warmup
-          start_epoch: 0
-          end_epoch: 5
-    discriminator:
-      - name: adversarial_bce
-        weight: 1.0
-```
-
-The Pix2Pix baseline objective uses generator `adversarial_bce` with weight `1.0`,
-generator `l1` with weight `25.0`, and discriminator `adversarial_bce` with
-weight `1.0`.
-
-The training SSIM implementation is differentiable PyTorch code. It maps
-current training tensors from `[-1, 1]` to `[0, 1]` before computing SSIM, and
-uses `ssim_loss = 1 - SSIM(prediction, target)`. MS-SSIM and other structural
-losses are not built in.
-
-Supported schedule types are `constant`, `linear_warmup`, `linear_decay`,
-`step`, `cosine`, `turn_on_after_epoch`, and `turn_off_after_epoch`.
-`linear_warmup`, `linear_decay`, and `cosine` use `start_epoch` and
-`end_epoch`. `step`, `turn_on_after_epoch`, and `turn_off_after_epoch` use
-`epoch`; `step` also uses `factor`.
-
-Mask weighting is optional. When `params.mask.enabled` is `true`, the training
-dataset must provide a `foreground_mask` tensor for every model output in every batch
-(`masks.foreground_mask.<output>`). Missing masks raise an error naming the output
-instead of being treated as all-foreground. The manifest loads the exact
-`foreground_mask__<target>` paths written when `masks.save_patch_masks: true`; each saved
-patch mask is that target's own aligned foreground mask, and an output's loss only ever
-uses its own mask.
-
-Pix2Pix composes one joint adversarial term with, for every configured reconstruction
-term, `weight * mean(term(prediction[o], target[o]) for o in model.outputs)`. The
-arithmetic mean over outputs is deliberate: one output keeps its exact scale and adding
-outputs does not inflate the reconstruction magnitude. The schedule applies after the
-mean, the loss parameters apply uniformly to all outputs, and this training mean is not
-an evaluation score.
-
-When configured loss terms are present, `metrics/epochs.csv` adds deterministic
-component columns using normalized names:
-
-```text
-loss_train_total_generator
-loss_train_total_discriminator
-loss_train_raw_<role>_<loss_name>
-loss_train_weighted_<role>_<loss_name>
-loss_train_current_weight_<role>_<loss_name>
-loss_val_total_generator
-loss_val_total_discriminator
-loss_val_raw_<role>_<loss_name>
-loss_val_weighted_<role>_<loss_name>
-loss_val_current_weight_<role>_<loss_name>
-```
-
-Pix2Pix reports every reconstruction term per output as `<loss_name>__<output>`; adversarial
-terms and the totals stay joint. For example, configured SSIM with `model.outputs: [HE,
-PAS]` writes `loss_train_raw_generator_ssim__HE`, `loss_train_raw_generator_ssim__PAS`,
-and the matching `weighted` and `current_weight` columns, plus validation columns when
-validation runs. `raw` is that output's term, `weighted` its contribution to `loss_G`
-(`current_weight * raw / M`), and `current_weight` the scheduled term weight.
+Losses, augmentation, schedulers, and early stopping retain their effective values in
+this snapshot; their configuration semantics are documented in the
+[run YAML references](../config/runs/example.yaml).
 
 ### `metadata/run.json`
 
@@ -591,17 +183,12 @@ shape is:
 [Consumed-data snapshots](#consumed-data-snapshots)); rows are never inlined.
 `produced_data` is set only by inference, after its outputs are written. Failed stages
 add `error_type` and `error`. Stage-specific results remain under `details`; later
-`run.result()` calls replace earlier values by key.
+results replace earlier values by key.
 
-Stage lifecycle: the session first snapshots config and environment; the application
-then resolves its exact inputs once, and `bind_inputs` persists the consumed-data
-snapshot before `stage_started` is published and reporters start (their start
-metadata carries the config hash and consumed snapshot ID). If configuration or input
-resolution fails first, a single `stage_failed` event and a failed stage record are
-written with `consumed_data: null` and the original error; reporters are not started.
-A snapshot written before a later failure is kept as evidence of what the failed
-attempt consumed. Metadata is a local single-writer store: concurrent writers to one
-run are not coordinated.
+A stage-start record binds its config, environment, and consumed-data identity. Failure
+before inputs are bound records `consumed_data: null` and the original error; a snapshot
+already written remains evidence of the failed attempt. Metadata is a local
+single-writer store: concurrent writers to one run are not coordinated.
 
 ### `metadata/events.jsonl`
 
@@ -615,13 +202,12 @@ writes and cannot invalidate them.
 
 A consumed-data snapshot answers *which exact assets did this tracked stage consume?*
 It is distinct from the dataset fingerprint, which answers *what dataset did
-preparation build?* (see [Dataset Format](dataset_format.md)). Each tracked stage
-resolves its inputs once, builds the snapshot from those same objects, and passes the
-same sequence to the computation, so membership cannot change between provenance and
-consumption.
+preparation build?* (see [Dataset Format](dataset_format.md)). Snapshot membership
+matches the inputs supplied to the stage computation.
 
-`snapshot.json` (snapshot schema version 1) and `rows.csv` are published atomically;
-`snapshot.json` binds the SHA-256 of `rows.csv`, so a mismatched pair is rejected.
+`snapshot.json` (snapshot schema version 1) binds the SHA-256 of `rows.csv`.
+Each file is published atomically, but the pair is not a transaction; readers reject
+mismatched metadata and rows after an interrupted update.
 Row columns:
 
 ```text
@@ -645,9 +231,8 @@ directory traversal order.
 
 Hash policy (`data.hash_policy`):
 
-- `content` (default): every consumed file is SHA-256 hashed; the file is stat-ed
-  before and after reading and a file that changes while hashed fails the stage. This
-  is the mode for a content-identical freeze. A hashing failure never falls back.
+- `content` (default): every consumed file is SHA-256 hashed and must remain stable
+  while hashed. This is the mode for a content-identical freeze. A hashing failure never falls back.
 - `membership`: records locators, sizes, and semantic metadata only.
   `content_verified: false` and an explicit limitation mark it as unverified.
 
@@ -740,6 +325,31 @@ epochs `0..resume_at-1`; stale rows at or after `resume_at` are discarded before
 new rows append. Missing, malformed, gapped, duplicate, or incompatible history
 fails instead of silently truncating it.
 
+When configured loss terms are present, `metrics/epochs.csv` adds deterministic
+component columns using normalized names:
+
+```text
+loss_train_total_generator
+loss_train_total_discriminator
+loss_train_raw_<role>_<loss_name>
+loss_train_weighted_<role>_<loss_name>
+loss_train_current_weight_<role>_<loss_name>
+loss_val_total_generator
+loss_val_total_discriminator
+loss_val_raw_<role>_<loss_name>
+loss_val_weighted_<role>_<loss_name>
+loss_val_current_weight_<role>_<loss_name>
+```
+
+Pix2Pix reports every reconstruction term per output as `<loss_name>__<output>`; adversarial
+terms and the totals stay joint. For example, configured SSIM with `model.outputs: [HE,
+PAS]` writes `loss_train_raw_generator_ssim__HE`, `loss_train_raw_generator_ssim__PAS`,
+and the matching `weighted` and `current_weight` columns, plus validation columns when
+validation runs. `raw` is that output's term, `weighted` its contribution to `loss_G`
+(`current_weight * raw / M`), and `current_weight` the scheduled term weight. The same
+loss parameters apply to every output; this training mean is not an evaluation score.
+CycleGAN objective components sum the two domain/direction contributions.
+
 ### `checkpoints/ep<NNN>.pth`
 
 PyTorch checkpoint saved every `training.checkpoint_rate` epochs.
@@ -771,14 +381,9 @@ existed (no `method.implementation`) are rejected rather than converted. The res
 config hash is recorded for provenance only, so output, evaluation, or reporting paths do
 not affect compatibility.
 
-Resume and inference validate every semantic field before method state is touched.
-Each method then preflights its own state before mutating anything: exact state
-groups and roles, model state keys, tensor shapes and dtypes, optimizer parameter
-groups and per-parameter state shapes, AMP scaler state, scheduler presence and
-state keys, and (CycleGAN) replay pools. Inference checks the selected generator the
-same way. Malformed or incompatible state raises `CheckpointCompatibilityError`
-naming the offending field. If restoration fails after preflight, the runtime is
-reported as partially restored and must be discarded.
+Resume and inference require compatible semantic metadata and method state before
+restoration. If restoration fails after validation, the runtime may be partially
+restored and must be discarded.
 
 `state.optimization` records, per optimizer role, the configured optimizer policy
 (class, initial `lr`, `betas`, `eps`, `weight_decay`, `amsgrad`, `maximize`) and the
@@ -796,12 +401,8 @@ and torch RNG, DataLoader shuffling and worker RNG, and augmentation RNG are **n
 checkpointed, so a resumed run is not guaranteed to reproduce the stochastic
 trajectory of an uninterrupted run.
 
-Saving writes a hidden `.ep<NNN>.pth.*.tmp` file in the same directory, fsyncs it,
-reads it back and validates it under the contract, and only then atomically renames
-it to `ep<NNN>.pth`. A failed or interrupted save never exposes partial bytes or
-replaces an existing checkpoint, and `latest`, `best`, and `top_k` selection only
-ever see published files. Use `inference.checkpoint_policy: latest` to load the most
-recent one automatically.
+A failed or interrupted save never exposes partial checkpoint bytes or replaces an
+existing checkpoint. Selection considers only successfully published checkpoints.
 
 ### `checkpoints/best.json`
 
@@ -819,11 +420,14 @@ rank 1 for that metric. `checkpoint_policy: top_k` additionally uses
 `checkpoint_rank`.
 Checkpoint files are not deleted by this metadata record.
 
-### `artifacts/output_train/`, `output_val/`, `output_test/`
+### Generated images
 
-Generated images produced during training (train/val) and inference (test). Every
-generated artifact is identified by `(sample_id, output_name)` and written as
-`<output_dir>/<output_name>/<sample_id>_generated.<ext>`, one file per model output, so
+`artifacts/output_train/`, `output_val/`, and `output_test/`:
+
+Inference writes test predictions to `output_test/`; training previews use `output_val/`.
+The Trainer creates `output_train/`, but built-in methods currently write no images there.
+Each inference artifact is identified by `(sample_id, output_name)` and written as
+`<output_dir>/<output_name>/<sample_id>_generated.<ext>`, one file per predicted output, so
 all Pix2Pix outputs and both CycleGAN directions share one output directory without
 collisions and every path inverts to its pair:
 
@@ -834,8 +438,10 @@ stained/00512_09216_generated.tif     # CycleGAN A_to_B predicts domain B
 label_free/00512_09216_generated.tif  # CycleGAN B_to_A predicts domain A
 ```
 
-Validation previews in `output_val/` are `epoch<e>_batch<b>_input.tif` plus
-`..._output__<output>.tif` and `..._target__<output>.tif` per output.
+Pix2Pix validation previews in `output_val/` are `epoch<e>_batch<b>_input.tif`
+(the first configured input) plus `..._output__<output>.tif` and
+`..._target__<output>.tif` per output. CycleGAN writes
+`epoch<e>_batch<b>_preview.tif` grids of real A, fake B, real B, and fake A.
 
 `vs infer-images --recursive` uses the same layout and preserves the input's relative
 directory structure (before `<output_name>`) under the output root, so equal filenames
@@ -847,17 +453,18 @@ files go to `inference.output_dir` or the run's `artifacts/output_single/` (one 
 or `artifacts/output_images/` (directories). Library callers without run defaults
 must pass an output path (see [`library_api.md`](library_api.md#direct-predictor-inference)).
 
-Full-resolution WSI outputs are pyramidal BigTIFFs with the input's pixel dimensions.
-For a single WSI input, known source MPP is preserved. For multi-input WSI, output
-MPP is preserved only when every input provides compatible known MPP. Conflicting
-known values fail; if any input lacks calibration, the shared output MPP remains
-unknown (never zero and never inferred from pixel counts). All outputs share the input
-grid and MPP and come from one tile traversal. The run first requires at least
-`M x width x height x 15` bytes of free scratch space next to the outputs for M outputs.
+Full-resolution WSI outputs are pyramidal BigTIFFs with the shared input pixel dimensions.
+MPP is copied from source metadata only when every input provides compatible known
+values (relative tolerance `1e-4`); conflicting known values fail before prediction,
+even if another input lacks calibration. Missing calibration leaves MPP unknown, never zero or inferred from
+pixel counts. A TIFF has one resolution unit, so both output axes remain unknown if only
+one axis is known. Every output shares the same grid and MPP; this does not certify
+biological registration. Operational requirements are in
+[Direct predictor inference](library_api.md#direct-predictor-inference).
 
 ## Evaluation outputs
 
-Every evaluation writes `evaluation/evaluation_metadata.json` (`schema_version` 3)
+A successful tracked evaluation writes `evaluation/evaluation_metadata.json` (`schema_version` 3)
 recording `method`, `training_pairing`, `evaluation_protocol`, `inference_direction`
 (`null` for Pix2Pix), `source_domains`, `reference_domains` (the predicted outputs),
 `generated_dir`, `counts`,
@@ -974,8 +581,9 @@ One row per requested `(sample_id, output_name)` pair, the single source of cove
 | `detail` | Human-readable message |
 | `target_path`, `generated_path`, `support_path` | Input paths (`support_path` empty without support) |
 
-It is written even when the evaluation fails, and no other paired report is published
-then.
+It is written for known per-pair input failures, including strict-mode failure or zero
+evaluable samples; those failures publish no new paired metric reports. Invalid requests
+and unexpected evaluator errors may fail before coverage is written.
 
 ### `evaluation/evaluation_result.json`
 
@@ -1024,28 +632,24 @@ checkpoint format: the bundled checkpoints are the run's v4 files, byte for byte
 
 The source must be a tracked run with `config/train/input.yaml`,
 `config/train/resolved.yaml`, `metadata/environments/train.json` and `checkpoints/`;
-none may be (or pass through) a symlink. The resolved training config is parsed with
-`RunConfig.from_yaml(..., definitions)`, so it must resolve through the same method and
-component definitions as normal reconstruction. Every selected checkpoint's
+none may be (or pass through) a symlink. The resolved training config must resolve with the same method and component
+definitions used for reconstruction. Every selected checkpoint's
 `config_hash` must equal the SHA-256 of that tracked resolved config; a missing or
 different hash is rejected (the binding is never inferred from file location).
 
-Selectors:
+Selectors (repeatable):
 
 | Selector | Source |
 |---|---|
 | explicit (`--checkpoint PATH`) | A regular, non-symlink file directly in the run's `checkpoints/`; relative paths are relative to it. `..`, absolute paths elsewhere, nested paths and symlinks are rejected |
-| `latest` (`--latest`) | `checkpoint_selection` latest-checkpoint resolution |
+| `latest` (`--latest`) | Newest `epNNN.pth` checkpoint |
 | `best` (`--best METRIC`) | Rank 1 of `METRIC` in `checkpoints/best.json` |
 | `top_k` (`--top-k METRIC RANK`) | Rank `RANK` of `METRIC` in `checkpoints/best.json` |
 
-Ranked selections read metric, rank, value, mode and epoch from `best.json`; nothing is
-re-ranked or re-scored. Every selected file is read with the weights-only
-`read_checkpoint`, checked with `Definitions.require_checkpoint`, validated against
-`config.method.definition.checkpoint_identity(config)`, bound to the config hash and
-hashed before anything is written. Unsupported, corrupt, unversioned and pre-v4
-checkpoints fail through the normal checkpoint policy. Selectors that resolve to the
-same physical file (same device and inode, including hard links) share one bundled copy.
+Ranked selections preserve metric, rank, value, mode and epoch from `best.json`, without
+re-ranking. Selected checkpoints must satisfy the current checkpoint contract and match
+the tracked config hash and supplied definitions. Selections of the same physical file,
+including hard links, share one bundled copy.
 
 ### `bundle.json` (schema version 1)
 
@@ -1066,24 +670,19 @@ bundled.
 
 ### Publication and verification
 
-The bundle is built in a hidden `.<name>.*.staging` directory beside the destination
-and verified there with `verify_model_bundle`: exact index schema, every path strictly
-inside the bundle with no absolute path, `..` or symlink, every SHA-256, and every
-checkpoint re-read and re-validated against the bundled resolved config, its config
-hash and the supplied definitions. Only then is the staging directory renamed to the
-destination with an atomic no-replace rename (`renameat2(RENAME_NOREPLACE)` on Linux,
-`renamex_np(RENAME_EXCL)` on macOS, `MoveFileExW` without replace on Windows), so a
-destination created concurrently is never replaced; other platforms are refused. The
-destination must not exist and must not lie inside the source run
-(directly or through a symlink). On failure only the staging directory is removed; the
-source run and any existing destination are never modified.
+Verification checks the index schema, bundle-contained relative paths (no `..` or
+symlinks), every SHA-256, and checkpoint compatibility with the bundled resolved config,
+its hash, and the supplied definitions. Export publishes only a fully verified bundle.
+The destination must not exist or lie inside the source run, including through symlinks.
+The source and any existing destination, including one created concurrently, remain
+untouched on failure. Export requires filesystem support for atomic no-replace
+publication on Linux, macOS, or Windows.
 
 ### Portability semantics
 
 A bundle stays verifiable and reconstructable after it is moved and the original run
-and dataset directories are gone: `RunConfig.from_yaml(bundle/"config/resolved.yaml",
-definitions)` plus `load_inference_generator(config, RunLayout(bundle), device,
-bundle/"checkpoints/<file>")` rebuilds the prediction network for new inference inputs.
+and dataset directories are gone; see the
+[Python reconstruction example](library_api.md#exporting-model-bundles).
 The bundled configs are unmodified research provenance; their `dataset_root`,
 `results_path`, `run_name` and manifest paths still name the original locations, so
 the resolved config is not a runnable reproduction of training once those are gone.
