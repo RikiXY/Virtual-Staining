@@ -18,14 +18,7 @@ def _make_norm(norm: str, channels: int) -> nn.Module:
 
 
 class DoubleConv(nn.Module):
-    """
-    Block consisting of two consecutive convolutions, each followed by
-    batch normalisation and ReLU activation.
-
-    Args:
-        in_channels (int): Number of input channels.
-        out_channels (int): Number of output channels.
-    """
+    """Two convolutions, each followed by batch or instance normalization and ReLU."""
 
     def __init__(self, in_channels: int, out_channels: int, norm: str) -> None:
         super().__init__()
@@ -55,12 +48,7 @@ class DoubleConv(nn.Module):
 
 
 class Down(nn.Module):
-    """
-    Downsampling block for U-Net-style architectures.
-
-    Reduces the spatial resolution via max pooling and then applies
-    a `DoubleConv` block to extract richer features.
-    """
+    """U-Net downsampling via max pooling followed by ``DoubleConv``."""
 
     def __init__(self, in_channels: int, out_channels: int, norm: str) -> None:
         super().__init__()
@@ -107,10 +95,7 @@ class Up(nn.Module):
 
 
 class OutConv(nn.Module):
-    """
-    Final 1x1 convolution that maps the features
-    to the required number of output channels.
-    """
+    """Final 1x1 convolution mapping features to output channels."""
 
     def __init__(self, in_channels: int, out_channels: int) -> None:
         super().__init__()
