@@ -19,7 +19,13 @@ from virtual_staining.config.data import (
     SplitConfig,
 )
 from virtual_staining.data import slide_set_processor as processor_module
-from virtual_staining.data.alignment import AlignmentResult, identity_alignment
+from virtual_staining.data.alignment import (
+    AlignmentResult,
+    AlignmentTransform,
+    ImageGeometry,
+    RegistrationRequest,
+    identity_alignment,
+)
 from virtual_staining.data.slide_set_processor import SlideSetProcessor
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
 from virtual_staining.utils.image_io import PillowRegionImageReader
@@ -86,20 +92,16 @@ def test_process_returns_rows_and_metadata_after_cleanup(
     assert (discarded["x"], discarded["y"]) == (8, 0)
     assert discarded["reasons"]
     assert set(discarded["ratios"]) == {"LF", "AF", "HE", "all", "intersection", "union"}
-    assert result.metadata == {
-        **{f"{name}__alignment_method": "identity" for name in ("LF", "AF", "HE")},
-        **{
-            f"{name}__alignment_metadata": json.dumps(
-                {
-                    "method": "identity",
-                    "reason": "reference" if name == "LF" else "declared_aligned",
-                    "warp_matrix": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-                },
-                sort_keys=True,
-            )
-            for name in ("LF", "AF", "HE")
-        },
-    }
+    for name in ("LF", "AF", "HE"):
+        assert result.metadata[f"{name}__alignment_method"] == "identity"
+        alignment = AlignmentResult.from_dict(
+            json.loads(result.metadata[f"{name}__alignment_metadata"])
+        )
+        assert alignment.reason == ("reference" if name == "LF" else "declared_aligned")
+        assert alignment.candidate is not None
+        assert alignment.candidate.moving.name == name
+        assert alignment.candidate.reference.name == "LF"
+        assert alignment.qc is None
 
 
 @pytest.mark.parametrize("on_failure", ["error", "skip_set"])
@@ -158,7 +160,12 @@ def test_process_closes_readers_on_failure(tmp_path, monkeypatch, on_failure, st
 def test_align_delegates_all_moving_assets_with_explicit_data(tmp_path, monkeypatch) -> None:
     processor = SlideSetProcessor(_config(tmp_path), _slide_set(tmp_path))
     processor.compute_masks()
-    result = identity_alignment("delegated")
+    result = identity_alignment(
+        ImageGeometry("LF", (8, 16)),
+        ImageGeometry("HE", (8, 16)),
+        RegistrationRequest("same_section_restained", "identity"),
+        "delegated",
+    )
     resolve = Mock(return_value=result)
     monkeypatch.setattr(processor_module, "resolve_alignment", resolve)
     try:
@@ -169,16 +176,17 @@ def test_align_delegates_all_moving_assets_with_explicit_data(tmp_path, monkeypa
         for call, state in zip(
             resolve.call_args_list, (processor.inputs["AF"], processor.targets["HE"]), strict=True
         ):
-            reference, moving, policy = call.args
+            reference, moving, request = call.args
             assert reference.preview is processor.reference.preview
-            assert reference.full_shape == processor.reference.shape
-            assert moving.preview is state.preview and moving.mask is state.mask
-            assert moving.full_shape == state.shape
-            assert moving.name == state.asset.modality
-            assert moving.mpp == (None, None)
-            assert policy is processor.config.alignment
-            assert call.kwargs == {"already_aligned": state.asset.already_aligned}
-            assert state.alignment is result
+            assert reference.geometry.shape == processor.reference.shape
+            assert moving.preview is state.preview and moving.tissue_support is None
+            assert moving.geometry.shape == state.shape
+            assert moving.geometry.name == state.asset.modality
+            assert moving.geometry.mpp == (None, None)
+            assert request.relationship == "unknown" and request.existing_alignment == "identity"
+            assert call.kwargs == {}
+            assert state.alignment is not None
+            assert state.alignment.candidate is result.candidate
     finally:
         processor.close()
 
@@ -193,12 +201,20 @@ def test_affine_extraction_handles_downsampled_masks_in_both_io_paths(tmp_path, 
         state.mask = np.zeros((4, 8), dtype=np.uint8)
         state.mask[:, :4] = 255
         state.alignment = AlignmentResult(
-            "affine_sift", np.array([[1.0, 0.0, -2.0], [0.0, 1.0, 0.0]])
+            "succeeded",
+            "affine_sift",
+            RegistrationRequest("same_section_restained", "affine"),
+            AlignmentTransform(
+                ImageGeometry("HE", (8, 16)),
+                ImageGeometry("LF", (8, 16)),
+                "affine",
+                np.array([[1.0, 0.0, -2.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+            ),
         )
         image, mask = processor.extract_asset_patch(state, x=0, y=0, width=8, height=8)
         expected_mask = cv2.warpAffine(
             state.mask,
-            np.array([[2.0, 0.0, -2.0], [0.0, 2.0, 0.0]]),
+            np.array([[2.0, 0.0, -1.5], [0.0, 2.0, 0.5]]),
             (8, 8),
             flags=cv2.INTER_NEAREST,
         )
@@ -218,13 +234,20 @@ def test_every_target_is_aligned_extracted_and_committed_on_one_grid(
         masks=MaskConfig(save_patch_masks=True),
     )
     slide_set = _slide_set(tmp_path, targets=("PAS", "HE"))
-    resolve = Mock(return_value=identity_alignment("declared_aligned"))
+    resolve = Mock(
+        return_value=identity_alignment(
+            ImageGeometry("LF", (8, 16)),
+            ImageGeometry("HE", (8, 16)),
+            RegistrationRequest("same_section_restained", "identity"),
+            "declared_aligned",
+        )
+    )
     monkeypatch.setattr(processor_module, "resolve_alignment", resolve)
 
     result = SlideSetProcessor(config, slide_set, "train").process()
 
     # AF, PAS and HE are aligned to the reference frame; the reference is identity.
-    assert [call.args[1].name for call in resolve.call_args_list] == ["AF", "PAS", "HE"]
+    assert [call.args[1].geometry.name for call in resolve.call_args_list] == ["AF", "PAS", "HE"]
     (valid,) = result.valid_rows
     sample = valid["sample_id"]
     assert valid["targets"] == {
@@ -393,3 +416,24 @@ def test_no_manifest_row_is_accepted_for_an_unverified_sample(
     assert result.error is not None and "Written patch" in result.error
     written = tmp_path / "splits" / "train" / slide_set.set_id
     assert not written.exists() or list(written.iterdir()) == []
+
+
+@pytest.mark.parametrize("tiled", [False, True])
+def test_alignment_retains_known_mpp_after_reader_cleanup(tmp_path, monkeypatch, tiled):
+    from virtual_staining.utils.image_io import ImageMetadata
+
+    monkeypatch.setattr(
+        PillowRegionImageReader,
+        "metadata",
+        property(lambda reader: ImageMetadata(*reader.size, mpp_x=0.25, mpp_y=0.5)),
+    )
+    config = replace(_config(tmp_path), io=IOConfig(tiled=tiled, backend="pillow"))
+    processor = SlideSetProcessor(config, _slide_set(tmp_path))
+    try:
+        processor.compute_masks()
+        processor.align()
+        for state in processor._states():
+            assert state.alignment is not None and state.alignment.candidate is not None
+            assert state.alignment.candidate.moving.mpp == (0.25, 0.5)
+    finally:
+        processor.close()

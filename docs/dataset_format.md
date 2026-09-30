@@ -154,13 +154,34 @@ foreground mask with verified dimensions. Failed samples leave no partial files.
 Rejected positions appear in `discarded_manifest.csv` with split `discarded`; an
 incomplete rebuild does not leave a consumable manifest or successful build record.
 
-Alignment matrices map moving full-resolution `(x, y)` to reference full-resolution
-`(x, y)`. Array shapes are `(height, width)` and output sizes `(width, height)`.
-Preview estimation accounts for each image's actual per-axis scale, including resize
-rounding; masks use nearest-neighbor resampling. Mask IoU measures estimation-space
-overlap and is diagnostic, with no
-rejection threshold. Serialized keypoint fields `n_keypoints_src` and
-`n_keypoints_tgt` mean reference and moving keypoints respectively.
+Alignment metadata uses the versioned result format below. Preparation's existing
+alignment flags declare coordinates only; its foreground masks are not tissue-support
+or observation-validity evidence. Candidate estimation does not certify correspondence.
+
+### Persisted alignment geometry and results
+
+`virtual_staining.alignment/1` identifies the JSON objects emitted by
+`AlignmentTransform.to_dict()` and `AlignmentResult.metadata`. `kind` distinguishes
+`transform` from `result`; their `from_dict()` methods accept only this representation.
+Superseded 2×3 geometry and unknown fields/families are rejected.
+
+A transform contains `direction: moving_level0_to_reference_level0`, a finite float64
+homogeneous 3×3 `matrix`, `family` (`identity`, `similarity`, or `affine`), and explicit
+`moving`/`reference` frames with `name`, `(height, width)` `shape`, and nullable `(x, y)`
+`mpp`. Integer `(x, y)` denotes a pixel centre, x right and y down. The pixel-cell
+extent is `[-0.5, width-0.5) × [-0.5, height-0.5)`; index boxes are half-open.
+`moving_grid` and `reference_grid` are both null or contain estimation-grid `shape`
+and `grid_to_level0` matrices, including crop, resize and centre offsets. Matrix
+coefficients retain double precision through JSON round trips. No physical scale is
+inferred from dimensions; reflection and deformation are unsupported.
+
+A result contains `backend_status`, `method`, nullable `candidate`, backend
+`diagnostics`, nullable `qc`, `reason`, and the `request` declarations. The request
+keeps relationship, transform permissions, existing alignment, purpose, diagnostic
+region and correspondence evidence separate. QC records `status` (`accepted`,
+`rejected`, `insufficient_evidence`), nullable metrics, missing evidence and reasons.
+Backend failure is separate and has no QC decision. Reader handles and image/evidence
+arrays are not serialized.
 
 ## Patch manifest v4
 

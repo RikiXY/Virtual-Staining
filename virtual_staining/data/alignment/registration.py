@@ -6,267 +6,291 @@ from dataclasses import replace
 import cv2
 import numpy as np
 
-from virtual_staining.config.data import AlignmentConfig
 from virtual_staining.data.alignment.models import (
     AlignmentError,
     AlignmentImage,
     AlignmentResult,
-    RegistrationDiagnostics,
-    _validate_affine,
+    AlignmentTransform,
+    GridGeometry,
+    ImageGeometry,
+    QCDecision,
+    QCPolicy,
+    RegistrationRequest,
+    SpatialEvidence,
 )
-from virtual_staining.data.alignment.warping import (
-    _rescale_transform,
-    _validate_mask_geometry,
-    _warp_image,
-)
-
-_MIN_INLIERS = 12
-_MIN_INLIER_RATIO = 0.10
-_LOWE_RATIO_THRESHOLD = 0.75
-_RANSAC_REPROJECTION_THRESHOLD = 5.0
-_RANSAC_MAX_ITERS = 2000
-_RANSAC_CONFIDENCE = 0.99
-_RANSAC_REFINE_ITERS = 10
-
-
-def _affine_diagnostics(warp_matrix: np.ndarray) -> dict[str, float]:
-    a, b, tx = warp_matrix[0]
-    c, d, ty = warp_matrix[1]
-    return {
-        "scale_x": float(np.sqrt(a * a + c * c)),
-        "scale_y": float(np.sqrt(b * b + d * d)),
-        "rotation_deg": float(np.degrees(np.arctan2(c, a))),
-        "translation_x": float(tx),
-        "translation_y": float(ty),
-    }
+from virtual_staining.data.alignment.warping import _coordinates, _sample_evidence
 
 
 def _ratio_test_matches(
     knn_matches: Sequence[Sequence[cv2.DMatch]],
     *,
-    ratio_threshold: float = _LOWE_RATIO_THRESHOLD,
+    ratio_threshold: float = 0.75,
 ) -> list[cv2.DMatch]:
-    good_matches = []
-    for candidates in knn_matches:
-        if len(candidates) < 2:
-            continue
-        best, second_best = candidates[0], candidates[1]
-        if best.distance < ratio_threshold * second_best.distance:
-            good_matches.append(best)
-    return good_matches
-
-
-def _aligned_mask_iou(
-    reference_mask: np.ndarray | None,
-    moving_mask: np.ndarray | None,
-    warp_matrix: np.ndarray,
-    output_size: tuple[int, int],
-) -> float | None:
-    if reference_mask is None or moving_mask is None:
-        return None
-
-    aligned_moving_mask = _warp_image(moving_mask, warp_matrix, output_size, is_mask=True)
-    foreground_1 = reference_mask > 0
-    foreground_2 = aligned_moving_mask > 0
-    union = np.logical_or(foreground_1, foreground_2)
-    union_count = int(np.count_nonzero(union))
-    if union_count == 0:
-        return None
-    intersection_count = int(np.count_nonzero(np.logical_and(foreground_1, foreground_2)))
-    return intersection_count / union_count
+    return [
+        pair[0]
+        for pair in knn_matches
+        if len(pair) >= 2 and pair[0].distance < ratio_threshold * pair[1].distance
+    ]
 
 
 def _estimate_affine(
     reference: np.ndarray,
     moving: np.ndarray,
-    reference_mask: np.ndarray | None = None,
-    moving_mask: np.ndarray | None = None,
-    nfeatures: int = 10000,
-    ratio_threshold: float = _LOWE_RATIO_THRESHOLD,
-) -> tuple[np.ndarray, RegistrationDiagnostics]:
-    for name, image, mask in (
-        ("reference_mask", reference, reference_mask),
-        ("moving_mask", moving, moving_mask),
-    ):
-        if mask is not None and mask.shape != image.shape[:2]:
-            raise AlignmentError(
-                f"{name} geometry must match image: expected {image.shape[:2]}, got {mask.shape}"
-            )
-        if mask is not None:
-            _validate_mask_geometry(mask, image.shape[:2], name=name)
+    *,
+    family: str,
+    reference_grid: GridGeometry,
+    moving_grid: GridGeometry,
+) -> tuple[np.ndarray, dict[str, int | float | None]]:
+    """SIFT/RANSAC execution diagnostics are never QC acceptance evidence."""
     clahe = cv2.createCLAHE(clipLimit=18.0, tileGridSize=(8, 8))
-    reference_clahe = reference
-    moving_clahe = moving
-
-    if len(reference_clahe.shape) == 3:
-        reference_clahe = cv2.cvtColor(reference_clahe, cv2.COLOR_BGR2GRAY)
-    if len(moving_clahe.shape) == 3:
-        moving_clahe = cv2.cvtColor(moving_clahe, cv2.COLOR_BGR2GRAY)
-
-    reference_clahe = clahe.apply(reference_clahe)
-    moving_clahe = clahe.apply(moving_clahe)
-
-    sift = cv2.SIFT_create(nfeatures=nfeatures)  # type: ignore[attr-defined]
-    reference_keypoints, reference_descriptors = sift.detectAndCompute(
-        reference_clahe, reference_mask
-    )
-    moving_keypoints, moving_descriptors = sift.detectAndCompute(moving_clahe, moving_mask)
-
-    n_reference_keypoints = len(reference_keypoints)
-    n_moving_keypoints = len(moving_keypoints)
-    if (
-        n_reference_keypoints < 4
-        or n_moving_keypoints < 4
-        or reference_descriptors is None
-        or moving_descriptors is None
-    ):
-        raise AlignmentError(
-            "Not enough features for alignment: "
-            f"reference={n_reference_keypoints}, moving={n_moving_keypoints}, minimum=4"
-        )
-
-    bf = cv2.BFMatcher(cv2.NORM_L2)
-    knn_matches = bf.knnMatch(reference_descriptors, moving_descriptors, k=2)
-    filtered_matches = _ratio_test_matches(knn_matches, ratio_threshold=ratio_threshold)
-
-    if len(filtered_matches) < 4:
-        raise AlignmentError(
-            "Not enough good descriptor matches for alignment after ratio test: "
-            f"good={len(filtered_matches)}, minimum=4, ratio_threshold={ratio_threshold}"
-        )
-
-    reference_points = np.asarray(
-        [reference_keypoints[match.queryIdx].pt for match in filtered_matches],
-        dtype=np.float32,
-    ).reshape(-1, 1, 2)
-    moving_points = np.asarray(
-        [moving_keypoints[match.trainIdx].pt for match in filtered_matches],
-        dtype=np.float32,
-    ).reshape(-1, 1, 2)
-
-    warp_matrix, inlier_mask = cv2.estimateAffinePartial2D(
-        moving_points,
-        reference_points,
+    sift = cv2.SIFT_create(nfeatures=10000)  # type: ignore[attr-defined]
+    features = []
+    for image in (reference, moving):
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+        features.append(sift.detectAndCompute(clahe.apply(gray), None))
+    (ref_keys, ref_desc), (mov_keys, mov_desc) = features
+    if ref_desc is None or mov_desc is None or min(len(ref_keys), len(mov_keys)) < 4:
+        raise AlignmentError("Not enough features for alignment")
+    matches = _ratio_test_matches(cv2.BFMatcher(cv2.NORM_L2).knnMatch(ref_desc, mov_desc, k=2))
+    if len(matches) < 4:
+        raise AlignmentError("Not enough good descriptor matches for alignment")
+    ref_points = np.array([ref_keys[m.queryIdx].pt for m in matches], dtype=np.float64)
+    mov_points = np.array([mov_keys[m.trainIdx].pt for m in matches], dtype=np.float64)
+    if family == "similarity":
+        # Enforce similarity in native pixels, even with anisotropic estimation grids.
+        # For this family RANSAC residuals are in reference level-0 pixels.
+        ref_map, mov_map = reference_grid.grid_to_level0, moving_grid.grid_to_level0
+        ref_points = ref_points @ ref_map[:2, :2].T + ref_map[:2, 2]
+        mov_points = mov_points @ mov_map[:2, :2].T + mov_map[:2, 2]
+    estimate = cv2.estimateAffinePartial2D if family == "similarity" else cv2.estimateAffine2D
+    matrix, inliers = estimate(
+        mov_points,
+        ref_points,
         method=cv2.RANSAC,
-        ransacReprojThreshold=_RANSAC_REPROJECTION_THRESHOLD,
-        maxIters=_RANSAC_MAX_ITERS,
-        confidence=_RANSAC_CONFIDENCE,
-        refineIters=_RANSAC_REFINE_ITERS,
+        ransacReprojThreshold=5.0,
+        maxIters=2000,
+        confidence=0.99,
+        refineIters=10,
+    )
+    if matrix is None:
+        raise AlignmentError("Affine estimation failed")
+    count = int(inliers.sum()) if inliers is not None else None
+    homogeneous = np.vstack((matrix, [0, 0, 1]))
+    if family == "similarity":
+        homogeneous = (
+            np.linalg.inv(reference_grid.grid_to_level0) @ homogeneous @ moving_grid.grid_to_level0
+        )
+    return homogeneous, dict(
+        n_keypoints_reference=len(ref_keys),
+        n_keypoints_moving=len(mov_keys),
+        n_matches=len(matches),
+        n_inliers=count,
+        inlier_ratio=count / len(matches) if count is not None else None,
     )
 
-    if warp_matrix is None:
-        raise AlignmentError(
-            "Affine estimation failed after ratio-test matching and RANSAC: "
-            "cv2.estimateAffinePartial2D returned None"
-        )
-    _validate_affine(warp_matrix)
 
-    n_inliers = int(inlier_mask.sum()) if inlier_mask is not None else 0
-    inlier_ratio = n_inliers / len(filtered_matches)
-    if n_inliers < _MIN_INLIERS:
-        raise AlignmentError(
-            f"Alignment rejected: only {n_inliers} inliers found (minimum {_MIN_INLIERS} required)"
-        )
-    if inlier_ratio < _MIN_INLIER_RATIO:
-        raise AlignmentError(
-            "Alignment rejected: inlier ratio "
-            f"{inlier_ratio:.3f} is below minimum {_MIN_INLIER_RATIO:.3f} "
-            f"({n_inliers}/{len(filtered_matches)} inliers)"
-        )
-
-    diagnostics = _affine_diagnostics(warp_matrix)
-    mask_iou = _aligned_mask_iou(
-        reference_mask,
-        moving_mask,
-        warp_matrix,
-        (reference.shape[1], reference.shape[0]),
-    )
-    metadata = RegistrationDiagnostics(
-        n_keypoints_reference=n_reference_keypoints,
-        n_keypoints_moving=n_moving_keypoints,
-        n_matches=len(filtered_matches),
-        n_inliers=n_inliers,
-        inlier_ratio=inlier_ratio,
-        scale_x=diagnostics["scale_x"],
-        scale_y=diagnostics["scale_y"],
-        rotation_deg=diagnostics["rotation_deg"],
-        translation_x=diagnostics["translation_x"],
-        translation_y=diagnostics["translation_y"],
-        mask_iou=mask_iou,
-    )
-
-    return warp_matrix, metadata
-
-
-def identity_alignment(reason: str = "reference") -> AlignmentResult:
-    return AlignmentResult("identity", np.eye(2, 3, dtype=np.float64), reason=reason)
-
-
-def _validate_identity(reference: AlignmentImage, moving: AlignmentImage) -> None:
-    if reference.full_shape != moving.full_shape:
-        raise AlignmentError(f"identity alignment requires equal geometry for {moving.name}")
-    for name, left, right in zip(("mpp_x", "mpp_y"), reference.mpp, moving.mpp, strict=True):
-        if left is not None and right is not None and not np.isclose(left, right, rtol=0.01):
-            raise AlignmentError(f"identity alignment has incompatible {name} for {moving.name}")
-
-
-def _registration_preview(image: AlignmentImage) -> tuple[np.ndarray, np.ndarray]:
-    preview = image.preview
-    if (
-        preview.dtype != np.uint8
-        or preview.ndim not in (2, 3)
-        or (preview.ndim == 3 and preview.shape[2] != 3)
-        or min(preview.shape[:2]) < 2
-    ):
-        raise AlignmentError(f"Invalid preview for {image.name}: expected uint8 BGR or grayscale")
-    assert image.mask is not None
-    _validate_mask_geometry(image.mask, image.full_shape, name=f"{image.name} mask")
-    mask = image.mask
-    if mask.shape != preview.shape[:2]:
-        mask = cv2.resize(
-            mask, (preview.shape[1], preview.shape[0]), interpolation=cv2.INTER_NEAREST
-        )
-    return (
-        cv2.resize(preview, None, fx=0.5, fy=0.5),
-        cv2.resize(mask, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_NEAREST),
+def identity_alignment(
+    reference: ImageGeometry,
+    moving: ImageGeometry,
+    request: RegistrationRequest,
+    reason: str | None = None,
+) -> AlignmentResult:
+    request.reference_region(reference)
+    if request.family != "identity":
+        raise AlignmentError("Identity candidate requires identity permission")
+    return AlignmentResult(
+        "succeeded",
+        "identity",
+        request,
+        AlignmentTransform(moving, reference, "identity", np.eye(3)),
+        reason=reason,
     )
 
 
 def resolve_alignment(
     reference: AlignmentImage,
     moving: AlignmentImage,
-    policy: AlignmentConfig,
-    *,
-    already_aligned: bool | None = None,
+    request: RegistrationRequest,
 ) -> AlignmentResult:
-    estimate = already_aligned is not True and (
-        already_aligned is False or policy.mode in {"auto", "always"}
-    )
-    if policy.mode == "never" and already_aligned is False:
-        raise AlignmentError(
-            f"alignment.mode=never contradicts already_aligned=false for {moving.name}"
+    """Estimate one direct candidate; no config, readers, runs or automatic QC acceptance.
+
+    The requested family constrains native geometry, including after grid conversion.
+    Similarity fitting uses native keypoint coordinates so anisotropic grid scales
+    cannot change the permitted transform family.
+    """
+    request.reference_region(reference.geometry)
+    if request.family == "identity":
+        return identity_alignment(reference.geometry, moving.geometry, request)
+    try:
+        matrix, diagnostics = _estimate_affine(
+            reference.preview,
+            moving.preview,
+            family=request.family,
+            reference_grid=reference.grid,
+            moving_grid=moving.grid,
         )
-    if not estimate:
-        if policy.validate_declared:
-            _validate_identity(reference, moving)
-        return identity_alignment("declared_aligned" if already_aligned is True else "policy_never")
-    if reference.mask is None or moving.mask is None:
-        raise AlignmentError(f"affine registration requires masks for {moving.name}")
-    reference_preview, reference_mask = _registration_preview(reference)
-    moving_preview, moving_mask = _registration_preview(moving)
-    matrix, diagnostics = _estimate_affine(
-        reference_preview, moving_preview, reference_mask, moving_mask
+        candidate = AlignmentTransform.from_estimated(
+            moving.geometry, reference.geometry, matrix, moving.grid, reference.grid
+        )
+        if request.family == "similarity" and candidate.family == "affine":
+            raise AlignmentError("Grid conversion exceeds requested native similarity family")
+        candidate = replace(candidate, family=request.family)
+        return AlignmentResult("succeeded", "affine_sift", request, candidate, diagnostics)
+    except (AlignmentError, cv2.error, RuntimeError, OSError) as exc:
+        return AlignmentResult("failed", "affine_sift", request, None, reason=str(exc))
+
+
+def _overlap(transform: AlignmentTransform, region: tuple[int, int, int, int]) -> float:
+    """Fraction of requested reference pixel-cell extent covered by transformed moving extent."""
+    h, w = transform.moving.shape
+    polygon = transform.map_points(
+        np.array([[-0.5, -0.5], [w - 0.5, -0.5], [w - 0.5, h - 0.5], [-0.5, h - 0.5]])
     )
-    matrix = _rescale_transform(
-        matrix,
-        reference_scale=(
-            reference_preview.shape[1] / reference.full_shape[1],
-            reference_preview.shape[0] / reference.full_shape[0],
-        ),
-        moving_scale=(
-            moving_preview.shape[1] / moving.full_shape[1],
-            moving_preview.shape[0] / moving.full_shape[0],
-        ),
+    x, y, rw, rh = region
+    for axis, edge, sign in (
+        (0, x - 0.5, 1),
+        (0, x + rw - 0.5, -1),
+        (1, y - 0.5, 1),
+        (1, y + rh - 0.5, -1),
+    ):
+        clipped = []
+        for a, b in zip(polygon, np.roll(polygon, -1, axis=0), strict=True):
+            a_in, b_in = sign * (a[axis] - edge) >= 0, sign * (b[axis] - edge) >= 0
+            if a_in:
+                clipped.append(a)
+            if a_in != b_in:
+                clipped.append(a + (b - a) * (edge - a[axis]) / (b[axis] - a[axis]))
+        polygon = np.asarray(clipped)
+        if len(polygon) == 0:
+            return 0.0
+    area = (
+        abs(
+            np.dot(polygon[:, 0], np.roll(polygon[:, 1], 1))
+            - np.dot(polygon[:, 1], np.roll(polygon[:, 0], 1))
+        )
+        / 2
     )
-    diagnostics = replace(diagnostics, **_affine_diagnostics(matrix))
-    return AlignmentResult("affine_sift", matrix, diagnostics=diagnostics)
+    return float(area / (rh * rw))
+
+
+def evaluate_alignment_qc(
+    candidate: AlignmentTransform,
+    request: RegistrationRequest,
+    policy: QCPolicy,
+    *,
+    moving_landmarks: np.ndarray | None = None,
+    reference_landmarks: np.ndarray | None = None,
+    moving_support: SpatialEvidence | None = None,
+    reference_support: SpatialEvidence | None = None,
+    moving_validity: SpatialEvidence | None = None,
+    reference_validity: SpatialEvidence | None = None,
+) -> QCDecision:
+    """Independent observations only; no backend-native scores enter this decision.
+
+    Landmarks must be held out from estimation. Support IoU and paired usable fraction
+    are evaluated on the supplied reference evidence grid over jointly known samples.
+    Empty tissue union is unavailable, not zero. Missing evidence is retained even when
+    the external policy does not require it. Acceptance is scoped to request.purpose;
+    correspondence declarations remain separate from this geometric QC decision.
+    """
+    region = request.reference_region(candidate.reference)
+    singular = np.linalg.svd(candidate.matrix[:2, :2], compute_uv=False)
+    metrics: dict[str, float | None] = dict(
+        min_scale=float(singular.min()),
+        max_scale=float(singular.max()),
+        translation=float(np.linalg.norm(candidate.matrix[:2, 2])),
+        overlap=_overlap(candidate, region),
+        landmark_rms=None,
+        landmark_improvement=None,
+        support_iou=None,
+        observation_valid_fraction=None,
+    )
+    rejected, missing = [], []
+    permitted = set(request.allowed_families or ("identity", "similarity", "affine"))
+    if request.relationship == "same_coordinate_frame":
+        permitted &= {"identity"}
+    if (
+        candidate.family not in permitted
+        or (request.family == "identity" and candidate.family != "identity")
+        or (request.family == "similarity" and candidate.family == "affine")
+    ):
+        rejected.append("candidate_family_disallowed")
+    if request.existing_alignment == "identity" and candidate.family != "identity":
+        rejected.append("candidate_contradicts_identity_declaration")
+    if moving_landmarks is not None or reference_landmarks is not None:
+        if moving_landmarks is None or reference_landmarks is None:
+            raise AlignmentError("Both independent landmark arrays must be supplied")
+        mapped = candidate.map_points(moving_landmarks)
+        reference_points = candidate.inverse().map_points(reference_landmarks)
+        if mapped.shape != reference_points.shape or len(mapped) == 0:
+            raise AlignmentError("Independent landmarks must have matching nonempty Nx2 shapes")
+        if request.diagnostic_region is not None:
+            x, y, w, h = region
+            if not np.all(
+                (reference_landmarks >= [x - 0.5, y - 0.5])
+                & (reference_landmarks < [x + w - 0.5, y + h - 0.5])
+            ):
+                raise AlignmentError("Landmarks exceed the declared diagnostic region")
+        rms = float(np.sqrt(np.mean(np.sum((mapped - reference_landmarks) ** 2, axis=1))))
+        identity_rms = float(
+            np.sqrt(
+                np.mean(np.sum((np.asarray(moving_landmarks) - reference_landmarks) ** 2, axis=1))
+            )
+        )
+        metrics.update(landmark_rms=rms, landmark_improvement=identity_rms - rms)
+    for metric, moving, reference, kind in (
+        ("support_iou", moving_support, reference_support, "tissue_support"),
+        ("observation_valid_fraction", moving_validity, reference_validity, "observation_validity"),
+    ):
+        for evidence, asset in ((moving, candidate.moving), (reference, candidate.reference)):
+            if evidence is not None and (evidence.asset != asset or evidence.kind != kind):
+                raise AlignmentError("QC evidence kind/asset mismatch")
+        if moving is None or reference is None:
+            continue
+        h, w = reference.grid.shape
+        native = _coordinates(reference.grid.grid_to_level0, 0, 0, w, h)
+        inverse = candidate.inverse().matrix
+        points = native @ inverse[:2, :2].T + inverse[:2, 2]
+        values, known = _sample_evidence(
+            moving, points, conservative=kind == "observation_validity"
+        )
+        # Evidence outside either native asset is not an observation of that asset.
+        for coords, asset in ((native, candidate.reference), (points, candidate.moving)):
+            known &= (
+                (coords[..., 0] >= -0.5)
+                & (coords[..., 0] < asset.shape[1] - 0.5)
+                & (coords[..., 1] >= -0.5)
+                & (coords[..., 1] < asset.shape[0] - 0.5)
+            )
+        x, y, width, height = region
+        known &= (
+            (native[..., 0] >= x - 0.5)
+            & (native[..., 0] < x + width - 0.5)
+            & (native[..., 1] >= y - 0.5)
+            & (native[..., 1] < y + height - 0.5)
+        )
+        denominator = (
+            int(np.count_nonzero(known & (values | reference.values)))
+            if kind == "tissue_support"
+            else int(np.count_nonzero(known))
+        )
+        if denominator:
+            metrics[metric] = float(
+                np.count_nonzero(known & values & reference.values) / denominator
+            )
+    missing.extend(name for name, value in metrics.items() if value is None)
+    unmet = []
+    for name, (low, high) in sorted(policy.thresholds.items()):
+        value = metrics[name]
+        if value is None:
+            unmet.append(f"missing:{name}")
+        elif (low is not None and value < low) or (high is not None and value > high):
+            rejected.append(f"threshold_failed:{name}")
+    if not policy.thresholds:
+        unmet.append("missing:qc_thresholds")
+        missing.append("qc_thresholds")
+    if request.purpose == "dense_correspondence" and not request.correspondence_evidence:
+        unmet.append("missing:correspondence_evidence")
+        missing.append("correspondence_evidence")
+    status = "rejected" if rejected else "insufficient_evidence" if unmet else "accepted"
+    return QCDecision(status, metrics, tuple(sorted(missing)), tuple(rejected + unmet))

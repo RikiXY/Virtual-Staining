@@ -415,3 +415,40 @@ each target has its own `1HW` mask, never another target's mask, and collation g
 `NCHW` images and `N1HW` masks under the same names. Model configuration
 selects `model.inputs` from the manifest input modalities and `model.outputs` from its
 target modalities, each in any order; model order is authoritative.
+
+## Registration and resampling
+
+`virtual_staining.data.alignment` exposes `ImageGeometry`, `GridGeometry`,
+`AlignmentTransform`, `AlignmentImage`, `SpatialEvidence`, `RegistrationRequest`,
+`AlignmentResult`, `QCPolicy`, and `QCDecision`. `GridGeometry.resized_crop()` binds
+an explicitly specified crop/resize to native pixel centres; `AlignmentTransform.from_estimated()`
+composes both grid maps with the estimated forward transform. `map_points()`,
+`inverse()` and `then()` use explicit moving/reference frames. The
+[persisted contract](dataset_format.md#persisted-alignment-geometry-and-results)
+defines coordinates and serialization.
+
+`resolve_alignment(reference, moving, request)` returns a direct identity or SIFT
+candidate and backend outcome, without QC acceptance. Same-coordinate-frame requests
+permit identity only; same-section modality/restaining requests permit identity,
+similarity and affine. Serial sections permit spatial association, not dense
+correspondence. Unknown relationships require an explicit bounded diagnostic region;
+non-corresponding assets cannot register. Explicit restrictions may narrow these
+permissions. Existing alignment declarations never establish biological relationships.
+
+`evaluate_alignment_qc(candidate, request, policy, ...)` evaluates supplied independent
+landmarks, tissue-support and observation-validity evidence against caller-supplied
+thresholds. Empty policies and required missing evidence yield `insufficient_evidence`.
+Landmark improvement compares held-out landmark RMS against identity. Acceptance is
+scoped to the declared purpose and does not upgrade a correspondence declaration;
+backend scores are not QC evidence. No scientific acceptance thresholds are supplied.
+
+`warp_aligned_patch(image_or_read_region, transform, ..., max_source_pixels=...)`
+returns a `WarpedPatch` with the image, geometric validity and separately nullable
+support/observation-validity values and known masks. It inverse-maps reference pixel
+centres, subdivides source reads to the supplied pixel budget, and borrows already-open
+readers without closing them. Linear image interpolation accounts conservatively for
+all validity contributors; nearest interpolation preserves labels. Out-of-bounds
+samples are geometrically invalid. Boolean `SpatialEvidence` maps carry their own
+asset and grid: true means specimen content for tissue support, or usable observation
+for validity. Outside their grid evidence is unknown. Foreground/loss masks remain
+separate and use `warp_aligned_mask_patch()` with their explicit grid.

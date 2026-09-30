@@ -66,14 +66,11 @@ is dataset-owned and emits no experiment run events. Dataset paths belong to
 See [dataset provenance](dataset_format.md#prepared-layout) and
 [consumed-data snapshots](run_format.md#consumed-data-snapshots) for their distinct identities.
 
-Registration is isolated in `data/alignment/`, independent of stage orchestration,
-training, inference, and evaluation. It owns alignment policy, transform estimation,
-and warping; callers own readers, backend selection, cleanup, and set-failure policy.
-The public boundary exports `AlignmentImage`, `AlignmentResult`,
-`RegistrationDiagnostics`, `AlignmentError`, `identity_alignment`, `resolve_alignment`,
-`warp_aligned_patch`, and `warp_aligned_mask_patch`; reader-backed warping borrows an
-already-open reader's `read_region` callback.
-Geometry and diagnostic meanings are documented in [Dataset Format](dataset_format.md#prepared-layout).
+Registration geometry, estimation, independent QC, and inverse resampling belong to
+`data/alignment/`, which depends on no preparation or run configuration. Callers own
+readers, cleanup, explicit reference selection, and failure policy. Existing preparation
+adapts its coordinate declarations to candidate requests; it does not certify biological
+correspondence or apply study QC. See the [alignment API](library_api.md#registration-and-resampling).
 
 Model export is an application utility, not a pipeline stage. It uses the existing
 configuration, checkpoint, and inference contracts; it introduces no separate model

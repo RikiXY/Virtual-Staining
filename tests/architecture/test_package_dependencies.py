@@ -112,7 +112,6 @@ def test_alignment_dependency_boundary() -> None:
         "models.py": (f"{alignment}.models.",),
         "warping.py": (f"{alignment}.models.",),
         "registration.py": (
-            "virtual_staining.config.",
             f"{alignment}.models.",
             f"{alignment}.warping.",
         ),

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -10,8 +10,12 @@ import numpy as np
 
 from virtual_staining.config.data import PreprocessingConfig
 from virtual_staining.data.alignment import (
+    AlignmentError,
     AlignmentImage,
     AlignmentResult,
+    GridGeometry,
+    ImageGeometry,
+    RegistrationRequest,
     identity_alignment,
     resolve_alignment,
     warp_aligned_mask_patch,
@@ -44,17 +48,26 @@ class AssetState:
     mask: np.ndarray | None = None
     shape: tuple[int, int] | None = None
     alignment: AlignmentResult | None = None
+    mpp: tuple[float | None, float | None] = (None, None)
 
     def alignment_image(self) -> AlignmentImage:
         if self.preview is None or self.shape is None:
             raise RuntimeError("compute_masks() must be called before align()")
-        metadata = self.reader.metadata if self.reader is not None else None
         return AlignmentImage(
             preview=self.preview,
-            full_shape=self.shape,
-            mask=self.mask,
-            name=self.asset.modality,
-            mpp=(metadata.mpp_x, metadata.mpp_y) if metadata is not None else (None, None),
+            geometry=ImageGeometry(
+                self.asset.modality,
+                self.shape,
+                self.mpp,
+            ),
+            grid=GridGeometry.resized_crop(
+                self.preview.shape[:2],
+                origin=(0, 0),
+                scale=(
+                    self.shape[1] / self.preview.shape[1],
+                    self.shape[0] / self.preview.shape[0],
+                ),
+            ),
         )
 
 
@@ -157,12 +170,15 @@ class SlideSetProcessor:
                 state.reader = open_image_reader(path, backend=self.config.io.backend)
                 width, height = state.reader.size
                 state.shape = (height, width)
+                metadata = state.reader.metadata
+                state.mpp = (metadata.mpp_x, metadata.mpp_y)
                 state.preview = state.reader.read_preview(self.config.masks.scale)
             else:
                 reader = open_image_reader(path, backend="pillow")
                 try:
                     metadata = reader.metadata
                     state.shape = (metadata.height, metadata.width)
+                    state.mpp = (metadata.mpp_x, metadata.mpp_y)
                     state.preview = reader.read_full()
                 finally:
                     reader.close()
@@ -181,22 +197,68 @@ class SlideSetProcessor:
 
     def align(self) -> None:
         reference = self.reference.alignment_image()
-        self.reference.alignment = identity_alignment()
+        self.reference.alignment = identity_alignment(
+            reference.geometry,
+            reference.geometry,
+            RegistrationRequest("same_coordinate_frame", "identity"),
+            reason="reference",
+        )
+        policy = self.config.alignment
         for state in self._states():
-            if state is not self.reference:
-                state.alignment = resolve_alignment(
-                    reference,
-                    state.alignment_image(),
-                    self.config.alignment,
-                    already_aligned=state.asset.already_aligned,
-                )
+            if state is self.reference:
+                continue
+            moving = state.alignment_image()
+            declared = state.asset.already_aligned
+            estimate = declared is not True and (
+                declared is False or policy.mode in {"auto", "always"}
+            )
+            if policy.mode == "never" and declared is False:
+                raise AlignmentError("alignment.mode=never contradicts already_aligned=false")
+            if not estimate and policy.validate_declared:
+                if reference.geometry.shape != moving.geometry.shape:
+                    raise AlignmentError(
+                        f"identity alignment requires equal geometry for {moving.geometry.name}"
+                    )
+                for axis, left, right in zip(
+                    ("x", "y"), reference.geometry.mpp, moving.geometry.mpp, strict=True
+                ):
+                    if (
+                        left is not None
+                        and right is not None
+                        and not np.isclose(left, right, rtol=0.01)
+                    ):
+                        raise AlignmentError(
+                            f"identity alignment has incompatible mpp_{axis} "
+                            f"for {moving.geometry.name}"
+                        )
+            # Inventory alignment flags make no biological declaration or QC claim.
+            request = RegistrationRequest(
+                "unknown",
+                "affine" if estimate else "identity",
+                existing_alignment="identity"
+                if declared is True
+                else "unaligned"
+                if declared is False
+                else "unknown",
+                diagnostic_region=(0, 0, reference.geometry.shape[1], reference.geometry.shape[0]),
+            )
+            result = resolve_alignment(reference, moving, request)
+            if result.backend_status == "failed":
+                raise AlignmentError(result.reason)
+            state.alignment = replace(
+                result,
+                reason=(None if estimate else "declared_aligned" if declared else "policy_never"),
+            )
 
     def extract_asset_patch(
         self, state: AssetState, *, x: int, y: int, width: int, height: int
     ) -> tuple[np.ndarray, np.ndarray]:
         if state.alignment is None or state.shape is None or state.mask is None:
             raise RuntimeError("compute_masks() and align() must be called before extraction")
+        if state.alignment.candidate is None:
+            raise AlignmentError("Patch extraction requires a transform candidate")
         size = (width, height)
+        source_budget = max(4, width * height)
         if state.alignment.method == "identity":
             if state.reader is not None:
                 image = state.reader.read_region(x, y, width, height)
@@ -214,13 +276,27 @@ class SlideSetProcessor:
                 raise RuntimeError("Asset preview must be loaded before extraction")
             image = warp_aligned_patch(
                 image_input,
-                state.alignment.warp_matrix,
+                state.alignment.candidate,
                 x=x,
                 y=y,
                 output_size=size,
-            )
+                max_source_pixels=source_budget,
+            ).image
             mask = warp_aligned_mask_patch(
-                state.mask, state.alignment.warp_matrix, state.shape, x=x, y=y, output_size=size
+                state.mask,
+                state.alignment.candidate,
+                GridGeometry.resized_crop(
+                    state.mask.shape,
+                    origin=(0, 0),
+                    scale=(
+                        state.shape[1] / state.mask.shape[1],
+                        state.shape[0] / state.mask.shape[0],
+                    ),
+                ),
+                x=x,
+                y=y,
+                output_size=size,
+                max_source_pixels=source_budget,
             )
         if image.shape[:2] != (height, width) or mask.shape[:2] != (height, width):
             raise RuntimeError(
