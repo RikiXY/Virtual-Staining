@@ -23,7 +23,7 @@ from virtual_staining.inference.runner import (
     predict_batch,
 )
 from virtual_staining.models.io_contract import MODEL_INPUT_RANGE, build_model_input_transform
-from virtual_staining.utils.artifacts import generated_path
+from virtual_staining.utils.artifacts import generated_path, require_output_name
 from virtual_staining.utils.image_io import (
     VALID_IMAGE_EXTENSIONS,
     ImageMetadata,
@@ -75,6 +75,9 @@ class PredictionContract:
                 raise ValueError(f"{field_name} must be a non-empty tuple of names, got {names!r}")
             if len(set(names)) != len(names):
                 raise ValueError(f"{field_name} must be unique, got {names!r}")
+        # Output names become artifact directories; the identifier rule keeps them there.
+        for name in self.output_names:
+            require_output_name(name)
         size = self.image_size
         if (
             not isinstance(size, tuple)

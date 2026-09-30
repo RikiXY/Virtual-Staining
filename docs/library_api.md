@@ -65,7 +65,8 @@ run_image_path_inference(runtime, {"AF": af_dir, "LF": lf_dir}, Path("out/batch"
 ```
 
 - **Contract.** `PredictionContract` declares the ordered `input_names`, the ordered
-  `output_names`, the predictor/tile input `image_size` as `(width, height)`,
+  `output_names` (safe identifiers matching `[A-Za-z][A-Za-z0-9_-]*`, since each names
+  an output directory; anything else is rejected), the predictor/tile input `image_size` as `(width, height)`,
   `output_semantics` (only `"same_grid_rgb"`) and `value_range` (only `(-1, 1)`). The
   predictor is any callable taking `{name: (N, 3, H, W) float tensor in [-1, 1]}` in
   contract order and returning `{output_name: (N, 3, H, W) float tensor in [-1, 1]}` with

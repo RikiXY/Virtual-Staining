@@ -406,3 +406,38 @@ def test_reordered_output_mapping_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="must be exactly"):
         run_image_path_inference(runtime, paths, tmp_path / "out")
     assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("output_name", [".", "..", "../HE", "HE/PAS", "HE\\PAS", "1HE", "H&E", ""])
+def test_standalone_contract_rejects_unsafe_output_names_before_prediction(
+    tmp_path: Path, output_name: str
+) -> None:
+    paths = _pair(tmp_path / "in", (16, 16))
+    out = tmp_path / "out"
+
+    with pytest.raises(ValueError, match="output_name"):
+        PredictionContract(("AF", "LF"), (output_name,), (16, 16))
+    with pytest.raises(ValueError, match="output_name"):
+        run_image_path_inference(
+            lambda: _runtime(
+                lambda inputs: pytest.fail("predictor must not run"), outputs=(output_name,)
+            ),
+            paths,
+            out,
+        )
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("output_name", ["HE", "PAS", "H_E", "H-E", "HE2"])
+def test_standalone_contract_accepts_safe_output_names(tmp_path: Path, output_name: str) -> None:
+    paths = _pair(tmp_path / "in", (16, 16), name="s.png")
+
+    def predictor(inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        return {output_name: inputs["LF"]}
+
+    result = run_image_path_inference(
+        _runtime(predictor, outputs=(output_name,)), paths, tmp_path / "out.png"
+    )
+
+    assert isinstance(result, SingleInferenceResult)
+    assert result.output_paths == {output_name: tmp_path / "out.png"}

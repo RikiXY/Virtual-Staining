@@ -32,6 +32,7 @@ from virtual_staining.utils.image_io import (
     RegionImageReader,
     load_grayscale_image,
     open_image_reader,
+    read_image_metadata,
 )
 
 
@@ -54,6 +55,20 @@ class AssetState:
             mask=self.mask,
             name=self.asset.modality,
             mpp=(metadata.mpp_x, metadata.mpp_y) if metadata is not None else (None, None),
+        )
+
+
+def _verify_written_patch(path: Path, image: np.ndarray) -> None:
+    """Require ``path`` to be a readable image with ``image``'s width and height."""
+    try:
+        metadata = read_image_metadata(path, backend="pillow")
+    except (OSError, ValueError) as exc:
+        raise OSError(f"Written patch {path} is not a readable image: {exc}") from exc
+    expected = (image.shape[1], image.shape[0])
+    if (metadata.width, metadata.height) != expected:
+        raise OSError(
+            f"Written patch {path} is {metadata.width}x{metadata.height}, expected "
+            f"{expected[0]}x{expected[1]}"
         )
 
 
@@ -245,15 +260,24 @@ class SlideSetProcessor:
         return not reasons, reasons
 
     def _write_sample(self, images: dict[Path, np.ndarray]) -> None:
-        """Materialize every image of one sample or none: a failed write removes the rest."""
-        written: list[Path] = []
+        """Materialize every image of one sample or none.
+
+        Each file is written, then read back far enough to prove its stored width and
+        height equal the array's. Any failure removes every file this attempt wrote for
+        the sample (including a corrupt one) and raises, so no row is committed for it.
+        """
+        owned: list[Path] = []
         try:
             for path, image in images.items():
-                if not cv2.imwrite(str(path), image):
+                existed = path.exists()
+                written = cv2.imwrite(str(path), image)
+                if written or not existed:
+                    owned.append(path)
+                if not written:
                     raise OSError(f"Could not write patch {path}")
-                written.append(path)
+                _verify_written_patch(path, image)
         except Exception:
-            for path in written:
+            for path in owned:
                 path.unlink(missing_ok=True)
             raise
 

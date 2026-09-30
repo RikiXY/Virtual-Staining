@@ -62,3 +62,34 @@ def test_collect_generated_artifacts_is_recursive_sorted_and_output_specific(
     )
     assert collect_generated_artifacts(tmp_path, "PAS") == (tmp_path / "case1/PAS/x_generated.png",)
     assert collect_generated_artifacts(tmp_path, "missing") == ()
+
+
+_UNSAFE_OUTPUT_NAMES = [".", "..", "../HE", "HE/PAS", "HE\\PAS", "1HE", "H&E", ""]
+_SAFE_OUTPUT_NAMES = ["HE", "PAS", "H_E", "H-E", "HE2"]
+
+
+@pytest.mark.parametrize("output_name", _UNSAFE_OUTPUT_NAMES)
+def test_generated_helpers_reject_unsafe_output_names(tmp_path: Path, output_name: str) -> None:
+    with pytest.raises(ValueError, match="output_name must be an identifier"):
+        generated_path(tmp_path, "s1", output_name, ".png")
+    with pytest.raises(ValueError, match="output_name must be an identifier"):
+        collect_generated_artifacts(tmp_path, output_name)
+    assert list(tmp_path.iterdir()) == []
+
+
+# pathlib drops a "." component, so it can never reach the inversion as a parent name.
+@pytest.mark.parametrize("parent", ["..", "1HE", "H&E"])
+def test_generated_identity_rejects_unsafe_output_directories(parent: str) -> None:
+    with pytest.raises(ValueError, match="output_name must be an identifier"):
+        generated_identity(Path("out") / parent / "s1_generated.png")
+
+
+@pytest.mark.parametrize("output_name", _SAFE_OUTPUT_NAMES)
+def test_safe_output_names_stay_one_directory_below_the_output_dir(
+    tmp_path: Path, output_name: str
+) -> None:
+    path = generated_path(tmp_path, "s1", output_name, ".png")
+
+    assert path.parent.parent == tmp_path and path.parent.name == output_name
+    assert path.resolve().is_relative_to(tmp_path.resolve())
+    assert generated_identity(path) == ("s1", output_name)

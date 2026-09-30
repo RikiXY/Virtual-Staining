@@ -73,7 +73,9 @@ def test_process_returns_rows_and_metadata_after_cleanup(
 
     result = SlideSetProcessor(config, slide_set, assigned_split).process()
 
-    assert close.call_count == 3
+    # Three source readers, plus one header read per verified written file (LF, AF, HE and
+    # the HE mask of the one accepted sample); every reader is closed.
+    assert close.call_count == 3 + 4
     assert result.set_id == slide_set.set_id
     assert result.split == assigned_split
     assert result.error is None
@@ -280,3 +282,114 @@ def test_a_sample_is_committed_only_when_every_image_is_written(
 
     written = sorted((tmp_path / "splits" / "train" / slide_set.set_id).iterdir())
     assert written == []
+
+
+def _sample_images(root: Path) -> dict[Path, np.ndarray]:
+    """One M=2 sample: two inputs, two targets and two target masks, in write order."""
+    rgb = np.full((8, 8, 3), 90, dtype=np.uint8)
+    mask = np.full((8, 8), 255, dtype=np.uint8)
+    root.mkdir(parents=True, exist_ok=True)
+    names = ("s__input__LF", "s__input__AF", "s__target__HE", "s__target__PAS")
+    images: dict[Path, np.ndarray] = {root / f"{name}.png": rgb for name in names}
+    images.update({root / f"s__foreground_mask__{t}.png": mask for t in ("HE", "PAS")})
+    return images
+
+
+def _processor(tmp_path: Path) -> SlideSetProcessor:
+    return SlideSetProcessor(
+        _config(tmp_path, ("HE", "PAS")), _slide_set(tmp_path, targets=("HE", "PAS"))
+    )
+
+
+def test_written_rgb_patches_and_masks_are_verified(tmp_path: Path) -> None:
+    images = _sample_images(tmp_path / "out")
+
+    _processor(tmp_path)._write_sample(images)
+
+    assert sorted(path.name for path in (tmp_path / "out").iterdir()) == sorted(
+        path.name for path in images
+    )
+
+
+def _fail_on(monkeypatch: pytest.MonkeyPatch, marker: str, effect: str) -> None:
+    real_write = cv2.imwrite
+
+    def write(path: str, image: np.ndarray) -> bool:
+        if marker not in path:
+            return real_write(path, image)
+        if effect == "false":
+            return False
+        if effect == "corrupt":
+            Path(path).write_bytes(b"not an image")
+            return True
+        if effect == "vanish":
+            return True
+        assert effect == "resized"
+        return real_write(path, image[:4, :6])
+
+    monkeypatch.setattr(processor_module.cv2, "imwrite", write)
+
+
+@pytest.mark.parametrize(
+    ("marker", "effect", "match"),
+    [
+        ("__target__HE", "false", "Could not write patch"),
+        ("__target__PAS", "false", "Could not write patch"),
+        ("__target__PAS", "corrupt", "not a readable image"),
+        ("__target__PAS", "vanish", "not a readable image"),
+        ("__target__PAS", "resized", "is 6x4, expected 8x8"),
+        ("__foreground_mask__PAS", "resized", "is 6x4, expected 8x8"),
+        ("__foreground_mask__HE", "corrupt", "not a readable image"),
+    ],
+)
+def test_a_failed_or_unverifiable_write_removes_every_file_of_the_sample(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, marker: str, effect: str, match: str
+) -> None:
+    out = tmp_path / "out"
+    images = _sample_images(out)
+    unrelated = out / "unrelated.png"
+    unrelated.write_bytes(b"user file")
+    _fail_on(monkeypatch, marker, effect)
+
+    with pytest.raises(OSError, match=match):
+        _processor(tmp_path)._write_sample(images)
+
+    # Earlier inputs/targets of the same sample and the failing file itself are gone.
+    assert [path.name for path in out.iterdir()] == ["unrelated.png"]
+    assert unrelated.read_bytes() == b"user file"
+
+
+def test_a_failed_write_keeps_a_pre_existing_file_it_did_not_create(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = tmp_path / "out"
+    images = _sample_images(out)
+    existing = out / "s__target__PAS.png"
+    existing.write_bytes(b"previous content")
+    _fail_on(monkeypatch, "__target__PAS", "false")
+
+    with pytest.raises(OSError):
+        _processor(tmp_path)._write_sample(images)
+
+    assert [path.name for path in out.iterdir()] == ["s__target__PAS.png"]
+    assert existing.read_bytes() == b"previous content"
+
+
+@pytest.mark.parametrize("effect", ["corrupt", "resized"])
+def test_no_manifest_row_is_accepted_for_an_unverified_sample(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, effect: str
+) -> None:
+    config = replace(
+        _config(tmp_path, ("HE", "PAS")),
+        masks=MaskConfig(save_patch_masks=True),
+        alignment=AlignmentConfig(on_failure="skip_set"),
+    )
+    slide_set = _slide_set(tmp_path, targets=("HE", "PAS"))
+    _fail_on(monkeypatch, "__target__PAS", effect)
+
+    result = SlideSetProcessor(config, slide_set, "train").process()
+
+    assert result.valid_rows == ()
+    assert result.error is not None and "Written patch" in result.error
+    written = tmp_path / "splits" / "train" / slide_set.set_id
+    assert not written.exists() or list(written.iterdir()) == []

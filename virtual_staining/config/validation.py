@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import math
-import re
 from collections.abc import Mapping
 from typing import Any
 
-#: Persisted modality/domain identifiers (config, inventory, manifest, artifacts).
-MODALITY_NAME_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
+from virtual_staining.utils.identifiers import MODALITY_NAME_PATTERN, is_modality_name
+
+__all__ = [
+    "MODALITY_NAME_PATTERN",
+    "check_modality_names",
+    "parse_bool_strict",
+    "parse_choice",
+    "parse_int",
+    "parse_modality_names",
+    "reject_superseded_keys",
+    "reject_unknown_keys",
+    "require_finite",
+]
 
 
 def reject_unknown_keys(data: Mapping[str, Any], allowed: frozenset[str], context: str) -> None:
@@ -30,9 +40,7 @@ def check_modality_names(names: tuple[str, ...], field_name: str) -> tuple[str, 
     """Require a non-empty tuple of unique safe identifiers; nothing is sanitized."""
     if not names:
         raise ValueError(f"{field_name} must contain at least one name")
-    invalid = [
-        name for name in names if not isinstance(name, str) or not MODALITY_NAME_PATTERN.match(name)
-    ]
+    invalid = [name for name in names if not is_modality_name(name)]
     if invalid:
         raise ValueError(
             f"{field_name} contains invalid identifiers {invalid}; names must match "

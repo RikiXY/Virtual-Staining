@@ -170,7 +170,7 @@ coordinate frame with the existing alignment code. No full aligned whole-slide i
 created. All inputs and targets are extracted at the same reference-grid position; a
 sample is committed to a split only after every one of its images (and, with
 `masks.save_patch_masks`, every target's foreground mask) has been written and its
-dimensions verified. Rejected positions are recorded in `discarded_manifest.csv` with
+dimensions verified; a sample that fails leaves none of its files behind. Rejected positions are recorded in `discarded_manifest.csv` with
 split `discarded`. A rebuild first withdraws `dataset_build.json` and the manifests, so a
 preparation that fails part way never looks consumable.
 
