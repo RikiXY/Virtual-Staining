@@ -50,7 +50,10 @@ def source_snapshot(config: RunConfig, slide_sets: tuple[SlideSet, ...]) -> Data
             "specimen_id": item.specimen_id or "",
             "patient_id": item.patient_id or "",
         }
-        for role, asset in (*(("input", asset) for asset in item.inputs), ("target", item.target)):
+        for role, asset in (
+            *(("input", asset) for asset in item.inputs),
+            *(("target", asset) for asset in item.targets),
+        ):
             rows.append(
                 AssetRow(
                     root="dataset",
@@ -83,7 +86,7 @@ def source_snapshot(config: RunConfig, slide_sets: tuple[SlideSet, ...]) -> Data
         selection={
             "modalities": list(preprocessing.inputs.modalities),
             "reference": preprocessing.inputs.reference,
-            "target_modality": preprocessing.inputs.target_modality,
+            "target_modalities": list(preprocessing.inputs.target_modalities),
             "split_unit": preprocessing.split.unit,
         },
         sources={"inventory": str(inventory), "inventory_sha256": sha256_file(inventory_path)},
@@ -147,10 +150,10 @@ def _log_prepare_summary(
     )
     for item in slide_sets:
         logger.info(
-            "Set %s | inputs=%s | target=%s | reference=%s",
+            "Set %s | inputs=%s | targets=%s | reference=%s",
             item.set_id,
             ",".join(asset.modality for asset in item.inputs),
-            item.target.modality,
+            ",".join(asset.modality for asset in item.targets),
             item.reference_modality,
         )
 
@@ -165,7 +168,7 @@ def _warn_image_backend(config: RunConfig, slide_sets: tuple[SlideSet, ...]) -> 
             {
                 root / asset.path
                 for item in slide_sets
-                for asset in (*item.inputs, item.target)
+                for asset in item.assets
                 if (root / asset.path).is_file()
             }
         )

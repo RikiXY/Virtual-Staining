@@ -41,7 +41,7 @@ from virtual_staining.loss_definitions import (
     SsimChannelMode,
 )
 from virtual_staining.methods.builtin import (
-    PIX2PIX_CHECKPOINT_METRICS,
+    PIX2PIX_IMAGE_METRICS,
     CycleGANDefinition,
     Pix2PixDefinition,
     builtin_definitions,
@@ -57,6 +57,8 @@ _MINIMAL = {
     "pix2pix": _RUNS / "minimal_pix2pix.yaml",
     "cyclegan": _RUNS / "minimal_cyclegan.yaml",
 }
+# The ranked Pix2Pix checkpoint columns of the one-output examples (output HE).
+_PIX2PIX_CHECKPOINT_METRICS = Pix2PixDefinition().checkpoint_modes(("HE",))
 _REFERENCE_TEXT = "\n".join(
     path.read_text(encoding="utf-8")
     for path in (*_FULL.values(), _QUEUES / "example.yaml", _QUEUES / "example_ablation.yaml")
@@ -229,7 +231,7 @@ _PUBLIC_OPTIONS: dict[str, tuple[frozenset[str], set[str]]] = {
     ),
     "model keys": (
         model.MODEL_KEYS | _owned("model"),
-        {"inputs", "target", "generator", "discriminator"},
+        {"inputs", "outputs", "generator", "discriminator"},
     ),
     "generator architectures": (
         frozenset(
@@ -253,7 +255,7 @@ _PUBLIC_OPTIONS: dict[str, tuple[frozenset[str], set[str]]] = {
     ),
     "preprocessing.inputs keys": (
         _dataclass_keys(preprocessing_module.InputConfig),
-        {"inventory", "modalities", "reference", "target_modality", "hash_verification"},
+        {"inventory", "modalities", "reference", "target_modalities", "hash_verification"},
     ),
     "preprocessing.patching keys": (
         _dataclass_keys(preprocessing_module.PatchingConfig),
@@ -331,22 +333,22 @@ _PUBLIC_OPTIONS: dict[str, tuple[frozenset[str], set[str]]] = {
     ),
     "augmentation keys": (
         training_module._AUGMENTATION_KEYS,
-        {"enabled", "expansion_factor", "intensity"},
+        {"enabled", "expansion_factor", "intensity", "photometric_inputs"},
     ),
     "augmentation intensities": (
         frozenset(get_args(training_module.AugmentationIntensity)),
         {"light", "medium", "strong"},
     ),
     "checkpoint metrics": (
-        frozenset(PIX2PIX_CHECKPOINT_METRICS),
+        frozenset({"loss_G_val", *(f"val_{name}__<output>" for name in PIX2PIX_IMAGE_METRICS)}),
         {
             "loss_G_val",
-            "val_ssim",
-            "val_psnr",
-            "val_mae",
-            "val_rmse",
-            "val_pcc_gray",
-            "val_pcc_rgb_mean",
+            "val_ssim__<output>",
+            "val_psnr__<output>",
+            "val_mae__<output>",
+            "val_rmse__<output>",
+            "val_pcc_gray__<output>",
+            "val_pcc_rgb_mean__<output>",
         },
     ),
     "loss term keys": (losses._LOSS_TERM_KEYS, {"name", "weight", "enabled", "params", "schedule"}),
@@ -635,11 +637,11 @@ _VALID_VARIANTS: list[tuple[str, dict[str, Any]]] = [
                 }
             },
         )
-        for metric in sorted(PIX2PIX_CHECKPOINT_METRICS)
+        for metric in sorted(_PIX2PIX_CHECKPOINT_METRICS)
     ],
-    ("pix2pix", {"training.early_stopping": {"monitor": "val_ssim", "patience": 15}}),
+    ("pix2pix", {"training.early_stopping": {"monitor": "val_ssim__HE", "patience": 15}}),
     ("pix2pix", {"training.early_stopping": {"monitor": "loss_D_val", "min_delta": 0.01}}),
-    ("pix2pix", {"training.early_stopping": {"monitor": "loss_val_weighted_generator_l1"}}),
+    ("pix2pix", {"training.early_stopping": {"monitor": "loss_val_weighted_generator_l1__HE"}}),
     *[
         (
             "pix2pix",
@@ -647,6 +649,24 @@ _VALID_VARIANTS: list[tuple[str, dict[str, Any]]] = [
         )
         for value in ("light", "medium", "strong")
     ],
+    (
+        "pix2pix",
+        {"training.augmentation": {"intensity": "medium", "photometric_inputs": ["AF", "LF"]}},
+    ),
+    ("pix2pix", {"training.augmentation": {"intensity": "strong", "photometric_inputs": []}}),
+    (
+        "pix2pix",
+        {
+            "preprocessing.inputs.target_modalities": ["HE", "PAS"],
+            "model.outputs": ["PAS", "HE"],
+            "inference.checkpoint_metric": "val_ssim__PAS",
+            "training.early_stopping": {"monitor": "val_ssim__HE"},
+        },
+    ),
+    (
+        "pix2pix",
+        {"preprocessing.inputs.target_modalities": ["HE", "PAS"], "model.inputs": ["LF"]},
+    ),
     ("pix2pix", {f"{_L1}.enabled": False}),
     ("pix2pix", {f"{_L1}.weight": 0.0}),
     ("pix2pix", {f"{_L1}.params": {"reduction": "none"}}),
@@ -678,7 +698,7 @@ _VALID_VARIANTS: list[tuple[str, dict[str, Any]]] = [
         {
             "inference": {
                 "checkpoint_policy": "top_k",
-                "checkpoint_metric": "val_mae",
+                "checkpoint_metric": "val_mae__HE",
                 "checkpoint_rank": 2,
                 "output_dir": "somewhere/output_test",
             }
@@ -769,8 +789,8 @@ def test_optional_sections_resolve_documented_defaults(tmp_path: Path) -> None:
         _variant(
             "pix2pix",
             {
-                "training.early_stopping": {"monitor": "val_mae"},
-                "training.scheduler": {"name": "reduce_on_plateau", "monitor": "val_psnr"},
+                "training.early_stopping": {"monitor": "val_mae__HE"},
+                "training.scheduler": {"name": "reduce_on_plateau", "monitor": "val_psnr__HE"},
             },
         ),
     )
@@ -818,7 +838,76 @@ _INVALID_VARIANTS: list[tuple[str, dict[str, Any], str]] = [
     ("cyclegan", {"image_size": [250, 256]}, "multiples of 4"),
     ("pix2pix", {"model.generator.bilinear": True}, "bilinear=True is not supported"),
     ("pix2pix", {"model.discriminator.use_sigmoid": True}, "use_sigmoid=True"),
-    ("pix2pix", {"model.target": "PAS"}, "model.target must equal"),
+    ("pix2pix", {"model.target": "HE"}, "model.target is not part of the current schema"),
+    (
+        "pix2pix",
+        {"preprocessing.inputs.target_modality": "HE"},
+        "target_modality is not part of the current schema",
+    ),
+    (
+        "pix2pix",
+        {"model.outputs": ["PAS"], "inference.checkpoint_metric": "loss_G_val"},
+        "not in preprocessing.inputs.target_modalities",
+    ),
+    ("pix2pix", {"model.inputs": ["AF", "XX"]}, "not in preprocessing.inputs.modalities"),
+    ("pix2pix", {"model.outputs": []}, "at least one name"),
+    ("pix2pix", {"model.outputs": "HE"}, "sequence of names"),
+    ("pix2pix", {"model.outputs": ["HE", "HE"]}, "duplicate names"),
+    ("pix2pix", {"model.outputs": ["H&E"]}, "invalid identifiers"),
+    ("pix2pix", {"model.outputs": ["LF"]}, "must be disjoint"),
+    ("pix2pix", {"preprocessing.inputs.target_modalities": ["H&E"]}, "invalid identifiers"),
+    ("pix2pix", {"preprocessing.inputs.target_modalities": ["LF"]}, "must differ"),
+    (
+        "pix2pix",
+        {
+            "preprocessing.inputs.target_modalities": ["HE", "PAS"],
+            "model.outputs": ["HE", "PAS"],
+            "training.early_stopping": {"patience": 5},
+        },
+        "early_stopping.monitor is required",
+    ),
+    ("pix2pix", {"inference.checkpoint_metric": "val_ssim__PAS"}, "names output 'PAS'"),
+    (
+        "pix2pix",
+        {
+            "preprocessing.inputs.target_modalities": ["HE", "PAS"],
+            "model.outputs": ["HE", "PAS"],
+            "training.early_stopping": {"monitor": "loss_G_val"},
+            "evaluation": {"protocol": "unpaired", "reference_collection": "real"},
+        },
+        "several simultaneous outputs",
+    ),
+    (
+        "pix2pix",
+        {"training.augmentation": {"intensity": "light", "photometric_inputs": ["LF"]}},
+        "must be empty for intensity='light'",
+    ),
+    (
+        "pix2pix",
+        {"training.augmentation": {"intensity": "medium", "photometric_inputs": ["HE"]}},
+        "not selected model.inputs",
+    ),
+    (
+        "pix2pix",
+        {"training.augmentation": {"intensity": "medium", "photometric_inputs": ["LF", "LF"]}},
+        "duplicate names",
+    ),
+    (
+        "pix2pix",
+        {
+            "training.augmentation": {
+                "intensity": "medium",
+                "photometric_inputs": ["foreground_mask"],
+            }
+        },
+        "not selected model.inputs",
+    ),
+    (
+        "pix2pix",
+        {"image_size": [320, 256], "training.augmentation.enabled": True},
+        "requires a square image_size",
+    ),
+    ("cyclegan", {"model.outputs": ["stained", "other"]}, "exactly one model.outputs entry"),
     ("cyclegan", {"training.augmentation.enabled": True}, "augmentation.enabled=false"),
     ("pix2pix", {"inference.direction": "A_to_B"}, "not supported by method.name='pix2pix'"),
     ("cyclegan", {"inference.direction": "sideways"}, r"direction must be one of \['A_to_B'"),
@@ -864,6 +953,7 @@ _INVALID_VARIANTS: list[tuple[str, dict[str, Any], str]] = [
     ("cyclegan", {"evaluation.metrics": [{"name": "mae"}]}, "paired protocol only"),
     ("cyclegan", {"evaluation.input_failures": "permissive"}, "paired protocol only"),
     ("pix2pix", {"inference.checkpoint_metric": "val_loss"}, "not a checkpoint metric"),
+    ("pix2pix", {"inference.checkpoint_metric": "val_ssim"}, "val_<metric>__<output>"),
     ("pix2pix", {"method.options": {}}, "Unknown key.*in method: options"),
     ("pix2pix", {"method.name": "stylegan"}, "not a registered method definition"),
     ("cyclegan", {"inference.checkpoint_metric": "val_ssim"}, "paired image-fidelity metric"),
@@ -877,7 +967,7 @@ _INVALID_VARIANTS: list[tuple[str, dict[str, Any], str]] = [
         {"training.early_stopping": {"monitor": "val_psnr"}},
         "paired image-fidelity metric",
     ),
-    ("pix2pix", {"training.early_stopping": {"monitor": "val_loss"}}, "validation CSV column"),
+    ("pix2pix", {"training.early_stopping": {"monitor": "val_loss"}}, "not a checkpoint metric"),
     ("pix2pix", {"training.scheduler": {"name": "linear_decay"}}, "decay_start_epoch is required"),
     (
         "pix2pix",

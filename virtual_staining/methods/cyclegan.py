@@ -127,17 +127,18 @@ class ReplayPool:
 
 
 class CycleGANInferenceAdapter(nn.Module):
-    """Expose one tensor-to-tensor CycleGAN generator through named-input inference."""
+    """Expose one tensor-to-tensor CycleGAN generator as a one-input, one-output mapping."""
 
-    def __init__(self, generator: nn.Module, input_name: str) -> None:
+    def __init__(self, generator: nn.Module, input_name: str, output_name: str) -> None:
         super().__init__()
         self.generator = generator
         self.input_names = (input_name,)
+        self.output_names = (output_name,)
 
-    def forward(self, inputs: Mapping[str, torch.Tensor]) -> torch.Tensor:
+    def forward(self, inputs: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         if tuple(inputs) != self.input_names:
             raise ValueError(f"Expected inputs {self.input_names}, got {tuple(inputs)}")
-        return self.generator(inputs[self.input_names[0]])
+        return {self.output_names[0]: self.generator(inputs[self.input_names[0]])}
 
 
 def build_cyclegan_inference_generator(
@@ -152,8 +153,10 @@ def build_cyclegan_inference_generator(
     generator.load_state_dict(
         validated_model_state(checkpoint.state, f"G_{direction}", generator, checkpoint.path)
     )
-    input_name = config.model.inputs[0] if direction == "A_to_B" else config.model.target
-    adapter = CycleGANInferenceAdapter(generator, input_name)
+    definition = config.method.definition
+    (input_name,) = definition.prediction_inputs(config, direction)
+    (output_name,) = definition.prediction_outputs(config, direction)
+    adapter = CycleGANInferenceAdapter(generator, input_name, output_name)
     adapter.eval()
     return adapter
 
@@ -187,7 +190,7 @@ def _set_requires_grad(modules: Iterable[nn.Module], requires_grad: bool) -> Non
 class CycleGANMethod:
     """Own the unpaired CycleGAN topology: two ResNet generators and two PatchGANs.
 
-    Domain A is ``model.inputs[0]`` and domain B is ``model.target``. ``D_A`` scores
+    Domain A is ``model.inputs[0]`` and domain B is ``model.outputs[0]``. ``D_A`` scores
     domain-A images and ``D_B`` scores domain-B images.
     """
 

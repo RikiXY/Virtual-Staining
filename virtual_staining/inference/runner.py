@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeAlias
@@ -20,8 +20,8 @@ from virtual_staining.models.io_contract import (
     denormalize_model_output,
 )
 
-#: ``{input_name: NCHW tensor in [-1, 1]}`` -> one NCHW RGB tensor in [-1, 1].
-Predictor: TypeAlias = Callable[[dict[str, torch.Tensor]], torch.Tensor]
+#: ``{input_name: NCHW tensor in [-1, 1]}`` -> ``{output_name: NCHW RGB tensor in [-1, 1]}``.
+Predictor: TypeAlias = Callable[[dict[str, torch.Tensor]], Mapping[str, torch.Tensor]]
 #: Slack for float noise around the declared output range; anything further out is rejected.
 OUTPUT_RANGE_TOLERANCE = 1e-3
 
@@ -33,37 +33,50 @@ class InferenceResult:
     num_samples: int = 0
 
 
-def validate_prediction(output: object, reference: torch.Tensor) -> torch.Tensor:
-    """Enforce the one same-grid RGB output contract before anything is published.
+def validate_prediction(
+    outputs: object, reference: torch.Tensor, output_names: tuple[str, ...]
+) -> dict[str, torch.Tensor]:
+    """Enforce the named same-grid RGB output contract before anything is published.
 
-    ``reference`` is one NCHW predictor input; the output must be ``(N, 3, H, W)`` on
-    exactly that grid. Nothing is cropped, padded, resized, selected or clamped away.
+    ``reference`` is one NCHW predictor input. The predictor must return a mapping with
+    exactly ``output_names`` in order (one output is a one-item mapping), each value a
+    finite ``(N, 3, H, W)`` tensor on exactly that grid within the declared range. Nothing
+    is cropped, padded, resized, selected or clamped away.
     """
-    if not isinstance(output, torch.Tensor):
+    if not isinstance(outputs, Mapping):
         raise TypeError(
-            "Predictor must return one RGB tensor; multi-output predictors are not "
-            f"supported, got {type(output).__name__}"
+            "Predictor must return a mapping of output name to RGB tensor, got "
+            f"{type(outputs).__name__}"
+        )
+    if tuple(outputs) != output_names:
+        raise ValueError(
+            f"Predictor outputs {tuple(outputs)} must be exactly {output_names} in that order"
         )
     expected = (reference.shape[0], 3, *reference.shape[-2:])
-    if tuple(output.shape) != expected:
-        raise ValueError(
-            f"Predictor output shape {tuple(output.shape)} violates the same-grid RGB "
-            f"contract: expected {expected} (input batch, 3 channels, input height/width)"
-        )
-    if not output.is_floating_point():
-        raise TypeError(f"Predictor output must be a floating tensor, got {output.dtype}")
-    if not bool(torch.isfinite(output).all()):
-        raise ValueError("Predictor output contains NaN or Inf values")
     low, high = MODEL_OUTPUT_RANGE
-    if (
-        float(output.min()) < low - OUTPUT_RANGE_TOLERANCE
-        or float(output.max()) > high + OUTPUT_RANGE_TOLERANCE
-    ):
-        raise ValueError(
-            f"Predictor output must lie in [{low}, {high}], got "
-            f"[{float(output.min()):.4g}, {float(output.max()):.4g}]"
-        )
-    return output
+    for name, output in outputs.items():
+        if not isinstance(output, torch.Tensor):
+            raise TypeError(f"Predictor output {name!r} must be a tensor")
+        if tuple(output.shape) != expected:
+            raise ValueError(
+                f"Predictor output {name!r} shape {tuple(output.shape)} violates the same-grid "
+                f"RGB contract: expected {expected} (input batch, 3 channels, input height/width)"
+            )
+        if not output.is_floating_point():
+            raise TypeError(
+                f"Predictor output {name!r} must be a floating tensor, got {output.dtype}"
+            )
+        if not bool(torch.isfinite(output).all()):
+            raise ValueError(f"Predictor output {name!r} contains NaN or Inf values")
+        if (
+            float(output.min()) < low - OUTPUT_RANGE_TOLERANCE
+            or float(output.max()) > high + OUTPUT_RANGE_TOLERANCE
+        ):
+            raise ValueError(
+                f"Predictor output {name!r} must lie in [{low}, {high}], got "
+                f"[{float(output.min()):.4g}, {float(output.max()):.4g}]"
+            )
+    return dict(outputs)
 
 
 @torch.no_grad()
@@ -71,12 +84,17 @@ def predict_batch(
     predictor: Predictor,
     inputs: dict[str, torch.Tensor],
     device: torch.device,
-) -> torch.Tensor:
-    """Run a caller-prepared predictor once; the predictor itself is never moved or mutated."""
+    output_names: tuple[str, ...],
+) -> dict[str, torch.Tensor]:
+    """Run a caller-prepared predictor once; the predictor itself is never moved or mutated.
+
+    Returns every named output denormalized to [0, 1], in ``output_names`` order.
+    """
     moved = {name: value.to(device) for name, value in inputs.items()}
     with autocast(device_type=device.type, enabled=device.type == "cuda"):
-        output = predictor(moved)
-    return denormalize_model_output(validate_prediction(output, next(iter(moved.values()))))
+        outputs = predictor(moved)
+    validated = validate_prediction(outputs, next(iter(moved.values())), output_names)
+    return {name: denormalize_model_output(value) for name, value in validated.items()}
 
 
 def resolve_inference_device() -> torch.device:
@@ -129,6 +147,11 @@ def inference_direction(config: RunConfig) -> str | None:
 def inference_input_names(config: RunConfig) -> tuple[str, ...]:
     """Return the named inputs the configured inference direction consumes."""
     return config.method.definition.prediction_inputs(config, inference_direction(config))
+
+
+def inference_output_names(config: RunConfig) -> tuple[str, ...]:
+    """Return the ordered named outputs the configured inference direction produces."""
+    return config.method.definition.prediction_outputs(config, inference_direction(config))
 
 
 def load_inference_generator(

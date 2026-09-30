@@ -39,12 +39,16 @@ from virtual_staining.split_contract import (
 
 @dataclass(frozen=True)
 class DatasetBuildResult:
+    """Committed sample counts per split; every committed sample has every named target."""
+
     train_count: int
     val_count: int
     test_count: int
     skipped_count: int
     output_root: Path
     reused: bool = False
+    input_modalities: tuple[str, ...] = ()
+    target_modalities: tuple[str, ...] = ()
 
     def save(self, path: Path, *, num_sets: int, num_sets_excluded: int) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -52,6 +56,8 @@ class DatasetBuildResult:
             json.dumps(
                 {
                     "schema_version": MANIFEST_SCHEMA_VERSION,
+                    "input_modalities": list(self.input_modalities),
+                    "target_modalities": list(self.target_modalities),
                     "num_sets": num_sets,
                     "num_sets_excluded": num_sets_excluded,
                     "patches": {
@@ -75,6 +81,12 @@ class DatasetBuildResult:
         if not isinstance(data, dict) or data.get("schema_version") != MANIFEST_SCHEMA_VERSION:
             raise ValueError(f"Invalid dataset build metadata at {path}")
         patches = data.get("patches")
+        names: list[tuple[str, ...]] = []
+        for key in ("input_modalities", "target_modalities"):
+            value = data.get(key)
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                raise ValueError(f"Invalid dataset build metadata at {path}")
+            names.append(tuple(value))
         if not isinstance(patches, dict):
             raise ValueError(f"Invalid dataset build metadata at {path}")
         try:
@@ -88,6 +100,8 @@ class DatasetBuildResult:
             counts[3],
             output_root,
             reused,
+            names[0],
+            names[1],
         )
 
 
@@ -117,44 +131,39 @@ class DatasetBuilder:
     def _records(
         self, set_id: str, rows: tuple[dict[str, Any], ...], *, discarded: bool = False
     ) -> tuple[ManifestRecord, ...]:
+        """Manifest records of one set; discarded rows keep their per-modality layout."""
         layout = DatasetLayout(Path())
+        inputs_config = self.config.inputs
         records = []
         for row in rows:
             split = DISCARDED_SPLIT if discarded else cast(DatasetSplit, row["split"])
-            root = (
-                layout.discarded_patches_dir
+            base = (
+                layout.discarded_patches_dir / set_id
                 if discarded
-                else layout.split_dir(cast(DatasetSplit, row["split"]))
+                else layout.split_dir(cast(DatasetSplit, row["split"])) / set_id
             )
-            if discarded:
-                inputs = {
-                    name: root / set_id / name / filename
-                    for name, filename in row["inputs"].items()
-                    if name in self.config.inputs.modalities
-                }
-                target = root / set_id / "target" / row["target"]
-                mask = None
-            else:
-                base = root / set_id
-                inputs = {
-                    name: base / filename
-                    for name, filename in row["inputs"].items()
-                    if name in self.config.inputs.modalities
-                }
-                target = base / row["target"]
-                mask = (
-                    base / row["foreground_mask"]
-                    if row.get("foreground_mask") and self.config.masks.save_patch_masks
-                    else None
-                )
+
+            def place(name: str, filename: str, base: Path = base) -> Path:
+                return base / name / filename if discarded else base / filename
+
             records.append(
                 ManifestRecord(
                     sample_id=row["sample_id"],
                     set_id=set_id,
                     split=split,
-                    input_paths=inputs,
-                    target_path=target,
-                    foreground_mask_path=mask,
+                    input_paths={
+                        name: place(name, row["inputs"][name]) for name in inputs_config.modalities
+                    },
+                    target_paths={
+                        name: place(name, row["targets"][name])
+                        for name in inputs_config.target_modalities
+                    },
+                    foreground_mask_paths={
+                        name: place(name, row["foreground_masks"][name])
+                        if not discarded and row["foreground_masks"]
+                        else None
+                        for name in inputs_config.target_modalities
+                    },
                     x=row["x"],
                     y=row["y"],
                     width=self.config.patching.patch_size[0],
@@ -166,6 +175,15 @@ class DatasetBuilder:
     def run_all(self) -> DatasetBuildResult:
         layout = DatasetLayout(self.config.dataset_root)
         root = layout.root
+        # Withdraw the completion marker and manifests first, so a build that fails part
+        # way never leaves an earlier, now inconsistent dataset looking consumable.
+        for path in (
+            layout.dataset_build_path,
+            layout.manifest_path,
+            layout.manifest_metadata_path,
+            layout.discarded_manifest_path,
+        ):
+            path.unlink(missing_ok=True)
         for path in (layout.split_dir(name) for name in DATASET_SPLITS):
             _ensure_clean_directory(path)
         layout.manifests_dir.mkdir(parents=True, exist_ok=True)
@@ -220,6 +238,8 @@ class DatasetBuilder:
             counts[TEST_SPLIT],
             len(discarded_records),
             root,
+            input_modalities=self.config.inputs.modalities,
+            target_modalities=self.config.inputs.target_modalities,
         )
         result.save(
             layout.dataset_build_path,
@@ -235,10 +255,10 @@ class DatasetBuilder:
         discarded_records: list[ManifestRecord],
     ) -> None:
         metadata = ManifestMetadata(
-            MANIFEST_SCHEMA_VERSION,
-            cast(tuple[str, ...], self.config.inputs.modalities),
-            self.config.inputs.reference,
-            self.config.inputs.target_modality,
+            schema_version=MANIFEST_SCHEMA_VERSION,
+            input_modalities=self.config.inputs.modalities,
+            target_modalities=self.config.inputs.target_modalities,
+            reference_modality=self.config.inputs.reference,
         )
         manifest = DatasetManifest(tuple(valid_records), layout.root, metadata)
         manifest.validate()
@@ -265,13 +285,10 @@ class DatasetBuilder:
         set_rows: list[dict[str, Any]],
         excluded: list[dict[str, str]],
     ) -> None:
+        names = (*self.config.inputs.modalities, *self.config.inputs.target_modalities)
         fields = ["set_id", "split", "patient_id", "specimen_id", "status"]
-        fields.extend(
-            f"{name}__alignment_method" for name in (*self.config.inputs.modalities, "target")
-        )
-        fields.extend(
-            f"{name}__alignment_metadata" for name in (*self.config.inputs.modalities, "target")
-        )
+        fields.extend(f"{name}__alignment_method" for name in names)
+        fields.extend(f"{name}__alignment_metadata" for name in names)
         with layout.slide_sets_path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=fields)
             writer.writeheader()

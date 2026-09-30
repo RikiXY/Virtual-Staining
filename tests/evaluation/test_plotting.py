@@ -19,19 +19,31 @@ _METRICS = tuple(
 
 def _row(value: float, **overrides: MetricResult) -> dict[str, object]:
     results = {metric.name: MetricResult.of(value) for metric in _METRICS} | overrides
-    return build_metric_row("s", "t.png", "g.png", (8, 8, 3), results, set_id="S")
+    return build_metric_row("s", "HE", "t.png", "g.png", (8, 8, 3), results, set_id="S")
 
 
 def test_save_dataset_plots_writes_one_histogram_per_requested_metric(tmp_path: Path) -> None:
     saved_paths = save_dataset_plots([_row(0.5), _row(0.6), _row(0.7)], _METRICS, tmp_path)
 
     assert {path.name for path in saved_paths} == {
-        "mae_histogram.png",
-        "psnr_histogram.png",
-        "pcc_gray_histogram.png",
+        "HE__mae_histogram.png",
+        "HE__psnr_histogram.png",
+        "HE__pcc_gray_histogram.png",
         "metrics_boxplot.png",
     }
     assert all(path.is_file() for path in saved_paths)
+
+
+def test_save_dataset_plots_never_mixes_outputs_in_one_histogram(tmp_path: Path) -> None:
+    rows = [_row(0.5), {**_row(0.9), "output_name": "PAS"}]
+
+    saved_paths = save_dataset_plots(rows, _METRICS[:1], tmp_path)
+
+    assert sorted(path.name for path in saved_paths) == [
+        "HE__mae_histogram.png",
+        "PAS__mae_histogram.png",
+        "metrics_boxplot.png",
+    ]
 
 
 def test_save_dataset_plots_ignores_non_finite_results(tmp_path: Path) -> None:

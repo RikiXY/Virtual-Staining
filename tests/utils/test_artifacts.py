@@ -2,34 +2,63 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tests.image_helpers import write_rgb_image
-from virtual_staining.utils.artifacts import collect_generated_artifacts, generated_filename
+from virtual_staining.utils.artifacts import (
+    collect_generated_artifacts,
+    generated_identity,
+    generated_path,
+)
 
 
-def test_generated_filename_normalizes_suffix() -> None:
-    assert generated_filename("00512_09216", ".tif") == "00512_09216_target_generated.tif"
-    assert generated_filename("patch_001", ".PNG") == "patch_001_target_generated.png"
-    assert generated_filename("x", ".png", "B_to_A") == "x_B_to_A_generated.png"
+def test_generated_path_is_keyed_by_sample_and_output(tmp_path: Path) -> None:
+    assert generated_path(tmp_path, "00512_09216", "HE", ".TIF") == (
+        tmp_path / "HE" / "00512_09216_generated.tif"
+    )
+    assert generated_path(tmp_path, "patch_001", "PAS", ".png") == (
+        tmp_path / "PAS" / "patch_001_generated.png"
+    )
 
 
-def test_collect_generated_artifacts_is_recursive_sorted_and_direction_specific(
+def test_generated_path_inverts_to_its_pair(tmp_path: Path) -> None:
+    for sample_id, output in (("s__x1_y2", "HE"), ("a__b", "b__c"), ("x", "PAS-2")):
+        path = generated_path(tmp_path, sample_id, output, ".png")
+        assert generated_identity(path) == (sample_id, output)
+
+
+def test_generated_path_is_collision_free_where_a_flat_name_is_not(tmp_path: Path) -> None:
+    # A flat "<sample>__<output>" name would collide for these two pairs.
+    first = generated_path(tmp_path, "s__A", "B", ".png")
+    second = generated_path(tmp_path, "s", "A__B", ".png")
+
+    assert first != second
+    assert generated_identity(first) != generated_identity(second)
+
+
+@pytest.mark.parametrize("sample_id", ["", "a/b", "a\\b"])
+def test_generated_path_rejects_non_component_sample_ids(tmp_path: Path, sample_id: str) -> None:
+    with pytest.raises(ValueError, match="sample_id"):
+        generated_path(tmp_path, sample_id, "HE", ".png")
+
+
+def test_collect_generated_artifacts_is_recursive_sorted_and_output_specific(
     tmp_path: Path,
 ) -> None:
     for name in (
-        "case2/y_A_to_B_generated.png",
-        "case1/x_A_to_B_generated.png",
-        "case1/x_B_to_A_generated.png",
-        "case1/x_target_generated.png",
-        "case1/unrelated.png",
+        "case2/HE/y_generated.png",
+        "case1/HE/x_generated.png",
+        "case1/PAS/x_generated.png",
+        "HE/z_generated.png",
+        "HE/unrelated.png",
     ):
         write_rgb_image(tmp_path / name)
-    (tmp_path / "case1" / "notes_A_to_B_generated.txt").write_text("not an image")
+    (tmp_path / "HE" / "notes_generated.txt").write_text("not an image")
 
-    assert collect_generated_artifacts(tmp_path, "A_to_B") == (
-        tmp_path / "case1/x_A_to_B_generated.png",
-        tmp_path / "case2/y_A_to_B_generated.png",
+    assert collect_generated_artifacts(tmp_path, "HE") == (
+        tmp_path / "HE/z_generated.png",
+        tmp_path / "case1/HE/x_generated.png",
+        tmp_path / "case2/HE/y_generated.png",
     )
-    assert collect_generated_artifacts(tmp_path, "B_to_A") == (
-        tmp_path / "case1/x_B_to_A_generated.png",
-    )
-    assert collect_generated_artifacts(tmp_path) == (tmp_path / "case1/x_target_generated.png",)
+    assert collect_generated_artifacts(tmp_path, "PAS") == (tmp_path / "case1/PAS/x_generated.png",)
+    assert collect_generated_artifacts(tmp_path, "missing") == ()

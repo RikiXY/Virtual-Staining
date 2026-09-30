@@ -2,20 +2,28 @@
 
 ## Wide slide-set inventory
 
-`inputs/slide_sets.csv` is a wide inventory. Paths are relative to `dataset_root`.
-Configured input names must match `[A-Za-z][A-Za-z0-9_-]*`.
+`inputs/slide_sets.csv` is a wide inventory, symmetric in named inputs and named
+targets. Paths are relative to `dataset_root`. Every input and target name is a machine
+identifier matching `[A-Za-z][A-Za-z0-9_-]*` (`HE` for H&E); names are never sanitized.
 
-For modalities `LF,AF`, required columns are:
+Each input `<name>` has the columns `input__<name>_path`, `input__<name>_aligned`,
+`input__<name>_mask`, `input__<name>_slide_id`, and each target `<name>` the columns
+`target__<name>_path`, `target__<name>_aligned`, `target__<name>_mask`,
+`target__<name>_slide_id`; the `_path` and `_aligned` columns are required, the others
+optional. `set_id`, `patient_id`, and `specimen_id` complete the row. For inputs `LF,AF`
+and targets `HE,PAS`:
 
 ```text
-set_id,input__LF_path,input__LF_aligned,input__AF_path,input__AF_aligned,target_path,target_aligned
-S001,raw/lf/S001.svs,true,raw/af/S001.svs,false,raw/he/S001.svs,false
+set_id,input__LF_path,input__LF_aligned,input__AF_path,input__AF_aligned,target__HE_path,target__HE_aligned,target__PAS_path,target__PAS_aligned
+S001,raw/lf/S001.svs,true,raw/af/S001.svs,false,raw/he/S001.svs,false,raw/pas/S001.svs,
 ```
 
-Optional columns are `input__<modality>_mask`, `input__<modality>_slide_id`,
-`target_mask`, `target_slide_id`, `patient_id`, and `specimen_id`.
-The configured reference input must be marked aligned. Missing or legacy columns
-are rejected.
+One target is the one-item case of the same columns. Every configured target is required
+for every set. The configured reference input must be marked aligned. Missing,
+duplicate, unknown, or superseded columns (the singular `target_path`, `target_aligned`,
+`target_mask`, `target_slide_id`) are rejected, as are unsafe or symlink-escaping paths,
+malformed set IDs, and any two assets of one set that are the same physical file
+(input/target or target/target reuse, including through symlinks and hard links).
 
 `DatasetLayout` in `virtual_staining.data.layout` is the single owner of these
 dataset paths. `ProjectConfig` supplies YAML values only; it does not construct
@@ -32,15 +40,28 @@ not paired inventory and never need it.
 ```bash
 vs inventory preview --dataset-root DATASET \
   --input LF=raw/LF --input 'AF=raw/AF/**/*.svs' \
-  --target-modality HE --target raw/HE --reference LF \
-  [--input-mask AF=masks/AF] [--target-mask masks/HE] \
+  --target HE=raw/HE --target PAS=raw/PAS --reference LF \
+  [--input-mask AF=masks/AF] [--target-mask HE=masks/HE] [--target-mask PAS=masks/PAS] \
   [--key relative-path|relative-stem] [--metadata meta.csv]
 vs inventory write ... [--output inputs/slide_sets.csv]
 ```
 
-**Mappings.** Every input (ordered, one per `--input NAME=SPEC`), the target, and each
-optional mask is named explicitly; nothing is inferred from folder names and no other
-directory is scanned. A spec is relative to `dataset_root` and is either:
+The library request has the same shape:
+
+```python
+InventoryRequest(
+    dataset_root=root,
+    inputs=(("LF", "raw/LF"), ("AF", "raw/AF")),
+    targets=(("HE", "raw/HE"), ("PAS", "raw/PAS")),
+    reference="LF",
+    target_masks=(("HE", "masks/HE"), ("PAS", "masks/PAS")),
+)
+```
+
+**Mappings.** Every input (ordered, one per `--input NAME=SPEC`), every target (ordered,
+one per `--target NAME=SPEC`), and each optional mask is named explicitly; nothing is
+inferred from folder names and no other directory is scanned. A spec is relative to
+`dataset_root` and is either:
 
 - a *directory*: every regular file below it, recursively; or
 - a *glob* (`*`, `?`, `[...]`, `**` for any number of directories): its *anchor* is the
@@ -56,9 +77,9 @@ file are errors. No image is opened.
 extension: `case1/S001.svs` matches only `case1/S001.svs`. `relative-stem` removes only
 the final extension, so `case1/S001.svs` and `case1/S001.tif` both become `case1/S001`
 (but `S001.ome.tiff` becomes `S001.ome`). A key forms a set only when every input and
-the target have exactly one file with that key. A key missing from any required mapping,
-two files with the same key in one mapping (e.g. `S001.svs` and `S001.tif` under
-`relative-stem`), or a target that is the same file as an input is an error. All
+every target have exactly one file with that key. A key missing from any required
+mapping, two files with the same key in one mapping (e.g. `S001.svs` and `S001.tif`
+under `relative-stem`), or two mappings resolving to the same file is an error. All
 discrepancies are listed together; incomplete keys are never silently dropped, and files
 are never paired by position, even when every mapping holds the same number of files.
 
@@ -71,25 +92,27 @@ are never paired by position, even when every mapping holds the same number of f
 **Metadata CSV** (optional, relative to `dataset_root`). Joined on a required `key`
 column holding keys in the selected key rule's form. Other allowed columns are only
 existing inventory fields: `set_id`, `patient_id`, `specimen_id`,
-`input__<modality>_aligned`, `input__<modality>_slide_id`, `target_aligned`,
-`target_slide_id`. Duplicate keys, keys matching no discovered asset key, unknown
+`input__<name>_aligned`, `input__<name>_slide_id`, `target__<name>_aligned`,
+`target__<name>_slide_id` (target-specific, e.g. `target__PAS_slide_id`). Duplicate
+keys, keys matching no discovered asset key, unknown
 columns, mask columns, modalities not in the request, and alignment values other than
 `true`/`false`/blank are errors. Patient, specimen and slide IDs are never invented.
 
 **Alignment.** The reference input is written `true` unless metadata says otherwise, and
 metadata declaring it `false` is an error; `true` means identity to the declared reference
-coordinate system only, not correspondence certification. Every other input and the
+coordinate system only, not correspondence certification. Every other input and every
 target keep an explicitly supplied `true`/`false`, otherwise the field stays blank
 (unknown). Alignment is never inferred from names, keys, directories, or dimensions.
 
-**Masks.** `--input-mask NAME=SPEC` and `--target-mask SPEC` use the same key rule and
-fill `input__<modality>_mask` / `target_mask`; a set without a mask leaves it blank.
+**Masks.** `--input-mask NAME=SPEC` and `--target-mask NAME=SPEC` use the same key rule
+and fill `input__<name>_mask` / `target__<name>_mask`; a set without a mask leaves it
+blank.
 Duplicate mask keys and mask keys matching no set are errors. Masks are never generated.
 
-**Rendering and publication.** Columns are `set_id`, each input's path and alignment in
-request order, `target_path`, `target_aligned`, then only the optional columns that
-carry a value, in the order per-input mask and slide ID, `target_mask`,
-`target_slide_id`, `patient_id`, `specimen_id`. Rows are sorted by `set_id` and all
+**Rendering and publication.** Columns are `set_id`, each input's then each target's path
+and alignment in request order, then only the optional columns that carry a value, in
+the order per-input mask and slide ID, per-target mask and slide ID, `patient_id`,
+`specimen_id`. Rows are sorted by `set_id` and all
 paths are `dataset_root`-relative POSIX paths, so the same request yields the same
 bytes. `preview` writes nothing. `write` refuses an invalid preview, reruns discovery
 and requires the same membership and rows, writes a sibling temporary file, loads it
@@ -131,7 +154,7 @@ build, and it decides whether an existing complete dataset can be reused. These
 dataset-owned artifacts are built by `data/provenance.py`.
 
 `metadata/consumed_data/prepare/` is the consumed-data snapshot of the raw assets the
-last preparation attempt selected: every input slide, target slide, and supplied mask
+last preparation attempt selected: every input slide, every target slide, and supplied mask
 with its modality and set/specimen/patient IDs (format in
 [Run Output Format](run_format.md#consumed-data-snapshots)). It is written before any
 reuse decision or build. Under `data.hash_policy: content` its verified digests feed
@@ -142,41 +165,68 @@ no cross-split claim. Experiment runs record the manifest hash and fingerprint a
 `sources` of their own stage snapshots; they do not write generic run, event, or stage
 metadata into the dataset directory.
 
-Every non-reference input and the target is aligned directly to the reference
-coordinate frame. No full aligned whole-slide image is created.
+Every non-reference input and every target is aligned directly to the reference
+coordinate frame with the existing alignment code. No full aligned whole-slide image is
+created. All inputs and targets are extracted at the same reference-grid position; a
+sample is committed to a split only after every one of its images (and, with
+`masks.save_patch_masks`, every target's foreground mask) has been written and its
+dimensions verified. Rejected positions are recorded in `discarded_manifest.csv` with
+split `discarded`. A rebuild first withdraws `dataset_build.json` and the manifests, so a
+preparation that fails part way never looks consumable.
 
-## Patch manifest v3
+## Patch manifest v4
 
-`manifests/manifest.csv` is the only prepared-record contract. Its columns are
+`manifests/manifest.csv` is the only prepared-record contract, and schema `4.0` is the
+only accepted version: earlier manifests are rejected, never converted. Its columns are
 ordered by manifest metadata:
 
 ```text
-sample_id,set_id,split,input__LF,input__AF,target_path,foreground_mask_path,x,y,width,height
+sample_id,set_id,split,input__LF,input__AF,target__HE,target__PAS,foreground_mask__HE,foreground_mask__PAS,x,y,width,height
 ```
 
-`sample_id` is `<set_id>__x<8 digits>_y<8 digits>`. Each record contains one
-relative path per named input, one target path, and optionally the target
-foreground mask. `manifest_metadata.json` contains exactly the v3 identity:
+`sample_id` is `<set_id>__x<8 digits>_y<8 digits>`. Every record holds one relative path
+per named input and per named target (all required; there are no sparse targets) and a
+`foreground_mask__<target>` column for every target, which may be blank. Patch files are
+`<sample_id>__input__<name>`, `<sample_id>__target__<name>` and
+`<sample_id>__foreground_mask__<name>` with the source extension. `x`, `y` are the
+upper-left patch origin and `width`, `height` the extent, in reference level-0 pixels
+with integer pixel centers; they are never model-resized tensor coordinates.
+`manifest_metadata.json` holds the canonical identity plus the builder-owned producer
+fields `created_at`, `record_count`, and `splits`:
 
 ```json
 {
-  "schema_version": "3.0",
+  "schema_version": "4.0",
   "input_modalities": ["LF", "AF"],
+  "target_modalities": ["HE", "PAS"],
   "reference_modality": "LF",
-  "target_modality": "H&E"
+  "coordinate_space": "reference_level0_pixels",
+  "pixel_center": "integer"
 }
 ```
 
-The loader rejects v1/v2 columns, absolute or traversing paths, missing names,
-input/target collisions, duplicate paths, and missing files when requested.
+The loader enforces the exact header order and rejects duplicate headers, rows with
+missing or extra cells, malformed metadata types and unknown metadata fields, unsafe
+identifiers, missing or extra named images, absolute or traversing paths, paths whose
+symlink resolution leaves the dataset root (when files are checked), duplicate sample
+IDs, cross-split sample conflicts, duplicate input paths, duplicate target paths,
+input/target path reuse, invalid coordinates or extents, and missing files when
+requested.
 
 ## Named runtime samples
 
-Datasets return:
+`PairedManifestDataset` returns the selected names in configured order:
 
 ```python
-{"inputs": {"LF": lf_tensor, "AF": af_tensor}, "target": target_tensor, "masks": {}}
+{
+    "inputs": {"LF": lf_tensor, "AF": af_tensor},
+    "targets": {"PAS": pas_tensor, "HE": he_tensor},
+    "masks": {"foreground_mask": {"PAS": pas_mask, "HE": he_mask}},
+}
 ```
 
-Model configuration selects an ordered subset with `model.inputs` and a target
-with `model.target`.
+`masks` is `{}` unless a configured loss needs foreground masks; then every selected
+target carries its own `1HW` mask and a mask of one target is never used for another.
+Collation gives `NCHW` images and `N1HW` masks under the same names. Model configuration
+selects `model.inputs` from the manifest input modalities and `model.outputs` from its
+target modalities, each in any order; model order is authoritative.

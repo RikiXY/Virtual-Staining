@@ -6,8 +6,8 @@ from virtual_staining.config.run import RunConfig
 from virtual_staining.definitions import Definitions
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.inference.runner import (
-    inference_direction,
     inference_input_names,
+    inference_output_names,
     load_inference_generator,
     resolve_inference_device,
 )
@@ -83,8 +83,8 @@ def _create_runtime(config: RunConfig) -> InferenceRuntime:
         predictor=predictor,
         contract=PredictionContract(
             input_names=inference_input_names(config),
+            output_names=inference_output_names(config),
             image_size=config.project.image_size,
-            artifact_direction=inference_direction(config),
         ),
         device=device,
         checkpoint_path=checkpoint_path,

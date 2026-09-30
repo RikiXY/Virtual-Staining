@@ -16,9 +16,9 @@ import pytest
 
 from virtual_staining.definitions import ComponentDefinition, MethodDefinition
 from virtual_staining.methods.builtin import (
-    PIX2PIX_CHECKPOINT_METRICS,
-    PIX2PIX_VALIDATION_METRICS,
+    PIX2PIX_IMAGE_METRICS,
     CycleGANDefinition,
+    Pix2PixDefinition,
     builtin_definitions,
     builtin_method_definitions,
 )
@@ -166,24 +166,43 @@ def test_default_definitions_register_each_builtin_once_through_the_public_api()
 
 
 def test_pix2pix_explicitly_owns_its_reused_validation_image_metrics() -> None:
-    assert {name: metric.name for name, metric in PIX2PIX_VALIDATION_METRICS.items()} == {
-        "val_ssim": "ssim",
-        "val_psnr": "psnr",
-        "val_mae": "mae",
-        "val_rmse": "rmse",
-        "val_pcc_rgb_mean": "pcc_rgb_mean",
-        "val_pcc_gray": "pcc_gray",
+    assert {name: metric.name for name, metric in PIX2PIX_IMAGE_METRICS.items()} == {
+        "ssim": "ssim",
+        "psnr": "psnr",
+        "mae": "mae",
+        "rmse": "rmse",
+        "pcc_rgb_mean": "pcc_rgb_mean",
+        "pcc_gray": "pcc_gray",
     }
-    assert list(PIX2PIX_CHECKPOINT_METRICS.items()) == [
+    # Validation metrics are per output; loss_G_val stays the joint default metric.
+    assert list(Pix2PixDefinition().checkpoint_modes(("PAS", "HE")).items()) == [
         ("loss_G_val", "min"),
-        ("val_ssim", "max"),
-        ("val_psnr", "max"),
-        ("val_mae", "min"),
-        ("val_rmse", "min"),
-        ("val_pcc_rgb_mean", "max"),
-        ("val_pcc_gray", "max"),
+        ("val_ssim__PAS", "max"),
+        ("val_ssim__HE", "max"),
+        ("val_psnr__PAS", "max"),
+        ("val_psnr__HE", "max"),
+        ("val_mae__PAS", "min"),
+        ("val_mae__HE", "min"),
+        ("val_rmse__PAS", "min"),
+        ("val_rmse__HE", "min"),
+        ("val_pcc_rgb_mean__PAS", "max"),
+        ("val_pcc_rgb_mean__HE", "max"),
+        ("val_pcc_gray__PAS", "max"),
+        ("val_pcc_gray__HE", "max"),
     ]
     assert dict(CycleGANDefinition.checkpoint_metrics) == {"loss_G_val": "min"}
+
+
+def test_pix2pix_monitor_names_accept_safe_output_identifiers() -> None:
+    definition = Pix2PixDefinition()
+
+    assert definition.monitor_mode("val_ssim__H-E_2", "monitor") == "max"
+    assert definition.monitor_mode("val_mae__PAS", "monitor") == "min"
+    assert definition.monitor_mode("loss_val_raw_generator_l1__H-E_2", "monitor") == "min"
+    assert definition.resolve_default_monitor(("HE",)) == "val_ssim__HE"
+    assert definition.resolve_default_monitor(("HE", "PAS")) is None
+    with pytest.raises(ValueError, match="val_<metric>__<output>"):
+        definition.monitor_mode("val_ssim", "monitor")
 
 
 @pytest.mark.parametrize(

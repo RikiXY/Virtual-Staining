@@ -5,11 +5,11 @@
 | Property | Value |
 |---|---|
 | Task | Virtual histological staining / paired image-to-image translation |
-| Modalities | Label-free microscopy input + stained histology target |
-| Format | Paired RGB image patches written from user-supplied source images |
+| Modalities | Named label-free inputs + one or more named stained histology targets |
+| Format | Aligned RGB image patches (every input and target of a sample on one grid) written from user-supplied source images |
 | Patch size | Configurable; default `256x256` pixels |
 | Splits | Train / Val / Test (`patch` level) |
-| Index file | `manifests/manifest.csv` |
+| Index file | `manifests/manifest.csv` (schema `4.0`) |
 
 ## Source Data
 
@@ -17,9 +17,11 @@ This repository does not ship raw microscopy data. The dataset is built from a
 user-provided paired image set placed under `dataset_root`.
 
 - The input modality is expected to be a label-free source image.
-- The target modality is expected to be the corresponding stained image.
-- The default filenames in the example configuration are `label_free.tif` and
-  `stained.tif`.
+- Every target modality (`preprocessing.inputs.target_modalities`, e.g. `[HE, PAS]`) is
+  expected to be a corresponding stained image of the same set; all configured targets
+  are required for every set.
+- Assets are listed in the wide `inputs/slide_sets.csv` inventory
+  (`input__<name>_path`, `target__<name>_path`, ...); see `docs/dataset_format.md`.
 - The preprocessing code accepts `.tif`, `.tiff`, and `.png` inputs.
 
 Dataset creators and users are responsible for ensuring that their source data
@@ -32,9 +34,9 @@ tissue section under two imaging conditions: a label-free source modality and a
 stained target modality.
 
 The repository does not enforce any acquisition hardware, stain protocol, or
-institution-specific procedure. Instead, it assumes the user provides one paired
-source image and one paired target image, then performs computational alignment
-of the target image to the source reference frame.
+institution-specific procedure. Instead, it assumes the user provides the named input
+images and every named target image of a set, then performs computational alignment of
+each non-reference image to the reference input's frame.
 
 ## Preprocessing Pipeline
 

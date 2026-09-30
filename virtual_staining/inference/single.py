@@ -6,6 +6,7 @@ import os
 import shutil
 import tempfile
 from collections.abc import Callable, Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TypeAlias, cast
@@ -22,7 +23,7 @@ from virtual_staining.inference.runner import (
     predict_batch,
 )
 from virtual_staining.models.io_contract import MODEL_INPUT_RANGE, build_model_input_transform
-from virtual_staining.utils.artifacts import generated_filename
+from virtual_staining.utils.artifacts import generated_path
 from virtual_staining.utils.image_io import (
     VALID_IMAGE_EXTENSIONS,
     ImageMetadata,
@@ -39,7 +40,7 @@ SingleInferenceMode = Literal["auto", "resize", "tile"]
 SUPPORTED_OUTPUT_FORMATS: frozenset[str] = frozenset(
     {"same", *(extension.removeprefix(".") for extension in VALID_IMAGE_EXTENSIONS)}
 )
-#: One RGB output whose pixel grid maps one-to-one onto the predictor input grid.
+#: Named RGB outputs whose pixel grids map one-to-one onto the predictor input grid.
 SAME_GRID_RGB = "same_grid_rgb"
 #: Relative slack when comparing known source MPP values (metadata representation noise).
 MPP_REL_TOLERANCE = 1e-4
@@ -47,29 +48,33 @@ MPP_REL_TOLERANCE = 1e-4
 
 @dataclass(frozen=True)
 class PredictionContract:
-    """What transport knows about a predictor: named RGB inputs -> one same-grid RGB output.
+    """What transport knows about a predictor: named RGB inputs -> named same-grid outputs.
 
     ``image_size`` is the predictor/tile input ``(width, height)``. Inputs are fed in
-    ``input_names`` order as NCHW tensors in ``value_range``; the output must be one
-    ``(N, 3, H, W)`` tensor in the same range on the same grid.
+    ``input_names`` order as NCHW tensors in ``value_range``; the predictor returns
+    ``{output_name: (N, 3, H, W) tensor}`` with exactly ``output_names`` in order, in the
+    same range on the same grid. One output is a one-item mapping.
     """
 
     input_names: tuple[str, ...]
+    output_names: tuple[str, ...]
     image_size: tuple[int, int]
     output_semantics: str = SAME_GRID_RGB
     value_range: tuple[int, int] = MODEL_INPUT_RANGE
-    artifact_direction: str | None = None
 
     def __post_init__(self) -> None:
-        names = self.input_names
-        if (
-            not isinstance(names, tuple)
-            or not names
-            or not all(isinstance(name, str) and name.strip() for name in names)
+        for field_name, names in (
+            ("input_names", self.input_names),
+            ("output_names", self.output_names),
         ):
-            raise ValueError(f"input_names must be a non-empty tuple of names, got {names!r}")
-        if len(set(names)) != len(names):
-            raise ValueError(f"input_names must be unique, got {names!r}")
+            if (
+                not isinstance(names, tuple)
+                or not names
+                or not all(isinstance(name, str) and name.strip() for name in names)
+            ):
+                raise ValueError(f"{field_name} must be a non-empty tuple of names, got {names!r}")
+            if len(set(names)) != len(names):
+                raise ValueError(f"{field_name} must be unique, got {names!r}")
         size = self.image_size
         if (
             not isinstance(size, tuple)
@@ -80,7 +85,7 @@ class PredictionContract:
         if self.output_semantics != SAME_GRID_RGB:
             raise ValueError(
                 f"Unsupported output_semantics {self.output_semantics!r}; only "
-                f"{SAME_GRID_RGB!r} (one RGB output on the input pixel grid) is supported"
+                f"{SAME_GRID_RGB!r} (named RGB outputs on the input pixel grid) is supported"
             )
         if tuple(self.value_range) != MODEL_INPUT_RANGE:
             raise ValueError(
@@ -115,13 +120,13 @@ RuntimeFactory: TypeAlias = Callable[[], InferenceRuntime]
 @dataclass(frozen=True)
 class SingleInferenceResult:
     input_paths: dict[str, Path]
-    output_path: Path
+    #: One published file per output name, in contract order.
+    output_paths: dict[str, Path]
     image_size: tuple[int, int]
     mode: str
     device: str
     checkpoint_path: Path | None = None
     predictor_identity: str | None = None
-    artifact_direction: str | None = None
 
 
 @dataclass(frozen=True)
@@ -133,7 +138,6 @@ class DirectoryInferenceResult:
     results: tuple[SingleInferenceResult, ...]
     checkpoint_path: Path | None = None
     predictor_identity: str | None = None
-    artifact_direction: str | None = None
 
 
 def _check_input_names(runtime: InferenceRuntime, names: Mapping[str, object]) -> None:
@@ -154,10 +158,14 @@ def _sample_id_from_input_path(input_path: Path) -> str:
     return stem
 
 
-def _generated_filename_for_input(
-    input_path: Path, output_suffix: str, direction: str | None
-) -> str:
-    return generated_filename(_sample_id_from_input_path(input_path), output_suffix, direction)
+def _generated_paths_for_input(
+    runtime: InferenceRuntime, output_dir: Path, input_path: Path, output_suffix: str
+) -> dict[str, Path]:
+    sample_id = _sample_id_from_input_path(input_path)
+    return {
+        name: generated_path(output_dir, sample_id, name, output_suffix)
+        for name in runtime.contract.output_names
+    }
 
 
 def _validate_supported_image_path(path: Path, *, label: str) -> None:
@@ -236,19 +244,23 @@ def _predict_images(
     images: dict[str, Image.Image],
     runtime: InferenceRuntime,
     transform: transforms.Compose,
-) -> torch.Tensor:
+) -> dict[str, torch.Tensor]:
+    """One predictor call; every named output of the first batch item, on the CPU."""
     inputs: dict[str, torch.Tensor] = {}
     for name in runtime.contract.input_names:
         source_tensor = transform(images[name])
         if not isinstance(source_tensor, torch.Tensor):
             raise TypeError("Inference transform must return a torch.Tensor")
         inputs[name] = source_tensor.unsqueeze(0)
-    return predict_batch(runtime.predictor, inputs, runtime.device)[0].cpu()
+    outputs = predict_batch(
+        runtime.predictor, inputs, runtime.device, runtime.contract.output_names
+    )
+    return {name: output[0].cpu() for name, output in outputs.items()}
 
 
 def _run_resized_prediction(
     images: dict[str, Image.Image], runtime: InferenceRuntime
-) -> torch.Tensor:
+) -> dict[str, torch.Tensor]:
     transform = build_inference_transform(runtime.contract.image_size)
     return _predict_images(images, runtime, transform)
 
@@ -257,7 +269,8 @@ def _run_tiled_prediction(
     images: dict[str, Image.Image],
     runtime: InferenceRuntime,
     tile_overlap: int,
-) -> torch.Tensor:
+) -> dict[str, torch.Tensor]:
+    """Traverse the input tiles once; each tile's prediction feeds every output."""
     image_size = runtime.contract.image_size
     _validate_tile_overlap(image_size, tile_overlap)
 
@@ -269,7 +282,10 @@ def _run_tiled_prediction(
     y_starts = _tile_starts(image_h, tile_h, stride_h)
 
     transform = _build_no_resize_transform()
-    accumulator = torch.zeros((3, image_h, image_w), dtype=torch.float32)
+    accumulators = {
+        name: torch.zeros((3, image_h, image_w), dtype=torch.float32)
+        for name in runtime.contract.output_names
+    }
     weights = torch.zeros((1, image_h, image_w), dtype=torch.float32)
 
     for y in y_starts:
@@ -285,19 +301,28 @@ def _run_tiled_prediction(
             actual_h = min(y + tile_h, image_h) - y
             # The same-grid contract was validated, so this only drops the padding.
             predicted = _predict_images(tiles, runtime, transform)
-            predicted = predicted[:, :actual_h, :actual_w]
-            accumulator[:, y : y + actual_h, x : x + actual_w] += predicted
+            for name, accumulator in accumulators.items():
+                accumulator[:, y : y + actual_h, x : x + actual_w] += predicted[name][
+                    :, :actual_h, :actual_w
+                ]
             weights[:, y : y + actual_h, x : x + actual_w] += 1.0
 
-    return (accumulator / weights.clamp_min(1.0)).clamp(0, 1)
+    return {
+        name: (accumulator / weights.clamp_min(1.0)).clamp(0, 1)
+        for name, accumulator in accumulators.items()
+    }
 
 
 def _write_tiled_rgb(
     readers: Mapping[str, RegionImageReader],
-    output_path: Path,
+    output_paths: Mapping[str, Path],
     runtime: InferenceRuntime,
     tile_overlap: int,
 ) -> None:
+    """Write one raw RGB file per output from a single tile traversal of the inputs.
+
+    Each output has its own bounded float32 memmap accumulator next to its raw file.
+    """
     image_size = runtime.contract.image_size
     _validate_tile_overlap(image_size, tile_overlap)
 
@@ -312,12 +337,14 @@ def _write_tiled_rgb(
     for y in y_starts:
         y_weights[y : min(y + tile_h, image_h)] += 1
 
-    accumulator_path = output_path.with_suffix(".float32")
-    accumulator = np.memmap(
-        accumulator_path, mode="w+", dtype=np.float32, shape=(image_h, image_w, 3)
-    )
+    accumulator_paths = {name: path.with_suffix(".float32") for name, path in output_paths.items()}
+    accumulators: dict[str, np.memmap] = {}
     transform = _build_no_resize_transform()
     try:
+        for name, path in accumulator_paths.items():
+            accumulators[name] = np.memmap(
+                path, mode="w+", dtype=np.float32, shape=(image_h, image_w, 3)
+            )
         for y in y_starts:
             for x in x_starts:
                 actual_w = min(tile_w, image_w - x)
@@ -329,27 +356,32 @@ def _write_tiled_rgb(
                     for name, reader in readers.items()
                 }
                 images = {name: _pad_tile(image, image_size) for name, image in images.items()}
-                predicted = _predict_images(images, runtime, transform)[:, :actual_h, :actual_w]
-                accumulator[y : y + actual_h, x : x + actual_w] += predicted.permute(
-                    1, 2, 0
-                ).numpy()
+                predicted = _predict_images(images, runtime, transform)
+                for name, accumulator in accumulators.items():
+                    accumulator[y : y + actual_h, x : x + actual_w] += (
+                        predicted[name][:, :actual_h, :actual_w].permute(1, 2, 0).numpy()
+                    )
 
-        output = np.memmap(output_path, mode="w+", dtype=np.uint8, shape=(image_h, image_w, 3))
-        try:
-            for y in range(0, image_h, tile_h):
-                bottom = min(y + tile_h, image_h)
-                weights = y_weights[y:bottom, None] * x_weights[None, :]
-                output[y:bottom] = np.clip(
-                    accumulator[y:bottom] / weights[:, :, None] * 255.0 + 0.5,
-                    0,
-                    255,
-                ).astype(np.uint8)
-            output.flush()
-        finally:
-            del output
+        for name, accumulator in accumulators.items():
+            output = np.memmap(
+                output_paths[name], mode="w+", dtype=np.uint8, shape=(image_h, image_w, 3)
+            )
+            try:
+                for y in range(0, image_h, tile_h):
+                    bottom = min(y + tile_h, image_h)
+                    weights = y_weights[y:bottom, None] * x_weights[None, :]
+                    output[y:bottom] = np.clip(
+                        accumulator[y:bottom] / weights[:, :, None] * 255.0 + 0.5,
+                        0,
+                        255,
+                    ).astype(np.uint8)
+                output.flush()
+            finally:
+                del output
     finally:
-        del accumulator
-        accumulator_path.unlink(missing_ok=True)
+        accumulators.clear()
+        for path in accumulator_paths.values():
+            path.unlink(missing_ok=True)
 
 
 def _shared_wsi_metadata(readers: Mapping[str, RegionImageReader]) -> ImageMetadata:
@@ -372,37 +404,50 @@ def _shared_wsi_metadata(readers: Mapping[str, RegionImageReader]) -> ImageMetad
     return ImageMetadata(width=width, height=height, mpp_x=mpp["x"], mpp_y=mpp["y"])
 
 
-def _require_scratch_space(directory: Path, width: int, height: int) -> None:
-    # Lower bound only: the float32 accumulator and the uint8 raw RGB coexist while
-    # finalizing; the compressed pyramid written next to them is extra and unknowable.
-    required = width * height * 3 * (np.dtype(np.float32).itemsize + 1)
+def _require_scratch_space(directory: Path, width: int, height: int, outputs: int = 1) -> None:
+    # Lower bound only: every output's float32 accumulator and uint8 raw RGB coexist
+    # while finalizing; the compressed pyramids written next to them are extra.
+    required = outputs * width * height * 3 * (np.dtype(np.float32).itemsize + 1)
     available = shutil.disk_usage(directory).free
     if available < required:
         raise OSError(
-            f"WSI inference needs at least {required} bytes ({required / 2**30:.2f} GiB) of "
-            f"scratch space on the filesystem of {directory}, but only {available} bytes "
+            f"WSI inference of {outputs} output(s) needs at least {required} bytes "
+            f"({required / 2**30:.2f} GiB) of scratch space on the filesystem of "
+            f"{directory}, but only {available} bytes "
             f"({available / 2**30:.2f} GiB) are free"
         )
 
 
 def _run_wsi_prediction(
     readers: dict[str, OpenSlideRegionImageReader],
-    output_path: Path,
+    output_paths: Mapping[str, Path],
     runtime: InferenceRuntime,
     tile_overlap: int,
 ) -> None:
-    if output_path.suffix.lower() not in {".tif", ".tiff"}:
+    """Predict every named output of a WSI from one tile traversal of the inputs."""
+    if any(path.suffix.lower() not in {".tif", ".tiff"} for path in output_paths.values()):
         raise ValueError("Full-resolution WSI output must use .tif or .tiff")
 
     metadata = _shared_wsi_metadata(readers)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    _require_scratch_space(output_path.parent, metadata.width, metadata.height)
-    # Scratch lives next to the output so publication is an atomic same-filesystem
-    # replace; the directory (raw RGB, accumulator, unpublished TIFF) is always removed.
-    with tempfile.TemporaryDirectory(prefix=f".{output_path.stem}.", dir=output_path.parent) as tmp:
-        raw_path = Path(tmp) / "generated.rgb"
-        _write_tiled_rgb(readers, raw_path, runtime, tile_overlap)
-        write_pyramidal_tiff_from_raw_rgb(raw_path, output_path, metadata)
+    for path in output_paths.values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+    for directory in {path.parent for path in output_paths.values()}:
+        _require_scratch_space(directory, metadata.width, metadata.height, len(output_paths))
+    # Scratch lives next to each output so publication is an atomic same-filesystem
+    # replace; the directories (raw RGB, accumulators, unpublished TIFFs) are removed.
+    with ExitStack() as stack:
+        raw_paths = {
+            name: Path(
+                stack.enter_context(
+                    tempfile.TemporaryDirectory(prefix=f".{path.stem}.", dir=path.parent)
+                )
+            )
+            / "generated.rgb"
+            for name, path in output_paths.items()
+        }
+        _write_tiled_rgb(readers, raw_paths, runtime, tile_overlap)
+        for name, path in output_paths.items():
+            write_pyramidal_tiff_from_raw_rgb(raw_paths[name], path, metadata)
 
 
 def _save_rgb(output: torch.Tensor, output_path: Path) -> None:
@@ -427,20 +472,29 @@ def _default_output_dir(directory: Path | None, kind: str) -> Path:
     return directory
 
 
-def _resolve_output_path(
+def _resolve_output_paths(
     runtime: InferenceRuntime,
     input_path: Path,
-    output_image: Path | None,
+    output: Path | None,
     *,
     output_format: str = "same",
-) -> Path:
-    if output_image is not None:
-        return output_image
+) -> dict[str, Path]:
+    """Destinations of every output: an explicit file only for one output, else a directory.
 
-    output_dir = _default_output_dir(runtime.default_single_output_dir, "single-image")
-    output_suffix = _output_suffix_for_input(input_path, output_format)
-    return output_dir / _generated_filename_for_input(
-        input_path, output_suffix, runtime.contract.artifact_direction
+    Several outputs never share one file: an explicit ``output`` must then be a directory
+    that receives the canonical ``<output>/<sample>_generated`` layout.
+    """
+    names = runtime.contract.output_names
+    if output is not None and len(names) == 1:
+        return {names[0]: output}
+    if output is not None and (output.is_file() or output.suffix.lower() in VALID_IMAGE_EXTENSIONS):
+        raise ValueError(
+            f"A single output file {output} cannot hold the {len(names)} outputs {list(names)}; "
+            "pass an output directory"
+        )
+    output_dir = output or _default_output_dir(runtime.default_single_output_dir, "single-image")
+    return _generated_paths_for_input(
+        runtime, output_dir, input_path, _output_suffix_for_input(input_path, output_format)
     )
 
 
@@ -448,7 +502,7 @@ def _run_one_image(
     runtime: InferenceRuntime,
     input_images: dict[str, Path],
     *,
-    output_path: Path,
+    output_paths: dict[str, Path],
     mode: SingleInferenceMode = "auto",
     tile_overlap: int = DEFAULT_TILE_OVERLAP,
 ) -> SingleInferenceResult:
@@ -457,13 +511,21 @@ def _run_one_image(
         raise ValueError(
             f"Input paths must match contract input order {input_names}, got {tuple(input_images)}"
         )
+    if tuple(output_paths) != runtime.contract.output_names:
+        raise ValueError(
+            f"Output paths must match contract output order {runtime.contract.output_names}"
+        )
+    if len({path.resolve() for path in output_paths.values()}) != len(output_paths):
+        raise ValueError(f"Outputs must be written to distinct paths: {output_paths}")
     for name, input_path in input_images.items():
         if not input_path.is_file():
             raise FileNotFoundError(f"Input image {name} not found: {input_path}")
         _validate_supported_image_path(input_path, label=f"input_image[{name}]")
-        if input_path.resolve() == output_path.resolve():
-            raise ValueError(f"Output path would overwrite input {name}: {output_path}")
-    _validate_supported_image_path(output_path, label="output_image")
+        for output_path in output_paths.values():
+            if input_path.resolve() == output_path.resolve():
+                raise ValueError(f"Output path would overwrite input {name}: {output_path}")
+    for name, output_path in output_paths.items():
+        _validate_supported_image_path(output_path, label=f"output_image[{name}]")
 
     requested_mode = _validate_mode(mode)
     readers: dict[str, RegionImageReader] = {}
@@ -504,39 +566,39 @@ def _run_one_image(
                 )
             _run_wsi_prediction(
                 readers,  # type: ignore[arg-type]
-                output_path,
+                output_paths,
                 runtime,
                 tile_overlap,
             )
-            output = None
+            outputs = None
         else:
             images = {name: open_rgb(input_path) for name, input_path in input_images.items()}
             if resolved_mode == "resize":
-                output = _run_resized_prediction(images, runtime)
+                outputs = _run_resized_prediction(images, runtime)
             else:
-                output = _run_tiled_prediction(images, runtime, tile_overlap)
+                outputs = _run_tiled_prediction(images, runtime, tile_overlap)
     finally:
         for reader in readers.values():
             reader.close()
 
-    if output is not None:
-        _save_rgb(output, output_path)
+    if outputs is not None:
+        for name, output in outputs.items():
+            _save_rgb(output, output_paths[name])
 
     logger.info(
         "Single-image inference complete: %s -> %s (mode=%s)",
         input_images,
-        output_path,
+        output_paths,
         resolved_mode,
     )
     return SingleInferenceResult(
         input_paths=dict(input_images),
-        output_path=output_path,
+        output_paths=dict(output_paths),
         image_size=runtime.contract.image_size,
         mode=resolved_mode,
         device=str(runtime.device),
         checkpoint_path=runtime.checkpoint_path,
         predictor_identity=runtime.predictor_identity,
-        artifact_direction=runtime.contract.artifact_direction,
     )
 
 
@@ -566,7 +628,7 @@ def _run_single_image_inference(
     _check_input_names(runtime, input_images)
     input_names = runtime.contract.input_names
     input_paths = {name: Path(input_images[name]) for name in input_names}
-    output_path = _resolve_output_path(
+    output_paths = _resolve_output_paths(
         runtime,
         input_paths[input_names[0]],
         output_image,
@@ -575,7 +637,7 @@ def _run_single_image_inference(
     return _run_one_image(
         runtime,
         input_paths,
-        output_path=output_path,
+        output_paths=output_paths,
         mode=mode,
         tile_overlap=tile_overlap,
     )
@@ -626,7 +688,6 @@ def _run_image_directory_inference(
     runtime = _resolve_runtime(runtime)
     _check_input_names(runtime, roots)
     ordered_names = runtime.contract.input_names
-    direction = runtime.contract.artifact_direction
     resolved_output_dir = output_dir or _default_output_dir(
         runtime.default_directory_output_dir, "directory"
     )
@@ -634,32 +695,33 @@ def _run_image_directory_inference(
         raise NotADirectoryError(
             f"Output path for directory inference must be a directory: {resolved_output_dir}"
         )
-    planned: dict[Path, dict[str, Path]] = {}
+    planned: list[tuple[dict[str, Path], dict[str, Path]]] = []
+    claimed: dict[Path, Path] = {}
     for relative_path in sorted(first_relative):
         source_paths = {name: roots[name] / relative_path for name in ordered_names}
         first_source = source_paths[ordered_names[0]]
         relative_parent = relative_path.parent if recursive else Path()
         output_suffix = _output_suffix_for_input(first_source, output_format)
-        output_path = (
-            resolved_output_dir
-            / relative_parent
-            / _generated_filename_for_input(first_source, output_suffix, direction)
+        output_paths = _generated_paths_for_input(
+            runtime, resolved_output_dir / relative_parent, first_source, output_suffix
         )
-        if output_path in planned:
-            raise ValueError(
-                f"Inputs {planned[output_path][ordered_names[0]]} and {first_source} would "
-                f"both be written to {output_path}"
-            )
-        planned[output_path] = source_paths
+        for output_path in output_paths.values():
+            if output_path in claimed:
+                raise ValueError(
+                    f"Inputs {claimed[output_path]} and {first_source} would both be written "
+                    f"to {output_path}"
+                )
+            claimed[output_path] = first_source
+        planned.append((source_paths, output_paths))
     results = [
         _run_one_image(
             runtime,
             source_paths,
-            output_path=output_path,
+            output_paths=output_paths,
             mode=mode,
             tile_overlap=tile_overlap,
         )
-        for output_path, source_paths in planned.items()
+        for source_paths, output_paths in planned
     ]
     return DirectoryInferenceResult(
         input_dirs={name: roots[name] for name in ordered_names},
@@ -669,7 +731,6 @@ def _run_image_directory_inference(
         results=tuple(results),
         checkpoint_path=runtime.checkpoint_path,
         predictor_identity=runtime.predictor_identity,
-        artifact_direction=direction,
     )
 
 

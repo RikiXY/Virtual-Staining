@@ -43,36 +43,47 @@ __all__ = [
     "CycleGANDefinition",
     "GanOptions",
     "GanTrainingOptions",
-    "PIX2PIX_VALIDATION_METRICS",
+    "PIX2PIX_IMAGE_METRICS",
     "Pix2PixDefinition",
     "builtin_definitions",
     "builtin_method_definitions",
+    "pix2pix_validation_metrics",
 ]
 
 DEFAULT_CYCLEGAN_REPLAY_BUFFER_SIZE = 50
 DEFAULT_GENERATOR_ARCHITECTURE = "concat_unet"
-# Validation columns both built-ins report for their configured loss terms.
+# Validation columns both built-ins report for their configured loss terms; a Pix2Pix
+# reconstruction term column ends in ``__<output>``.
 _LOSS_MONITOR_PATTERN = re.compile(
     r"^loss_val_(?:total_(?:generator|discriminator)|"
-    r"(?:raw|weighted|current_weight)_(?:generator|discriminator)_[a-z0-9_]+)$"
+    r"(?:raw|weighted|current_weight)_(?:generator|discriminator)_[A-Za-z0-9_-]+)$"
 )
-# Pix2Pix deliberately reuses these built-in evaluation metrics for validation; the
-# definition below, not the evaluation subsystem, owns which exist and how they rank.
-PIX2PIX_VALIDATION_METRICS: Mapping[str, ResolvedMetric] = MappingProxyType(
+# Pix2Pix deliberately reuses these built-in evaluation metrics for validation, once per
+# model output (``val_<metric>__<output>``); no column mixes outputs. The definition
+# below, not the evaluation subsystem, owns which exist and how they rank.
+PIX2PIX_IMAGE_METRICS: Mapping[str, ResolvedMetric] = MappingProxyType(
     {
-        f"val_{name}": BUILTIN_METRIC_DEFINITIONS[name].resolve({}, name)
+        name: BUILTIN_METRIC_DEFINITIONS[name].resolve({}, name)
         for name in ("ssim", "psnr", "mae", "rmse", "pcc_rgb_mean", "pcc_gray")
     }
 )
-PIX2PIX_CHECKPOINT_METRICS: Mapping[str, CheckpointMode] = MappingProxyType(
-    {
-        "loss_G_val": "min",
-        **{
-            name: "max" if metric.definition.higher_is_better else "min"
-            for name, metric in PIX2PIX_VALIDATION_METRICS.items()
-        },
-    }
+_VALIDATION_COLUMN = re.compile(
+    rf"^val_(?P<metric>{'|'.join(PIX2PIX_IMAGE_METRICS)})__(?P<output>[A-Za-z][A-Za-z0-9_-]*)$"
 )
+_OUTPUT_SUFFIX = re.compile(r"__(?P<output>[A-Za-z][A-Za-z0-9_-]*)$")
+
+
+def pix2pix_validation_metrics(outputs: tuple[str, ...]) -> dict[str, tuple[str, ResolvedMetric]]:
+    """Validation column -> (output, metric), metric-major so one output keeps metric order."""
+    return {
+        f"val_{name}__{output}": (output, metric)
+        for name, metric in PIX2PIX_IMAGE_METRICS.items()
+        for output in outputs
+    }
+
+
+def _metric_mode(metric: ResolvedMetric) -> CheckpointMode:
+    return "max" if metric.definition.higher_is_better else "min"
 
 
 @dataclass(frozen=True)
@@ -198,11 +209,6 @@ class _GanDefinition(MethodDefinition):
     def monitor_mode(self, monitor: str, field: str) -> CheckpointMode:
         if monitor in {"loss_G_val", "loss_D_val"} or _LOSS_MONITOR_PATTERN.fullmatch(monitor):
             return "min"
-        if monitor not in PIX2PIX_CHECKPOINT_METRICS:
-            raise ValueError(
-                f"{field} must be a validation CSV column such as loss_G_val, loss_D_val, "
-                "val_ssim, val_mae, or a configured loss_val_* column"
-            )
         return self.checkpoint_metric_mode(monitor, field)
 
     def requires_foreground_mask(self, config: RunConfig) -> bool:
@@ -213,14 +219,69 @@ class _GanDefinition(MethodDefinition):
 
 
 class Pix2PixDefinition(_GanDefinition):
-    """Paired Pix2Pix: ConcatUNet generator over N named inputs, conditional PatchGAN."""
+    """Paired Pix2Pix: ConcatUNet over N named inputs -> M named outputs, one joint
+    conditional PatchGAN over all inputs and outputs.
+
+    Validation image metrics are per output (``val_<metric>__<output>``); ``loss_G_val``
+    is the default checkpoint metric. One output defaults early stopping to its
+    ``val_ssim`` column; several outputs require an explicit monitor.
+    """
 
     name = "pix2pix"
     pairing = "paired"
     prediction_directions = ("forward",)
-    checkpoint_metrics = PIX2PIX_CHECKPOINT_METRICS
-    default_monitor = "val_ssim"
+    checkpoint_metrics: Mapping[str, CheckpointMode] = MappingProxyType({"loss_G_val": "min"})
+    default_monitor = None
     generator_architecture = "concat_unet"
+
+    def checkpoint_metric_mode(self, metric: str, field: str) -> CheckpointMode:
+        match = _VALIDATION_COLUMN.fullmatch(metric)
+        if match is not None:
+            return _metric_mode(PIX2PIX_IMAGE_METRICS[match["metric"]])
+        if metric not in self.checkpoint_metrics:
+            raise ValueError(
+                f"{field}={metric!r} is not a checkpoint metric of method.name='pix2pix'; "
+                "supported: loss_G_val or val_<metric>__<output> with <metric> one of "
+                f"{list(PIX2PIX_IMAGE_METRICS)}"
+            )
+        return self.checkpoint_metrics[metric]
+
+    def checkpoint_modes(self, outputs: tuple[str, ...]) -> dict[str, CheckpointMode]:
+        """Every ranked checkpoint metric for these outputs; ``loss_G_val`` first."""
+        return {
+            **self.checkpoint_metrics,
+            **{
+                column: _metric_mode(metric)
+                for column, (_, metric) in pix2pix_validation_metrics(outputs).items()
+            },
+        }
+
+    def resolve_default_monitor(self, outputs: tuple[str, ...]) -> str | None:
+        return f"val_ssim__{outputs[0]}" if len(outputs) == 1 else None
+
+    def validate(self, config: RunConfig) -> None:
+        training = config.training
+        options = config.method.options.training
+        named = {
+            "inference.checkpoint_metric": (
+                config.inference.checkpoint_metric if config.inference is not None else None
+            ),
+            "training.early_stopping.monitor": (
+                training.early_stopping.monitor
+                if training is not None and training.early_stopping is not None
+                else None
+            ),
+            "training.scheduler.monitor": (
+                options.scheduler.monitor if options is not None else None
+            ),
+        }
+        for field, name in named.items():
+            match = _OUTPUT_SUFFIX.search(name or "")
+            if match is not None and match["output"] not in config.model.outputs:
+                raise ValueError(
+                    f"{field}={name!r} names output {match['output']!r}, which is not one of "
+                    f"model.outputs {list(config.model.outputs)}"
+                )
 
     def component_identities(self, options: GanOptions) -> Mapping[str, Mapping[str, Any]]:
         return {
@@ -258,7 +319,9 @@ class Pix2PixDefinition(_GanDefinition):
 class CycleGANDefinition(_GanDefinition):
     """Unpaired CycleGAN: two ResNet generators, two PatchGANs, replay pools.
 
-    Domain A is ``model.inputs[0]`` and domain B is ``model.target``.
+    Exactly one input and one output: domain A is ``model.inputs[0]`` and domain B is
+    ``model.outputs[0]``. Its two prediction directions are alternatives, never two
+    simultaneous outputs: A_to_B predicts B and B_to_A predicts A.
     """
 
     name = "cyclegan"
@@ -316,17 +379,19 @@ class CycleGANDefinition(_GanDefinition):
                 "method.name='cyclegan' requires exactly one model.inputs entry (domain A); "
                 f"got {list(config.model.inputs)}"
             )
-        domain_a, domain_b = config.model.inputs[0], config.model.target
-        if domain_a == domain_b:
+        if len(config.model.outputs) != 1:
             raise ValueError(
-                "cyclegan model.inputs[0] and model.target must name different domains"
+                "method.name='cyclegan' requires exactly one model.outputs entry (domain B); "
+                f"got {list(config.model.outputs)}. Its two directions are alternatives, "
+                "not simultaneous outputs."
             )
+        domain_a, domain_b = config.model.inputs[0], config.model.outputs[0]
         missing = sorted({domain_a, domain_b} - set(config.data.domains))
         extra = sorted(set(config.data.domains) - {domain_a, domain_b})
         if missing or extra:
             raise ValueError(
                 f"data.domains keys must be exactly [{domain_a!r}, {domain_b!r}] "
-                f"(model.inputs[0], model.target); missing={missing}, extra={extra}"
+                f"(model.inputs[0], model.outputs[0]); missing={missing}, extra={extra}"
             )
         if config.training is None:
             return
@@ -347,7 +412,10 @@ class CycleGANDefinition(_GanDefinition):
                 )
 
     def prediction_inputs(self, config: RunConfig, direction: str | None) -> tuple[str, ...]:
-        return (config.model.inputs[0],) if direction == "A_to_B" else (config.model.target,)
+        return (config.model.inputs[0],) if direction == "A_to_B" else (config.model.outputs[0],)
+
+    def prediction_outputs(self, config: RunConfig, direction: str | None) -> tuple[str, ...]:
+        return (config.model.outputs[0],) if direction == "A_to_B" else (config.model.inputs[0],)
 
     def component_identities(self, options: GanOptions) -> Mapping[str, Mapping[str, Any]]:
         generator = options.generator.identity()

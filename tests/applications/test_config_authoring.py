@@ -28,7 +28,7 @@ from virtual_staining.data.manifest import DatasetManifest
 from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.experiment.snapshots import save_stage_config_snapshots
 from virtual_staining.methods.builtin import builtin_definitions
-from virtual_staining.utils.artifacts import generated_filename
+from virtual_staining.utils.artifacts import generated_path
 from virtual_staining.utils.hashing import sha256_file
 
 _RUNS = Path(__file__).resolve().parents[2] / "config" / "runs"
@@ -62,7 +62,7 @@ def _write_prepared(root: Path, *, patients: tuple[str, str, str] = ("p0", "p1",
     for index, split in enumerate(("train", "val", "test")):
         sample_id = f"{index * 256:05}_00000"
         record = make_manifest_record(sample_id, split, set_id=f"S{index}")
-        for path in (*record.input_paths.values(), record.target_path):
+        for path in (*record.input_paths.values(), *record.target_paths.values()):
             (root / path).parent.mkdir(parents=True, exist_ok=True)
             (root / path).write_bytes(b"placeholder, never decoded")
         records.append(record)
@@ -85,19 +85,23 @@ def _write_checkpoint(config: RunConfig) -> Path:
 
 
 def _write_generated(
-    config: RunConfig, sample_ids: list[str], direction: str | None = None
+    config: RunConfig, sample_ids: list[str], output_name: str = "stained"
 ) -> None:
     output = RunLayout.from_project(config.project).output_test_dir
-    output.mkdir(parents=True, exist_ok=True)
     for sample_id in sample_ids:
-        (output / generated_filename(sample_id, ".tif", direction)).write_bytes(b"generated")
+        path = generated_path(output, sample_id, output_name, ".tif")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"generated")
 
 
 def _write_inventory(root: Path, *, mask: str = "") -> dict[str, Any]:
     (root / "raw").mkdir(parents=True)
     for name in ("lf1.tif", "he1.tif"):
         (root / "raw" / name).write_bytes(b"slide")
-    columns = "set_id,input__label_free_path,input__label_free_aligned,target_path,target_aligned"
+    columns = (
+        "set_id,input__label_free_path,input__label_free_aligned,"
+        "target__stained_path,target__stained_aligned"
+    )
     row = "S1,raw/lf1.tif,true,raw/he1.tif,false"
     if mask:
         columns, row = f"{columns},input__label_free_mask", f"{row},{mask}"
@@ -108,7 +112,7 @@ def _write_inventory(root: Path, *, mask: str = "") -> dict[str, Any]:
             "inventory": "inputs/slide_sets.csv",
             "modalities": ["label_free"],
             "reference": "label_free",
-            "target_modality": "stained",
+            "target_modalities": ["stained"],
         },
         "split": {"unit": "set", "train": 0.8, "val": 0.1, "test": 0.1, "seed": 0},
     }
@@ -313,7 +317,7 @@ def test_external_definitions_keep_method_options(tmp_path: Path) -> None:
             "options": {"architecture": "tiny_residual", "learning_rate": 0.002},
         },
         "data": {"pairing": "paired", "group_validation": "unavailable"},
-        "model": {"inputs": ["source"], "target": "target"},
+        "model": {"inputs": ["source"], "outputs": ["target"]},
         "training": {"batch_size": 2, "epochs": 1, "seed": 1, "num_workers": 0},
     }
     by_mapping = inspect_run_mapping(raw, definitions)
@@ -398,7 +402,7 @@ def test_prepare_inventory_success_and_failures(tmp_path: Path) -> None:
     (root / "raw" / "he1.tif").unlink()
     report = preflight(config, ["prepare"], depth="assets")
     assert not report.valid
-    assert "target_path not found" in report.checks[-1].message
+    assert "target__stained_path not found" in report.checks[-1].message
 
     missing = inspect_run_mapping(
         _paired_config(tmp_path / "other", preprocessing=preprocessing)
@@ -432,9 +436,12 @@ def test_paired_training_manifest_checks(tmp_path: Path) -> None:
     assert preflight(config, ["train"], depth="assets").valid
 
     wrong_target = inspect_run_mapping(
-        _paired_config(tmp_path, model={"inputs": ["label_free"], "target": "other"})
+        _paired_config(tmp_path, model={"inputs": ["label_free"], "outputs": ["other"]})
     ).config
-    assert "model.target" in preflight(wrong_target, ["train"], depth="assets").checks[-1].message
+    assert (
+        "not manifest target modalities"
+        in preflight(wrong_target, ["train"], depth="assets").checks[-1].message
+    )
 
     (root / "splits" / "val").rename(root / "splits" / "moved")
     assert (
@@ -514,15 +521,16 @@ def test_cyclegan_inference_reports_direction_specific_inputs(tmp_path: Path) ->
     check = preflight(config, ["infer"], depth="assets").checks[-2]
 
     assert check.check_id == "infer.manifest" and check.status == "valid"
-    assert "direction=B_to_A" in check.message and "['stained']" in check.message
+    assert "direction=B_to_A" in check.message and "inputs=['stained']" in check.message
+    assert "outputs=['label_free']" in check.message
 
 
-def test_paired_evaluation_expects_direction_named_outputs(tmp_path: Path) -> None:
+def test_paired_evaluation_expects_output_named_artifacts(tmp_path: Path) -> None:
     config = inspect_run_mapping(_paired_config(tmp_path)).config
     _write_prepared(config.project.dataset_root)
     check = preflight(config, ["evaluate"], depth="assets").checks[-1]
     assert check.check_id == "evaluate.generated" and check.status == "invalid"
-    assert generated_filename("00512_00000", ".tif") in check.message
+    assert "stained/00512_00000_generated.tif" in check.message
 
     _write_generated(config, ["00512_00000"])
     assert preflight(config, ["evaluate"], depth="assets").valid
@@ -543,9 +551,9 @@ def test_unpaired_evaluation_collections(tmp_path: Path) -> None:
     assert _statuses(report)["evaluate.reference"] == "valid"
     assert _statuses(report)["evaluate.generated"] == "invalid"
 
-    _write_generated(config, ["a"], direction="B_to_A")
+    _write_generated(config, ["a"], output_name="label_free")
     assert not preflight(config, ["evaluate"], depth="assets").valid
-    _write_generated(config, ["a"], direction="A_to_B")
+    _write_generated(config, ["a"], output_name="stained")
     assert preflight(config, ["evaluate"], depth="assets").valid
 
     raw = cyclegan_config_data(tmp_path)
@@ -617,10 +625,78 @@ def test_a_successful_preflight_does_not_freeze_assets(tmp_path: Path) -> None:
     kept = copy.deepcopy(report)
     assert report.valid
 
-    target = config.project.dataset_root / make_manifest_record("00256_00000", "val").target_path
+    record = make_manifest_record("00256_00000", "val")
+    target = config.project.dataset_root / record.target_paths["stained"]
     target.unlink()
 
     # The earlier report is a value, not a lock: it still says valid and protected nothing.
     assert report == kept and report.valid
     rerun = preflight(config, ["train"], depth="assets")
     assert not rerun.valid and "Manifest file not found" in rerun.checks[-1].message
+
+
+def _write_two_target_prepared(root: Path) -> None:
+    records = []
+    for index, split in enumerate(("train", "val", "test")):
+        sample_id = f"{index * 256:05}_00000"
+        record = make_manifest_record(
+            sample_id,
+            split,
+            set_id=f"S{index}",
+            input_paths={"label_free": Path(f"splits/{split}/{sample_id}_lf.tif")},
+            target_paths={
+                name: Path(f"splits/{split}/{sample_id}_{name}.tif") for name in ("HE", "PAS")
+            },
+        )
+        for path in (*record.input_paths.values(), *record.target_paths.values()):
+            (root / path).parent.mkdir(parents=True, exist_ok=True)
+            (root / path).write_bytes(b"placeholder, never decoded")
+        records.append(record)
+    layout = DatasetLayout(root)
+    metadata = manifest_metadata(("label_free",), ("HE", "PAS"))
+    DatasetManifest(tuple(records), root, metadata).to_csv(layout.manifest_path)
+    layout.manifest_metadata_path.write_text(json.dumps(metadata.to_dict()))
+    with layout.slide_sets_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["set_id", "specimen_id", "patient_id"])
+        writer.writerows([f"S{index}", f"sp{index}", f"p{index}"] for index in range(3))
+
+
+def test_two_output_asset_preflight_checks_every_selected_output(tmp_path: Path) -> None:
+    data = pix2pix_config_data(tmp_path, inputs=("label_free",), outputs=("PAS", "HE"))
+    data["inference"] = {"checkpoint_policy": "latest"}
+    data["evaluation"] = {}
+    config = inspect_run_mapping(data).config
+    _write_two_target_prepared(config.project.dataset_root)
+
+    statuses = _statuses(preflight(config, ["train", "infer", "evaluate"], depth="assets"))
+    assert statuses["train.manifest"] == "valid"
+    assert statuses["evaluate.generated"] == "planned"
+    report = preflight(config, ["evaluate"], depth="assets")
+    assert "2 of 2 expected generated file(s) missing" in report.checks[-1].message
+
+    _write_generated(config, ["00512_00000"], output_name="HE")
+    report = preflight(config, ["evaluate"], depth="assets")
+    assert not report.valid
+    assert "PAS/00512_00000_generated.tif" in report.checks[-1].message
+    _write_generated(config, ["00512_00000"], output_name="PAS")
+    assert preflight(config, ["evaluate"], depth="assets").valid
+
+    selected = copy.deepcopy(data)
+    selected["model"]["outputs"] = ["IHC"]
+    subset = inspect_run_mapping(selected).config
+    check = preflight(subset, ["train"], depth="assets").checks[-1]
+    assert check.status == "invalid" and "not manifest target modalities" in check.message
+
+
+def test_config_check_resolves_plural_outputs_without_assets(tmp_path: Path) -> None:
+    data = pix2pix_config_data(tmp_path, outputs=("PAS", "HE"))
+    inspection = inspect_run_mapping(data)
+
+    assert inspection.resolved["model"]["outputs"] == ["PAS", "HE"]
+    assert "target" not in inspection.resolved["model"]
+    assert preflight(inspection.config, ["train"]).valid
+    singular = copy.deepcopy(data)
+    singular["model"]["target"] = "HE"
+    with pytest.raises(ValueError, match="model.target is not part of the current schema"):
+        inspect_run_mapping(singular)

@@ -51,12 +51,13 @@ def _parse_concat_unet(raw: Mapping[str, Any], context: ComponentContext) -> dic
 
 
 def _build_concat_unet(
-    options: Mapping[str, Any], *, input_names: tuple[str, ...]
+    options: Mapping[str, Any], *, input_names: tuple[str, ...], output_names: tuple[str, ...]
 ) -> ConcatUNetGenerator:
     from virtual_staining.models.generator import ConcatUNetGenerator
 
     return ConcatUNetGenerator(
         input_names,
+        output_names,
         base_channels=options["base_channels"],
         norm=options["norm"],
         dropout=options["dropout"],
@@ -108,11 +109,19 @@ def _parse_patchgan(raw: Mapping[str, Any], context: ComponentContext) -> dict[s
     }
 
 
-def _build_patchgan(options: Mapping[str, Any], *, in_channels: int) -> PatchGANDiscriminator:
+def _build_patchgan(
+    options: Mapping[str, Any],
+    *,
+    in_channels: int | None = None,
+    input_names: tuple[str, ...] = (),
+    output_names: tuple[str, ...] = (),
+) -> PatchGANDiscriminator:
     from virtual_staining.models.discriminator import PatchGANDiscriminator
 
     return PatchGANDiscriminator(
         in_channels=in_channels,
+        input_names=input_names,
+        output_names=output_names,
         ndf=options["ndf"],
         norm=options["norm"],
         use_sigmoid=options["use_sigmoid"],

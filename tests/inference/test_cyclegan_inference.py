@@ -19,13 +19,13 @@ from virtual_staining.inference.outputs import generated_path_for_record
 from virtual_staining.inference.runner import (
     inference_direction,
     inference_input_names,
+    inference_output_names,
     load_inference_generator,
     predict_batch,
 )
 from virtual_staining.inference.single import DirectoryInferenceResult
 from virtual_staining.methods.cyclegan import CycleGANInferenceAdapter, CycleGANMethod
 from virtual_staining.training.checkpoints import MethodCheckpointManager
-from virtual_staining.utils.artifacts import generated_filename
 
 _CPU = torch.device("cpu")
 
@@ -57,16 +57,22 @@ def test_direction_resolution_and_required_inputs(tmp_path: Path) -> None:
 
     assert inference_direction(default) == "A_to_B"
     assert inference_input_names(default) == ("label_free",)
+    assert inference_output_names(default) == ("stained",)
     assert inference_direction(reverse) == "B_to_A"
     assert inference_input_names(reverse) == ("stained",)
+    # Two directions are alternatives: each predicts exactly one named output.
+    assert inference_output_names(reverse) == ("label_free",)
 
 
 @pytest.mark.parametrize(
-    ("direction", "input_name", "source"),
-    [("A_to_B", "label_free", "G_A_to_B"), ("B_to_A", "stained", "G_B_to_A")],
+    ("direction", "input_name", "output_name", "source"),
+    [
+        ("A_to_B", "label_free", "stained", "G_A_to_B"),
+        ("B_to_A", "stained", "label_free", "G_B_to_A"),
+    ],
 )
 def test_same_checkpoint_loads_either_direction(
-    tmp_path: Path, direction: str, input_name: str, source: str
+    tmp_path: Path, direction: str, input_name: str, output_name: str, source: str
 ) -> None:
     method = _trained(tmp_path)
     config = RunConfig.from_yaml(_config_path(tmp_path, direction))
@@ -76,24 +82,21 @@ def test_same_checkpoint_loads_either_direction(
     assert path.name == "ep000.pth"
     assert isinstance(generator, CycleGANInferenceAdapter)
     assert generator.input_names == (input_name,)
+    assert generator.output_names == (output_name,)
     assert not generator.training
     expected = method._models()[source]
     expected.eval()
     for key, value in expected.state_dict().items():
         assert torch.equal(value, generator.generator.state_dict()[key])
     image = torch.rand(1, 3, 32, 32) * 2 - 1
-    prediction = predict_batch(generator, {input_name: image}, _CPU)
-    assert prediction.shape == (1, 3, 32, 32)
+    prediction = predict_batch(generator, {input_name: image}, _CPU, (output_name,))
+    assert list(prediction) == [output_name]
+    assert prediction[output_name].shape == (1, 3, 32, 32)
     with torch.no_grad():
-        assert torch.allclose(prediction, (expected(image) * 0.5 + 0.5).clamp(0, 1))
+        expected_image = (expected(image) * 0.5 + 0.5).clamp(0, 1)
+        assert torch.allclose(prediction[output_name], expected_image)
     with pytest.raises(ValueError, match="Expected inputs"):
         generator({"wrong": image})
-
-
-def test_direction_aware_names_do_not_collide_and_pix2pix_is_unchanged() -> None:
-    assert generated_filename("s1", ".TIF") == "s1_target_generated.tif"
-    assert generated_filename("s1", ".tif", "A_to_B") == "s1_A_to_B_generated.tif"
-    assert generated_filename("s1", ".tif", "B_to_A") == "s1_B_to_A_generated.tif"
 
 
 def test_infer_images_both_directions_share_output_root_recursively(tmp_path: Path) -> None:
@@ -120,11 +123,12 @@ def test_infer_images_both_directions_share_output_root_recursively(tmp_path: Pa
     assert isinstance(backward, DirectoryInferenceResult)
     assert set(forward.input_dirs) == {"label_free"}
     assert set(backward.input_dirs) == {"stained"}
+    # Artifacts are named by the domain each direction predicts, so they never collide.
     assert sorted(path.relative_to(output).as_posix() for path in output.rglob("*.png")) == [
-        "slide1/p0_A_to_B_generated.png",
-        "slide1/p0_B_to_A_generated.png",
-        "slide2/nested/p1_A_to_B_generated.png",
-        "slide2/nested/p1_B_to_A_generated.png",
+        "slide1/label_free/p0_generated.png",
+        "slide1/stained/p0_generated.png",
+        "slide2/nested/label_free/p1_generated.png",
+        "slide2/nested/stained/p1_generated.png",
     ]
     with pytest.raises(ValueError, match="Unknown input modality: label_free"):
         infer_images(_config_path(tmp_path, "B_to_A"), (f"label_free={inputs}",), output)
@@ -149,8 +153,8 @@ def test_manifest_inference_reads_direction_specific_domain(
         config_path = _config_path(runs, direction, manifest_dataset.root)
         results[direction] = infer(RunConfig.from_yaml(config_path), config_path)
 
-    for direction in ("A_to_B", "B_to_A"):
-        expected = generated_path_for_record(record, output_dir, direction)
+    for direction, output_name in (("A_to_B", "stained"), ("B_to_A", "label_free")):
+        expected = generated_path_for_record(record, output_dir, output_name)
         assert results[direction].generated_paths == [expected]
         assert expected.is_file()
 

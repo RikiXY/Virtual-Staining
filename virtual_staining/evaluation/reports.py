@@ -1,5 +1,8 @@
 """Paired evaluation reports: per-image metric rows, coverage and the result metadata.
 
+Every row is one ``(sample_id, output_name)`` pair: one generated RGB image of one model
+output against that output's own RGB target. Outputs are never pooled.
+
 Per-image columns are generated from the resolved metric request. For each metric
 ``<m>`` the row carries ``<m>`` (the number: finite value, ``inf`` for positive infinity,
 empty for undefined/unavailable), ``<m>_status`` (one of ``METRIC_STATUSES``) and
@@ -31,6 +34,7 @@ EVALUATION_RESULT_JSON = "evaluation_result.json"
 EVALUATION_RESULT_SCHEMA_VERSION = 1
 COVERAGE_FIELDNAMES = [
     "sample_id",
+    "output_name",
     "set_id",
     "status",
     "reason",
@@ -41,6 +45,7 @@ COVERAGE_FIELDNAMES = [
 ]
 _BASE_FIELDNAMES = [
     "sample_id",
+    "output_name",
     "set_id",
     "target_path",
     "generated_path",
@@ -61,6 +66,7 @@ def metric_fieldnames(metric_names: Sequence[str], *, support: bool) -> list[str
 
 def build_metric_row(
     sample_id: str,
+    output_name: str,
     target_path: str | Path,
     generated_path: str | Path,
     shape: tuple[int, int, int],
@@ -71,6 +77,7 @@ def build_metric_row(
     height, width, channels = shape
     row: dict[str, object] = {
         "sample_id": sample_id,
+        "output_name": output_name,
         "set_id": set_id,
         "target_path": str(target_path),
         "generated_path": str(generated_path),
@@ -102,7 +109,7 @@ def write_per_image_metrics_csv(
 
 
 def write_coverage_csv(rows: Sequence[Mapping[str, object]], output_path: str | Path) -> Path:
-    """One row per requested sample: ``evaluated``, ``excluded`` or ``failed`` with a reason."""
+    """One row per requested pair: ``evaluated``, ``excluded`` or ``failed`` with a reason."""
     return write_per_image_metrics_csv(rows, COVERAGE_FIELDNAMES, output_path)
 
 

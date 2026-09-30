@@ -12,8 +12,8 @@ stage. This page only covers the standalone boundaries; see
 |---|---|---|---|---|---|
 | Prepare | `DatasetBuilder(config, slide_sets).run_all()` (`data/builder.py`) | `PreprocessingConfig` + explicit `SlideSet` tuple | Patches, manifest, manifest metadata, slide-set metadata, split assignment and dataset fingerprint under `config.dataset_root` | `applications.prepare` / `vs prepare`: resolves `SlideSet`s from the YAML inventory, snapshots config and sources, reuses unchanged datasets | Writes only under `dataset_root`; the inventory CSV is read only by `resolve_slide_sets`, not by the builder |
 | Train | `Trainer(config, run_paths, method, train_loader, val_loader, device)` then `.train(seed)` (`training/trainer.py`) | `TrainingConfig` + `TrainingMethodRuntime` + train/val `DataLoader`s + output `RunLayout`; optional `progress_reporter`, `preview_sink`, `benchmark_recorder`, `config_hash`, `experiment_session` | `metrics/epochs.csv`, `checkpoints/ep*.pth`, `checkpoints/best.json`, training/validation output dirs under the `RunLayout` root; `.resume()` reads checkpoints there | `applications.train` / `vs train`: builds loaders from the manifest or domain collections, binds the consumed-data snapshot and passes its real `ExperimentSession` | The loaders are the data boundary; the Trainer never reads manifests, dataset roots or preparation outputs. The runtime comes from `config.method.definition.build_training_runtime(config, device, seed=...)` and supplies its own checkpoint identity |
-| Infer | `run_image_path_inference(runtime, named_paths, output_path)` (`inference/single.py`) | An `InferenceRuntime` (caller-constructed predictor + `PredictionContract` + device), or a factory returning one, + named input files or directories + output path | Generated images at the output path (or at the runtime's default output dir, if it has one) | `applications.infer` / `vs infer`: test-split manifest inference with consumed/produced snapshots; `applications.infer_images` builds the runtime from a run's checkpoint | Named RGB inputs -> one RGB output on the same pixel grid only; see [Direct predictor inference](#direct-predictor-inference) |
-| Evaluate | `evaluate_samples(samples, output_dir, metrics=..., input_failures=...)` / `evaluate_pair(target, generated, metrics=..., support_path=...)` (`evaluation/evaluator.py`) | Explicit `EvaluationSample` records (optional `support_path`) or a pair of image paths + output directory; an optional resolved metric request | `per_image_metrics.csv`, `summary.csv`, `coverage.csv`, `evaluation_result.json` in `output_dir`; `evaluate_pair` writes nothing | `applications.evaluate` / `vs evaluate`: resolves records from the manifest or run outputs and records evaluation provenance | Default request is the built-in default metric set; grouped summaries and producer linking stay in the application; see [Evaluation metrics](#evaluation-metrics) |
+| Infer | `run_image_path_inference(runtime, named_paths, output_path)` (`inference/single.py`) | An `InferenceRuntime` (caller-constructed predictor + `PredictionContract` + device), or a factory returning one, + named input files or directories + output path | Generated images at the output path (or at the runtime's default output dir, if it has one) | `applications.infer` / `vs infer`: test-split manifest inference with consumed/produced snapshots; `applications.infer_images` builds the runtime from a run's checkpoint | Named RGB inputs -> named RGB outputs on the same pixel grid only; see [Direct predictor inference](#direct-predictor-inference) |
+| Evaluate | `evaluate_samples(samples, output_dir, metrics=..., input_failures=...)` / `evaluate_pair(target, generated, metrics=..., support_path=...)` (`evaluation/evaluator.py`) | Explicit `EvaluationSample(sample_id, output_name, set_id, target_path, generated_path)` records (optional `support_path`; each `(sample_id, output_name)` pair once) or a pair of image paths + output directory; an optional resolved metric request | `per_image_metrics.csv`, `summary.csv`, `coverage.csv`, `evaluation_result.json` in `output_dir`; `evaluate_pair` writes nothing | `applications.evaluate` / `vs evaluate`: resolves records from the manifest or run outputs and records evaluation provenance | Default request is the built-in default metric set; grouped summaries and producer linking stay in the application; see [Evaluation metrics](#evaluation-metrics) |
 
 ## Notes
 
@@ -55,26 +55,30 @@ from virtual_staining.inference.single import (
 model = MyModel().to(device).eval()  # caller-owned and caller-prepared
 runtime = InferenceRuntime(
     predictor=model,
-    contract=PredictionContract(input_names=("AF", "LF"), image_size=(256, 256)),
+    contract=PredictionContract(
+        input_names=("AF", "LF"), output_names=("HE", "PAS"), image_size=(256, 256)
+    ),
     device=device,
 )
-run_image_path_inference(runtime, {"AF": af_path, "LF": lf_path}, Path("out/sample.png"))
+run_image_path_inference(runtime, {"AF": af_path, "LF": lf_path}, Path("out"))
 run_image_path_inference(runtime, {"AF": af_dir, "LF": lf_dir}, Path("out/batch"), recursive=True)
 ```
 
-- **Contract.** `PredictionContract` declares the ordered `input_names`, the
-  predictor/tile input `image_size` as `(width, height)`, `output_semantics`
-  (only `"same_grid_rgb"`), `value_range` (only `(-1, 1)`) and an optional
-  `artifact_direction` used for output names. The predictor is any callable taking
-  `{name: (N, 3, H, W) float tensor in [-1, 1]}` in contract order and returning one
-  `(N, 3, H, W)` float tensor in [-1, 1] on exactly the input grid. It needs no
-  `input_names` attribute. Transport converts images to that range and back.
+- **Contract.** `PredictionContract` declares the ordered `input_names`, the ordered
+  `output_names`, the predictor/tile input `image_size` as `(width, height)`,
+  `output_semantics` (only `"same_grid_rgb"`) and `value_range` (only `(-1, 1)`). The
+  predictor is any callable taking `{name: (N, 3, H, W) float tensor in [-1, 1]}` in
+  contract order and returning `{output_name: (N, 3, H, W) float tensor in [-1, 1]}` with
+  exactly the contract's output names in order, each on exactly the input grid. One
+  output is a one-item mapping. It needs no `input_names` attribute. Transport converts
+  images to that range and back.
 - **Validation before publication.** Every prediction is checked before it is
-  accumulated or written: one tensor (tuples/dicts are rejected), same batch size,
-  exactly 3 channels, the same height and width as the input tile, floating dtype,
-  finite values, and values within [-1, 1] (±1e-3). Nothing is cropped, padded,
-  resized, selected or clamped to make a bad output fit. N-to-M translation, several
-  outputs, and scalar or segmentation outputs are not supported.
+  accumulated or written: a mapping with exactly the ordered output names (bare
+  tensors, tuples, missing, extra or reordered names are rejected) and, per output, the
+  same batch size, exactly 3 channels, the same height and width as the input tile,
+  floating dtype, finite values, and values within [-1, 1] (±1e-3). Nothing is cropped,
+  padded, resized, selected or clamped to make a bad output fit. Scalar or segmentation
+  outputs are not supported.
 - **Ownership.** The caller owns the predictor and the device. Transport only calls it
   under `torch.no_grad` (with CUDA autocast on CUDA devices) after moving the inputs
   to `runtime.device`. It never moves, rebuilds, switches the train/eval mode of, or
@@ -83,9 +87,12 @@ run_image_path_inference(runtime, {"AF": af_dir, "LF": lf_dir}, Path("out/batch"
 - **Provenance is optional.** `InferenceRuntime.checkpoint_path` and
   `predictor_identity` default to `None`, and results report them as they are. The
   checkpoint adapter fills in the real checkpoint path and the method name.
-- **Output paths.** Without `default_single_output_dir` /
-  `default_directory_output_dir`, every call needs an explicit output path. A call
-  without one fails before any prediction and never writes to the working directory.
+- **Output paths.** An explicit single output file is accepted only for a one-output
+  contract; with several outputs the output path must be a directory (an image-suffixed
+  path or an existing file is rejected before prediction), so no output is ever
+  dropped. Without `default_single_output_dir` / `default_directory_output_dir`, every
+  call needs an explicit output path. A call without one fails before any prediction
+  and never writes to the working directory.
   `run_image_path_inference` also accepts a zero-argument factory. Directory pairing
   is checked before the factory is called, so a checkpoint is only loaded when the
   inputs are valid.
@@ -95,14 +102,18 @@ run_image_path_inference(runtime, {"AF": af_dir, "LF": lf_dir}, Path("out/batch"
   `image_size` tiles with stride `image_size - tile_overlap`. The last tile is anchored
   at the image edge, partial tiles are padded with white, all inputs are read at the
   same coordinates, overlaps are averaged with equal weight, and only the unpadded
-  region contributes. `tile_overlap` must be smaller than both tile dimensions.
+  region contributes. The inputs are traversed once and the predictor is called once
+  per tile for all outputs; each output has its own accumulator. `tile_overlap` must be
+  smaller than both tile dimensions.
 - **Outputs.** A single-file output is written to a hidden temporary file next to
   the destination and atomically renamed over it, replacing any existing file. A
   failed run leaves an existing output untouched. An output may not overwrite an
   input. In directory mode, two inputs that map to the same output name (for example
   `a.png` and `a.tif` with `output_format="png"`) are rejected before prediction.
-  Names are `<stem>_target_generated<ext>`, or `<stem>_<direction>_generated<ext>`
-  when a direction is set.
+  Every generated artifact is identified by `(sample_id, output_name)` and named
+  `<output_dir>/<output_name>/<stem>_generated<ext>` (recursive inputs insert their
+  relative folder before `<output_name>`); `utils.artifacts.generated_path` builds and
+  `generated_identity` inverts it.
 - **WSI.** When every input opens with OpenSlide and tiling is needed, inputs are read
   region by region. The output has exactly the shared input pixel dimensions and is
   written as a pyramidal BigTIFF by libvips. MPP is copied only from source metadata,
@@ -112,10 +123,11 @@ run_image_path_inference(runtime, {"AF": af_dir, "LF": lf_dir}, Path("out/batch"
   when another input lacks calibration. If any input lacks calibration, the shared
   output MPP remains unknown (not zero). A TIFF has one resolution unit, so an output
   with only one known axis is published with both axes unknown. MPP is never derived
-  from pixel counts, and the same-grid output is a pixel-grid contract, not proof
-  that the inputs are biologically registered. Before
-  prediction, the free space on the output's filesystem must cover at least
-  `width x height x 3 x 5` bytes (float32 accumulator plus raw RGB). The compressed
+  from pixel counts, and the same-grid outputs are a pixel-grid contract, not proof
+  that the inputs are biologically registered. Every output is written on the same
+  shared grid with the same MPP. Before prediction, the free space on each output's
+  filesystem must cover at least `M x width x height x 3 x 5` bytes for M outputs
+  (a float32 accumulator plus raw RGB per output). The compressed
   TIFF needs space on top of that estimate. This is disk-backed scratch space, not
   zero-disk execution, and there is no resumable WSI job. Scratch files live in a
   temporary directory next to the output and are always removed. The TIFF is reopened
@@ -156,7 +168,7 @@ method:
     learning_rate: 0.001
 model:
   inputs: [source]
-  target: target
+  outputs: [target]
 ```
 
 - **Registration is explicit Python.** `Definitions` is an immutable value; `extend()`
@@ -177,10 +189,15 @@ model:
   loading uses the same path. Unknown keys fail everywhere. The resolved config records
   the method name and its option spelling; `MethodConfig.definition` is a live
   reference and is never serialized.
-- **Contract: named N RGB inputs -> one RGB output**, normalized to [-1, 1], matching
-  `model.inputs` / `model.target`. N-to-M translation, other output kinds and
-  registration backends are separate work. Evaluation metrics are supplied the same
-  way; see [Evaluation metrics](#evaluation-metrics).
+- **Contract: N ordered named RGB inputs -> M ordered named RGB outputs**, normalized to
+  [-1, 1], matching `model.inputs` / `model.outputs`. `build_inference_model` returns a
+  module mapping named inputs to `{output_name: tensor}` with exactly
+  `prediction_outputs(config, direction)` (default `model.outputs`); one output is a
+  one-item mapping. Paired training batches carry `inputs`, `targets` and per-target
+  `masks` (`{"foreground_mask": {output_name: N1HW}}`); there is no singular `target`.
+  A method may restrict M in `validate` (CycleGAN and the example above require one
+  output). Other output kinds and registration backends are separate work. Evaluation
+  metrics are supplied the same way; see [Evaluation metrics](#evaluation-metrics).
 - **Ownership.** A `MethodDefinition` owns its options and their validation, its
   pairing, prediction directions, the validation metrics it ranks and their direction
   (`checkpoint_metrics`, `monitor_mode`), training-runtime construction, inference-only
@@ -269,11 +286,10 @@ from virtual_staining.applications.inventory_authoring import (
 request = InventoryRequest(
     dataset_root=Path("DATASET"),
     inputs=(("LF", "raw/LF"), ("AF", "raw/AF/**/*.svs")),   # ordered (name, spec)
-    target_modality="HE",
-    target="raw/HE",
+    targets=(("HE", "raw/HE"), ("PAS", "raw/PAS")),         # ordered (name, spec)
     reference="LF",
     input_masks=(("AF", "masks/AF"),),   # optional
-    target_mask=None,
+    target_masks=(("HE", "masks/HE"),),  # optional, per target
     metadata=None,                       # optional CSV joined on its `key` column
     key_rule="relative-path",            # or "relative-stem"
 )
@@ -286,15 +302,16 @@ render_inventory_csv(preview)            # the exact bytes write_inventory publi
 write_inventory(preview)                 # -> DATASET/inputs/slide_sets.csv
 ```
 
-- An invalid request (duplicate or invalid input names, unknown reference, a target
-  named like an input, a mask for an unknown input) raises `ValueError` before scanning.
+- An invalid request (duplicate or invalid input or target names, unknown reference, a
+  target named like an input, a mask for an unknown input or target) raises `ValueError`
+  before scanning.
 - Issue kinds: `spec`, `duplicate`, `incomplete`, `conflict`, `set_id`, `metadata`,
   `mask`. Every issue is collected; `valid` is true only without issues.
 - `write_inventory` raises `FileExistsError` for an existing destination and
   `ValueError` for an invalid or stale preview, an output outside `dataset_root`, or a
   CSV the canonical loader does not resolve to the previewed `SlideSet`s.
 - `virtual_staining.data.slide_sets.load_slide_set_inventory(path, dataset_root, *,
-  modalities, reference_modality, target_modality)` is that canonical loader;
+  modalities, reference_modality, target_modalities)` is that canonical loader;
   `resolve_slide_sets(config)` delegates to it.
 - Matching, set-ID, metadata, alignment, and mask rules are in
   [`dataset_format.md`](dataset_format.md#authoring-the-inventory).

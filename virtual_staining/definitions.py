@@ -107,7 +107,7 @@ class ResolutionContext:
     definitions: Definitions
     image_size: tuple[int, int]
     inputs: tuple[str, ...]
-    target: str
+    outputs: tuple[str, ...]
     training: TrainingConfig | None
 
     def component(self, name: object, field: str) -> ComponentDefinition:
@@ -120,7 +120,7 @@ class ResolutionContext:
 
 
 class MethodDefinition(ABC):
-    """One registered image-translation method: named RGB inputs -> one RGB output.
+    """One registered image-translation method: named RGB inputs -> named RGB outputs.
 
     A definition owns everything method-specific: which config keys it reads, their
     validation and defaults, the validation metrics it reports and ranks, training
@@ -143,6 +143,7 @@ class MethodDefinition(ABC):
     #: The first entry is the default checkpoint metric.
     checkpoint_metrics: Mapping[str, CheckpointMode] = MappingProxyType({})
     #: Default ``training.early_stopping.monitor``; None makes the monitor required.
+    #: ``resolve_default_monitor`` may derive it from the configured outputs instead.
     default_monitor: str | None = None
     #: Raw keys owned per config section; ``method.name`` and the common keys of every
     #: section belong to the framework. External methods default to ``method.options``.
@@ -177,10 +178,20 @@ class MethodDefinition(ABC):
         """Return the natural mode of validation monitor ``monitor`` or reject it."""
         return self.checkpoint_metric_mode(monitor, field)
 
+    def resolve_default_monitor(self, outputs: tuple[str, ...]) -> str | None:
+        """Default early-stopping monitor for ``model.outputs``; None makes it required."""
+        del outputs
+        return self.default_monitor
+
     def prediction_inputs(self, config: RunConfig, direction: str | None) -> tuple[str, ...]:
         """Named inputs consumed when predicting in ``direction``."""
         del direction
         return tuple(config.model.inputs)
+
+    def prediction_outputs(self, config: RunConfig, direction: str | None) -> tuple[str, ...]:
+        """Ordered named outputs produced when predicting in ``direction``."""
+        del direction
+        return tuple(config.model.outputs)
 
     def requires_foreground_mask(self, config: RunConfig) -> bool:
         """Whether paired training batches must carry the prepared foreground mask."""
@@ -207,7 +218,7 @@ class MethodDefinition(ABC):
             implementation={"version": self.version, "source": self.source},
             pairing=self.pairing,
             inputs=tuple(config.model.inputs),
-            outputs=(config.model.target,),
+            outputs=tuple(config.model.outputs),
             prediction_directions=tuple(self.prediction_directions),
             options=self.reconstruction_options(options),
             components=self.component_identities(options),
@@ -238,10 +249,11 @@ class MethodDefinition(ABC):
     ) -> torch.nn.Module:
         """Build only the prediction network and restore it from a validated checkpoint.
 
-        The module maps ``{input_name: NCHW tensor in [-1, 1]}`` to one RGB tensor in
-        [-1, 1] on the same pixel grid; the framework supplies the input names from
-        ``prediction_inputs``. No optimizer, scheduler, objective or unused network may
-        be constructed.
+        The module maps ``{input_name: NCHW tensor in [-1, 1]}`` to
+        ``{output_name: RGB NCHW tensor in [-1, 1]}`` on the same pixel grid, with exactly
+        the names and order of ``prediction_outputs`` (one output is a one-item mapping);
+        the framework supplies the input names from ``prediction_inputs``. No optimizer,
+        scheduler, objective or unused network may be constructed.
         """
 
 

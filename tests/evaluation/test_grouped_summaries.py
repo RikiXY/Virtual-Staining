@@ -8,9 +8,11 @@ from virtual_staining.evaluation.summaries import write_grouped_summaries
 from virtual_staining.metrics import MetricResult
 
 
-def _row(set_id: str, value: float, **overrides: MetricResult) -> dict[str, object]:
+def _row(
+    set_id: str, value: float, output: str = "HE", **overrides: MetricResult
+) -> dict[str, object]:
     results = {"mae": MetricResult.of(value), "custom": MetricResult.of(value), **overrides}
-    return build_metric_row("s", "t.png", "g.png", (8, 8, 3), results, set_id=set_id)
+    return build_metric_row("s", output, "t.png", "g.png", (8, 8, 3), results, set_id=set_id)
 
 
 def _read(path: Path) -> list[dict[str, str]]:
@@ -44,6 +46,7 @@ def test_grouped_summaries_average_finite_patches_of_the_requested_metrics(
     }
     grouped = _read(tmp_path / "set_metrics.csv")
     assert list(grouped[0]) == [
+        "output_name",
         "unit",
         "group_id",
         "patch_count",
@@ -93,3 +96,30 @@ def test_grouped_summaries_skip_incomplete_biological_levels(tmp_path: Path) -> 
         bootstrap_seed=0,
     )
     assert [path.name for path in paths] == ["set_metrics.csv", "summary_set.csv"]
+
+
+def test_grouped_summaries_keep_output_identity(tmp_path: Path) -> None:
+    rows = [
+        _row("P1", 1.0, "PAS"),
+        _row("P1", 5.0, "HE"),
+        _row("P2", 3.0, "PAS"),
+        _row("P2", 7.0, "HE"),
+    ]
+    sets = {"P1": {"patient_id": "PT1"}, "P2": {"patient_id": "PT2"}}
+
+    write_grouped_summaries(
+        rows, ["mae"], sets, tmp_path, bootstrap_iterations=50, bootstrap_seed=0
+    )
+
+    grouped = _read(tmp_path / "set_metrics.csv")
+    assert [(row["output_name"], row["group_id"], row["mae_finite_mean"]) for row in grouped] == [
+        ("PAS", "P1", "1.0"),
+        ("PAS", "P2", "3.0"),
+        ("HE", "P1", "5.0"),
+        ("HE", "P2", "7.0"),
+    ]
+    summary = _read(tmp_path / "summary_patient.csv")
+    assert [(row["output_name"], row["finite_mean"]) for row in summary] == [
+        ("PAS", "2.0"),
+        ("HE", "6.0"),
+    ]

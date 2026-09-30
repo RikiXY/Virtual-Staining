@@ -220,6 +220,14 @@ def _add_common_comparison_arguments(parser: argparse.ArgumentParser) -> None:
         help="Metric column to compare.",
     )
     parser.add_argument(
+        "--output-name",
+        default=None,
+        help=(
+            "Model output to compare (the output_name column). Required when a CSV holds "
+            "several outputs; outputs are never pooled."
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         default=None,
         help=(
@@ -282,7 +290,8 @@ def _add_paired_subparser(subparsers: Any) -> None:
         "paired",
         help="Compare two paired metric distributions on the same samples.",
         description=(
-            "Compare two paired metric distributions by aligning rows on the same sample_id. "
+            "Compare two paired metric distributions by aligning rows on the same sample_id "
+            "and output_name. "
             "Useful when the two runs share the same test samples."
         ),
     )
@@ -383,6 +392,7 @@ def _build_request(args: argparse.Namespace) -> CompareRequest:
         ),
         tolerance=getattr(args, "tolerance", 0.0),
         sample_id_column=getattr(args, "sample_id_column", "sample_id"),
+        output_name=args.output_name,
     )
 
 

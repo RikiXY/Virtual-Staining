@@ -47,8 +47,16 @@ def _build_parser() -> argparse.ArgumentParser:
             metavar="NAME=SPEC",
             help=f"Input modality mapping, repeatable and order preserving; SPEC is {_SPEC_HELP}.",
         )
-        command.add_argument("--target-modality", required=True, help="Target modality name.")
-        command.add_argument("--target", required=True, metavar="SPEC", help="Target mapping.")
+        command.add_argument(
+            "--target",
+            dest="targets",
+            type=_named_spec,
+            action="append",
+            required=True,
+            metavar="NAME=SPEC",
+            help="Target modality mapping, repeatable and order preserving; every target is "
+            "required for every set.",
+        )
         command.add_argument("--reference", required=True, help="Reference input name.")
         command.add_argument(
             "--input-mask",
@@ -59,7 +67,15 @@ def _build_parser() -> argparse.ArgumentParser:
             metavar="NAME=SPEC",
             help="Optional mask mapping for one named input, repeatable.",
         )
-        command.add_argument("--target-mask", metavar="SPEC", help="Optional target mask mapping.")
+        command.add_argument(
+            "--target-mask",
+            dest="target_masks",
+            type=_named_spec,
+            action="append",
+            default=[],
+            metavar="NAME=SPEC",
+            help="Optional mask mapping for one named target, repeatable.",
+        )
         command.add_argument(
             "--key",
             choices=KEY_RULES,
@@ -90,11 +106,10 @@ def main(argv: list[str] | None = None) -> None:
         request = InventoryRequest(
             dataset_root=args.dataset_root,
             inputs=tuple(args.inputs),
-            target_modality=args.target_modality,
-            target=args.target,
+            targets=tuple(args.targets),
             reference=args.reference,
             input_masks=tuple(args.input_masks),
-            target_mask=args.target_mask,
+            target_masks=tuple(args.target_masks),
             metadata=args.metadata,
             key_rule=args.key,
         )
@@ -110,7 +125,7 @@ def main(argv: list[str] | None = None) -> None:
     print(f"key_rule: {request.key_rule}")
     print(f"inputs: {' '.join(request.modalities)}")
     print(f"reference: {request.reference}")
-    print(f"target: {request.target_modality}")
+    print(f"targets: {' '.join(request.target_modalities)}")
     print(f"metadata: {request.metadata or 'none'}")
     print(f"matched_sets: {preview.matched_count}")
     for match in preview.matches:

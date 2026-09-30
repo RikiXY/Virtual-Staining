@@ -59,7 +59,7 @@ def _canonical_set_payload(slide_sets: tuple[SlideSet, ...]) -> list[dict[str, A
             "set_id": item.set_id,
             "reference_modality": item.reference_modality,
             "inputs": [_asset_payload(asset) for asset in item.inputs],
-            "target": _asset_payload(item.target),
+            "targets": [_asset_payload(asset) for asset in item.targets],
             "patient_id": item.patient_id,
             "specimen_id": item.specimen_id,
         }
@@ -91,7 +91,7 @@ def build_dataset_fingerprint_metadata(
             cache = {}
     files: list[dict[str, Any]] = []
     for item in sorted(slide_sets, key=lambda value: value.set_id):
-        for asset in (*item.inputs, item.target):
+        for asset in item.assets:
             assets = (("mask", asset.mask_path),) if asset.mask_path is not None else ()
             for role, relative in ((asset.modality, asset.path), *assets):
                 files.append(

@@ -31,7 +31,7 @@ def _pix2pix(tmp_path: Path, extra: str = "") -> RunConfig:
             f"""
 model:
   inputs: [label_free]
-  target: stained
+  outputs: [stained]
 training:
   epochs: 1
   losses:
@@ -139,12 +139,17 @@ def _drop_loss(role: str, name: str) -> Mutation:
     ("mutate", "match"),
     [
         (_set(("data",), {"pairing": "paired"}), "requires data.pairing='unpaired'"),
-        (_set(("model", "inputs"), []), "model.inputs must be a non-empty"),
+        (_set(("model", "inputs"), []), "model.inputs must contain at least one name"),
         (
             _set(("model", "inputs"), ["label_free", "other"]),
             "exactly one model.inputs entry",
         ),
-        (_set(("model", "target"), "label_free"), "must name different domains"),
+        (
+            _set(("model", "outputs"), ["stained", "other"]),
+            "exactly one model.outputs entry",
+        ),
+        (_set(("model", "outputs"), ["label_free"]), "must be disjoint"),
+        (_set(("model", "target"), "stained"), "model.target is not part of the current schema"),
         (_delete(("data", "domains", "stained")), r"missing=\['stained'\]"),
         (_set(("data", "domains", "extra"), "domains/extra"), r"extra=\['extra'\]"),
         (
@@ -234,7 +239,7 @@ def test_pix2pix_rejects_concat_unet_incompatible_resnet_fields(tmp_path: Path) 
         RunConfig.from_yaml(
             write_run_config(
                 tmp_path,
-                "model:\n  inputs: [a]\n  target: b\n  generator:\n    blocks: 3",
+                "model:\n  inputs: [a]\n  outputs: [b]\n  generator:\n    blocks: 3",
             )
         )
 

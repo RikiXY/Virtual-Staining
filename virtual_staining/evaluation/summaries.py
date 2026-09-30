@@ -1,8 +1,9 @@
-"""Dataset and grouped summaries of the requested per-image metrics.
+"""Dataset and grouped summaries of the requested per-image metrics, per model output.
 
-Every count column covers all evaluated samples; ``finite_*`` statistics use only results
-whose status is ``finite``, so positive infinity, undefined and unavailable results are
-counted but never averaged.
+Every summary row belongs to one ``output_name``; no statistic is ever pooled across
+outputs. Every count column covers all evaluated samples of that output; ``finite_*``
+statistics use only results whose status is ``finite``, so positive infinity, undefined
+and unavailable results are counted but never averaged.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 SUMMARY_FIELDNAMES = [
+    "output_name",
     "metric",
     "count",
     "finite_count",
@@ -38,6 +40,16 @@ _STATUS_COUNTS = {
 def finite_values(rows: Sequence[Mapping[str, object]], metric: str) -> list[float]:
     """Numbers of the rows whose ``<metric>_status`` is ``finite``."""
     return [float(str(row[metric])) for row in rows if row[f"{metric}_status"] == "finite"]
+
+
+def rows_by_output(
+    rows: Sequence[Mapping[str, object]],
+) -> dict[str, list[Mapping[str, object]]]:
+    """Group per-image rows by ``output_name``, in first-appearance order."""
+    grouped: dict[str, list[Mapping[str, object]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["output_name"]), []).append(row)
+    return grouped
 
 
 def _summary_row(rows: Sequence[Mapping[str, object]], metric: str) -> dict[str, object]:
@@ -70,23 +82,27 @@ def write_summary_csv(
     with path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=SUMMARY_FIELDNAMES)
         writer.writeheader()
-        writer.writerows(_summary_row(rows, metric) for metric in metric_names)
+        writer.writerows(
+            {"output_name": output, **_summary_row(output_rows, metric)}
+            for output, output_rows in rows_by_output(rows).items()
+            for metric in metric_names
+        )
     return path
 
 
-def read_summary_csv(path: str | Path) -> dict[str, dict[str, float]]:
-    """Summary statistics by metric; empty cells (no finite values) read as NaN."""
+def read_summary_csv(path: str | Path) -> dict[str, dict[str, dict[str, float]]]:
+    """Summary statistics by output and metric; empty cells (no finite values) read as NaN."""
     summary_path = Path(path)
     if not summary_path.is_file():
         raise FileNotFoundError(f"Summary CSV not found: {summary_path}")
+    summaries: dict[str, dict[str, dict[str, float]]] = {}
     with summary_path.open("r", newline="", encoding="utf-8") as file:
-        return {
-            row["metric"]: {
+        for row in csv.DictReader(file):
+            summaries.setdefault(row["output_name"], {})[row["metric"]] = {
                 key: float(row[key]) if row[key] != "" else math.nan
-                for key in SUMMARY_FIELDNAMES[1:]
+                for key in SUMMARY_FIELDNAMES[2:]
             }
-            for row in csv.DictReader(file)
-        }
+    return summaries
 
 
 def read_per_image_metrics_csv(path: str | Path) -> list[dict[str, str]]:
@@ -108,16 +124,18 @@ def write_grouped_summaries(
     bootstrap_iterations: int,
     bootstrap_seed: int,
 ) -> list[Path]:
-    """Per-group finite means and a group-level bootstrap of their mean.
+    """Per-output, per-group finite means and a group-level bootstrap of their mean.
 
-    ``<unit>_metrics.csv`` holds one row per group (set, specimen or patient, from the
-    supplied slide-set metadata) with ``<m>_finite_count`` and ``<m>_finite_mean``.
-    ``summary_<unit>.csv`` resamples groups (``resampling_unit``) with replacement; only
-    groups with a finite mean for that metric take part.
+    ``<unit>_metrics.csv`` holds one row per (output, group) (set, specimen or patient,
+    from the supplied slide-set metadata) with ``<m>_finite_count`` and
+    ``<m>_finite_mean``. ``summary_<unit>.csv`` resamples one output's groups
+    (``resampling_unit``) with replacement; only groups with a finite mean for that metric
+    take part. Outputs are never pooled.
     """
     written: list[Path] = []
+    by_output = rows_by_output(rows)
     for unit, field in (("set", "set_id"), ("specimen", "specimen_id"), ("patient", "patient_id")):
-        groups: dict[str, list[Mapping[str, object]]] = {}
+        groups: dict[tuple[str, str], list[Mapping[str, object]]] = {}
         incomplete = False
         for row in rows:
             set_id = str(row["set_id"])
@@ -126,24 +144,27 @@ def write_grouped_summaries(
             if not group_id:
                 incomplete = True
                 break
-            groups.setdefault(group_id, []).append(row)
+            groups.setdefault((str(row["output_name"]), group_id), []).append(row)
         if incomplete or not groups:
             continue
         unit_rows: list[dict[str, object]] = []
-        for group_id, group_rows in sorted(groups.items()):
-            unit_row: dict[str, object] = {
-                "unit": unit,
-                "group_id": group_id,
-                "patch_count": len(group_rows),
-            }
-            for metric in metric_names:
-                values = finite_values(group_rows, metric)
-                unit_row[f"{metric}_finite_count"] = len(values)
-                unit_row[f"{metric}_finite_mean"] = statistics.mean(values) if values else ""
-            unit_rows.append(unit_row)
+        for output in by_output:
+            for group_id in sorted(group for name, group in groups if name == output):
+                group_rows = groups[output, group_id]
+                unit_row: dict[str, object] = {
+                    "output_name": output,
+                    "unit": unit,
+                    "group_id": group_id,
+                    "patch_count": len(group_rows),
+                }
+                for metric in metric_names:
+                    values = finite_values(group_rows, metric)
+                    unit_row[f"{metric}_finite_count"] = len(values)
+                    unit_row[f"{metric}_finite_mean"] = statistics.mean(values) if values else ""
+                unit_rows.append(unit_row)
         metrics_path = output_dir / f"{unit}_metrics.csv"
         with metrics_path.open("w", newline="", encoding="utf-8") as handle:
-            fieldnames = ["unit", "group_id", "patch_count"]
+            fieldnames = ["output_name", "unit", "group_id", "patch_count"]
             for metric in metric_names:
                 fieldnames += [f"{metric}_finite_count", f"{metric}_finite_mean"]
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -155,6 +176,7 @@ def write_grouped_summaries(
             writer = csv.DictWriter(
                 handle,
                 fieldnames=[
+                    "output_name",
                     "resampling_unit",
                     "metric",
                     "group_count",
@@ -164,13 +186,14 @@ def write_grouped_summaries(
                 ],
             )
             writer.writeheader()
-            for metric in metric_names:
+            for output, metric in ((o, m) for o in by_output for m in metric_names):
                 values = [
                     float(str(row[f"{metric}_finite_mean"]))
                     for row in unit_rows
-                    if row[f"{metric}_finite_mean"] != ""
+                    if row["output_name"] == output and row[f"{metric}_finite_mean"] != ""
                 ]
-                # Seeded per metric so adding or reordering metrics never moves another CI.
+                # Seeded per metric so adding or reordering metrics or outputs never moves
+                # another CI.
                 rng = random.Random(f"{bootstrap_seed}:{metric}")
                 bootstrap = sorted(
                     statistics.mean(rng.choice(values) for _ in values)
@@ -178,6 +201,7 @@ def write_grouped_summaries(
                 )
                 writer.writerow(
                     {
+                        "output_name": output,
                         "resampling_unit": unit,
                         "metric": metric,
                         "group_count": len(values),

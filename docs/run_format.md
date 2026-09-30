@@ -111,7 +111,7 @@ data:
 
 Pix2Pix requires `pairing: paired` (the default) and trains from the prepared manifest;
 `domains` must then be omitted. CycleGAN requires `pairing: unpaired` and exactly two
-`domains`, keyed by `model.inputs[0]` (domain A) and `model.target` (domain B). Each entry
+`domains`, keyed by `model.inputs[0]` (domain A) and `model.outputs[0]` (domain B). Each entry
 is either a directory containing `train/`, `val/`, and `test/` (searched recursively) or a
 path/glob containing the literal `{split}`. Relative entries resolve from `dataset_root`.
 The two collections are independent: an epoch has `max(len(A), len(B))` samples, the
@@ -130,6 +130,24 @@ data:
 Domain collections must resolve inside `dataset_root` so their locators stay portable.
 See [Consumed-data snapshots](#consumed-data-snapshots).
 
+### `model.inputs` and `model.outputs`
+
+```yaml
+model:
+  inputs: [AF, LF]     # N ordered named RGB inputs
+  outputs: [PAS, HE]   # M ordered named RGB outputs; [HE] for one output
+```
+
+Both are required, ordered, non-empty lists of unique machine identifiers matching
+`[A-Za-z][A-Za-z0-9_-]*` (names are never sanitized), and they must be disjoint. One
+output is the one-item case of the same representation; the superseded singular
+`model.target` (and `preprocessing.inputs.target_modality`) is rejected with a pointer to
+the plural field. With a `preprocessing` section, `model.inputs` must be a subset of
+`preprocessing.inputs.modalities` and `model.outputs` a subset of
+`preprocessing.inputs.target_modalities`, each in any order; model order is
+authoritative. Pix2Pix accepts any M; CycleGAN requires exactly one input and one
+output.
+
 ### `model.generator`
 
 | `architecture` | Method | Fields |
@@ -139,9 +157,12 @@ See [Consumed-data snapshots](#consumed-data-snapshots).
 
 The architecture is fixed by the method; it is not a free choice. Both methods use
 `model.discriminator` (`ndf`, `norm`, `use_sigmoid`) for their PatchGAN discriminators:
-conditional on the concatenated inputs for Pix2Pix, unconditional for CycleGAN. CycleGAN
-takes exactly one `model.inputs` entry and needs `image_size` dimensions that are
-multiples of 4 and at least 8.
+one joint discriminator conditioned on all inputs and scoring all outputs together
+(`3*N + 3*M` channels) for Pix2Pix, unconditional per domain for CycleGAN. The Pix2Pix
+generator has `3*N` input and `3*M` output channels, split back into the named outputs.
+Channel counts are derived from `model.inputs`/`model.outputs`, never component options.
+CycleGAN takes exactly one `model.inputs` and one `model.outputs` entry and needs
+`image_size` dimensions that are multiples of 4 and at least 8.
 
 ### `inference.direction`
 
@@ -150,8 +171,11 @@ inference:
   direction: A_to_B   # cyclegan only: A_to_B (default) | B_to_A
 ```
 
-`A_to_B` translates `model.inputs[0]` into `model.target`; `B_to_A` translates the
-reverse with the second generator of the same checkpoint. Pix2Pix rejects the field.
+`A_to_B` translates `model.inputs[0]` into `model.outputs[0]`; `B_to_A` translates the
+reverse with the second generator of the same checkpoint. The two directions are
+alternative predictions of one checkpoint, each producing exactly one named output
+(`model.outputs[0]` for `A_to_B`, `model.inputs[0]` for `B_to_A`), never two
+simultaneous outputs. Pix2Pix rejects the field.
 CycleGAN validation reports training-objective losses only, so CycleGAN checkpoint,
 scheduler, and early-stopping monitors must be `loss_G_val` or `loss_val_*` columns,
 not `val_*` image metrics.
@@ -320,16 +344,33 @@ training:
   augmentation:
     enabled: false
     expansion_factor: 1
-    intensity: light  # light, medium, or strong
+    intensity: light          # light, medium, or strong
+    photometric_inputs: []    # resolved; see below
 ```
+
+One sampled geometry realization (resize, flips, `RandomRotate90`, affine) is applied to
+every selected input, every selected target and every target mask; images keep
+continuous interpolation and masks use nearest-neighbour. Targets and masks never get
+photometric transforms. `light` has none (`photometric_inputs` resolves to `[]`, and a
+non-empty list with `light` is rejected); for `medium`/`strong` each input in
+`photometric_inputs` gets its own photometric stream seeded from `training.seed` and a
+SHA-256 digest of its name. Omitted, it resolves to the preparation reference input
+when that input is selected, else to the first selected model input; the resolved
+config records the effective list. Entries must be unique selected `model.inputs`.
+Because every preset includes `RandomRotate90`, `enabled: true` requires a square
+`image_size`; disabled augmentation keeps non-square support. Results repeat only under
+the same complete execution setup (seed, worker count, library versions); no
+worker-count-independent or exact-resume replay is promised. CycleGAN requires
+`enabled: false`.
 
 Optimizer learning-rate schedules are configured under `training.scheduler`.
 Omitting the section preserves a flat learning rate. Epoch numbers are
 zero-based. `linear_decay` keeps the initial optimizer LR through
 `decay_start_epoch`, then decays linearly through the final epoch. Plateau
 scheduling steps only after validation, using validation metric columns such as
-`loss_G_val`, `val_ssim`, `val_mae`, `val_rmse`, `val_psnr`, `val_pcc_gray`, or
-`val_pcc_rgb_mean`. `loss_G_val` depends on the configured training loss terms.
+`loss_G_val` or a per-output Pix2Pix column `val_<metric>__<output>` (`val_ssim__HE`,
+`val_mae__PAS`, with `<metric>` one of `ssim`, `psnr`, `mae`, `rmse`, `pcc_gray`,
+`pcc_rgb_mean`). `loss_G_val` depends on the configured training loss terms.
 
 ```yaml
 training:
@@ -342,7 +383,7 @@ training:
 training:
   scheduler:
     name: reduce_on_plateau
-    monitor: val_ssim
+    monitor: val_ssim__HE
     mode: max
     factor: 0.5
     patience: 5
@@ -355,13 +396,16 @@ loss-term weights rather than optimizer learning rates.
 Early stopping is configured under `training.early_stopping` and is disabled
 when omitted. `patience` counts validation events, not raw epochs, so
 `validate_rate` controls how often the monitored value can become stale. Use
-validation CSV column names such as `val_ssim`, `val_mae`, `val_rmse`,
-`loss_G_val`, `loss_D_val`, or configured `loss_val_*` component columns.
+validation CSV column names such as `val_ssim__HE`, `val_mae__PAS`,
+`loss_G_val`, `loss_D_val`, or configured `loss_val_*` component columns. A Pix2Pix
+monitor that names an output must name one of `model.outputs`. With one output the
+default monitor is `val_ssim__<output>`; with several outputs `monitor` is required,
+because choosing which output decides early stopping is the user's decision.
 
 ```yaml
 training:
   early_stopping:
-    monitor: val_ssim
+    monitor: val_ssim__HE
     mode: max
     patience: 15
     min_delta: 0.0
@@ -444,10 +488,19 @@ Supported schedule types are `constant`, `linear_warmup`, `linear_decay`,
 `epoch`; `step` also uses `factor`.
 
 Mask weighting is optional. When `params.mask.enabled` is `true`, the training
-dataset must provide a `foreground_mask` tensor for every batch. Missing masks
-raise an error instead of being treated as all-foreground. The manifest loads
-the exact `foreground_mask_path` written when `masks.save_patch_masks: true`.
-The saved patch mask is the aligned target foreground mask.
+dataset must provide a `foreground_mask` tensor for every model output in every batch
+(`masks.foreground_mask.<output>`). Missing masks raise an error naming the output
+instead of being treated as all-foreground. The manifest loads the exact
+`foreground_mask__<target>` paths written when `masks.save_patch_masks: true`; each saved
+patch mask is that target's own aligned foreground mask, and an output's loss only ever
+uses its own mask.
+
+Pix2Pix composes one joint adversarial term with, for every configured reconstruction
+term, `weight * mean(term(prediction[o], target[o]) for o in model.outputs)`. The
+arithmetic mean over outputs is deliberate: one output keeps its exact scale and adding
+outputs does not inflate the reconstruction magnitude. The schedule applies after the
+mean, the loss parameters apply uniformly to all outputs, and this training mean is not
+an evaluation score.
 
 When configured loss terms are present, `metrics/epochs.csv` adds deterministic
 component columns using normalized names:
@@ -465,10 +518,12 @@ loss_val_weighted_<role>_<loss_name>
 loss_val_current_weight_<role>_<loss_name>
 ```
 
-For example, configured SSIM writes `loss_train_raw_generator_ssim`,
-`loss_train_weighted_generator_ssim`, and
-`loss_train_current_weight_generator_ssim`, plus matching validation columns
-when validation runs.
+Pix2Pix reports every reconstruction term per output as `<loss_name>__<output>`; adversarial
+terms and the totals stay joint. For example, configured SSIM with `model.outputs: [HE,
+PAS]` writes `loss_train_raw_generator_ssim__HE`, `loss_train_raw_generator_ssim__PAS`,
+and the matching `weighted` and `current_weight` columns, plus validation columns when
+validation runs. `raw` is that output's term, `weighted` its contribution to `loss_G`
+(`current_weight * raw / M`), and `current_weight` the scheduled term weight.
 
 ### `metadata/run.json`
 
@@ -602,7 +657,7 @@ within one split is listed under `duplicates` for review, never deduplicated. By
 identity is only asserted under `content`; `membership` still detects same-file aliases.
 
 Held-out assets: training also observes the held-out test assets of its selected data
-contract - the test manifest records' selected inputs, target, and mask (when used) for
+contract - the test manifest records' selected inputs, targets, and masks (when used) for
 paired training, and the domain A and B `test` collections resolved from the same
 `data.domains` specs for unpaired training - under the same hash policy. They take part
 in the file, content, and group leakage checks but are not consumed rows and do not
@@ -637,8 +692,9 @@ clinical or biological validity follows from them.
 Per stage:
 
 - **train** (paired): the files each train/val manifest record supplies - selected
-  inputs, target, and the foreground mask only when a mask loss requires it - with
-  set/specimen/patient IDs. Augmentation expansion is configuration, not extra rows.
+  inputs, every selected target (`domain` is the target name), and each target's
+  foreground mask only when a mask loss requires it - with set/specimen/patient IDs.
+  Augmentation expansion is configuration, not extra rows.
   `sources` records the manifest SHA-256 and dataset fingerprint.
 - **train** (unpaired): train/val membership of domain A (`input`) and domain B
   (`target`). The seeded epoch draw is a sampling policy (stage `details`), not a
@@ -646,10 +702,12 @@ Per stage:
 - **infer**: only the files fed to the predictor - the selected inputs for Pix2Pix
   and CycleGAN `A_to_B`, the held-out target for `B_to_A`. These are exactly the
   image files inference opens; the other side of each record is never read. After writing, the
-  `produced_data` snapshot lists each `generated` output with its `sample_id` and
-  content identity and references the consumed snapshot and checkpoint.
+  `produced_data` snapshot lists one `generated` row per `(sample_id, output_name)` with
+  the output name as `domain` and its content identity, and references the consumed
+  snapshot and checkpoint.
 - **evaluate** (paired): one `reference` and one `generated` row per evaluated
-  sample, sharing its `sample_id` - the explicit correspondence the evaluator used.
+  `(sample_id, output_name)` pair, sharing that `sample_id` and naming the output as
+  `domain` - the explicit correspondence the evaluator used.
   Missing generated files keep `status=missing`; evaluated/excluded counts stay in
   stage `details` and `coverage.csv`.
 - **evaluate** (unpaired): the generated and reference collections, without
@@ -672,10 +730,11 @@ Values use six decimal places; missing or non-finite validation values are blank
 Training loss/component columns use `step_mean`: the unweighted mean over the
 epoch's optimization steps, so a smaller final batch counts as much as a full one.
 Validation loss/component columns are likewise means over validation batches, while
-validation image metrics (`val_ssim`, `val_mae`, ...) are means over individual
+validation image metrics (`val_ssim__HE`, `val_mae__PAS`, ...) are means over individual
 images, skipping non-finite values. Validation-image columns are those the method
-declares: Pix2Pix reports `val_ssim`, `val_psnr`, `val_mae`, `val_rmse`,
-`val_pcc_rgb_mean` and `val_pcc_gray`; CycleGAN reports none.
+declares: Pix2Pix reports `val_ssim__<output>`, `val_psnr__<output>`, `val_mae__<output>`,
+`val_rmse__<output>`, `val_pcc_rgb_mean__<output>` and `val_pcc_gray__<output>` for every
+model output (no column averages outputs); CycleGAN reports none.
 Rows flush after every epoch. Resume requires a matching header and complete
 epochs `0..resume_at-1`; stale rows at or after `resume_at` are discarded before
 new rows append. Missing, malformed, gapped, duplicate, or incompatible history
@@ -762,20 +821,26 @@ Checkpoint files are not deleted by this metadata record.
 
 ### `artifacts/output_train/`, `output_val/`, `output_test/`
 
-Generated images produced during training (train/val) and inference (test).
-Each file is named after its source patch. Pix2Pix outputs use the `_target_generated`
-suffix; CycleGAN outputs carry the translation direction, so both directions can share
-one output directory without collisions:
+Generated images produced during training (train/val) and inference (test). Every
+generated artifact is identified by `(sample_id, output_name)` and written as
+`<output_dir>/<output_name>/<sample_id>_generated.<ext>`, one file per model output, so
+all Pix2Pix outputs and both CycleGAN directions share one output directory without
+collisions and every path inverts to its pair:
 
 ```text
-00512_09216_target_generated.tif   # Pix2Pix
-00512_09216_A_to_B_generated.tif   # CycleGAN, inference.direction: A_to_B
-00512_09216_B_to_A_generated.tif   # CycleGAN, inference.direction: B_to_A
+HE/00512_09216_generated.tif          # Pix2Pix output HE
+PAS/00512_09216_generated.tif         # Pix2Pix output PAS
+stained/00512_09216_generated.tif     # CycleGAN A_to_B predicts domain B
+label_free/00512_09216_generated.tif  # CycleGAN B_to_A predicts domain A
 ```
 
-`vs infer-images --recursive` uses the same suffixes and preserves the input's relative
-directory structure under the output root, so equal filenames in different source folders
-do not collide. Inputs that would map to the same output file (for example `a.png` and
+Validation previews in `output_val/` are `epoch<e>_batch<b>_input.tif` plus
+`..._output__<output>.tif` and `..._target__<output>.tif` per output.
+
+`vs infer-images --recursive` uses the same layout and preserves the input's relative
+directory structure (before `<output_name>`) under the output root, so equal filenames
+in different source folders do not collide. An explicit output file is accepted only for
+a one-output model; several outputs need an output directory. Inputs that would map to the same output file (for example `a.png` and
 `a.tif` with `--output-format png`) are rejected before prediction. An existing output
 file is replaced atomically only after its prediction succeeds. Without `--output`,
 files go to `inference.output_dir` or the run's `artifacts/output_single/` (one file)
@@ -786,14 +851,16 @@ Full-resolution WSI outputs are pyramidal BigTIFFs with the input's pixel dimens
 For a single WSI input, known source MPP is preserved. For multi-input WSI, output
 MPP is preserved only when every input provides compatible known MPP. Conflicting
 known values fail; if any input lacks calibration, the shared output MPP remains
-unknown (never zero and never inferred from pixel counts). The run first requires at least
-`width x height x 15` bytes of free scratch space next to the output.
+unknown (never zero and never inferred from pixel counts). All outputs share the input
+grid and MPP and come from one tile traversal. The run first requires at least
+`M x width x height x 15` bytes of free scratch space next to the outputs for M outputs.
 
 ## Evaluation outputs
 
-Every evaluation writes `evaluation/evaluation_metadata.json` (`schema_version` 2)
+Every evaluation writes `evaluation/evaluation_metadata.json` (`schema_version` 3)
 recording `method`, `training_pairing`, `evaluation_protocol`, `inference_direction`
-(`null` for Pix2Pix), `source_domains`, `reference_domain`, `generated_dir`, `counts`,
+(`null` for Pix2Pix), `source_domains`, `reference_domains` (the predicted outputs),
+`generated_dir`, `counts`,
 the written `artifacts`, the `consumed_data` reference and `generated_producer` lineage,
 and `pairwise_metrics_available`: `true` for `paired`, `false` for `unpaired`. Unpaired
 metadata also records the feature definitions and explicit `limitations`. For the paired
@@ -804,14 +871,20 @@ versions are not read or migrated.
 
 The **paired** protocol writes `per_image_metrics.csv`, `summary.csv`, `coverage.csv`,
 `evaluation_result.json`, and grouped `<unit>_metrics.csv` / `summary_<unit>.csv` for
-`set`, `specimen`, and `patient` (bootstrap confidence intervals). Each generated image
-is compared with its aligned manifest reference: the target for Pix2Pix and CycleGAN
-`A_to_B`, the domain-A input for CycleGAN `B_to_A`. With `save_graphs: true` it also
-writes one `<metric>_histogram.png` per requested metric and `metrics_boxplot.png`,
-both over finite values only.
+`set`, `specimen`, and `patient` (bootstrap confidence intervals). Every aligned test
+record yields one explicit pair per predicted output, `(sample_id, output_name)`: the
+record's real image of that output (the target for Pix2Pix and CycleGAN `A_to_B`, the
+domain-A input for CycleGAN `B_to_A`) against the generated artifact of that output.
+Every report keeps `output_name`; no statistic, plot or ranking averages different
+outputs. Strict/permissive input failures apply per pair, so a missing `PAS` prediction
+never hides a present `HE` prediction. With `save_graphs: true` it also writes one
+`<output>__<metric>_histogram.png` per output and requested metric and
+`metrics_boxplot.png` (one box per output and metric), over finite values only.
 
-The **unpaired** protocol (CycleGAN default, any method opt-in) compares the active
-direction's generated images with the real `test` collection of
+The **unpaired** protocol (CycleGAN default, any one-output method opt-in; rejected for
+a model with several simultaneous outputs, since one reference collection has no
+unambiguous per-output contract) compares the active direction's generated images of
+its one output with the real `test` collection of
 `evaluation.reference_collection`, else of the reference domain from `data.domains`. No
 pairs are formed. Each image is reduced to per-image RGB mean/std and luminance mean/std:
 
@@ -842,8 +915,9 @@ defect and fails the evaluation; nothing is silently normalized.
 
 ### `evaluation/per_image_metrics.csv`
 
-Paired protocol only. One row per evaluated test image. The base columns are
-`sample_id`, `set_id`, `target_path`, `generated_path`, `width`, `height`, `channels`
+Paired protocol only. One row per evaluated `(sample_id, output_name)` pair. The base
+columns are `sample_id`, `output_name`, `set_id`, `target_path` (the real image of that
+output), `generated_path`, `width`, `height`, `channels`
 (plus `support_path` when valid-region support was used). Then, for each requested
 metric `<m>` in request order:
 
@@ -870,29 +944,31 @@ Evaluation SSIM is fixed as above and is independent of the training SSIM loss.
 
 ### `evaluation/summary.csv`
 
-One row per requested metric: `count` (evaluated images), `finite_count`,
+One row per output and requested metric (`output_name`, `metric`): `count` (evaluated
+images of that output), `finite_count`,
 `positive_infinity_count`, `undefined_count`, `unavailable_count` (these four sum to
 `count`), and `finite_mean`, `finite_median`, `finite_std`, `finite_min`, `finite_max`
 computed from finite values only (empty when there are none).
 
 ### Grouped summaries
 
-`<unit>_metrics.csv` has one row per group (`unit`, `group_id`, `patch_count`) with
-`<m>_finite_count` and `<m>_finite_mean` per requested metric. `summary_<unit>.csv`
-bootstraps groups with replacement: `resampling_unit`, `metric`, `group_count` (groups
+`<unit>_metrics.csv` has one row per output and group (`output_name`, `unit`,
+`group_id`, `patch_count`) with `<m>_finite_count` and `<m>_finite_mean` per requested
+metric. `summary_<unit>.csv` bootstraps one output's groups with replacement:
+`output_name`, `resampling_unit`, `metric`, `group_count` (groups
 with a finite mean), `finite_mean` and `ci95_low`/`ci95_high`. Groups come from the
 supplied `set_id` and the slide-set `specimen_id`/`patient_id`; a level is skipped when
 any row lacks it. Each metric has its own seeded resampling stream, so adding a metric
 never changes another metric's interval. Outputs of different stains are never averaged
-together (one output per run).
+together.
 
 ### `evaluation/coverage.csv`
 
-One row per requested sample, the single source of coverage truth:
+One row per requested `(sample_id, output_name)` pair, the single source of coverage truth:
 
 | Column | Description |
 |---|---|
-| `sample_id`, `set_id` | Sample and slide-set identifiers |
+| `sample_id`, `output_name`, `set_id` | Pair and slide-set identifiers |
 | `status` | `evaluated`, `excluded` (permissive) or `failed` (strict) |
 | `reason` | Stable code: `missing_target`, `missing_generated`, `missing_support`, `unreadable_<role>`, `unsupported_<role>_mode`, `shape_mismatch`, `malformed_support`, `support_shape_mismatch` |
 | `detail` | Human-readable message |
@@ -909,6 +985,13 @@ resolved identity (`name`, `version`, `source`, `options`, `applicability`, `inp
 `plot_range`), the `statuses`, `input_failures`, `valid_region_support`, and `counts`
 (`requested` = `evaluated` + `excluded` + `failed`). Strict JSON: non-finite numbers
 never appear.
+
+`vs compare` compares one model output at a time: paired comparisons align rows by
+`(sample_id, output_name)` (each key must be unique), and a CSV holding several outputs
+requires `--output-name` (library: `CompareRequest.output_name`); no cross-output mean
+or winner is computed. `vs organize` ranks each output's rows separately (one
+subdirectory per output) and `vs panels` selects representative cases per
+`<output>/<metric>`.
 
 `vs organize`, `vs compare` and `vs panels` read ranking directions,
 presentation thresholds and plot ranges from this file next to the CSV, else from the

@@ -41,20 +41,23 @@ _METHOD_KEYS = frozenset({"architecture", "learning_rate", "plateau_monitor"})
 
 
 class _TinyNetwork(nn.Module):
-    """Named RGB inputs in [-1, 1] -> one RGB output in [-1, 1]."""
+    """Named RGB inputs in [-1, 1] -> a one-item mapping to one RGB output in [-1, 1]."""
 
-    def __init__(self, input_names: tuple[str, ...], width: int, residual: bool) -> None:
+    def __init__(
+        self, input_names: tuple[str, ...], output_name: str, width: int, residual: bool
+    ) -> None:
         super().__init__()
         self.input_names = input_names
+        self.output_name = output_name
         self.head = nn.Conv2d(3 * len(input_names), width, 3, padding=1)
         self.body = nn.Conv2d(width, width, 3, padding=1) if residual else None
         self.tail = nn.Conv2d(width, 3, 3, padding=1)
 
-    def forward(self, inputs: Mapping[str, torch.Tensor]) -> torch.Tensor:
+    def forward(self, inputs: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         features = torch.relu(self.head(torch.cat([inputs[name] for name in self.input_names], 1)))
         if self.body is not None:
             features = features + torch.relu(self.body(features))
-        return torch.tanh(self.tail(features))
+        return {self.output_name: torch.tanh(self.tail(features))}
 
 
 def _parse_width(raw: Mapping[str, Any], context: ComponentContext) -> dict[str, Any]:
@@ -70,14 +73,18 @@ TINY_CONV = ComponentDefinition(
     version="1",
     source=SOURCE,
     parse_options=_parse_width,
-    factory=lambda options, *, input_names: _TinyNetwork(input_names, options["width"], False),
+    factory=lambda options, *, input_names, output_name: _TinyNetwork(
+        input_names, output_name, options["width"], False
+    ),
 )
 TINY_RESIDUAL = ComponentDefinition(
     name="tiny_residual",
     version="1",
     source=SOURCE,
     parse_options=_parse_width,
-    factory=lambda options, *, input_names: _TinyNetwork(input_names, options["width"], True),
+    factory=lambda options, *, input_names, output_name: _TinyNetwork(
+        input_names, output_name, options["width"], True
+    ),
 )
 
 
@@ -134,13 +141,19 @@ class TinyReconstruction(MethodDefinition):
             resolved["plateau_monitor"] = options.plateau_monitor
         return {"method": {"options": resolved}}
 
+    def validate(self, config: RunConfig) -> None:
+        if len(config.model.outputs) != 1:
+            raise ValueError("tiny_reconstruction predicts exactly one model.outputs entry")
+
     def component_identities(self, options: TinyOptions) -> Mapping[str, Mapping[str, Any]]:
         return {"network": options.network.identity()}
 
     def build_network(self, config: RunConfig, device: torch.device) -> nn.Module:
         self.built["network"] += 1
         options: TinyOptions = config.method.options
-        return options.network.build(input_names=tuple(config.model.inputs)).to(device)
+        return options.network.build(
+            input_names=tuple(config.model.inputs), output_name=config.model.outputs[0]
+        ).to(device)
 
     def build_training_runtime(
         self,
@@ -199,6 +212,7 @@ class TinyRuntime:
         self._identity = definition.checkpoint_identity(config)
         self._device = device
         self._input_names = tuple(config.model.inputs)
+        self._output_name = config.model.outputs[0]
         self._plateau_monitor = options.plateau_monitor
         self.network = definition.build_network(config, device)
         definition.built["optimizer"] += 1
@@ -214,19 +228,19 @@ class TinyRuntime:
 
     def _unpack(self, batch: Any) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
         inputs = {name: batch["inputs"][name].to(self._device) for name in self._input_names}
-        return inputs, batch["target"].to(self._device)
+        return inputs, batch["targets"][self._output_name].to(self._device)
 
     def train_mode(self) -> None:
         self.network.train()
 
     def batch_size(self, batch: Any) -> int:
-        return int(batch["target"].shape[0])
+        return int(batch["targets"][self._output_name].shape[0])
 
     def step(self, batch: object, *, epoch: int, global_step: int) -> MethodMetrics:
         del epoch, global_step
         inputs, target = self._unpack(batch)
         self.optimizer.zero_grad()
-        loss = self.objective(self.network(inputs), target)
+        loss = self.objective(self.network(inputs)[self._output_name], target)
         loss.backward()
         self.optimizer.step()
         return MethodMetrics(losses={"loss_recon": float(loss.detach())})
@@ -239,7 +253,7 @@ class TinyRuntime:
         with torch.no_grad():
             for batch in loader:
                 inputs, target = self._unpack(batch)
-                prediction = self.network(inputs)
+                prediction = self.network(inputs)[self._output_name]
                 losses.append(float(self.objective(prediction, target)))
                 biases.append(float((prediction - target).mean().abs()))
         self.network.train()

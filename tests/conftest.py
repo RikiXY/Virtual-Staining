@@ -37,7 +37,7 @@ def manifest_dataset(tmp_path: Path) -> ManifestDataset:
     for split, sample_id in split_samples:
         x_str, y_str = sample_id.split("_", maxsplit=1)
         input_path = Path(f"splits/{split}/{sample_id}__input__label_free.tif")
-        target_path = Path(f"splits/{split}/{sample_id}__target.tif")
+        target_path = Path(f"splits/{split}/{sample_id}__target__stained.tif")
         _write_tiny_image(tmp_path / input_path)
         _write_tiny_image(tmp_path / target_path)
         records.append(
@@ -45,7 +45,7 @@ def manifest_dataset(tmp_path: Path) -> ManifestDataset:
                 sample_id,
                 split,
                 input_paths={"label_free": input_path},
-                target_path=target_path,
+                target_paths={"stained": target_path},
                 x=int(x_str),
                 y=int(y_str),
             )

@@ -58,11 +58,11 @@ def _manager(config: RunConfig, method: Pix2PixMethod) -> MethodCheckpointManage
     return MethodCheckpointManager(method, paths.checkpoints_dir, config_hash="sha256:test")
 
 
-def _batch() -> dict[str, Any]:
+def _batch(outputs: tuple[str, ...] = ("stained",)) -> dict[str, Any]:
     torch.manual_seed(1)
     return {
         "inputs": {"LF": torch.rand(2, 3, 64, 64) * 2 - 1, "AF": torch.rand(2, 3, 64, 64) * 2 - 1},
-        "target": torch.rand(2, 3, 64, 64) * 2 - 1,
+        "targets": {name: torch.rand(2, 3, 64, 64) * 2 - 1 for name in outputs},
         "masks": {},
     }
 
@@ -160,16 +160,18 @@ def test_pix2pix_v4_inference_round_trip(tmp_path: Path) -> None:
     _assert_modules_equal(source.generator, generator)
     source.generator.eval()
     inputs = _batch()["inputs"]
-    assert torch.equal(
-        predict_batch(generator, inputs, _CPU), predict_batch(source.generator, inputs, _CPU)
-    )
+    restored = predict_batch(generator, inputs, _CPU, ("stained",))
+    expected = predict_batch(source.generator, inputs, _CPU, ("stained",))
+    assert list(restored) == ["stained"]
+    assert torch.equal(restored["stained"], expected["stained"])
 
 
 @pytest.mark.parametrize(
     ("changes", "field"),
     [
         ({"inputs": ["AF", "LF"]}, r"method.inputs\[0\]"),
-        ({"target": "other"}, r"method.outputs\[0\]"),
+        ({"outputs": ["other"]}, r"method.outputs\[0\]"),
+        ({"outputs": ["stained", "other"]}, "method.outputs"),
         ({"generator": {"base_channels": 8}}, "method.components.generator.options.base_channels"),
         ({"generator": {"base_channels": 4, "norm": "instance"}}, "generator.options.norm"),
         ({"generator": {"base_channels": 4, "dropout": True}}, "generator.options.dropout"),
@@ -411,7 +413,7 @@ _POLICY_CHANGES: dict[str, tuple[dict[str, Any], dict[str, Any], str]] = {
     "plateau_mode": (_PLATEAU, _plateau(mode="max"), "scheduler.mode is 'min'"),
     "plateau_monitor": (
         _PLATEAU,
-        _plateau(monitor="val_ssim"),
+        _plateau(monitor="val_ssim__stained"),
         "scheduler.monitor is 'loss_G_val'",
     ),
     "optimizer_beta": ({}, {"beta1": 0.9}, r"optimizer.betas\[0\] is 0.5 .* but 0.9"),
@@ -609,3 +611,84 @@ def test_training_and_validation_share_one_resolved_loss_evaluator(
 
     assert method._step.loss_evaluator is method._loss_evaluator
     assert captured["loss_evaluator"] is method._loss_evaluator
+
+
+def _two_output_checkpoint(tmp_path: Path) -> tuple[RunConfig, Pix2PixMethod, Path]:
+    config = _config(tmp_path, outputs=["PAS", "HE"])
+    torch.manual_seed(0)
+    method = Pix2PixMethod(config, _CPU)
+    method.train_mode()
+    method.step(_batch(("PAS", "HE")), epoch=0, global_step=0)
+    return config, method, _manager(config, method).save(3)
+
+
+def test_two_output_checkpoint_keeps_ordered_outputs_and_format_4(tmp_path: Path) -> None:
+    config, source, path = _two_output_checkpoint(tmp_path)
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+
+    assert payload["format_version"] == 4
+    assert payload["method"]["outputs"] == ["PAS", "HE"]
+    # Derived channel counts are construction context, never component identity.
+    for component in payload["method"]["components"].values():
+        assert not {"in_channels", "out_channels", "output_names"} & set(component["options"])
+
+    generator, _ = load_inference_generator(config, RunLayout.from_project(config.project), _CPU)
+    source.generator.eval()
+    inputs = _batch(("PAS", "HE"))["inputs"]
+    restored = predict_batch(generator, inputs, _CPU, ("PAS", "HE"))
+    expected = predict_batch(source.generator, inputs, _CPU, ("PAS", "HE"))
+    assert list(restored) == ["PAS", "HE"]
+    assert all(torch.equal(restored[name], expected[name]) for name in expected)
+
+
+def test_two_output_checkpoint_resumes_exact_method_state(tmp_path: Path) -> None:
+    config, source, path = _two_output_checkpoint(tmp_path)
+    torch.manual_seed(5)
+    resumed = Pix2PixMethod(config, _CPU)
+
+    _manager(config, resumed).load(path)
+
+    assert_nested_equal(resumed.state_dict(), source.state_dict())
+    resumed.train_mode()
+    metrics = resumed.step(_batch(("PAS", "HE")), epoch=1, global_step=1)
+    assert {"generator_l1__PAS", "generator_l1__HE"} <= set(metrics.raw)
+
+
+@pytest.mark.parametrize("outputs", [["HE", "PAS"], ["PAS"], ["PAS", "HE", "IHC"]])
+def test_two_output_checkpoint_rejects_other_output_names_or_order(
+    tmp_path: Path, outputs: list[str]
+) -> None:
+    _two_output_checkpoint(tmp_path)
+    config = _config(tmp_path, outputs=outputs)
+
+    with pytest.raises(CheckpointCompatibilityError, match="method.outputs"):
+        load_inference_generator(config, RunLayout.from_project(config.project), _CPU)
+    with pytest.raises(CheckpointCompatibilityError, match="method.outputs"):
+        _manager(config, Pix2PixMethod(config, _CPU)).load(
+            RunLayout.from_project(config.project).checkpoints_dir / "ep003.pth"
+        )
+
+
+def test_one_output_state_cannot_be_reshaped_into_two_outputs(tmp_path: Path) -> None:
+    _config_, one_output, _path = _trained_checkpoint(tmp_path)
+    config = _config(tmp_path / "two", outputs=["PAS", "HE"])
+    method = Pix2PixMethod(config, _CPU)
+    before = copy.deepcopy(method.state_dict())
+
+    with pytest.raises(CheckpointCompatibilityError, match="has shape"):
+        method.load_state_dict(one_output.state_dict())
+    assert_nested_equal(method.state_dict(), before)
+
+
+def test_two_output_validation_reports_only_per_output_columns(tmp_path: Path) -> None:
+    config = _config(tmp_path, outputs=["PAS", "HE"])
+    method = Pix2PixMethod(config, _CPU)
+
+    metrics = method.validate([_batch(("PAS", "HE"))], epoch=0)  # type: ignore[arg-type]
+
+    assert list(method.validation_metric_names)[:2] == ["val_ssim__PAS", "val_ssim__HE"]
+    assert set(metrics.image) == set(method.validation_metric_names)
+    assert all("__" in name for name in metrics.image)
+    assert {"generator_l1__PAS", "generator_l1__HE"} <= set(metrics.raw)
+    assert method.checkpoint_selection_modes()["val_mae__HE"] == "min"
+    assert method.default_checkpoint_metric == "loss_G_val"

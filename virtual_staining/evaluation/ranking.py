@@ -208,25 +208,34 @@ def organize_by_metrics(
 
     summary_rows: list[dict[str, Any]] = []
 
+    # Samples of different model outputs are ranked separately, never against each other.
+    outputs = (
+        [(str(name), df[df["output_name"] == name]) for name in dict.fromkeys(df["output_name"])]
+        if "output_name" in df.columns
+        else [(None, df)]
+    )
     for metric in selected_metrics:
         if metric not in df.columns:
             logger.warning("Metric %r not found in CSV; skipping", metric)
             continue
-        result = _organize_metric(
-            df=df,
-            metric=metric,
-            higher_is_better=ranking_direction(csv_path, metric, explicit.get(metric)),
-            output_dir=output_dir,
-            image_columns=image_columns,
-            top_k=top_n,
-            mode=mode,
-            overwrite=overwrite,
-            include_all_ranked=include_all_ranked,
-        )
+        for output_name, output_df in outputs:
+            result = _organize_metric(
+                df=output_df,
+                metric=metric,
+                higher_is_better=ranking_direction(csv_path, metric, explicit.get(metric)),
+                output_dir=output_dir if output_name is None else output_dir / output_name,
+                image_columns=image_columns,
+                top_k=top_n,
+                mode=mode,
+                overwrite=overwrite,
+                include_all_ranked=include_all_ranked,
+            )
 
-        if result is None:
-            continue
+            if result is None:
+                continue
 
-        summary_rows.append(result)
+            summary_rows.append(
+                result if output_name is None else {"output_name": output_name, **result}
+            )
     summary_csv = _write_organization_summary(summary_rows, output_dir) if summary_rows else None
     return summary_rows, summary_csv, tuple(image_columns)

@@ -37,8 +37,11 @@ upper layers may import from lower layers, never the reverse.
 Every method, built-in or external, is a registered `MethodDefinition`, and every
 network architecture a registered `ComponentDefinition` (`definitions.py`). Callers pass
 an immutable `Definitions` set explicitly; `builtin_definitions()` is the default and
-holds Pix2Pix (paired, named N-input -> one-target) and CycleGAN (unpaired, one domain
-A <-> one domain B) plus the `concat_unet`, `resnet` and `patchgan` components. There
+holds Pix2Pix (paired, named N-input -> M-output) and CycleGAN (unpaired, one domain
+A <-> one domain B, exactly one input and one output) plus the `concat_unet`, `resnet`
+and `patchgan` components. The framework contract is N ordered named RGB inputs -> M
+ordered named RGB outputs (`model.inputs`, `model.outputs`); one output is the one-item
+case of the same plural representation, never a separate singular path. There
 is no dynamic import, `class_path` loading, or plugin discovery, and checkpoint
 metadata is compared with, never used to import, definitions.
 
@@ -47,8 +50,10 @@ resolves `method.name`, splits the shared `method`/`model`/`training` sections i
 framework keys and the keys the definition declares in `owned_keys`, and lets the
 definition parse its options. Generic config knows no method, loss, metric catalogue
 or architecture: the definition validates its options and cross-section rules,
-declares its pairing and prediction directions, and supplies the direction and
-validity of `training.early_stopping.monitor` and `inference.checkpoint_metric`. The
+declares its pairing, prediction directions, and each direction's named prediction
+inputs and outputs (`prediction_inputs`, `prediction_outputs`), and supplies the default,
+direction and validity of `training.early_stopping.monitor` and
+`inference.checkpoint_metric`. The
 built-ins keep the documented `model.generator`, `model.discriminator`, `training.lr_*`,
 `beta*`, `scheduler`, `losses` and `method.replay_buffer_size` spelling as keys they own;
 an external method owns `method.options` and needs none of them.
@@ -59,7 +64,9 @@ Config parsing derives accepted names, roles, parameters, and method compatibili
 those definitions, and runtimes take primitive math (BCE/LSGAN adversarial, L1, SSIM,
 foreground-mask weighting) from them. Objective composition stays method-owned: Pix2Pix's
 `ConfiguredLossEvaluator` (one per method instance, shared by training and validation)
-applies primitives to the conditional discriminator logits and generated image, while
+applies the adversarial primitive once to the joint discriminator logits and every
+reconstruction primitive to each named output with that output's own foreground mask,
+weighting the arithmetic mean over outputs (so one output keeps its exact scale), while
 `CycleGANMethod` decides which directional tensors each term compares, sums the A/B
 directions, and requires its active adversarial and cycle terms. Loss-weight schedules
 remain `LossScheduleConfig` in `config/losses.py`; definitions do not own weights.
@@ -75,15 +82,21 @@ model-count accessors.
 
 - `Trainer` owns the epoch loop, validation cadence, `epochs.csv` history, checkpoint
   cadence and `best.json` ranking, resume, and early stopping. It does not know which
-  networks a method trains.
+  networks a method trains, how many outputs it predicts, or how channels are packed;
+  the shared `training/helpers.unpack_batch` only validates named `inputs`, `targets`
+  and per-target `masks` of a paired batch.
 - `MethodCheckpointManager` wraps the runtime's `state_dict()` in the v4 payload from
   `checkpoint_contract.py` and validates the definition name/version/source, component
   identities and options, I/O names, directions, image size, and normalization before
   calling `load_state_dict()`. It assumes no fixed number of models
   or optimizers. Only v4 is accepted; older or unversioned payloads are rejected, with no
   migration path.
-- `Pix2PixMethod` owns the ConcatUNet generator, conditional PatchGAN discriminator, their
-  optimizers, AMP scalers, schedulers, and the configured BCE/L1/SSIM objective.
+- `Pix2PixMethod` owns the ConcatUNet generator (`3*N` input and `3*M` output channels,
+  split back into the named outputs), one joint conditional PatchGAN over all inputs and
+  all real or generated outputs (`3*N + 3*M` channels), their two optimizers, AMP
+  scalers, schedulers, and the configured BCE/L1/SSIM objective. Its reconstruction
+  components and validation image metrics are reported per output
+  (`generator_l1__HE`, `val_ssim__HE`); adversarial terms and `loss_G`/`loss_D` stay joint.
 - `CycleGANMethod` owns `G_A_to_B`, `G_B_to_A`, `D_A`, `D_B`, joint generator and
   discriminator optimizers, scalers, schedulers, CycleGAN weight initialization, the LSGAN
   / cycle L1 / identity L1 objective, and the `fake_A` / `fake_B` replay pools including
@@ -98,14 +111,19 @@ policy, rejects checkpoints naming unregistered definitions, validates the defin
 checkpoint identity, and calls `build_inference_model`, which constructs only the
 prediction network (no optimizer, scheduler, objective, discriminator or replay pool).
 CycleGAN returns a `CycleGANInferenceAdapter` wrapping the generator for
-`inference.direction`, so every loaded model accepts the same named-input mapping. Single-image, directory, tiled, and WSI
+`inference.direction`, so every loaded model maps named inputs to a mapping of named
+outputs (a one-item mapping for one output). Single-image, directory, tiled, and WSI
 inference in `inference/single.py` and the `vs infer` test-split loop are method-agnostic
-apart from choosing the input names and the direction-aware output filename
-(`utils/artifacts.py`).
+apart from the definition's prediction input and output names; every generated artifact
+is identified by `(sample_id, output_name)` through one helper in `utils/artifacts.py`
+(`<output_dir>/<output_name>/<sample_id>_generated<ext>`).
 
 Evaluation protocol selection belongs to `applications/evaluate.py`; it defaults to the
-run's `data.pairing`. `paired` maps aligned manifest records to references and reuses `evaluation/evaluator.py`
-and `metrics.py`; `unpaired` (default for CycleGAN) collects the active direction's
+run's `data.pairing`. `paired` expands every aligned manifest record into one explicit
+`(sample_id, output_name)` pair per predicted output and reuses `evaluation/evaluator.py`
+and `metrics.py` for each RGB pair; rows, coverage, summaries, grouped summaries, plots
+and comparisons keep `output_name` and never average across outputs. `unpaired` (default
+for CycleGAN, and available only to one-output models) collects the active direction's
 generated images and an independent real reference collection
 (`evaluation.reference_collection`, else the reference domain's `data.domains` entry) and
 delegates to `evaluation/unpaired.py`; it is independent of the training pairing. The paired metric
@@ -160,13 +178,15 @@ its `ProgressUpdate` callback is silent unless an adapter supplies a reporter.
 The CLI supplies terminal rendering, while application/library callers remain
 presentation-neutral. Infer-images runtime creation belongs to `applications/`;
 `inference/single.py` accepts an already-loaded `InferenceRuntime` (a caller-owned
-predictor plus an explicit `PredictionContract`: ordered input names, tile size,
-same-grid single RGB output, [-1, 1] range, optional direction) or a factory for one.
+predictor plus an explicit `PredictionContract`: ordered input names, ordered output
+names, tile size, same-grid RGB outputs, [-1, 1] range) or a factory for one. Tiled and
+WSI inference traverse the inputs once, call the predictor once per tile and keep one
+bounded accumulator per output; WSI scratch preflight scales with the output count.
 This is the only image-inference transport. `applications/infer_images.py` builds
 the predictor from a checkpoint through the method definition, fills in the same
 contract and optional checkpoint provenance, and delegates to it. The manifest
 `applications/infer.py` loop keeps its own provenance-owning loop but calls the same
-`predict_batch`, which enforces the same-grid output check. Transport never names a
+`predict_batch`, which enforces the named same-grid output check. Transport never names a
 method, network topology, optimizer or loss.
 
 `applications/export_model.py` is a utility, not a stage: it composes the existing

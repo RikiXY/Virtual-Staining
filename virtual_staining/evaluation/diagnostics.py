@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 
-from virtual_staining.utils.artifacts import generated_sample_id
+from virtual_staining.utils.artifacts import generated_identity
 from virtual_staining.utils.image_io import open_rgb, to_float01
 
 
@@ -121,7 +121,8 @@ def save_diagnostic_plots(
 
     target = to_float01(target_img)
     generated = to_float01(generated_img)
-    sample_id = generated_sample_id(generated_path)
+    sample_id, output_name = generated_identity(generated_path)
+    sample_id = f"{sample_id}__{output_name}"
     save_dir = Path(save_dir)
 
     return [

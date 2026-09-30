@@ -17,13 +17,13 @@ from virtual_staining.training.trainer import Trainer
 def test_unpack_batch_preserves_named_inputs_and_validates_shapes() -> None:
     batch = {
         "inputs": {"LF": torch.zeros(2, 3, 8, 8), "AF": torch.ones(2, 3, 8, 8)},
-        "target": torch.zeros(2, 3, 8, 8),
-        "masks": {"foreground_mask": torch.ones(2, 1, 8, 8)},
+        "targets": {"stained": torch.zeros(2, 3, 8, 8)},
+        "masks": {"foreground_mask": {"stained": torch.ones(2, 1, 8, 8)}},
     }
-    inputs, target, masks = unpack_batch(batch, torch.device("cpu"), ("LF", "AF"))
+    inputs, targets, masks = unpack_batch(batch, torch.device("cpu"), ("LF", "AF"), ("stained",))
     assert tuple(inputs) == ("LF", "AF")
-    assert target.shape == (2, 3, 8, 8)
-    assert masks["foreground_mask"].shape == (2, 1, 8, 8)
+    assert targets["stained"].shape == (2, 3, 8, 8)
+    assert masks["foreground_mask"]["stained"].shape == (2, 1, 8, 8)
 
 
 def _pix2pix_config(tmp_path: Path, inputs: tuple[str, ...]) -> RunConfig:
@@ -40,7 +40,7 @@ def test_trainer_requires_named_generator(tmp_path: Path) -> None:
     method = Pix2PixMethod(run_config, torch.device("cpu"))
     sample = {
         "inputs": {"LF": torch.zeros(1, 3, 8, 8), "AF": torch.zeros(1, 3, 8, 8)},
-        "target": torch.zeros(1, 3, 8, 8),
+        "targets": {"stained": torch.zeros(1, 3, 8, 8)},
         "masks": {},
     }
     loader = DataLoader([sample], batch_size=1)  # pyright: ignore[reportArgumentType]

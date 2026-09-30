@@ -43,7 +43,7 @@ def _pix2pix_batch(seed: int, size: int = 2) -> dict[str, Any]:
             "LF": torch.rand(size, 3, 32, 32, generator=generator) * 2 - 1,
             "AF": torch.rand(size, 3, 32, 32, generator=generator) * 2 - 1,
         },
-        "target": torch.rand(size, 3, 32, 32, generator=generator) * 2 - 1,
+        "targets": {"stained": torch.rand(size, 3, 32, 32, generator=generator) * 2 - 1},
         "masks": {},
     }
 
@@ -122,7 +122,9 @@ def test_disabled_previews_do_no_io_and_match_enabled_metrics(
     stems = [f"epoch3_batch{index}" for index in range(5)]
     if isinstance(method, Pix2PixMethod):
         expected = [
-            f"{stem}_{role}.tif" for stem in stems for role in ("input", "output", "target")
+            f"{stem}_{role}.tif"
+            for stem in stems
+            for role in ("input", "output__stained", "target__stained")
         ]
     else:
         expected = [f"{stem}_preview.tif" for stem in stems]
@@ -137,23 +139,24 @@ def test_pix2pix_preview_payload_and_saved_files(tmp_path: Path, saved: list[Any
     (payload,) = sink.previews
 
     assert (payload.epoch, payload.batch_index) == (0, 0)
-    assert tuple(payload.images) == ("input", "output", "target")
+    assert tuple(payload.images) == ("input", "output__stained", "target__stained")
     assert all(t.grad_fn is None and not t.requires_grad for t in payload.images.values())
     # Payload references the loader tensors in place: nothing was copied or moved.
     assert payload.images["input"].data_ptr() == loader[0]["inputs"]["LF"].data_ptr()
-    assert payload.images["target"].data_ptr() == loader[0]["target"].data_ptr()
+    target = loader[0]["targets"]["stained"]
+    assert payload.images["target__stained"].data_ptr() == target.data_ptr()
 
     method.validate(loader, epoch=0, preview_sink=ValidationPreviewWriter(tmp_path / "val"))
     with torch.no_grad():
         expected_output = method.generator.eval()(loader[0]["inputs"])
     assert [(path.name, kwargs) for _, path, kwargs in saved] == [
         ("epoch0_batch0_input.tif", {}),
-        ("epoch0_batch0_output.tif", {}),
-        ("epoch0_batch0_target.tif", {}),
+        ("epoch0_batch0_output__stained.tif", {}),
+        ("epoch0_batch0_target__stained.tif", {}),
     ]
     assert torch.equal(saved[0][0], denormalize_model_output(loader[0]["inputs"]["LF"][0]))
-    assert torch.equal(saved[1][0], denormalize_model_output(expected_output[0]))
-    assert torch.equal(saved[2][0], denormalize_model_output(loader[0]["target"][0]))
+    assert torch.equal(saved[1][0], denormalize_model_output(expected_output["stained"][0]))
+    assert torch.equal(saved[2][0], denormalize_model_output(target[0]))
 
 
 def test_cyclegan_preview_payload_and_grid(tmp_path: Path, saved: list[Any]) -> None:
@@ -273,7 +276,7 @@ def test_pix2pix_image_metrics_are_sample_means_across_uneven_batches(tmp_path: 
     singles = [
         {
             "inputs": {name: tensor[index : index + 1] for name, tensor in full["inputs"].items()},
-            "target": full["target"][index : index + 1],
+            "targets": {"stained": full["targets"]["stained"][index : index + 1]},
             "masks": {},
         }
         for index in range(2)

@@ -25,31 +25,34 @@ from virtual_staining.data.slide_sets import SlideAsset, SlideSet
 from virtual_staining.utils.image_io import PillowRegionImageReader
 
 
-def _config(root: Path) -> PreprocessingConfig:
+def _config(root: Path, targets: tuple[str, ...] = ("HE",)) -> PreprocessingConfig:
     return PreprocessingConfig(
         dataset_root=root,
-        inputs=InputConfig(root / "inputs.csv", ("LF", "AF"), "LF", "target"),
+        inputs=InputConfig(root / "inputs.csv", ("LF", "AF"), "LF", targets),
         patching=PatchingConfig(patch_size=(8, 8), grid_movement=(8, 8), margin=0),
         split=SplitConfig(unit="set", train=1.0, val=0.0, test=0.0),
     )
 
 
-def _slide_set(root: Path, set_id: str = "set-1") -> SlideSet:
+def _slide_set(root: Path, set_id: str = "set-1", targets: tuple[str, ...] = ("HE",)) -> SlideSet:
     directory = Path("raw") / set_id
     (root / directory).mkdir(parents=True)
     image = np.full((8, 16, 3), 100, dtype=np.uint8)
     image[:, 8:] = 255
-    for name in ("lf.png", "af.png", "target.png"):
-        assert cv2.imwrite(str(root / directory / name), image)
+    for name in ("LF", "AF", *targets):
+        assert cv2.imwrite(str(root / directory / f"{name}.png"), image)
     mask_path = directory / "mask.png"
     assert cv2.imwrite(str(root / mask_path), np.full((8, 16), 255, dtype=np.uint8))
     return SlideSet(
         set_id,
         (
-            SlideAsset("LF", directory / "lf.png", already_aligned=True, mask_path=mask_path),
-            SlideAsset("AF", directory / "af.png", already_aligned=True, mask_path=mask_path),
+            SlideAsset("LF", directory / "LF.png", already_aligned=True, mask_path=mask_path),
+            SlideAsset("AF", directory / "AF.png", already_aligned=True, mask_path=mask_path),
         ),
-        SlideAsset("target", directory / "target.png", already_aligned=True, mask_path=mask_path),
+        tuple(
+            SlideAsset(name, directory / f"{name}.png", already_aligned=True, mask_path=mask_path)
+            for name in targets
+        ),
         "LF",
     )
 
@@ -80,9 +83,9 @@ def test_process_returns_rows_and_metadata_after_cleanup(
     assert valid["split"] == (assigned_split or ("train" if seed == 0 else "test"))
     assert (discarded["x"], discarded["y"]) == (8, 0)
     assert discarded["reasons"]
-    assert set(discarded["ratios"]) == {"LF", "AF", "target", "all", "intersection", "union"}
+    assert set(discarded["ratios"]) == {"LF", "AF", "HE", "all", "intersection", "union"}
     assert result.metadata == {
-        **{f"{name}__alignment_method": "identity" for name in ("LF", "AF", "target")},
+        **{f"{name}__alignment_method": "identity" for name in ("LF", "AF", "HE")},
         **{
             f"{name}__alignment_metadata": json.dumps(
                 {
@@ -92,7 +95,7 @@ def test_process_returns_rows_and_metadata_after_cleanup(
                 },
                 sort_keys=True,
             )
-            for name in ("LF", "AF", "target")
+            for name in ("LF", "AF", "HE")
         },
     }
 
@@ -162,7 +165,7 @@ def test_align_delegates_all_moving_assets_with_explicit_data(tmp_path, monkeypa
         assert processor.reference.alignment.reason == "reference"
         assert resolve.call_count == 2
         for call, state in zip(
-            resolve.call_args_list, (processor.inputs["AF"], processor.target), strict=True
+            resolve.call_args_list, (processor.inputs["AF"], processor.targets["HE"]), strict=True
         ):
             reference, moving, policy = call.args
             assert reference.preview is processor.reference.preview
@@ -184,7 +187,7 @@ def test_affine_extraction_handles_downsampled_masks_in_both_io_paths(tmp_path, 
     processor = SlideSetProcessor(config, _slide_set(tmp_path))
     try:
         processor.compute_masks()
-        state = processor.target
+        state = processor.targets["HE"]
         state.mask = np.zeros((4, 8), dtype=np.uint8)
         state.mask[:, :4] = 255
         state.alignment = AlignmentResult(
@@ -203,3 +206,77 @@ def test_affine_extraction_handles_downsampled_masks_in_both_io_paths(tmp_path, 
         np.testing.assert_array_equal(image, expected_image)
     finally:
         processor.close()
+
+
+def test_every_target_is_aligned_extracted_and_committed_on_one_grid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = replace(
+        _config(tmp_path, ("PAS", "HE")),
+        masks=MaskConfig(save_patch_masks=True),
+    )
+    slide_set = _slide_set(tmp_path, targets=("PAS", "HE"))
+    resolve = Mock(return_value=identity_alignment("declared_aligned"))
+    monkeypatch.setattr(processor_module, "resolve_alignment", resolve)
+
+    result = SlideSetProcessor(config, slide_set, "train").process()
+
+    # AF, PAS and HE are aligned to the reference frame; the reference is identity.
+    assert [call.args[1].name for call in resolve.call_args_list] == ["AF", "PAS", "HE"]
+    (valid,) = result.valid_rows
+    sample = valid["sample_id"]
+    assert valid["targets"] == {
+        "PAS": f"{sample}__target__PAS.png",
+        "HE": f"{sample}__target__HE.png",
+    }
+    assert valid["foreground_masks"] == {
+        "PAS": f"{sample}__foreground_mask__PAS.png",
+        "HE": f"{sample}__foreground_mask__HE.png",
+    }
+    written = tmp_path / "splits" / "train" / slide_set.set_id
+    for name in (*valid["inputs"].values(), *valid["targets"].values()):
+        image = cv2.imread(str(written / name))
+        assert image is not None and image.shape == (8, 8, 3)
+    for name in valid["foreground_masks"].values():
+        assert (written / name).is_file()
+    assert {"PAS__alignment_method", "HE__alignment_method"} <= set(result.metadata)
+
+
+def test_target_policy_requires_every_target_foreground(tmp_path: Path) -> None:
+    config = _config(tmp_path, ("HE", "PAS"))
+    config = replace(
+        config,
+        filtering=replace(
+            config.filtering, foreground=replace(config.filtering.foreground, policy="target")
+        ),
+    )
+    slide_set = _slide_set(tmp_path, targets=("HE", "PAS"))
+    empty = Path("raw/set-1/empty.png")
+    assert cv2.imwrite(str(tmp_path / empty), np.zeros((8, 16), dtype=np.uint8))
+    slide_set = replace(
+        slide_set, targets=(slide_set.targets[0], replace(slide_set.targets[1], mask_path=empty))
+    )
+
+    result = SlideSetProcessor(config, slide_set, "train").process()
+
+    assert result.valid_rows == ()
+    assert all("foreground_target" in row["reasons"] for row in result.discarded_rows)
+
+
+def test_a_sample_is_committed_only_when_every_image_is_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, ("HE", "PAS"))
+    slide_set = _slide_set(tmp_path, targets=("HE", "PAS"))
+    real_write = cv2.imwrite
+
+    def fail_pas(path: str, image: np.ndarray) -> bool:
+        return False if "__target__PAS" in path else real_write(path, image)
+
+    monkeypatch.setattr(processor_module.cv2, "imwrite", fail_pas)
+
+    with pytest.raises(OSError, match="Could not write patch"):
+        SlideSetProcessor(config, slide_set, "train").process()
+
+    written = sorted((tmp_path / "splits" / "train" / slide_set.set_id).iterdir())
+    assert written == []

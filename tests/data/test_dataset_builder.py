@@ -31,21 +31,21 @@ from virtual_staining.data.slide_set_processor import SetBuildResult
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
 
 
-def _config(root: Path) -> PreprocessingConfig:
+def _config(root: Path, targets: tuple[str, ...] = ("HE",)) -> PreprocessingConfig:
     return PreprocessingConfig(
         dataset_root=root,
-        inputs=InputConfig(root / "inputs.csv", ("LF", "AF"), "LF", "target"),
+        inputs=InputConfig(root / "inputs.csv", ("LF", "AF"), "LF", targets),
         patching=PatchingConfig(patch_size=(8, 8), grid_movement=(8, 8), margin=0),
         split=SplitConfig(unit="set", train=1.0, val=0.0, test=0.0),
     )
 
 
-def _slide_set(root: Path, set_id: str = "set-1") -> SlideSet:
+def _slide_set(root: Path, set_id: str = "set-1", targets: tuple[str, ...] = ("HE",)) -> SlideSet:
     directory = Path("raw") / set_id
     (root / directory).mkdir(parents=True)
     image = np.full((8, 16, 3), 100, dtype=np.uint8)
     image[:, 8:] = 255
-    for name in ("lf.png", "af.png", "target.png"):
+    for name in ("lf.png", "af.png", *(f"{target}.png" for target in targets)):
         assert cv2.imwrite(str(root / directory / name), image)
     mask_path = directory / "mask.png"
     assert cv2.imwrite(str(root / mask_path), np.full((8, 16), 255, dtype=np.uint8))
@@ -55,7 +55,10 @@ def _slide_set(root: Path, set_id: str = "set-1") -> SlideSet:
             SlideAsset("LF", directory / "lf.png", already_aligned=True, mask_path=mask_path),
             SlideAsset("AF", directory / "af.png", already_aligned=True, mask_path=mask_path),
         ),
-        SlideAsset("target", directory / "target.png", already_aligned=True, mask_path=mask_path),
+        tuple(
+            SlideAsset(name, directory / f"{name}.png", already_aligned=True, mask_path=mask_path)
+            for name in targets
+        ),
         "LF",
     )
 
@@ -77,8 +80,8 @@ def test_builder_emits_dynamic_manifest_and_set_metadata(tmp_path, monkeypatch) 
                         "sample_id": f"{slide_set.set_id}__x00000000_y00000000",
                         "split": assigned_split,
                         "inputs": {"LF": "lf.png", "AF": "af.png"},
-                        "target": "target.png",
-                        "foreground_mask": None,
+                        "targets": {"HE": "he.png"},
+                        "foreground_masks": {},
                         "x": 0,
                         "y": 0,
                     },
@@ -86,7 +89,7 @@ def test_builder_emits_dynamic_manifest_and_set_metadata(tmp_path, monkeypatch) 
                 discarded_rows=(),
                 metadata={
                     f"{name}__alignment_method": "identity"
-                    for name in (*config.inputs.modalities, "target")
+                    for name in (*config.inputs.modalities, *config.inputs.target_modalities)
                 },
             )
 
@@ -99,13 +102,18 @@ def test_builder_emits_dynamic_manifest_and_set_metadata(tmp_path, monkeypatch) 
     assert result.train_count == 2
     assert not hasattr(builder, "_current_set_id")
     header = (tmp_path / "manifests" / "manifest.csv").read_text(encoding="utf-8").splitlines()[0]
-    assert header.split(",")[:6] == [
+    assert header.split(",") == [
         "sample_id",
         "set_id",
         "split",
         "input__LF",
         "input__AF",
-        "target_path",
+        "target__HE",
+        "foreground_mask__HE",
+        "x",
+        "y",
+        "width",
+        "height",
     ]
     layout = DatasetLayout(tmp_path)
     rows = _read_csv(layout.manifest_path)
@@ -135,8 +143,8 @@ def test_records_use_explicit_set_id_without_mutating_builder(tmp_path, discarde
             "sample_id": "x",
             "split": "train",
             "inputs": {"LF": "x.png", "AF": "y.png"},
-            "target": "t.png",
-            "foreground_mask": None,
+            "targets": {"HE": "t.png"},
+            "foreground_masks": {},
             "x": 0,
             "y": 0,
         },
@@ -147,7 +155,8 @@ def test_records_use_explicit_set_id_without_mutating_builder(tmp_path, discarde
         assert record.set_id == set_id
         base = Path("discarded_patches" if discarded else "splits/train") / set_id
         assert record.input_paths["LF"] == base / ("LF/x.png" if discarded else "x.png")
-        assert record.target_path == base / ("target/t.png" if discarded else "t.png")
+        assert record.target_paths["HE"] == base / ("HE/t.png" if discarded else "t.png")
+        assert record.foreground_mask_paths == {"HE": None}
     assert vars(builder) == before
 
 
@@ -173,7 +182,9 @@ def test_build_outputs_are_stable_with_an_excluded_set(tmp_path, tiled, unit):
         replace(_slide_set(tmp_path, f"set-{i}"), patient_id=f"P{i}", specimen_id=f"SP{i}")
         for i in range(1, 4)
     )
-    assert cv2.imwrite(str(tmp_path / sets[1].target.path), np.full((8, 8, 3), 100, dtype=np.uint8))
+    assert cv2.imwrite(
+        str(tmp_path / sets[1].targets[0].path), np.full((8, 8, 3), 100, dtype=np.uint8)
+    )
     layout = DatasetLayout(tmp_path)
     builder = DatasetBuilder(config, tuple(reversed(sets)))
     result = builder.run_all()
@@ -181,7 +192,12 @@ def test_build_outputs_are_stable_with_an_excluded_set(tmp_path, tiled, unit):
     assert not hasattr(builder, "_current_set_id")
     assert result.train_count + result.val_count + result.test_count == 2
     assert result.skipped_count == 2
-    metadata = ManifestMetadata(MANIFEST_SCHEMA_VERSION, ("LF", "AF"), "LF", "target")
+    metadata = ManifestMetadata(
+        schema_version=MANIFEST_SCHEMA_VERSION,
+        input_modalities=("LF", "AF"),
+        target_modalities=("HE",),
+        reference_modality="LF",
+    )
     valid = DatasetManifest.from_csv(layout.manifest_path, tmp_path, metadata)
     discarded = DatasetManifest.from_csv(layout.discarded_manifest_path, tmp_path, metadata)
     valid.validate(check_files_exist=True)
@@ -192,20 +208,23 @@ def test_build_outputs_are_stable_with_an_excluded_set(tmp_path, tiled, unit):
         expected_x = 8 if record.split == "discarded" else 0
         assert record.sample_id == f"{record.set_id}__x{expected_x:08}_y00000000"
         assert (record.x, record.y, record.width, record.height) == (expected_x, 0, 8, 8)
-        assert record.target_path.name == f"{record.sample_id}__target.png"
+        assert record.target_paths["HE"].name == f"{record.sample_id}__target__HE.png"
+        if record.split != "discarded":
+            mask = record.foreground_mask_paths["HE"]
+            assert mask is not None and mask.name == f"{record.sample_id}__foreground_mask__HE.png"
         assert record.input_paths["LF"].name == f"{record.sample_id}__input__LF.png"
     rows = _read_csv(layout.slide_sets_path)
     assert [row["status"] for row in rows] == ["processed", "excluded", "processed"]
     assert [row["patient_id"] for row in rows] == ["P1", "P2", "P3"]
     assert [row["specimen_id"] for row in rows] == ["SP1", "SP2", "SP3"]
-    assert [row["target__alignment_method"] for row in rows] == ["identity", "", "identity"]
+    assert [row["HE__alignment_method"] for row in rows] == ["identity", "", "identity"]
     assert rows[1]["LF__alignment_method"] == rows[1]["AF__alignment_method"] == "identity"
-    assert rows[1]["target__alignment_metadata"] == ""
+    assert rows[1]["HE__alignment_metadata"] == ""
     assert _read_csv(layout.metadata_dir / "excluded_sets.csv") == [
         {
             "set_id": "set-2",
             "split": rows[1]["split"],
-            "error": "identity alignment requires equal geometry for target",
+            "error": "identity alignment requires equal geometry for HE",
         }
     ]
     assignments = _read_csv(layout.split_assignment_path)
@@ -219,6 +238,8 @@ def test_build_outputs_are_stable_with_an_excluded_set(tmp_path, tiled, unit):
     build_metadata = json.loads(layout.dataset_build_path.read_text())
     assert build_metadata == {
         "schema_version": MANIFEST_SCHEMA_VERSION,
+        "input_modalities": ["LF", "AF"],
+        "target_modalities": ["HE"],
         "num_sets": 3,
         "num_sets_excluded": 1,
         "patches": {
@@ -270,3 +291,52 @@ def test_build_outputs_are_stable_with_an_excluded_set(tmp_path, tiled, unit):
     before = outputs()
     assert DatasetBuilder(config, sets).run_all() == result
     assert outputs() == before
+
+
+def test_two_target_build_writes_symmetric_v4_outputs(tmp_path: Path) -> None:
+    config = replace(
+        _config(tmp_path, ("PAS", "HE")),
+        io=IOConfig(tiled=False, backend="pillow"),
+        masks=MaskConfig(save_patch_masks=True),
+    )
+    sets = (_slide_set(tmp_path, targets=("PAS", "HE")),)
+
+    result = DatasetBuilder(config, sets).run_all()
+
+    layout = DatasetLayout(tmp_path)
+    assert (result.train_count, result.target_modalities) == (1, ("PAS", "HE"))
+    metadata = json.loads(layout.manifest_metadata_path.read_text())
+    assert metadata["target_modalities"] == ["PAS", "HE"]
+    manifest = DatasetManifest.from_csv(
+        layout.manifest_path, tmp_path, ManifestMetadata.from_mapping(metadata)
+    )
+    manifest.validate(check_files_exist=True)
+    (record,) = manifest.records
+    assert tuple(record.target_paths) == ("PAS", "HE")
+    assert all(path is not None for path in record.foreground_mask_paths.values())
+    assert set(_read_csv(layout.slide_sets_path)[0]) >= {
+        "PAS__alignment_method",
+        "HE__alignment_method",
+    }
+    fingerprint = json.loads(layout.dataset_fingerprint_path.read_text())
+    files = {(entry["modality"], entry["role"]) for entry in fingerprint["files"]}
+    assert {("PAS", "PAS"), ("HE", "HE"), ("PAS", "mask"), ("HE", "mask")} <= files
+
+
+def test_a_failed_rebuild_never_looks_consumable(tmp_path: Path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    sets = (_slide_set(tmp_path),)
+    DatasetBuilder(config, sets).run_all()
+    layout = DatasetLayout(tmp_path)
+    assert layout.dataset_build_path.is_file() and layout.manifest_path.is_file()
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(builder_module, "SlideSetProcessor", fail)
+    with pytest.raises(RuntimeError, match="disk full"):
+        DatasetBuilder(config, sets).run_all()
+
+    assert not layout.dataset_build_path.exists()
+    assert not layout.manifest_path.exists()
+    assert not layout.manifest_metadata_path.exists()

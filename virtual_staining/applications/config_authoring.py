@@ -19,7 +19,7 @@ from virtual_staining.applications.evaluate import (
     evaluation_generated_dir,
     evaluation_protocol,
     load_paired_evaluation_manifest,
-    paired_sample,
+    paired_samples,
     unpaired_generated_collection,
     unpaired_reference_collection,
 )
@@ -43,6 +43,7 @@ from virtual_staining.inference.runner import (
     inference_direction,
     inference_input_names,
     inference_output_dir,
+    inference_output_names,
     resolve_inference_checkpoint,
 )
 from virtual_staining.split_contract import TEST_SPLIT, TRAIN_SPLIT, VAL_SPLIT
@@ -277,14 +278,14 @@ _PAIRED_SPLITS = (TRAIN_SPLIT, VAL_SPLIT, TEST_SPLIT)
 
 def _paired_train(config: RunConfig) -> str:
     manifest = load_manifest_or_raise(config.project)
-    require_model_modalities(manifest, config.model.inputs, config.model.target)
+    require_model_modalities(manifest, config.model.inputs, config.model.outputs)
     manifest.validate(check_files_exist=True, require_splits={TRAIN_SPLIT, VAL_SPLIT})
     # Train/val rows plus the held-out test rows training checks for group leakage.
     rows = paired_record_rows(
         [record for record in manifest.records if record.split in _PAIRED_SPLITS],
         input_names=config.model.inputs,
-        target=config.model.target,
-        include_mask=config.method.definition.requires_foreground_mask(config),
+        target_names=config.model.outputs,
+        include_masks=config.method.definition.requires_foreground_mask(config),
         groups=load_set_groups(config.project),
     )
     result = validate_groups(
@@ -293,11 +294,14 @@ def _paired_train(config: RunConfig) -> str:
         patch_split=prepared_split_unit(config.project) == "patch",
     )
     counts = {split: len(manifest.filter_split(split)) for split in (TRAIN_SPLIT, VAL_SPLIT)}
-    return f"manifest records {counts}; supplied groups: {_groups(result)}"
+    return (
+        f"manifest records {counts}; outputs {list(config.model.outputs)}; "
+        f"supplied groups: {_groups(result)}"
+    )
 
 
 def _unpaired_train(config: RunConfig) -> str:
-    domain_a, domain_b = config.model.inputs[0], config.model.target
+    domain_a, domain_b = config.model.inputs[0], config.model.outputs[0]
     paths, rows = resolve_domain_collections(
         config.data.domains,
         config.project.dataset_root,
@@ -320,12 +324,13 @@ def _infer_checks(config: RunConfig, preceding: frozenset[str]) -> list[Prefligh
 
     def manifest() -> str:
         loaded = load_manifest_or_raise(config.project)
-        require_model_modalities(loaded, config.model.inputs, config.model.target)
+        require_model_modalities(loaded, config.model.inputs, config.model.outputs)
         loaded.validate(check_files_exist=True, require_splits={TEST_SPLIT})
         return (
             f"{len(loaded.filter_split(TEST_SPLIT))} test record(s); direction="
             f"{inference_direction(config)}, prediction inputs="
-            f"{list(inference_input_names(config))}"
+            f"{list(inference_input_names(config))}, outputs="
+            f"{list(inference_output_names(config))}"
         )
 
     def checkpoint() -> str:
@@ -404,13 +409,18 @@ def _paired_evaluation_manifest(config: RunConfig) -> str:
 
 def _paired_generated(config: RunConfig, generated_dir: Path) -> str:
     records = load_paired_evaluation_manifest(config).filter_split(TEST_SPLIT).records
-    expected = [paired_sample(config, record, generated_dir).generated_path for record in records]
+    # One expected artifact per (sample_id, output_name) pair.
+    expected = [
+        sample.generated_path
+        for record in records
+        for sample in paired_samples(config, record, generated_dir)
+    ]
     missing = [path for path in expected if not path.is_file()]
     strict = config.evaluation is None or config.evaluation.input_failures == "strict"
     if missing and (strict or len(missing) == len(expected)):
         raise FileNotFoundError(
             f"{len(missing)} of {len(expected)} expected generated file(s) missing under "
-            f"{generated_dir}, e.g. {missing[0].name}"
+            f"{generated_dir}, e.g. {missing[0].relative_to(generated_dir)}"
         )
     excluded = f"; {len(missing)} missing will be excluded" if missing else ""
     return f"{len(expected) - len(missing)} of {len(expected)} generated file(s) present{excluded}"

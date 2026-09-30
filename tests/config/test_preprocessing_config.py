@@ -15,7 +15,7 @@ def _mapping(**overrides: object) -> dict[str, object]:
             "inventory": "inputs/slides.csv",
             "modalities": ["LF", "AF"],
             "reference": "LF",
-            "target_modality": "stained",
+            "target_modalities": ["stained"],
         },
         "split": {"unit": "set", "train": 0.8, "val": 0.1, "test": 0.1},
     }
@@ -98,18 +98,18 @@ def test_to_dict_round_trip_preserves_canonical_sections() -> None:
                 "inputs": {
                     "modalities": ["LF", "LF"],
                     "reference": "LF",
-                    "target_modality": "stained",
+                    "target_modalities": ["stained"],
                     "inventory": "i.csv",
                 }
             },
-            "unique",
+            "duplicate names",
         ),
         (
             {
                 "inputs": {
                     "modalities": ["LF"],
                     "reference": "AF",
-                    "target_modality": "stained",
+                    "target_modalities": ["stained"],
                     "inventory": "i.csv",
                 }
             },
@@ -120,7 +120,7 @@ def test_to_dict_round_trip_preserves_canonical_sections() -> None:
                 "inputs": {
                     "modalities": ["LF"],
                     "reference": "LF",
-                    "target_modality": "LF",
+                    "target_modalities": ["LF"],
                     "inventory": "i.csv",
                 }
             },

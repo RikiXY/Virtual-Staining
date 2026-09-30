@@ -1,6 +1,9 @@
 """Paired evaluation of explicit target/generated records with a resolved metric request.
 
-Only known input problems (:class:`EvaluationInputError`) are per-sample coverage events:
+A sample is one ``(sample_id, output_name)`` pair: one generated RGB image of one model
+output against that output's RGB target. Only known input problems
+(:class:`EvaluationInputError`) are per-pair coverage events, so one missing output
+never hides another:
 ``strict`` (default) records them and fails the operation, ``permissive`` excludes those
 samples and continues. Any other exception (metric defects, backend or programming
 errors) propagates in both modes.
@@ -58,6 +61,7 @@ class EvaluationCoverageError(RuntimeError):
 @dataclass(frozen=True)
 class EvaluationSample:
     sample_id: str
+    output_name: str
     set_id: str
     target_path: Path
     generated_path: Path
@@ -168,6 +172,9 @@ def evaluate_samples(
         raise ValueError("Evaluation requires at least one sample")
     if input_failures not in ("strict", "permissive"):
         raise ValueError(f"input_failures must be 'strict' or 'permissive', got {input_failures!r}")
+    pairs = [(sample.sample_id, sample.output_name) for sample in samples]
+    if len(set(pairs)) != len(pairs):
+        raise ValueError("Evaluation samples must be unique (sample_id, output_name) pairs")
     with_support = {sample.support_path is not None for sample in samples}
     if len(with_support) > 1:
         raise ValueError("Valid-region support must be supplied for every sample or for none")
@@ -181,6 +188,7 @@ def evaluate_samples(
     for sample in samples:
         entry = {
             "sample_id": sample.sample_id,
+            "output_name": sample.output_name,
             "set_id": sample.set_id,
             "status": "evaluated",
             "reason": "",
@@ -197,7 +205,9 @@ def evaluate_samples(
                 support_path=sample.support_path,
             )
         except EvaluationInputError as exc:
-            logger.warning("Evaluation input failure for %s: %s", sample.sample_id, exc)
+            logger.warning(
+                "Evaluation input failure for %s/%s: %s", sample.sample_id, sample.output_name, exc
+            )
             status = "failed" if input_failures == "strict" else "excluded"
             coverage.append({**entry, "status": status, "reason": exc.reason, "detail": str(exc)})
             continue
@@ -205,6 +215,7 @@ def evaluate_samples(
         rows.append(
             build_metric_row(
                 sample.sample_id,
+                sample.output_name,
                 sample.target_path,
                 sample.generated_path,
                 shape,

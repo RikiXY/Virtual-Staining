@@ -15,7 +15,7 @@ method:
 
 data:
   pairing: unpaired
-  domains:                # keys = model.inputs[0] (A) and model.target (B)
+  domains:                # keys = model.inputs[0] (A) and model.outputs[0] (B)
     label_free: domains/label_free                   # holds train/ val/ test/
     stained: "prepared/{split}/stained/**/*.tif"     # {split} pattern
   hash_policy: content
@@ -23,7 +23,7 @@ data:
 
 model:
   inputs: [label_free]
-  target: stained
+  outputs: [stained]      # CycleGAN: exactly one input and one output
   generator:
     architecture: resnet  # 9 blocks, instance norm by default
 

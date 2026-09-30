@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -11,10 +11,10 @@ from virtual_staining.config.experiment_data import DataConfig
 from virtual_staining.config.inference import InferenceConfig
 from virtual_staining.config.loader import load_yaml_mapping
 from virtual_staining.config.method import DEFAULT_METHOD_NAME, METHOD_KEYS, MethodConfig
-from virtual_staining.config.model import MODEL_KEYS, ModelConfig
+from virtual_staining.config.model import MODEL_KEYS, SUPERSEDED_MODEL_KEYS, ModelConfig
 from virtual_staining.config.project import PROJECT_KEYS, ProjectConfig
 from virtual_staining.config.training import TRAINING_KEYS, TrainingConfig
-from virtual_staining.config.validation import reject_unknown_keys
+from virtual_staining.config.validation import reject_superseded_keys, reject_unknown_keys
 from virtual_staining.definitions import Definitions, MethodDefinition, ResolutionContext
 
 _TOP_LEVEL_KEYS = PROJECT_KEYS | frozenset(
@@ -113,15 +113,47 @@ class RunConfig:
                 )
             if self.evaluation.input_failures != "strict":
                 raise ValueError("evaluation.input_failures applies to the paired protocol only")
+        self._resolve_augmentation()
         definition.validate(self)
+        if self.evaluation is not None and protocol == "unpaired" and len(self.model.outputs) > 1:
+            raise ValueError(
+                "evaluation.protocol='unpaired' compares one generated collection with one "
+                f"independent reference collection; model.outputs {list(self.model.outputs)} "
+                "has several simultaneous outputs and no unambiguous per-output reference "
+                "contract exists. Use the paired protocol or a one-output model."
+            )
         if self.preprocessing is None:
             return
-        configured = set(self.preprocessing.inputs.modalities)
-        requested = set(self.model.inputs)
-        if not requested.issubset(configured):
-            raise ValueError("model.inputs must be a subset of preprocessing.inputs.modalities")
-        if self.model.target != self.preprocessing.inputs.target_modality:
-            raise ValueError("model.target must equal preprocessing.inputs.target_modality")
+        inputs = self.preprocessing.inputs
+        # Subsets in any order: model order is authoritative and datasets select by name.
+        unknown = sorted(set(self.model.inputs) - set(inputs.modalities))
+        if unknown:
+            raise ValueError(
+                f"model.inputs {unknown} are not in preprocessing.inputs.modalities "
+                f"{list(inputs.modalities)}"
+            )
+        unknown = sorted(set(self.model.outputs) - set(inputs.target_modalities))
+        if unknown:
+            raise ValueError(
+                f"model.outputs {unknown} are not in preprocessing.inputs.target_modalities "
+                f"{list(inputs.target_modalities)}"
+            )
+
+    def _resolve_augmentation(self) -> None:
+        """Fill the effective ``photometric_inputs`` and check paired-geometry rules."""
+        if self.training is None:
+            return
+        augmentation = self.training.augmentation.resolve(
+            self.model.inputs,
+            self.preprocessing.inputs.reference if self.preprocessing is not None else None,
+        )
+        object.__setattr__(self, "training", replace(self.training, augmentation=augmentation))
+        width, height = self.project.image_size
+        if augmentation.enabled and width != height:
+            raise ValueError(
+                "training.augmentation.enabled=true requires a square image_size: every "
+                f"preset includes RandomRotate90, got image_size [{width}, {height}]"
+            )
 
     def _validate_inference(self, definition: MethodDefinition) -> None:
         if self.inference is None:
@@ -161,10 +193,13 @@ class RunConfig:
         if not isinstance(name, str):
             raise TypeError("method.name must be a string")
         definition = definitions.method(name)
+        reject_superseded_keys(_section(raw, "model"), SUPERSEDED_MODEL_KEYS, "model")
         common, owned = _split_sections(raw, definition)
         model = ModelConfig.from_mapping(common["model"])
         training = (
-            TrainingConfig.from_mapping(common["training"], method=definition)
+            TrainingConfig.from_mapping(
+                common["training"], method=definition, outputs=model.outputs
+            )
             if "training" in raw
             else None
         )
@@ -174,7 +209,7 @@ class RunConfig:
                 definitions=definitions,
                 image_size=project.image_size,
                 inputs=model.inputs,
-                target=model.target,
+                outputs=model.outputs,
                 training=training,
             ),
         )

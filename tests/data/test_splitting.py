@@ -17,7 +17,7 @@ def _sets() -> tuple[SlideSet, ...]:
         SlideSet(
             f"S{i}",
             (SlideAsset("LF", Path(f"lf{i}.png")),),
-            SlideAsset("target", Path(f"target{i}.png")),
+            (SlideAsset("HE", Path(f"he{i}.png")),),
             "LF",
             patient_id=f"P{i // 2}",
             specimen_id=f"SP{i // 2}",

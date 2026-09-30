@@ -1,72 +1,109 @@
 from __future__ import annotations
 
+import pytest
 import torch
 from torch import nn
 
 from virtual_staining.config.losses import LossTermConfig
+from virtual_staining.models.generator import concat_named, split_named
 from virtual_staining.training.losses import ConfiguredLossEvaluator
 from virtual_staining.training.steps import Pix2PixTrainingStep
 
+_INPUTS = ("LF", "AF")
+_OUTPUTS = ("PAS", "HE")
+
 
 class TinyGenerator(nn.Module):
-    input_names = ("LF", "AF")
+    input_names = _INPUTS
 
     def __init__(self) -> None:
         super().__init__()
-        self.conv = nn.Conv2d(6, 3, 1)
+        self.conv = nn.Conv2d(6, 6, 1)
 
-    def forward(self, inputs: dict[str, torch.Tensor]) -> torch.Tensor:
-        return torch.tanh(self.conv(torch.cat([inputs[name] for name in self.input_names], dim=1)))
+    def forward(self, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        stacked = concat_named(inputs, self.input_names, "Generator inputs")
+        return split_named(torch.tanh(self.conv(stacked)), _OUTPUTS)
 
 
 class TinyDiscriminator(nn.Module):
     def __init__(self) -> None:
         super().__init__()
-        self.conv = nn.Conv2d(9, 1, 1)
+        self.conv = nn.Conv2d(12, 1, 1)
 
-    def forward(self, condition: torch.Tensor, image: torch.Tensor) -> torch.Tensor:
-        return self.conv(torch.cat([condition, image], dim=1)).mean((2, 3))
+    def forward(
+        self, inputs: dict[str, torch.Tensor], images: dict[str, torch.Tensor]
+    ) -> torch.Tensor:
+        joint = torch.cat(
+            [concat_named(inputs, _INPUTS, "in"), concat_named(images, _OUTPUTS, "out")], dim=1
+        )
+        return self.conv(joint).mean((2, 3))
 
 
-def test_training_step_accepts_named_inputs_and_derived_channels() -> None:
-    generator = TinyGenerator()
-    discriminator = TinyDiscriminator()
-    step = Pix2PixTrainingStep(
+def _step(
+    generator: nn.Module, discriminator: nn.Module, *, discriminator_terms: bool = True
+) -> Pix2PixTrainingStep:
+    return Pix2PixTrainingStep(
         generator,
         discriminator,
         torch.optim.Adam(generator.parameters(), lr=1e-3),
-        torch.optim.Adam(discriminator.parameters(), lr=1e-3),
+        torch.optim.SGD(discriminator.parameters(), lr=1e-1),
         torch.amp.GradScaler("cpu", enabled=False),
         torch.amp.GradScaler("cpu", enabled=False),
         torch.device("cpu"),
         False,
         loss_evaluator=ConfiguredLossEvaluator(
             generator_terms=(LossTermConfig("adversarial_bce", 1.0), LossTermConfig("l1", 1.0)),
-            discriminator_terms=(LossTermConfig("adversarial_bce", 1.0),),
+            discriminator_terms=(
+                (LossTermConfig("adversarial_bce", 1.0),) if discriminator_terms else ()
+            ),
         ),
     )
-    inputs = {"LF": torch.randn(2, 3, 8, 8), "AF": torch.randn(2, 3, 8, 8)}
-    result = step.step(inputs, torch.randn(2, 3, 8, 8), masks={})
-    assert result.loss_G == result.loss_G
-    assert result.loss_D == result.loss_D
+
+
+def _batch() -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+    inputs = {name: torch.randn(2, 3, 8, 8) for name in _INPUTS}
+    targets = {name: torch.randn(2, 3, 8, 8).clamp(-1, 1) for name in _OUTPUTS}
+    return inputs, targets
+
+
+def test_training_step_updates_on_every_named_output() -> None:
+    generator = TinyGenerator()
+    result = _step(generator, TinyDiscriminator()).step(*_batch(), masks={})
+
+    assert set(result.raw or {}) == {
+        "discriminator_adversarial_bce",
+        "generator_adversarial_bce",
+        "generator_l1__PAS",
+        "generator_l1__HE",
+    }
+    assert result.loss_G == result.loss_G and result.loss_D == result.loss_D
+    grad = generator.conv.weight.grad
+    assert grad is not None
+    # Rows 0-2 produce PAS and rows 3-5 produce HE; both received generator gradient.
+    assert grad[0:3].abs().sum() > 0 and grad[3:6].abs().sum() > 0
+
+
+def test_generator_phase_never_updates_the_discriminator() -> None:
+    discriminator = TinyDiscriminator()
+    before = [parameter.detach().clone() for parameter in discriminator.parameters()]
+
+    # No discriminator loss: the discriminator phase has zero gradient, so any change
+    # would have to come from the generator phase.
+    _step(TinyGenerator(), discriminator, discriminator_terms=False).step(*_batch(), masks={})
+
+    after = list(discriminator.parameters())
+    assert all(torch.equal(old, new) for old, new in zip(before, after, strict=True))
 
 
 def test_training_step_rejects_missing_named_input() -> None:
-    generator = TinyGenerator()
-    step = Pix2PixTrainingStep(
-        generator,
-        TinyDiscriminator(),
-        torch.optim.SGD(generator.parameters(), lr=1e-3),
-        torch.optim.SGD(TinyDiscriminator().parameters(), lr=1e-3),
-        torch.amp.GradScaler("cpu", enabled=False),
-        torch.amp.GradScaler("cpu", enabled=False),
-        torch.device("cpu"),
-        False,
-        loss_evaluator=ConfiguredLossEvaluator(generator_terms=(LossTermConfig("l1", 1.0),)),
-    )
-    try:
-        step.step({"LF": torch.zeros(1, 3, 4, 4)}, torch.zeros(1, 3, 4, 4), masks={})
-    except ValueError as exc:
-        assert "Generator inputs must have exact ordered names" in str(exc)
-    else:
-        raise AssertionError("missing named input was accepted")
+    step = _step(TinyGenerator(), TinyDiscriminator())
+    inputs, targets = _batch()
+    with pytest.raises(ValueError, match="Generator inputs must have exact ordered names"):
+        step.step({"LF": inputs["LF"]}, targets, masks={})
+
+
+def test_training_step_rejects_reordered_targets() -> None:
+    step = _step(TinyGenerator(), TinyDiscriminator())
+    inputs, targets = _batch()
+    with pytest.raises(ValueError, match="exact ordered names"):
+        step.step(inputs, dict(reversed(targets.items())), masks={})

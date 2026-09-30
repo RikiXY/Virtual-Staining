@@ -6,8 +6,8 @@
 |---|---|
 | Task | Image-to-image translation for virtual staining |
 | Architecture | Pix2Pix-style conditional GAN with U-Net generator and PatchGAN discriminator |
-| Input | Label-free microscopy patch (RGB, configurable size; default `256x256`) |
-| Output | Virtually stained microscopy patch (RGB, same size as input) |
+| Input | N ordered named RGB patches (`model.inputs`, e.g. `[AF, LF]`; configurable size, default `256x256`) |
+| Output | M ordered named virtually stained RGB patches (`model.outputs`, e.g. `[HE]` or `[HE, PAS]`), same grid as the inputs |
 | Framework | PyTorch |
 | Language | Python 3.11+ |
 
@@ -36,7 +36,9 @@ repository's second built-in method, CycleGAN, is not described by this card.
 
 **Generator**
 
-- U-Net generator implemented in PyTorch.
+- U-Net generator implemented in PyTorch over the channel-concatenated named inputs
+  (`3*N` channels) with `3*M` output channels split back into the named outputs; one
+  output is the `M=1` case of the same model.
 - Default encoder/decoder width starts at 64 channels and increases by depth.
 - Downsampling uses max pooling followed by double-convolution blocks.
 - Upsampling uses transposed convolutions by default (`bilinear: false` in the example config).
@@ -45,8 +47,9 @@ repository's second built-in method, CycleGAN, is not described by this card.
 
 **Discriminator**
 
-- PatchGAN discriminator operating on the concatenated input and target/generated image pair.
-- Default input channel count is 6 (`3 + 3` for RGB source and RGB target/generated).
+- One joint conditional PatchGAN discriminator scoring all named inputs together with
+  all real or all generated outputs.
+- Its input channel count is `3*N + 3*M` (6 for one input and one output).
 - Uses a final patchwise logit map rather than a single image-level prediction.
 - Keeps the standard PatchGAN receptive field of approximately `70x70`.
 - Uses raw logits by default (`use_sigmoid: false`).
@@ -55,15 +58,20 @@ repository's second built-in method, CycleGAN, is not described by this card.
 
 - Adversarial term: `BCEWithLogitsLoss`.
 - Reconstruction term: `L1Loss`.
-- Combined generator objective: adversarial loss plus weighted L1 loss.
+- Combined generator objective: one joint adversarial term plus, per reconstruction term,
+  the weighted arithmetic mean of that term over the outputs (one output keeps its
+  exact scale). This training mean is not an evaluation score.
 - Default L1 weight in the example training config: `25.0`.
+- Several outputs are an engineering capability; nothing in this repository shows that
+  predicting several stains jointly helps any of them.
 
 ## Training Data
 
 The model is trained on paired label-free / stained microscopy images after
 preprocessing and patch extraction.
 
-- Patches are extracted from aligned full-size source/target image pairs.
+- Patches are extracted from aligned full-size slide sets: every named input and every
+  named target on one reference grid.
 - Patch size is configurable; the standard example configuration uses `256x256`.
 - Default data split is patch-level train/validation/test.
 - Quality filters remove patches using foreground ratio, white ratio, and largest

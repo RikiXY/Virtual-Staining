@@ -37,7 +37,7 @@ def _sets(root: Path) -> tuple[SlideSet, ...]:
                 SlideAsset("source", assets[0], already_aligned=True),
                 SlideAsset("aux", assets[1], already_aligned=True),
             ),
-            SlideAsset("target", assets[2], already_aligned=True),
+            (SlideAsset("HE", assets[2], already_aligned=True),),
             "source",
         ),
     )

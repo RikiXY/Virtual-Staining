@@ -68,7 +68,7 @@ def _paired_datasets(
     assert config.training is not None
     training = config.training
     manifest = load_manifest_or_raise(config.project)
-    require_model_modalities(manifest, config.model.inputs, config.model.target)
+    require_model_modalities(manifest, config.model.inputs, config.model.outputs)
     manifest.validate(check_files_exist=True, require_splits={"train", "val"})
     train_manifest = manifest.filter_split("train")
     val_manifest = manifest.filter_split("val")
@@ -79,8 +79,8 @@ def _paired_datasets(
     rows = paired_record_rows(
         (*train_manifest.records, *val_manifest.records),
         input_names=config.model.inputs,
-        target=config.model.target,
-        include_mask=include_mask,
+        target_names=config.model.outputs,
+        include_masks=include_mask,
         groups=groups,
     )
     # Held-out test records are not consumed but share the split partition, so the same
@@ -88,8 +88,8 @@ def _paired_datasets(
     test_context = paired_record_rows(
         manifest.filter_split("test").records,
         input_names=config.model.inputs,
-        target=config.model.target,
-        include_mask=include_mask,
+        target_names=config.model.outputs,
+        include_masks=include_mask,
         groups=groups,
     )
     snapshot = build_snapshot(
@@ -105,8 +105,8 @@ def _paired_datasets(
             "pairing": "paired",
             "splits": ["train", "val"],
             "inputs": list(config.model.inputs),
-            "target": config.model.target,
-            "foreground_mask": include_mask,
+            "targets": list(config.model.outputs),
+            "foreground_masks": include_mask,
         },
         sources=manifest_sources(config.project),
     )
@@ -116,13 +116,12 @@ def _paired_datasets(
         image_size=config.project.image_size,
         seed=seed,
         input_names=config.model.inputs,
-        reference_modality=config.preprocessing.inputs.reference
-        if config.preprocessing
-        else config.model.inputs[0],
+        target_names=config.model.outputs,
     )
     train_dataset = PairedManifestDataset(
         train_manifest,
         input_names=config.model.inputs,
+        target_names=config.model.outputs,
         transform=None if train_paired_transform is not None else transform,
         paired_transform=train_paired_transform,
         include_foreground_mask=include_mask,
@@ -131,6 +130,7 @@ def _paired_datasets(
     val_dataset = PairedManifestDataset(
         val_manifest,
         input_names=config.model.inputs,
+        target_names=config.model.outputs,
         transform=transform,
         include_foreground_mask=include_mask,
     )
@@ -154,7 +154,7 @@ def _unpaired_datasets(
     transform: Callable[[Any], Any],
     seed: int,
 ) -> tuple[UnpairedImageDataset, UnpairedImageDataset, DataSnapshot]:
-    domain_a, domain_b = config.model.inputs[0], config.model.target
+    domain_a, domain_b = config.model.inputs[0], config.model.outputs[0]
     splits: tuple[tuple[DatasetSplit, int | None], ...] = ((TRAIN_SPLIT, seed), (VAL_SPLIT, None))
     # The held-out test collections of both domains are resolved only as leakage context.
     paths, resolved = resolve_domain_collections(

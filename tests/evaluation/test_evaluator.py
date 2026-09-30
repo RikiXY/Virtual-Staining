@@ -45,7 +45,7 @@ def _pair(tmp_path: Path, name: str, target: Any = (10, 20, 30), generated: Any 
 
 def _sample(tmp_path: Path, name: str, **kwargs: Any) -> EvaluationSample:
     target, generated = _pair(tmp_path, name)
-    return EvaluationSample(name, "S1", target, generated, **kwargs)
+    return EvaluationSample(name, "HE", "S1", target, generated, **kwargs)
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
@@ -77,10 +77,10 @@ def _failure_samples(tmp_path: Path) -> list[EvaluationSample]:
     Image.new("L", (16, 16)).save(gray)
     return [
         good,
-        EvaluationSample("missing", "S1", good.target_path, tmp_path / "absent.png"),
-        EvaluationSample("unreadable", "S1", good.target_path, unreadable),
-        EvaluationSample("shape", "S1", good.target_path, small),
-        EvaluationSample("gray", "S1", good.target_path, gray),
+        EvaluationSample("missing", "HE", "S1", good.target_path, tmp_path / "absent.png"),
+        EvaluationSample("unreadable", "HE", "S1", good.target_path, unreadable),
+        EvaluationSample("shape", "HE", "S1", good.target_path, small),
+        EvaluationSample("gray", "HE", "S1", good.target_path, gray),
     ]
 
 
@@ -123,7 +123,7 @@ def test_permissive_mode_excludes_known_input_failures(tmp_path: Path) -> None:
 
 def test_nothing_evaluated_is_never_a_successful_result(tmp_path: Path) -> None:
     target, _ = _pair(tmp_path, "a")
-    missing = [EvaluationSample("a", "S1", target, tmp_path / "absent.png")]
+    missing = [EvaluationSample("a", "HE", "S1", target, tmp_path / "absent.png")]
 
     with pytest.raises(EvaluationCoverageError, match="No sample could be evaluated"):
         evaluate_samples(missing, tmp_path / "out", input_failures="permissive")
@@ -191,7 +191,7 @@ def test_external_metric_appears_in_reports_and_result_metadata(tmp_path: Path) 
     result = evaluate_samples([_sample(tmp_path, "a")], tmp_path / "out", metrics=metrics)
 
     row = _read_csv(result.metrics_csv)[0]
-    assert list(row)[7:] == [
+    assert list(row)[8:] == [
         "scaled_error",
         "scaled_error_status",
         "scaled_error_reason",
@@ -214,7 +214,7 @@ def test_external_metric_appears_in_reports_and_result_metadata(tmp_path: Path) 
 
 def test_non_finite_results_are_empty_cells_with_status_and_strict_json(tmp_path: Path) -> None:
     target, generated = _pair(tmp_path, "same", generated=(10, 20, 30))
-    samples = [EvaluationSample("same", "S1", target, generated)]
+    samples = [EvaluationSample("same", "HE", "S1", target, generated)]
 
     result = evaluate_samples(samples, tmp_path / "out")
 
@@ -299,7 +299,7 @@ def test_malformed_or_mismatched_support_is_rejected(
     assert caught.value.reason == reason
     with pytest.raises(EvaluationCoverageError):
         evaluate_samples(
-            [EvaluationSample("a", "S1", target, generated, support)],
+            [EvaluationSample("a", "HE", "S1", target, generated, support)],
             tmp_path / "out",
             metrics=_ERRORS,
         )
@@ -317,7 +317,12 @@ def test_missing_support_file_is_a_known_input_failure(tmp_path: Path) -> None:
 def test_support_with_ssim_or_pcc_fails_before_reading_inputs(tmp_path: Path, name: str) -> None:
     metrics = resolve_metrics([{"name": "mae"}, {"name": name}], BUILTIN_METRIC_DEFINITIONS)
     sample = EvaluationSample(
-        "a", "S1", tmp_path / "absent_t.png", tmp_path / "absent_g.png", tmp_path / "absent_m.png"
+        "a",
+        "HE",
+        "S1",
+        tmp_path / "absent_t.png",
+        tmp_path / "absent_g.png",
+        tmp_path / "absent_m.png",
     )
 
     with pytest.raises(ValueError, match="do not support it"):

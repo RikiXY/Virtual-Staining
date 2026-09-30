@@ -19,7 +19,7 @@ from virtual_staining.evaluation.unpaired import (
     UNPAIRED_FEATURE_COMPARISON_CSV,
     UNPAIRED_IMAGE_STATISTICS_CSV,
 )
-from virtual_staining.utils.artifacts import generated_filename
+from virtual_staining.utils.artifacts import generated_path
 
 _SAMPLE_IDS = ["00000_00000", "00256_00000"]
 
@@ -78,6 +78,8 @@ def test_cyclegan_train_resume_infer_evaluate_smoke(
     first = torch.load(checkpoints / "ep000.pth", map_location="cpu", weights_only=True)
     assert first["format_version"] == CHECKPOINT_FORMAT_VERSION
     assert first["method"]["name"] == "cyclegan"
+    # The plural representation: one input (domain A) and one output (domain B).
+    assert (first["method"]["inputs"], first["method"]["outputs"]) == (["label_free"], ["stained"])
     run_stage(_config(tmp_path, "resume", training={"epochs": 2, "resume": "latest"}), "train")
     assert (checkpoints / "ep001.pth").is_file()
     assert [row["epoch"] for row in _rows(run_root / "metrics" / "epochs.csv")] == ["0", "1"]
@@ -96,10 +98,11 @@ def test_cyclegan_train_resume_infer_evaluate_smoke(
     ] == str(checkpoints / "ep001.pth")
     run_stage(b_to_a, "infer")
     output_test = run_root / "artifacts" / "output_test"
-    assert sorted(path.name for path in output_test.iterdir()) == sorted(
-        generated_filename(sample_id, ".png", direction)
+    # Each direction publishes the one domain it predicts: B for A_to_B, A for B_to_A.
+    assert sorted(path for path in output_test.rglob("*") if path.is_file()) == sorted(
+        generated_path(output_test, sample_id, domain, ".png")
         for sample_id in _SAMPLE_IDS
-        for direction in ("A_to_B", "B_to_A")
+        for domain in ("stained", "label_free")
     )
 
     # Recursive directory inference keeps relative folders; equal basenames never collide.
@@ -111,10 +114,10 @@ def test_cyclegan_train_resume_infer_evaluate_smoke(
     infer_images(a_to_b, (f"label_free={inputs}",), generated, recursive=True)
     infer_images(b_to_a, (f"stained={inputs}",), generated, recursive=True)
     assert sorted(path.relative_to(generated).as_posix() for path in generated.rglob("*.png")) == [
-        "slide1/tile_A_to_B_generated.png",
-        "slide1/tile_B_to_A_generated.png",
-        "slide2/nested/tile_A_to_B_generated.png",
-        "slide2/nested/tile_B_to_A_generated.png",
+        "slide1/label_free/tile_generated.png",
+        "slide1/stained/tile_generated.png",
+        "slide2/nested/label_free/tile_generated.png",
+        "slide2/nested/stained/tile_generated.png",
     ]
 
     # Default CycleGAN protocol: unpaired collection diagnostics for the active direction only.
@@ -123,29 +126,31 @@ def test_cyclegan_train_resume_infer_evaluate_smoke(
     statistics = _rows(unpaired_dir / UNPAIRED_IMAGE_STATISTICS_CSV)
     generated_rows = [row for row in statistics if row["collection"] == "generated"]
     assert len(generated_rows) == len(_SAMPLE_IDS)
-    assert all("_A_to_B_generated" in row["path"] for row in generated_rows)
+    assert all("/stained/" in row["path"] for row in generated_rows)
     assert sum(row["collection"] == "reference" for row in statistics) == 3
     assert (unpaired_dir / UNPAIRED_FEATURE_COMPARISON_CSV).is_file()
     assert not (unpaired_dir / "per_image_metrics.csv").exists()
     unpaired = _json(unpaired_dir / "evaluation_metadata.json")
     assert unpaired["evaluation_protocol"] == "unpaired"
     assert unpaired["pairwise_metrics_available"] is False
-    assert unpaired["reference_domain"] == "stained"
+    assert unpaired["reference_domains"] == ["stained"]
     assert unpaired["limitations"]
 
     # Explicit paired protocol against the aligned manifest: generated A vs real A.
     run_stage(b_to_a, "evaluate")
     paired_dir = run_root / "evaluation_paired"
     metrics = _rows(paired_dir / "per_image_metrics.csv")
-    assert [row["sample_id"] for row in metrics] == _SAMPLE_IDS
-    assert all("_B_to_A_generated" in row["generated_path"] for row in metrics)
+    assert [(row["sample_id"], row["output_name"]) for row in metrics] == [
+        (sample_id, "label_free") for sample_id in _SAMPLE_IDS
+    ]
+    assert all("/label_free/" in row["generated_path"] for row in metrics)
     assert all(row["target_path"].endswith("_source.png") for row in metrics)
     paired = _json(paired_dir / "evaluation_metadata.json")
     assert paired["evaluation_protocol"] == "paired"
     assert paired["training_pairing"] == "unpaired"
     assert paired["pairwise_metrics_available"] is True
     assert paired["inference_direction"] == "B_to_A"
-    assert paired["reference_domain"] == "label_free"
+    assert paired["reference_domains"] == ["label_free"]
     assert "limitations" not in paired
 
     # Shared run provenance: one run record, per-stage records, snapshots, environments.

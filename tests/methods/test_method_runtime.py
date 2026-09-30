@@ -24,7 +24,7 @@ image_size: [16, 16]
 {method_section}
 model:
   inputs: [source]
-  target: target
+  outputs: [target]
   generator:
     base_channels: 4
   discriminator:

@@ -71,24 +71,19 @@ def build_metric_case_artifacts(
     )
 
     diagnostics_case_dir = metric_dir / "diagnostics" / f"{kind}_{sample_id}"
-    diagnostic_paths = save_diagnostic_plots(
+    error_histogram, scatter, intensity_overlay = save_diagnostic_plots(
         generated_path=generated_path,
         target_path=target_path,
         save_dir=diagnostics_case_dir,
     )
-    diagnostic_paths_by_name = {path.name: path for path in diagnostic_paths}
     diagnostic_entry: DiagnosticEntry = {
         "kind": kind,
         "sample_id": sample_id,
         "metric_value": metric_value,
         "comparison_path": saved_path,
-        "error_histogram_path": diagnostic_paths_by_name[f"{sample_id}_error_histogram.png"],
-        "intensity_overlay_histogram_path": diagnostic_paths_by_name[
-            f"{sample_id}_intensity_overlay_histogram.png"
-        ],
-        "target_vs_generated_scatter_by_channel_path": diagnostic_paths_by_name[
-            f"{sample_id}_target_vs_generated_scatter_by_channel.png"
-        ],
+        "error_histogram_path": error_histogram,
+        "intensity_overlay_histogram_path": intensity_overlay,
+        "target_vs_generated_scatter_by_channel_path": scatter,
     }
     selection_row = build_selection_summary_row(
         metric_name=metric_name,

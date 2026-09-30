@@ -53,6 +53,8 @@ class CompareRequest:
     thresholds: tuple[float, ...] | None = None
     tolerance: float = 0.0
     sample_id_column: str = "sample_id"
+    #: The one model output compared; required when a CSV holds several outputs.
+    output_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,7 @@ class _ResolvedCompareRequest:
     thresholds: tuple[float, ...]
     tolerance: float
     sample_id_column: str
+    output_name: str | None
 
 
 @dataclass
@@ -116,7 +119,10 @@ def _resolve_request(request: CompareRequest) -> _ResolvedCompareRequest:
     else:
         # Plain data-driven axis: no scientific range is assumed for an unknown metric.
         values = np.concatenate(
-            [load_metric_values(csv_a, request.column), load_metric_values(csv_b, request.column)]
+            [
+                load_metric_values(csv_a, request.column, request.output_name),
+                load_metric_values(csv_b, request.column, request.output_name),
+            ]
         )
         values = values[np.isfinite(values)]
         default_min, default_max = (
@@ -151,6 +157,7 @@ def _resolve_request(request: CompareRequest) -> _ResolvedCompareRequest:
         ),
         tolerance=request.tolerance,
         sample_id_column=request.sample_id_column,
+        output_name=request.output_name,
     )
 
 
@@ -196,32 +203,25 @@ def _run_root_for_csv(path: Path) -> Path | None:
 
 
 def _default_output_dir(request: CompareRequest, csv_a: Path, label_a: str, label_b: str) -> Path:
+    name = f"{request.mode}_{request.column}"
+    if request.output_name is not None:
+        name = f"{name}__{request.output_name}"
     for run_path in (request.run_a, request.run_b):
         if run_path is not None:
             return (
                 ResultsLayout(run_path.resolve().parent).comparisons_dir
                 / f"{label_a}_vs_{label_b}"
-                / f"{request.mode}_{request.column}"
+                / name
             )
     run_root = _run_root_for_csv(csv_a)
     if run_root is not None:
-        return (
-            ResultsLayout(run_root.parent).comparisons_dir
-            / f"{label_a}_vs_{label_b}"
-            / f"{request.mode}_{request.column}"
-        )
-    return (
-        Path("local_workspace")
-        / "results"
-        / "comparisons"
-        / f"{label_a}_vs_{label_b}"
-        / f"{request.mode}_{request.column}"
-    )
+        return ResultsLayout(run_root.parent).comparisons_dir / f"{label_a}_vs_{label_b}" / name
+    return Path("local_workspace") / "results" / "comparisons" / f"{label_a}_vs_{label_b}" / name
 
 
 def _compare_unpaired(request: _ResolvedCompareRequest) -> CompareResult:
-    values_a = load_metric_values(request.csv_a, request.column)
-    values_b = load_metric_values(request.csv_b, request.column)
+    values_a = load_metric_values(request.csv_a, request.column, request.output_name)
+    values_b = load_metric_values(request.csv_b, request.column, request.output_name)
     thresholds = list(request.thresholds)
 
     group_a = compute_unpaired_group_stats(
@@ -299,6 +299,7 @@ def _compare_paired(request: _ResolvedCompareRequest) -> CompareResult:
         csv_b=request.csv_b,
         sample_id_column=request.sample_id_column,
         metric_column=request.column,
+        output_name=request.output_name,
     )
     summary = compute_paired_summary(
         merged=merged,

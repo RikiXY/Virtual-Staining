@@ -14,7 +14,7 @@ from virtual_staining.experiment.run_layout import RunLayout
 def test_evaluation_config_defaults_to_run_dirs(tmp_path: Path) -> None:
     yaml_file = write_run_config(
         tmp_path,
-        "model:\n  inputs: [label_free]\n  target: stained\nevaluation:\n  save_graphs: false",
+        "model:\n  inputs: [label_free]\n  outputs: [stained]\nevaluation:\n  save_graphs: false",
         dataset_root=tmp_path / "data",
         results_path=tmp_path / "results",
         run_name="section_run",
@@ -41,7 +41,7 @@ def test_evaluation_config_accepts_explicit_dirs(tmp_path: Path) -> None:
         """\
         model:
           inputs: [label_free]
-          target: stained
+          outputs: [stained]
         evaluation:
           generated_dir: /custom/generated
           output_dir: /custom/evaluation
@@ -61,7 +61,7 @@ def test_evaluation_config_accepts_explicit_dirs(tmp_path: Path) -> None:
 def test_evaluation_from_yaml_unknown_section_key_raises(tmp_path: Path) -> None:
     yaml_file = write_run_config(
         tmp_path,
-        "model:\n  inputs: [label_free]\n  target: stained\n"
+        "model:\n  inputs: [label_free]\n  outputs: [stained]\n"
         "evaluation:\n  target_dir: /custom/targets",
         filename="typo.yaml",
         dataset_root=tmp_path / "data",
@@ -78,7 +78,7 @@ def test_evaluation_from_yaml_unknown_top_level_key_raises(tmp_path: Path) -> No
         """
         model:
           inputs: [label_free]
-          target: stained
+          outputs: [stained]
         typo_field: oops
         evaluation:
           save_graphs: false
@@ -95,7 +95,7 @@ def test_evaluation_from_yaml_unknown_top_level_key_raises(tmp_path: Path) -> No
 def test_evaluation_from_yaml_string_bool_save_graphs_raises(tmp_path: Path) -> None:
     yaml_file = write_run_config(
         tmp_path,
-        'model:\n  inputs: [label_free]\n  target: stained\nevaluation:\n  save_graphs: "false"',
+        'model:\n  inputs: [label_free]\n  outputs: [stained]\nevaluation:\n  save_graphs: "false"',
         filename="str_bool.yaml",
         dataset_root=tmp_path / "data",
         results_path=tmp_path / "results",
@@ -108,7 +108,7 @@ def test_evaluation_from_yaml_string_bool_save_graphs_raises(tmp_path: Path) -> 
 def test_evaluation_from_yaml_string_bool_hide_graphs_path_raises(tmp_path: Path) -> None:
     yaml_file = write_run_config(
         tmp_path,
-        "model:\n  inputs: [label_free]\n  target: stained\n"
+        "model:\n  inputs: [label_free]\n  outputs: [stained]\n"
         'evaluation:\n  hide_graphs_path: "false"',
         filename="str_bool2.yaml",
         dataset_root=tmp_path / "data",
@@ -130,7 +130,7 @@ def _pix2pix_config(tmp_path: Path, evaluation_yaml: str) -> RunConfig:
     return RunConfig.from_yaml(
         write_run_config(
             tmp_path,
-            "model:\n  inputs: [label_free]\n  target: stained\n" + evaluation_yaml,
+            "model:\n  inputs: [label_free]\n  outputs: [stained]\n" + evaluation_yaml,
             filename="pix2pix.yaml",
         )
     )

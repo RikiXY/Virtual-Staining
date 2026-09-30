@@ -41,7 +41,7 @@ def _make_synthetic_dataset(dataset_root: Path, size: int = 192) -> Path:
     cv2.imwrite(str(dataset_root / "target.tif"), target.astype(np.uint8))
     (dataset_root / "inputs").mkdir()
     (dataset_root / "inputs" / "slide_sets.csv").write_text(
-        "set_id,input__source_path,input__source_aligned,target_path,target_aligned\n"
+        "set_id,input__source_path,input__source_aligned,target__target_path,target__target_aligned\n"
         "P1,source.tif,true,target.tif,true\n",
         encoding="utf-8",
     )
@@ -79,7 +79,7 @@ def _write_smoke_config(tmp_path: Path, dataset_root: Path, *, run_name: str = "
             inventory: inputs/slide_sets.csv
             modalities: [source]
             reference: source
-            target_modality: target
+            target_modalities: [target]
           patching:
             patch_size: [64, 64]
             grid_movement: [64, 64]
@@ -101,7 +101,7 @@ def _write_smoke_config(tmp_path: Path, dataset_root: Path, *, run_name: str = "
 
         model:
           inputs: [source]
-          target: target
+          outputs: [target]
           generator:
             base_channels: 16
           discriminator:
@@ -188,8 +188,8 @@ def test_full_pipeline_smoke(tmp_path: Path) -> None:
     infer_record = _read_json(run_root / "metadata" / "stages" / "infer.json")
     assert infer_record["details"]["checkpoint_path"] == str(run_root / "checkpoints" / "ep001.pth")
     generated = sorted((run_root / "artifacts" / "output_test").iterdir())
-    assert generated
-    assert all(path.name.endswith("_target_generated.tif") for path in generated)
+    assert [path.name for path in generated] == ["target"]
+    assert all(path.name.endswith("_generated.tif") for path in generated[0].iterdir())
 
     metrics_csv = run_root / "evaluation" / "per_image_metrics.csv"
     assert metrics_csv.exists()

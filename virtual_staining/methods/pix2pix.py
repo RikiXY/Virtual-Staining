@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.optim as optim
@@ -13,9 +13,10 @@ from virtual_staining.checkpoint_contract import CheckpointIdentity, ValidatedCh
 from virtual_staining.config.losses import configured_loss_names
 from virtual_staining.config.run import RunConfig
 from virtual_staining.methods.builtin import (
-    PIX2PIX_VALIDATION_METRICS,
     GanOptions,
     GanTrainingOptions,
+    Pix2PixDefinition,
+    pix2pix_validation_metrics,
 )
 from virtual_staining.training.helpers import (
     TRAINING_STATE_KEYS,
@@ -51,7 +52,9 @@ def build_pix2pix_inference_generator(
 ) -> torch.nn.Module:
     """Build only the forward generator and restore it from a validated checkpoint."""
     options: GanOptions = config.method.options
-    generator = options.generator.build(input_names=tuple(config.model.inputs)).to(device)
+    generator = options.generator.build(
+        input_names=tuple(config.model.inputs), output_names=tuple(config.model.outputs)
+    ).to(device)
     generator.load_state_dict(
         validated_model_state(checkpoint.state, "generator", generator, checkpoint.path)
     )
@@ -60,11 +63,10 @@ def build_pix2pix_inference_generator(
 
 
 class Pix2PixMethod:
-    """Own the concrete paired Pix2Pix training topology."""
+    """Own the concrete paired Pix2Pix training topology: N named inputs -> M outputs."""
 
     metric_names: tuple[str, ...] = ("loss_G", "loss_D")
     component_total_names: tuple[str, ...] = ("generator", "discriminator")
-    validation_metric_names: tuple[str, ...] = tuple(PIX2PIX_VALIDATION_METRICS)
 
     def __init__(
         self,
@@ -77,9 +79,15 @@ class Pix2PixMethod:
         if config.training is None or options.training is None:
             raise ValueError("training config is required to construct Pix2Pix")
         definition = config.method.definition
+        if not isinstance(definition, Pix2PixDefinition):
+            raise TypeError("Pix2PixMethod requires the Pix2Pix method definition")
         self.config = config
         self.name = definition.name
-        self._checkpoint_metrics = dict(definition.checkpoint_metrics)
+        self.input_names = tuple(config.model.inputs)
+        self.output_names = tuple(config.model.outputs)
+        self._image_metrics = pix2pix_validation_metrics(self.output_names)
+        self.validation_metric_names = tuple(self._image_metrics)
+        self._checkpoint_metrics = definition.checkpoint_modes(self.output_names)
         self.default_checkpoint_metric = next(iter(self._checkpoint_metrics))
         self._identity = definition.checkpoint_identity(config)
         self._epochs = config.training.epochs
@@ -88,14 +96,12 @@ class Pix2PixMethod:
         self._benchmark_recorder = benchmark_recorder
         self._amp_enabled = is_amp_enabled(device)
         self.loss_config = self._optimization.losses
-        self.loss_names = tuple(configured_loss_names(self.loss_config))
+        self.loss_names = tuple(configured_loss_names(self.loss_config, self.output_names))
 
-        input_names = tuple(config.model.inputs)
-        self.generator = options.generator.build(input_names=input_names).to(device)
-        # Conditional PatchGAN: the concatenated inputs plus the real or generated target.
-        self.discriminator = options.discriminator.build(in_channels=3 * len(input_names) + 3).to(
-            device
-        )
+        names = {"input_names": self.input_names, "output_names": self.output_names}
+        self.generator = options.generator.build(**names).to(device)
+        # One joint conditional PatchGAN: all inputs plus all real or generated outputs.
+        self.discriminator = options.discriminator.build(**names).to(device)
         optimization = self._optimization
         self._opt_G = optim.Adam(
             self.generator.parameters(),
@@ -140,9 +146,8 @@ class Pix2PixMethod:
         self.discriminator.train()
 
     def batch_size(self, batch: object) -> int:
-        if not isinstance(batch, dict):
-            return 0
-        target = batch.get("target")
+        targets = batch.get("targets") if isinstance(batch, dict) else None
+        target = targets.get(self.output_names[0]) if isinstance(targets, dict) else None
         if not isinstance(target, torch.Tensor) or target.ndim == 0:
             return 0
         return int(target.shape[0])
@@ -150,13 +155,13 @@ class Pix2PixMethod:
     def step(self, batch: object, *, epoch: int, global_step: int) -> MethodMetrics:
         recorder = self._benchmark_recorder
         if recorder is None:
-            inputs, target, masks = self._unpack_batch(batch)
+            inputs, targets, masks = self._unpack_batch(batch)
         else:
             with recorder.phase("h2d"):
-                inputs, target, masks = self._unpack_batch(batch)
+                inputs, targets, masks = self._unpack_batch(batch)
         result = self._step.step(
             inputs,
-            target,
+            targets,
             epoch=epoch,
             global_step=global_step,
             masks=masks,
@@ -176,9 +181,10 @@ class Pix2PixMethod:
 
     def _unpack_batch(
         self, batch: object
-    ) -> tuple[dict[str, torch.Tensor], torch.Tensor, dict[str, torch.Tensor]]:
-        input_names = cast(tuple[str, ...], self.generator.input_names)
-        return unpack_batch(batch, self.device, input_names)
+    ) -> tuple[
+        dict[str, torch.Tensor], dict[str, torch.Tensor], dict[str, dict[str, torch.Tensor]]
+    ]:
+        return unpack_batch(batch, self.device, self.input_names, self.output_names)
 
     def validate(
         self,
@@ -196,7 +202,9 @@ class Pix2PixMethod:
             losses=self.loss_config,
             device=self.device,
             amp_enabled=self._amp_enabled,
-            image_metrics=PIX2PIX_VALIDATION_METRICS,
+            input_names=self.input_names,
+            output_names=self.output_names,
+            image_metrics=self._image_metrics,
             preview_sink=preview_sink,
         )
         has_components = bool(result.raw or result.weighted or result.current_weight)

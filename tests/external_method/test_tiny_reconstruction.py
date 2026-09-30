@@ -71,7 +71,7 @@ def _mapping(tmp_path: Path, **options: Any) -> dict[str, Any]:
             "options": {"architecture": "tiny_conv", "learning_rate": 0.001, **options},
         },
         "data": {"pairing": "paired", "group_validation": "unavailable"},
-        "model": {"inputs": ["source"], "target": "target"},
+        "model": {"inputs": ["source"], "outputs": ["target"]},
         "training": {
             "batch_size": 2,
             "epochs": 2,
@@ -131,7 +131,7 @@ def test_external_config_carries_no_gan_settings(tmp_path: Path) -> None:
     definitions, _ = _definitions()
     resolved = _resolve(tmp_path, definitions).to_dict()
 
-    assert resolved["model"] == {"inputs": ["source"], "target": "target"}
+    assert resolved["model"] == {"inputs": ["source"], "outputs": ["target"]}
     assert set(resolved["method"]) == {"name", "options"}
     assert set(resolved["training"]) == {
         "batch_size",
@@ -257,7 +257,7 @@ def _samples(count: int = 4) -> list[dict[str, Any]]:
     samples = []
     for _ in range(count):
         source = torch.rand(3, 32, 32, generator=generator) * 2 - 1
-        samples.append({"inputs": {"source": source}, "target": -source, "masks": {}})
+        samples.append({"inputs": {"source": source}, "targets": {"target": -source}, "masks": {}})
     return samples
 
 
@@ -420,7 +420,7 @@ def test_checkpoint_naming_unsupplied_definitions_fails_before_building(tmp_path
             **{key: _mapping(tmp_path)[key] for key in ("dataset_root", "results_path")},
             "run_name": "external_example",
             "image_size": [32, 32],
-            "model": {"inputs": ["source"], "target": "target"},
+            "model": {"inputs": ["source"], "outputs": ["target"]},
             "inference": {"checkpoint_path": str(checkpoint)},
         }
     )
@@ -448,12 +448,14 @@ def _paired_dataset(root: Path) -> None:
             set_id=f"S{index}",
             ext=".png",
             input_paths={"source": Path(f"splits/{split}/{sample_id}__input__source.png")},
+            target_paths={"target": Path(f"splits/{split}/{sample_id}__target__target.png")},
         )
         records.append(record)
-        for offset, path in enumerate((*record.input_paths.values(), record.target_path)):
+        for offset, path in enumerate(
+            (*record.input_paths.values(), *record.target_paths.values())
+        ):
             write_rgb_image(root / path, size=(32, 32), color=(40 * index, 30 * offset, 7))
-    metadata = manifest_metadata(("source",))
-    metadata = type(metadata)(metadata.schema_version, ("source",), "source", "target")
+    metadata = manifest_metadata(("source",), ("target",))
     manifest = DatasetManifest(tuple(records), root, metadata)
     layout = DatasetLayout(root)
     manifest.to_csv(layout.manifest_path)
@@ -478,7 +480,8 @@ def test_tracked_train_and_infer_applications_run_the_external_method(tmp_path: 
     assert result.best_checkpoint_path is not None
     assert produced.num_samples == 1
     assert isinstance(single, SingleInferenceResult)
-    assert single.output_path.is_file()
+    assert list(single.output_paths) == ["target"]
+    assert single.output_paths["target"].is_file()
     # The checkpoint-backed adapter hands the definition's model to the generic runtime.
     assert single.checkpoint_path is not None and single.checkpoint_path.is_file()
     assert single.predictor_identity == "tiny_reconstruction"
@@ -503,7 +506,7 @@ def test_tracked_train_and_infer_applications_run_the_external_method(tmp_path: 
         for i in range(3)
     ]
     unpaired = evaluate_unpaired_collections(
-        [single.output_path], references, tmp_path / "unpaired", save_graphs=False
+        [single.output_paths["target"]], references, tmp_path / "unpaired", save_graphs=False
     )
     assert (unpaired.generated_count, unpaired.reference_count) == (1, 3)
     with unpaired.feature_comparison_csv.open(newline="", encoding="utf-8") as handle:

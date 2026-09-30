@@ -19,7 +19,7 @@ run_name: test_run
 image_size: [256, 256]
 model:
   inputs: [source]
-  target: target
+  outputs: [target]
   generator:
     dropout: true
 preprocessing:
@@ -27,7 +27,7 @@ preprocessing:
     inventory: inputs/slides.csv
     modalities: [source]
     reference: source
-    target_modality: target
+    target_modalities: [target]
   split:
     unit: set
     train: 0.8
@@ -116,7 +116,7 @@ results_path: /tmp/results
 run_name: test
 model:
   inputs: [source]
-  target: target
+  outputs: [target]
   discriminator:
     use_sigmoid: true
 """,

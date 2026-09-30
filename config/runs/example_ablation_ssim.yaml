@@ -16,15 +16,15 @@ data:
   group_validation: auto
 
 model:
-  inputs: [autofluorescence, label_free]
-  target: H&E
+  inputs: [AF, LF]
+  outputs: [HE]
 
 preprocessing:
   inputs:
     inventory: inputs/slide_sets.csv
-    modalities: [autofluorescence, label_free]
-    reference: label_free
-    target_modality: H&E
+    modalities: [AF, LF]
+    reference: LF
+    target_modalities: [HE]
   split:
     unit: patient
     train: 0.8
@@ -51,7 +51,7 @@ training:
 
 inference:
   checkpoint_policy: best
-  checkpoint_metric: val_ssim
+  checkpoint_metric: val_ssim__HE
 
 evaluation:
   protocol: paired

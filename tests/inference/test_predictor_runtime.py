@@ -23,17 +23,19 @@ CPU = torch.device("cpu")
 
 
 class InMemoryPredictor(torch.nn.Module):
-    """Returns the LF input unchanged and checks both modalities share coordinates."""
+    """Predicts HE = LF and PAS = -LF, checking both modalities share coordinates."""
 
-    def __init__(self) -> None:
+    def __init__(self, outputs: tuple[str, ...] = ("HE",)) -> None:
         super().__init__()
+        self.outputs = outputs
         self.scale = torch.nn.Parameter(torch.ones(()))
         self.calls: list[tuple[str, ...]] = []
 
-    def forward(self, inputs: dict[str, torch.Tensor]) -> torch.Tensor:
+    def forward(self, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         self.calls.append(tuple(inputs))
         assert torch.equal(inputs["AF"], inputs["LF"]), "modalities read different regions"
-        return inputs["LF"] * self.scale
+        signs = {"HE": 1.0, "PAS": -1.0}
+        return {name: inputs["LF"] * self.scale * signs[name] for name in self.outputs}
 
 
 def _random_image(path: Path, size: tuple[int, int], seed: int = 0) -> np.ndarray:
@@ -44,11 +46,12 @@ def _random_image(path: Path, size: tuple[int, int], seed: int = 0) -> np.ndarra
 
 
 def _runtime(
-    predictor: Callable[[dict[str, torch.Tensor]], torch.Tensor],
+    predictor: Callable[[dict[str, torch.Tensor]], object],
     names: tuple[str, ...] = ("AF", "LF"),
     size: tuple[int, int] = (16, 16),
+    outputs: tuple[str, ...] = ("HE",),
 ) -> InferenceRuntime:
-    return InferenceRuntime(predictor, PredictionContract(names, size), CPU)
+    return InferenceRuntime(predictor, PredictionContract(names, outputs, size), CPU)  # type: ignore[arg-type]
 
 
 def _pair(root: Path, size: tuple[int, int], name: str = "sample.png") -> dict[str, Path]:
@@ -88,12 +91,12 @@ def test_in_memory_predictor_runs_file_directory_and_tiled_inference(tmp_path: P
     assert single.checkpoint_path is None and single.predictor_identity is None
     assert directory.checkpoint_path is None
     assert tuple(directory.input_dirs) == ("AF", "LF")
-    assert sorted(r.output_path.relative_to(directory.output_dir) for r in directory.results) == [
-        Path("a_target_generated.png"),
-        Path("nested/b_target_generated.png"),
-    ]
+    assert sorted(
+        r.output_paths["HE"].relative_to(directory.output_dir) for r in directory.results
+    ) == [Path("HE/a_generated.png"), Path("nested/HE/b_generated.png")]
     assert set(predictor.calls) == {("AF", "LF")}
-    assert np.abs(_read(tiled.output_path).astype(int) - _read(large["LF"])).max() <= 1
+    assert single.output_paths == {"HE": tmp_path / "out" / "exact.png"}
+    assert np.abs(_read(tiled.output_paths["HE"]).astype(int) - _read(large["LF"])).max() <= 1
     # The runtime stays usable and untouched by transport.
     assert not predictor.training
     assert predictor.scale.device == CPU and predictor.scale.requires_grad
@@ -151,7 +154,7 @@ def test_overlap_not_smaller_than_tile_is_rejected(tmp_path: Path, overlap: int)
 
 
 def _shift(transform: Callable[[torch.Tensor], object]) -> Callable[..., object]:
-    return lambda inputs: transform(inputs["LF"])
+    return lambda inputs: {"HE": transform(inputs["LF"])}
 
 
 MALFORMED = {
@@ -164,7 +167,12 @@ MALFORMED = {
     "inf": _shift(lambda x: x + math.inf),
     "range": _shift(lambda x: x * 3),
     "integer": _shift(lambda x: x.long()),
-    "multi_output": _shift(lambda x: (x, x)),
+    "not_a_tensor": _shift(lambda x: (x, x)),
+    "bare_tensor": lambda inputs: inputs["LF"],
+    "tuple": lambda inputs: (inputs["LF"],),
+    "renamed": lambda inputs: {"PAS": inputs["LF"]},
+    "extra": lambda inputs: {"HE": inputs["LF"], "PAS": inputs["LF"]},
+    "empty": lambda inputs: {},
 }
 
 
@@ -211,6 +219,9 @@ def test_input_names_must_match_the_contract(
         ({"input_names": ("AF", "AF")}, "unique"),
         ({"input_names": ("AF", " ")}, "non-empty"),
         ({"input_names": ["AF"]}, "tuple"),
+        ({"output_names": ()}, "output_names must be a non-empty"),
+        ({"output_names": ("HE", "HE")}, "output_names must be unique"),
+        ({"output_names": ["HE"]}, "output_names must be a non-empty tuple"),
         ({"image_size": (0, 16)}, "positive"),
         ({"image_size": (16,)}, "positive"),
         ({"image_size": (16.0, 16)}, "positive"),
@@ -220,7 +231,12 @@ def test_input_names_must_match_the_contract(
     ],
 )
 def test_invalid_contracts_are_rejected(kwargs: dict[str, object], message: str) -> None:
-    values: dict[str, object] = {"input_names": ("AF",), "image_size": (16, 16), **kwargs}
+    values: dict[str, object] = {
+        "input_names": ("AF",),
+        "output_names": ("HE",),
+        "image_size": (16, 16),
+        **kwargs,
+    }
     with pytest.raises(ValueError, match=message):
         PredictionContract(**values)  # type: ignore[arg-type]
 
@@ -269,9 +285,9 @@ def test_same_basename_in_different_subdirectories_does_not_collide(tmp_path: Pa
         recursive=True,
     )
     assert isinstance(result, DirectoryInferenceResult)
-    assert {r.output_path for r in result.results} == {
-        tmp_path / "out/x/a_target_generated.png",
-        tmp_path / "out/y/a_target_generated.png",
+    assert {r.output_paths["HE"] for r in result.results} == {
+        tmp_path / "out/x/HE/a_generated.png",
+        tmp_path / "out/y/HE/a_generated.png",
     }
 
 
@@ -296,12 +312,12 @@ def test_directory_output_path_that_is_a_file_is_rejected(tmp_path: Path) -> Non
         )
 
 
-def test_explicit_artifact_direction_names_outputs(tmp_path: Path) -> None:
+def test_predictor_identity_is_reported_and_outputs_are_named_by_output(tmp_path: Path) -> None:
     for modality in ("AF", "LF"):
         _random_image(tmp_path / modality / "a.png", (16, 16))
     runtime = InferenceRuntime(
         InMemoryPredictor(),
-        PredictionContract(("AF", "LF"), (16, 16), artifact_direction="A_to_B"),
+        PredictionContract(("AF", "LF"), ("HE",), (16, 16)),
         CPU,
         predictor_identity="my-model",
     )
@@ -310,5 +326,83 @@ def test_explicit_artifact_direction_names_outputs(tmp_path: Path) -> None:
     )
     assert isinstance(result, DirectoryInferenceResult)
     assert result.predictor_identity == "my-model"
-    assert result.artifact_direction == "A_to_B"
-    assert result.results[0].output_path.name == "a_A_to_B_generated.png"
+    assert result.results[0].output_paths == {"HE": tmp_path / "out" / "HE" / "a_generated.png"}
+
+
+def _two_outputs() -> InferenceRuntime:
+    return _runtime(InMemoryPredictor(("PAS", "HE")), outputs=("PAS", "HE"))
+
+
+def test_several_outputs_never_share_one_output_file(tmp_path: Path) -> None:
+    paths = _pair(tmp_path / "in", (16, 16))
+    runtime = _runtime(lambda inputs: pytest.fail("predictor must not run"), outputs=("PAS", "HE"))
+
+    with pytest.raises(ValueError, match="cannot hold the 2 outputs"):
+        run_image_path_inference(runtime, paths, tmp_path / "out" / "result.png")
+    existing = tmp_path / "existing"
+    existing.write_text("a file")
+    with pytest.raises(ValueError, match="cannot hold the 2 outputs"):
+        run_image_path_inference(runtime, paths, existing)
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize(("size", "mode"), [((16, 16), "resize"), ((37, 21), "tile")])
+def test_several_outputs_are_published_into_an_output_directory(
+    tmp_path: Path, size: tuple[int, int], mode: str
+) -> None:
+    paths = _pair(tmp_path / "in", size, name="sample.png")
+    predictor = InMemoryPredictor(("PAS", "HE"))
+
+    result = run_image_path_inference(
+        _runtime(predictor, outputs=("PAS", "HE")),
+        paths,
+        tmp_path / "out",
+        mode=mode,  # type: ignore[arg-type]
+        tile_overlap=4,
+    )
+
+    assert isinstance(result, SingleInferenceResult)
+    assert result.output_paths == {
+        "PAS": tmp_path / "out" / "PAS" / "sample_generated.png",
+        "HE": tmp_path / "out" / "HE" / "sample_generated.png",
+    }
+    source = _read(paths["LF"]).astype(int)
+    he = _read(result.output_paths["HE"]).astype(int)
+    pas = _read(result.output_paths["PAS"]).astype(int)
+    assert he.shape == pas.shape == source.shape  # every output on the input grid
+    assert np.abs(he - source).max() <= 1
+    assert np.abs(pas - (255 - source)).max() <= 1
+    if mode == "tile":
+        # One traversal: one predictor call per tile, not one per output.
+        assert len(predictor.calls) == 6
+
+
+def test_directory_inference_publishes_every_output_per_input(tmp_path: Path) -> None:
+    for modality in ("AF", "LF"):
+        _random_image(tmp_path / modality / "a.png", (16, 16))
+        _random_image(tmp_path / modality / "b.png", (16, 16), seed=1)
+
+    result = run_image_path_inference(
+        _two_outputs(), {"AF": tmp_path / "AF", "LF": tmp_path / "LF"}, tmp_path / "out"
+    )
+
+    assert isinstance(result, DirectoryInferenceResult)
+    assert sorted(
+        path.relative_to(tmp_path / "out")
+        for single in result.results
+        for path in single.output_paths.values()
+    ) == [
+        Path("HE/a_generated.png"),
+        Path("HE/b_generated.png"),
+        Path("PAS/a_generated.png"),
+        Path("PAS/b_generated.png"),
+    ]
+
+
+def test_reordered_output_mapping_is_rejected(tmp_path: Path) -> None:
+    paths = _pair(tmp_path, (16, 16))
+    runtime = _runtime(InMemoryPredictor(("HE", "PAS")), outputs=("PAS", "HE"))
+
+    with pytest.raises(ValueError, match="must be exactly"):
+        run_image_path_inference(runtime, paths, tmp_path / "out")
+    assert not (tmp_path / "out").exists()

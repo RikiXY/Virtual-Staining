@@ -48,7 +48,7 @@ def _optimization(**overrides: object) -> GanTrainingOptions:
 def test_training_sections_round_trip() -> None:
     config = _resolve(
         scheduler={"name": "linear_decay", "decay_start_epoch": 50},
-        early_stopping={"monitor": "val_ssim", "patience": 10},
+        early_stopping={"monitor": "val_ssim__stained", "patience": 10},
         augmentation={"enabled": True, "expansion_factor": 3, "intensity": "medium"},
     )
     training = config.training
@@ -84,6 +84,7 @@ def test_training_resolves_defaults() -> None:
         "enabled": False,
         "expansion_factor": 1,
         "intensity": "light",
+        "photometric_inputs": [],
     }
 
 
@@ -112,8 +113,100 @@ def test_early_stopping_default_monitor_and_mode_come_from_the_method() -> None:
     early_stopping = _training(early_stopping={}).early_stopping
 
     assert early_stopping is not None
-    assert early_stopping.monitor == Pix2PixDefinition.default_monitor == "val_ssim"
+    assert early_stopping.monitor == "val_ssim__stained"
+    assert Pix2PixDefinition().resolve_default_monitor(("stained",)) == early_stopping.monitor
     assert early_stopping.mode == "max"
+
+
+def test_several_outputs_require_an_explicit_early_stopping_monitor() -> None:
+    data = pix2pix_config_data(Path("unused"), outputs=("HE", "PAS"))
+    data["training"] = {"epochs": 10, "losses": _LOSSES, "early_stopping": {}}
+    with pytest.raises(ValueError, match="early_stopping.monitor is required"):
+        RunConfig.from_mapping(data)
+
+    data["training"]["early_stopping"] = {"monitor": "val_mae__PAS"}
+    config = RunConfig.from_mapping(data)
+    assert config.training is not None and config.training.early_stopping is not None
+    assert config.training.early_stopping.mode == "min"
+
+    data["training"]["early_stopping"] = {"monitor": "val_mae__XX"}
+    with pytest.raises(ValueError, match="names output 'XX'"):
+        RunConfig.from_mapping(data)
+
+
+def _augmentation(inputs: tuple[str, ...], **augmentation: object) -> tuple[str, ...] | None:
+    data = pix2pix_config_data(Path("unused"), inputs=inputs)
+    data["training"] = {"epochs": 10, "losses": _LOSSES, "augmentation": augmentation}
+    training = RunConfig.from_mapping(data).training
+    assert training is not None
+    return training.augmentation.photometric_inputs
+
+
+def test_photometric_inputs_resolve_to_the_effective_list() -> None:
+    # light has no photometric transforms.
+    assert _augmentation(("LF", "AF"), intensity="light") == ()
+    # Without a preparation reference the first selected input is the default.
+    assert _augmentation(("AF", "LF"), intensity="medium") == ("AF",)
+    assert _augmentation(("LF", "AF"), intensity="strong", photometric_inputs=[]) == ()
+    assert _augmentation(("LF", "AF"), intensity="medium", photometric_inputs=["LF"]) == ("LF",)
+    assert _augmentation(("LF", "AF"), intensity="medium", photometric_inputs=["AF", "LF"]) == (
+        "AF",
+        "LF",
+    )
+
+
+def test_photometric_inputs_default_to_the_selected_preparation_reference() -> None:
+    def resolve(inputs: list[str]) -> tuple[str, ...] | None:
+        data = pix2pix_config_data(Path("unused"), inputs=tuple(inputs))
+        data["training"] = {
+            "epochs": 10,
+            "losses": _LOSSES,
+            "augmentation": {"intensity": "medium"},
+        }
+        data["preprocessing"] = {
+            "inputs": {
+                "inventory": "i.csv",
+                "modalities": ["LF", "AF"],
+                "reference": "LF",
+                "target_modalities": ["stained"],
+            },
+            "split": {"unit": "patch", "train": 0.8, "val": 0.1, "test": 0.1},
+        }
+        training = RunConfig.from_mapping(data).training
+        assert training is not None
+        resolved = training.augmentation.photometric_inputs
+        assert RunConfig.from_mapping(data).to_dict()["training"]["augmentation"][
+            "photometric_inputs"
+        ] == list(resolved or ())
+        return resolved
+
+    assert resolve(["AF", "LF"]) == ("LF",)  # the reference is selected
+    assert resolve(["AF"]) == ("AF",)  # reference absent -> first selected input
+
+
+@pytest.mark.parametrize(
+    ("augmentation", "message"),
+    [
+        ({"intensity": "light", "photometric_inputs": ["LF"]}, "must be empty for"),
+        ({"intensity": "medium", "photometric_inputs": ["LF", "LF"]}, "duplicate names"),
+        ({"intensity": "medium", "photometric_inputs": ["XX"]}, "not selected model.inputs"),
+        ({"intensity": "medium", "photometric_inputs": ["stained"]}, "not selected model.inputs"),
+        ({"intensity": "medium", "photometric_inputs": "LF"}, "list of input names"),
+    ],
+)
+def test_photometric_inputs_are_validated(augmentation: dict[str, Any], message: str) -> None:
+    with pytest.raises((ValueError, TypeError), match=message):
+        _augmentation(("LF", "AF"), **augmentation)
+
+
+def test_enabled_augmentation_requires_a_square_image_size() -> None:
+    data = pix2pix_config_data(Path("unused"), image_size=(48, 32))
+    data["training"] = {"epochs": 10, "losses": _LOSSES, "augmentation": {"enabled": True}}
+    with pytest.raises(ValueError, match="requires a square image_size"):
+        RunConfig.from_mapping(data)
+
+    data["training"]["augmentation"] = {"enabled": False, "intensity": "medium"}
+    assert RunConfig.from_mapping(data).project.image_size == (48, 32)
 
 
 @pytest.mark.parametrize(

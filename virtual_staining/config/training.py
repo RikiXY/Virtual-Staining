@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 
 from virtual_staining.checkpoint_selection import CheckpointMode
@@ -28,7 +28,9 @@ TRAINING_KEYS: frozenset[str] = frozenset(
     }
 )
 _EARLY_STOPPING_KEYS: frozenset[str] = frozenset({"monitor", "mode", "patience", "min_delta"})
-_AUGMENTATION_KEYS: frozenset[str] = frozenset({"enabled", "expansion_factor", "intensity"})
+_AUGMENTATION_KEYS: frozenset[str] = frozenset(
+    {"enabled", "expansion_factor", "intensity", "photometric_inputs"}
+)
 
 
 @dataclass(frozen=True)
@@ -61,9 +63,17 @@ class EarlyStoppingConfig:
 
 @dataclass(frozen=True)
 class AugmentationConfig:
+    """Paired augmentation; ``photometric_inputs`` None means "resolve the default".
+
+    ``resolve`` fills the effective list: empty for ``light`` (no photometric
+    transforms), otherwise the preparation reference input when it is selected, else the
+    first selected model input. Targets and masks never receive photometric transforms.
+    """
+
     enabled: bool = False
     expansion_factor: int = 1
     intensity: AugmentationIntensity = "light"
+    photometric_inputs: tuple[str, ...] | None = None
 
     def validate(self) -> None:
         if self.expansion_factor < 1:
@@ -72,17 +82,47 @@ class AugmentationConfig:
             raise ValueError(
                 f"augmentation.intensity must be one of {sorted(get_args(AugmentationIntensity))}"
             )
+        names = self.photometric_inputs
+        if names is None:
+            return
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(f"augmentation.photometric_inputs has duplicate names {duplicates}")
+        if names and self.intensity == "light":
+            raise ValueError(
+                "augmentation.photometric_inputs must be empty for intensity='light', which "
+                "has no photometric transforms"
+            )
+
+    def resolve(self, model_inputs: tuple[str, ...], reference: str | None) -> AugmentationConfig:
+        """Return this config with the effective ``photometric_inputs`` for ``model_inputs``."""
+        names = self.photometric_inputs
+        if names is None:
+            if self.intensity == "light":
+                names = ()
+            else:
+                names = (reference if reference in model_inputs else model_inputs[0],)
+        unknown = [name for name in names if name not in model_inputs]
+        if unknown:
+            raise ValueError(
+                f"augmentation.photometric_inputs {unknown} are not selected model.inputs "
+                f"{list(model_inputs)}; targets and masks never receive photometric transforms"
+            )
+        return replace(self, photometric_inputs=tuple(names))
 
     @property
     def effective_expansion_factor(self) -> int:
         return self.expansion_factor if self.enabled else 1
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "enabled": self.enabled,
             "expansion_factor": self.expansion_factor,
             "intensity": self.intensity,
         }
+        if self.photometric_inputs is not None:
+            data["photometric_inputs"] = list(self.photometric_inputs)
+        return data
 
 
 def _parse_augmentation_config(raw: Any) -> AugmentationConfig:
@@ -94,7 +134,15 @@ def _parse_augmentation_config(raw: Any) -> AugmentationConfig:
     expansion_factor = raw.get("expansion_factor", 1)
     if isinstance(expansion_factor, bool) or not isinstance(expansion_factor, int):
         raise TypeError("augmentation.expansion_factor must be an integer")
+    photometric = raw.get("photometric_inputs")
+    if photometric is not None:
+        if isinstance(photometric, str) or not isinstance(photometric, list | tuple):
+            raise TypeError("augmentation.photometric_inputs must be a list of input names")
+        if not all(isinstance(name, str) for name in photometric):
+            raise TypeError("augmentation.photometric_inputs must contain names")
+        photometric = tuple(photometric)
     config = AugmentationConfig(
+        photometric_inputs=photometric,
         enabled=parse_bool_strict(raw.get("enabled", False), "augmentation.enabled"),
         expansion_factor=expansion_factor,
         intensity=cast(
@@ -110,16 +158,19 @@ def _parse_augmentation_config(raw: Any) -> AugmentationConfig:
     return config
 
 
-def _parse_early_stopping_config(raw: Any, method: MethodDefinition) -> EarlyStoppingConfig | None:
+def _parse_early_stopping_config(
+    raw: Any, method: MethodDefinition, outputs: tuple[str, ...]
+) -> EarlyStoppingConfig | None:
     if raw is None:
         return None
     if not isinstance(raw, dict):
         raise TypeError("training.early_stopping must be a YAML mapping")
     reject_unknown_keys(raw, _EARLY_STOPPING_KEYS, "training.early_stopping")
-    monitor = raw.get("monitor", method.default_monitor)
+    monitor = raw.get("monitor", method.resolve_default_monitor(outputs))
     if monitor is None:
         raise ValueError(
-            f"training.early_stopping.monitor is required for method.name={method.name!r}"
+            f"training.early_stopping.monitor is required for method.name={method.name!r} "
+            f"with model.outputs {list(outputs)}"
         )
     if not isinstance(monitor, str):
         raise TypeError("training.early_stopping.monitor must be a string")
@@ -162,7 +213,9 @@ class TrainingConfig:
         self.validate()
 
     @classmethod
-    def from_mapping(cls, data: dict[str, Any], *, method: MethodDefinition) -> TrainingConfig:
+    def from_mapping(
+        cls, data: dict[str, Any], *, method: MethodDefinition, outputs: tuple[str, ...]
+    ) -> TrainingConfig:
         reject_unknown_keys(data, TRAINING_KEYS, "training")
         if "epochs" not in data:
             raise ValueError("training.epochs is required")
@@ -176,7 +229,9 @@ class TrainingConfig:
             checkpoint_top_k=int(data.get("checkpoint_top_k", 3)),
             log_rate=int(data.get("log_rate", 15)),
             resume=data.get("resume"),
-            early_stopping=_parse_early_stopping_config(data.get("early_stopping"), method),
+            early_stopping=_parse_early_stopping_config(
+                data.get("early_stopping"), method, outputs
+            ),
             augmentation=_parse_augmentation_config(data.get("augmentation", {})),
         )
 

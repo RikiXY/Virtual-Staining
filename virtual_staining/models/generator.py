@@ -162,34 +162,76 @@ class UNetGenerator(nn.Module):
         return torch.tanh(self.outc(x))
 
 
+def concat_named(
+    images: Mapping[str, torch.Tensor],
+    names: tuple[str, ...],
+    role: str,
+    *,
+    like: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Concatenate RGB NCHW ``images`` in exactly the ordered ``names`` along channels.
+
+    Every tensor must share the batch and spatial shape of the first one (or of ``like``).
+    """
+    if tuple(images) != names:
+        raise ValueError(f"{role} must have exact ordered names {names}, got {tuple(images)}")
+    reference = like if like is not None else images[names[0]]
+    for name in names:
+        value = images[name]
+        if not isinstance(value, torch.Tensor) or value.ndim != 4 or value.shape[1] != 3:
+            raise ValueError(f"{role} {name!r} must be an RGB NCHW tensor")
+        if value.shape[0] != reference.shape[0] or value.shape[2:] != reference.shape[2:]:
+            raise ValueError(
+                f"{role} {name!r} has shape {tuple(value.shape)}; every image must share "
+                f"batch and spatial shape {(reference.shape[0], *reference.shape[2:])}"
+            )
+    return torch.cat([images[name] for name in names], dim=1)
+
+
 def concat_inputs(inputs: Mapping[str, torch.Tensor], input_names: tuple[str, ...]) -> torch.Tensor:
-    if tuple(inputs) != input_names:
-        raise ValueError(
-            f"Generator inputs must have exact ordered names {input_names}, got {tuple(inputs)}"
-        )
-    return torch.cat([inputs[name] for name in input_names], dim=1)
+    return concat_named(inputs, input_names, "Generator inputs")
+
+
+def split_named(tensor: torch.Tensor, names: tuple[str, ...]) -> dict[str, torch.Tensor]:
+    """Split ``3 * len(names)`` channels into one RGB tensor per name, in order."""
+    return {name: tensor[:, 3 * index : 3 * index + 3] for index, name in enumerate(names)}
+
+
+def _check_names(names: tuple[str, ...], role: str) -> None:
+    if not names or len(set(names)) != len(names):
+        raise ValueError(f"{role} must be non-empty and unique")
 
 
 class ConcatUNetGenerator(nn.Module):
+    """U-Net over the channel-concatenated named inputs, split into named RGB outputs.
+
+    ``input_names``/``output_names`` are construction context derived from the model I/O,
+    never component options: the U-Net sees ``3 * N`` input and ``3 * M`` output channels.
+    """
+
     def __init__(
         self,
         input_names: tuple[str, ...],
+        output_names: tuple[str, ...],
         channels_per_input: int = 3,
         **unet_kwargs: Any,
     ) -> None:
         super().__init__()
-        if not input_names or len(set(input_names)) != len(input_names):
-            raise ValueError("input_names must be non-empty and unique")
+        _check_names(input_names, "input_names")
+        _check_names(output_names, "output_names")
+        if set(input_names) & set(output_names):
+            raise ValueError("input_names and output_names must be disjoint")
         self.input_names = input_names
+        self.output_names = output_names
         self.channels_per_input = channels_per_input
         self.unet = UNetGenerator(
             in_channels=len(input_names) * channels_per_input,
-            out_channels=3,
+            out_channels=3 * len(output_names),
             **unet_kwargs,
         )
 
-    def forward(self, inputs: Mapping[str, torch.Tensor]) -> torch.Tensor:
-        return self.unet(concat_inputs(inputs, self.input_names))
+    def forward(self, inputs: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        return split_named(self.unet(concat_inputs(inputs, self.input_names)), self.output_names)
 
 
 RESNET_SIZE_MULTIPLE = 4

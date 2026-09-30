@@ -69,23 +69,24 @@ def test_resnet_generator_rejects_invalid_shapes(shape: tuple[int, ...], match: 
 
 def test_patchgan_conditional_and_unconditional_inputs() -> None:
     patchgan = PATCHGAN.resolve({"ndf": 4}, _CONTEXT)
-    # Pix2Pix conditions on its two inputs plus the target; CycleGAN scores one image.
-    conditional = patchgan.build(in_channels=9)
+    # Pix2Pix conditions on its two inputs plus the output; CycleGAN scores one image.
+    conditional = patchgan.build(input_names=("LF", "AF"), output_names=("HE",))
     unconditional = patchgan.build(in_channels=3)
 
     assert conditional.in_channels == 9
     assert unconditional.in_channels == 3
-    condition, image = torch.randn(2, 6, 32, 32), torch.randn(2, 3, 32, 32)
-    assert conditional(condition, image).shape == (2, 1, 2, 2)
+    image = torch.randn(2, 3, 32, 32)
+    inputs = {"LF": torch.randn(2, 3, 32, 32), "AF": torch.randn(2, 3, 32, 32)}
+    assert conditional(inputs, {"HE": image}).shape == (2, 1, 2, 2)
     assert unconditional(image).shape == (2, 1, 2, 2)
 
 
-def test_patchgan_conditional_forward_is_unchanged() -> None:
+def test_patchgan_unconditional_forward_is_unchanged() -> None:
     torch.manual_seed(0)
-    discriminator = PatchGANDiscriminator(in_channels=6, ndf=4)
-    x, y = torch.randn(1, 3, 32, 32), torch.randn(1, 3, 32, 32)
+    discriminator = PatchGANDiscriminator(in_channels=3, ndf=4)
+    x = torch.randn(1, 3, 32, 32)
 
-    assert torch.equal(discriminator(x, y), discriminator.model(torch.cat([x, y], dim=1)))
+    assert torch.equal(discriminator(x), discriminator.model(x))
 
 
 def test_cyclegan_initializer_is_applied_to_convs_and_affine_norms() -> None:
@@ -117,7 +118,7 @@ def test_cyclegan_initializer_is_applied_to_convs_and_affine_norms() -> None:
 def test_component_identity_holds_registered_name_version_and_normalized_options() -> None:
     concat_unet = CONCAT_UNET.resolve({}, _CONTEXT)
 
-    generator = concat_unet.build(input_names=("a",))
+    generator = concat_unet.build(input_names=("a",), output_names=("b",))
     assert isinstance(generator, ConcatUNetGenerator)
     assert generator.unet.base_channels == 64
     assert concat_unet.identity() == {

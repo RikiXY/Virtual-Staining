@@ -2,14 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextlib import nullcontext
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.amp import GradScaler, autocast
 
-from virtual_staining.models.generator import concat_inputs
 from virtual_staining.training.losses import (
     ConfiguredLossEvaluator,
     LossEvaluationContext,
@@ -50,14 +49,13 @@ class Pix2PixTrainingStep:
     def step(
         self,
         inputs: Mapping[str, torch.Tensor],
-        target: torch.Tensor,
+        targets: Mapping[str, torch.Tensor],
         *,
         epoch: int = 0,
         global_step: int | None = None,
-        masks: dict[str, torch.Tensor] | None = None,
+        masks: Mapping[str, Mapping[str, torch.Tensor]] | None = None,
     ) -> StepLosses:
-        input_names = cast(tuple[str, ...], self.generator.input_names)
-        condition = concat_inputs(inputs, input_names)
+        """Update the joint discriminator, then the generator, on all named outputs."""
         discriminator_phase = (
             self.benchmark_recorder.phase("discriminator_update")
             if self.benchmark_recorder is not None
@@ -65,9 +63,9 @@ class Pix2PixTrainingStep:
         )
         with discriminator_phase:
             with autocast(device_type=self.device.type, enabled=self.amp_enabled):
-                fake = self.generator(inputs).detach()
-                D_real = self.discriminator(condition, target)
-                D_fake = self.discriminator(condition, fake)
+                fake = {name: value.detach() for name, value in self.generator(inputs).items()}
+                D_real = self.discriminator(inputs, targets)
+                D_fake = self.discriminator(inputs, fake)
                 context = LossEvaluationContext(epoch=epoch, global_step=global_step)
                 discriminator_loss = self.loss_evaluator.discriminator_total(
                     discriminator_real=D_real,
@@ -92,11 +90,11 @@ class Pix2PixTrainingStep:
         with generator_phase:
             with autocast(device_type=self.device.type, enabled=self.amp_enabled):
                 fake = self.generator(inputs)
-                D_fake = self.discriminator(condition, fake)
+                D_fake = self.discriminator(inputs, fake)
                 context = LossEvaluationContext(epoch=epoch, global_step=global_step, masks=masks)
                 generator_loss = self.loss_evaluator.generator_total(
-                    prediction=fake,
-                    target=target,
+                    predictions=fake,
+                    targets=targets,
                     discriminator_fake=D_fake,
                     context=context,
                 )

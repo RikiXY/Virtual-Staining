@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from virtual_staining.utils.artifacts import (
-    GENERATED_SUFFIX,
     TARGET_SUFFIX,
+    generated_identity,
     sample_id_for_suffix,
 )
 from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS
@@ -15,8 +15,9 @@ def _extract_sample_id(path: str | Path, suffix: str, label: str = "File") -> st
 
 
 def extract_single_sample_id(target_path: str | Path, generated_path: str | Path) -> str:
+    """The shared sample ID of a ``<id>_target`` file and a generated artifact."""
     target_id = _extract_sample_id(target_path, TARGET_SUFFIX, "Target")
-    generated_id = _extract_sample_id(generated_path, GENERATED_SUFFIX, "Generated")
+    generated_id, _ = generated_identity(generated_path)
     if target_id != generated_id:
         raise ValueError(
             "Target and generated files refer to different sample ids. "

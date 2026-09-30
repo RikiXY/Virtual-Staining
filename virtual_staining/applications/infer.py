@@ -24,6 +24,7 @@ from virtual_staining.inference.runner import (
     inference_direction,
     inference_input_names,
     inference_output_dir,
+    inference_output_names,
     load_inference_generator,
     predict_batch,
     resolve_inference_checkpoint,
@@ -37,13 +38,13 @@ PAIRED_INFER_ADAPTER = "paired_manifest_infer/1"
 INFER_OUTPUT_ADAPTER = "inference_outputs/1"
 
 
-def _prediction_sources(
-    record: ManifestRecord, source_names: tuple[str, ...], direction: str | None
-) -> dict[str, Path]:
-    """Root-relative files a record feeds to the predictor; nothing else is opened."""
-    if direction == "B_to_A":
-        return {name: record.target_path for name in source_names}
-    return {name: record.input_paths[name] for name in source_names}
+def _prediction_sources(record: ManifestRecord, source_names: tuple[str, ...]) -> dict[str, Path]:
+    """Root-relative files a record feeds to the predictor; nothing else is opened.
+
+    A source is looked up by domain name, so CycleGAN B_to_A reads the held-out aligned
+    domain-B target as its input.
+    """
+    return {name: record.domain_path(name) for name in source_names}
 
 
 def infer(config: RunConfig, config_path: Path) -> InferenceResult:
@@ -54,7 +55,7 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
         output_dir = inference_output_dir(config, session.paths)
         direction = inference_direction(config)
         manifest = load_manifest_or_raise(config.project)
-        require_model_modalities(manifest, config.model.inputs, config.model.target)
+        require_model_modalities(manifest, config.model.inputs, config.model.outputs)
         manifest.validate(check_files_exist=True, require_splits={"test"})
         test_manifest = manifest.filter_split("test")
         checkpoint_path = resolve_inference_checkpoint(config, session.paths)
@@ -65,6 +66,7 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
         # is the domain-B source and the domain-A references are never opened.
         groups = load_set_groups(config.project)
         source_names = inference_input_names(config)
+        output_names = inference_output_names(config)
         rows = [
             AssetRow(
                 root="dataset",
@@ -78,7 +80,7 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
                 patient_id=groups.get(record.set_id, ("", ""))[1],
             )
             for record in test_manifest.records
-            for name, path in _prediction_sources(record, source_names, direction).items()
+            for name, path in _prediction_sources(record, source_names).items()
         ]
         resolved = config.to_dict()
         generation = {
@@ -94,7 +96,11 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
             roots={"dataset": config.project.dataset_root},
             hash_policy=config.data.hash_policy,
             group_validation=config.data.group_validation,
-            selection={"split": "test", "prediction_inputs": list(source_names)},
+            selection={
+                "split": "test",
+                "prediction_inputs": list(source_names),
+                "prediction_outputs": list(output_names),
+            },
             context={
                 "method": config.method.name,
                 "direction": direction,
@@ -128,33 +134,35 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
                 "No test pairs found in manifest: %s",
                 DatasetLayout.from_project(config.project).manifest_path,
             )
-        output_domain = config.model.inputs[0] if direction == "B_to_A" else config.model.target
         produced: list[AssetRow] = []
         for record in test_manifest.records:
             inputs = {
                 name: transform(
                     Image.open(config.project.dataset_root / path).convert("RGB")
                 ).unsqueeze(0)
-                for name, path in _prediction_sources(record, source_names, direction).items()
+                for name, path in _prediction_sources(record, source_names).items()
             }
-            output = predict_batch(generator, inputs, device)[0]
-            out_path = generated_path_for_record(record, output_dir, direction)
-            save_image(output, out_path)
+            outputs = predict_batch(generator, inputs, device, output_names)
             specimen, patient = groups.get(record.set_id, ("", ""))
-            produced.append(
-                AssetRow(
-                    root="output",
-                    locator=relative_locator(output_dir, out_path),
-                    role="generated",
-                    domain=output_domain,
-                    split=record.split,
-                    sample_id=record.sample_id,
-                    set_id=record.set_id,
-                    specimen_id=specimen,
-                    patient_id=patient,
+            # One published artifact and one produced row per (sample_id, output_name).
+            for output_name, output in outputs.items():
+                out_path = generated_path_for_record(record, output_dir, output_name)
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                save_image(output[0], out_path)
+                produced.append(
+                    AssetRow(
+                        root="output",
+                        locator=relative_locator(output_dir, out_path),
+                        role="generated",
+                        domain=output_name,
+                        split=record.split,
+                        sample_id=record.sample_id,
+                        set_id=record.set_id,
+                        specimen_id=specimen,
+                        patient_id=patient,
+                    )
                 )
-            )
-            result.generated_paths.append(out_path)
+                result.generated_paths.append(out_path)
             result.num_samples += 1
             session.result(inferred_count=result.num_samples)
         outputs = session.record_outputs(
@@ -164,7 +172,7 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
                 adapter=INFER_OUTPUT_ADAPTER,
                 roots={"output": output_dir},
                 hash_policy=config.data.hash_policy,
-                selection={"direction": direction, "output_domain": output_domain},
+                selection={"direction": direction, "output_domains": list(output_names)},
                 context={"consumed_snapshot_id": snapshot.snapshot_id, **snapshot.context},
             )
         )

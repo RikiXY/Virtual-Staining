@@ -8,9 +8,11 @@ Two translation methods are built in and share one training, checkpoint, inferen
 infrastructure:
 
 - **Pix2Pix** (reference method) - paired training on aligned patches; named
-  N-input -> one-target translation; ConcatUNet generator and conditional PatchGAN
-  discriminator; configurable BCE / L1 / SSIM losses.
-- **CycleGAN** - one source domain A <-> one target domain B; unpaired training from two
+  N-input -> M-output translation (`model.outputs: [HE]` or `[HE, PAS]`); one ConcatUNet
+  generator with `3*M` output channels and one joint conditional PatchGAN discriminator;
+  configurable BCE / L1 / SSIM losses.
+- **CycleGAN** - one source domain A <-> one target domain B (exactly one input and one
+  output); unpaired training from two
   independent image collections; two ResNet generators and two unconditional PatchGAN
   discriminators (LSGAN, cycle L1, optional identity L1, replay pools); `A_to_B` and
   `B_to_A` inference from the same checkpoint.
@@ -18,7 +20,8 @@ infrastructure:
 The method is selected with `method.name` in the run config. The stock CLI ships only
 these two built-in methods. Python callers can register further methods and network
 components explicitly (see [`docs/library_api.md`](docs/library_api.md#extending-with-explicit-definitions));
-there is no plugin discovery, and translation is always to exactly one target.
+there is no plugin discovery. The framework contract is N ordered named RGB inputs ->
+M ordered named RGB outputs; one output is the one-item case of the same representation.
 
 ## CLI Commands
 
@@ -118,7 +121,7 @@ research artifact, not a redistribution approval; see
 Evaluate one generated image without adding another top-level command:
 
 ```bash
-vs evaluate --pair target.png target_generated.png --output-dir evaluation
+vs evaluate --pair sample_target.png generated/HE/sample_generated.png --output-dir evaluation
 ```
 
 Run inference on one image or a directory. Multi-input models take one named
@@ -135,6 +138,10 @@ vs infer-images \
   --output local_workspace/results/my_run/sample.png
 ```
 
+An explicit output file is accepted only for a one-output model. With several
+`model.outputs`, `--output` must be a directory, which receives one
+`<output>/<sample>_generated.<ext>` file per output; no output is ever dropped.
+
 For directory batches, matching files must have exactly the same relative
 paths, including extensions. Recursive subdirectories are preserved:
 
@@ -149,9 +156,11 @@ vs infer-images \
 
 Single-input models retain the shorthand `--input PATH`. CycleGAN runs consume the
 domain selected by `inference.direction` (`model.inputs[0]` for `A_to_B`,
-`model.target` for `B_to_A`). Generated names carry the direction
-(`tile_A_to_B_generated.png`, `tile_B_to_A_generated.png`), so both directions can
-share one output root; Pix2Pix outputs keep the `_target_generated` suffix.
+`model.outputs[0]` for `B_to_A`). Every generated image is identified by
+`(sample_id, output_name)` and written as `<output_dir>/<output_name>/<sample_id>_generated.<ext>`
+(`stained/tile_generated.png` for `A_to_B`, `label_free/tile_generated.png` for
+`B_to_A`), so both CycleGAN directions and all Pix2Pix outputs share one output root
+without collisions.
 
 `vs infer-images` accepts `.bmp`, `.jpg`, `.jpeg`, `.png`, `.tif`, and `.tiff`.
 It defaults to `--mode auto`: patch-sized inputs use the standard single-patch
@@ -213,17 +222,17 @@ run_name: your_run_name
 image_size: [256, 256]
 
 model:
-  inputs: [autofluorescence, label_free]
-  target: H&E
+  inputs: [AF, LF]            # N ordered named RGB inputs
+  outputs: [HE]               # M ordered named RGB outputs, e.g. [HE, PAS]
   generator: {architecture: concat_unet, base_channels: 64, norm: batch, dropout: false, bilinear: false}
   discriminator: {ndf: 64, norm: instance, use_sigmoid: false}
 
 preprocessing:
   inputs:
     inventory: inputs/slide_sets.csv
-    modalities: [autofluorescence, label_free]
-    reference: label_free
-    target_modality: H&E
+    modalities: [AF, LF]
+    reference: LF
+    target_modalities: [HE]   # every prepared target; model.outputs selects a subset
   masks: {generation: if_missing, strategy: connected_components, scale: 0.25}
   alignment: {mode: auto, method: affine_sift}
   filtering: {foreground: {enabled: true, policy: reference, min_ratio: 0.25}}
@@ -235,9 +244,10 @@ training:
   lr_g: 0.0002
   seed: 42
   augmentation:
-    enabled: false
+    enabled: false            # true requires a square image_size
     expansion_factor: 1
-    intensity: light
+    intensity: light          # medium/strong add photometric transforms
+    photometric_inputs: []    # inputs that get them; [] for light
   losses:
     generator:
       - name: l1
@@ -253,8 +263,16 @@ evaluation:
   save_graphs: true
 ```
 
+With several `model.outputs`, each reconstruction loss is the arithmetic mean of that
+term over the outputs (one output keeps its exact scale), training history reports it
+per output (`loss_*_raw_generator_l1__HE`), validation image metrics are per output
+(`val_ssim__HE`), and evaluation reports every output separately; nothing averages
+different outputs into one score. A synthetic multi-output run proves only the software
+contract, not any biological benefit.
+
 A CycleGAN run instead sets `method.name: cyclegan`, `data.pairing: unpaired` with one
-image collection per domain under `data.domains`, a `resnet` generator, and the
+image collection per domain under `data.domains`, a `resnet` generator, exactly one
+`model.inputs` and one `model.outputs` entry, and the
 `adversarial_lsgan` / `cycle_l1` / `identity_l1` losses; see the CycleGAN example.
 
 Experiment commands accept YAML configuration directly through `--config`.
@@ -289,11 +307,13 @@ stages repeats every required validation and freezes what they actually consume.
 ```bash
 vs inventory preview --dataset-root DATASET \
   --input LF=raw/LF --input 'AF=raw/AF/**/*.svs' \
-  --target-modality HE --target raw/HE --reference LF
+  --target HE=raw/HE --target PAS=raw/PAS --reference LF
 vs inventory write ...   # publishes DATASET/inputs/slide_sets.csv; never overwrites
 ```
 
-Files are matched across the explicit input/target mappings by their path relative to
+`--target NAME=SPEC` and `--target-mask NAME=SPEC` are repeatable; a key forms a set only
+when every input and every target has exactly one file. Files are matched across the
+explicit input/target mappings by their path relative to
 each mapping (`--key relative-stem` ignores the final extension). `preview` lists every
 incomplete, duplicate, or colliding key and writes nothing; `write` publishes only a valid
 preview after the canonical loader has read it back. Alignment of non-reference inputs,
@@ -440,23 +460,27 @@ from the same slide. For independent generalization evidence, configure `split.u
   single method-aware v4 format with opaque method-owned state; inference, run metadata,
   and provenance are shared. Details: [`docs/architecture.md`](docs/architecture.md).
 - **Preprocessing** (paired data) - tissue masking, feature-based affine alignment of
-  target to reference, patch extraction with foreground and white-area quality filters.
-- **Pix2Pix** (reference method) - conditional GAN on aligned pairs: ConcatUNet generator
-  over the concatenated named inputs, conditional PatchGAN discriminator, adversarial BCE
-  plus L1 (optional SSIM) losses.
+  every target to the reference, patch extraction on one grid with foreground and
+  white-area quality filters.
+- **Pix2Pix** (reference method) - conditional GAN on aligned samples: ConcatUNet generator
+  over the concatenated named inputs, split into the named outputs, one joint conditional
+  PatchGAN over all inputs and outputs, adversarial BCE plus per-output-averaged L1
+  (optional SSIM) losses.
 - **CycleGAN** (alternative method) - unpaired A <-> B translation: two ResNet generators,
   two unconditional PatchGAN discriminators, LSGAN adversarial, cycle-consistency L1 and
   optional identity L1 losses, fake-image replay pools.
 - **Evaluation** - two distinct protocols:
   - *paired* (Pix2Pix default; CycleGAN opt-in) - per-image MAE, MSE, RMSE, PSNR, SSIM,
     and PCC (or any requested metric, including ones supplied in Python) against aligned
-    references, with explicit result statuses, input coverage and set/specimen/patient
+    references, one explicit `(sample_id, output_name)` pair per model output, with
+    explicit result statuses, input coverage and per-output set/specimen/patient
     summaries. Requires an aligned held-out test manifest.
   - *unpaired* (CycleGAN default; any method opt-in) - compares the generated collection
     with an independent real reference collection through per-image RGB/luminance
     feature distributions. No pairs are formed and no pairwise fidelity metric is
     reported. Methods without a `data.domains` reference collection (e.g. Pix2Pix) set
-    `evaluation.reference_collection`; this changes evaluation only, not training.
+    `evaluation.reference_collection`; this changes evaluation only, not training. It is
+    available only for one-output models.
 
 ### Scientific scope
 

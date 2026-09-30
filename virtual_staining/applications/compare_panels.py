@@ -18,7 +18,7 @@ from virtual_staining.evaluation.selection import (
 )
 from virtual_staining.evaluation.summaries import read_per_image_metrics_csv, read_summary_csv
 from virtual_staining.experiment.run_layout import RunLayout
-from virtual_staining.utils.artifacts import generated_sample_id
+from virtual_staining.utils.artifacts import generated_identity
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,8 @@ class SinglePanelResult:
 
 @dataclass
 class FromMetricsResult:
+    """Representative cases per ``<output>/<metric>``; outputs are never pooled."""
+
     run_path: Path
     available_metrics: list[str]
     per_metric_representative_rows: dict[str, dict[str, dict[str, str]]]
@@ -65,11 +67,15 @@ def _infer_run_dir_from_generated_path(generated_path: str | Path) -> Path:
         ) from None
 
 
+def _generated_label(generated_image: str | Path) -> str:
+    sample_id, output_name = generated_identity(generated_image)
+    return f"{sample_id}__{output_name}"
+
+
 def _infer_default_save_path(generated_image: str | Path) -> Path:
     generated_path = Path(generated_image)
-    sample_id = generated_sample_id(generated_path)
     layout = RunLayout.from_artifact_path(generated_path)
-    return layout.comparisons_dir / f"{sample_id}_comparison.png"
+    return layout.comparisons_dir / f"{_generated_label(generated_path)}_comparison.png"
 
 
 def _infer_diagnostics_dir(save_path: str | Path) -> Path:
@@ -77,9 +83,7 @@ def _infer_diagnostics_dir(save_path: str | Path) -> Path:
 
 
 def _infer_case_diagnostics_dir(save_path: str | Path, generated_image: str | Path) -> Path:
-    diagnostics_dir = _infer_diagnostics_dir(save_path)
-    sample_id = generated_sample_id(generated_image)
-    return diagnostics_dir / sample_id
+    return _infer_diagnostics_dir(save_path) / _generated_label(generated_image)
 
 
 def _run_single(request: ComparePanelsRequest) -> SinglePanelResult:
@@ -127,29 +131,31 @@ def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
     saved_aggregated_paths: list[Path] = []
     # Metrics without a declared ranking direction have no best/worst and are skipped.
     # An unknown metric (no metadata, not built-in) fails in ranking_direction.
-    directions: dict[str, bool] = {}
-    for metric, summary in summary_rows.items():
-        info = metric_info(per_image_csv, metric)
-        if summary["finite_count"] > 0 and (info is None or info.higher_is_better is not None):
-            directions[metric] = ranking_direction(per_image_csv, metric)
-    available_metrics = list(directions)
+    # Selection is per (output, metric): each output is ranked among its own rows only.
+    directions: dict[tuple[str, str], bool] = {}
+    for output, summaries in summary_rows.items():
+        for metric, summary in summaries.items():
+            info = metric_info(per_image_csv, metric)
+            if summary["finite_count"] > 0 and (info is None or info.higher_is_better is not None):
+                directions[output, metric] = ranking_direction(per_image_csv, metric)
+    available_metrics = [f"{output}/{metric}" for output, metric in directions]
 
     if not available_metrics:
         raise ValueError(f"No rankable metric with finite values found in {summary_csv}.")
 
     per_metric_representative_rows: dict[str, dict[str, dict[str, str]]] = {}
 
-    for metric_name in available_metrics:
-        metric_summary = summary_rows[metric_name]
-        metric_dir = metrics_dir / metric_name
+    for (output, metric_name), higher_is_better in directions.items():
+        metric_summary = summary_rows[output][metric_name]
+        metric_dir = metrics_dir / output / metric_name
         metric_dir.mkdir(parents=True, exist_ok=True)
         representative_rows = select_representative_rows(
             metric_name,
             metric_summary,
-            per_image_rows,
-            higher_is_better=directions[metric_name],
+            [row for row in per_image_rows if row["output_name"] == output],
+            higher_is_better=higher_is_better,
         )
-        per_metric_representative_rows[metric_name] = representative_rows
+        per_metric_representative_rows[f"{output}/{metric_name}"] = representative_rows
         metric_selection_rows: list[dict[str, object]] = []
         metric_diagnostic_entries: list[DiagnosticEntry] = []
 
@@ -160,7 +166,7 @@ def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
                 row=row,
                 metric_summary=metric_summary,
                 metric_dir=metric_dir,
-                higher_is_better=directions[metric_name],
+                higher_is_better=higher_is_better,
             )
             selection_summary_rows.append(selection_row)
             metric_selection_rows.append(selection_row)

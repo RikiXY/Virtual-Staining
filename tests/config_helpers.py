@@ -38,7 +38,7 @@ def write_run_config(
         content += f"{section}\n"
     data = yaml.safe_load(content)
     if "model" not in data:
-        data["model"] = {"inputs": ["label_free"], "target": "stained"}
+        data["model"] = {"inputs": ["label_free"], "outputs": ["stained"]}
     content = yaml.safe_dump(data, sort_keys=False)
     return write_yaml(tmp_path / filename, content)
 
@@ -77,7 +77,7 @@ def cyclegan_config_data(tmp_path: Path) -> dict[str, Any]:
         },
         "model": {
             "inputs": ["label_free"],
-            "target": "stained",
+            "outputs": ["stained"],
             "generator": {"architecture": "resnet", "base_channels": 4, "blocks": 1},
             "discriminator": {"ndf": 4},
         },
@@ -106,6 +106,7 @@ def pix2pix_config_data(
     tmp_path: Path,
     *,
     inputs: tuple[str, ...] = ("LF", "AF"),
+    outputs: tuple[str, ...] = ("stained",),
     image_size: tuple[int, int] = (32, 32),
 ) -> dict[str, Any]:
     """Return a canonical tiny Pix2Pix run configuration mapping for tests to adjust."""
@@ -117,7 +118,7 @@ def pix2pix_config_data(
         "method": {"name": "pix2pix"},
         "model": {
             "inputs": list(inputs),
-            "target": "stained",
+            "outputs": list(outputs),
             "generator": {"base_channels": 4},
             "discriminator": {"ndf": 4},
         },

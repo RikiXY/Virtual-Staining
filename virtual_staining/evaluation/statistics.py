@@ -64,13 +64,38 @@ def resolve_input_csv(path_like: str | Path) -> Path:
     raise ValueError(f"Input path does not exist: {path}")
 
 
-def _load_metric_frame(csv_path: str | Path) -> pd.DataFrame:
+OUTPUT_NAME_COLUMN = "output_name"
+
+
+def _load_metric_frame(csv_path: str | Path, output_name: str | None = None) -> pd.DataFrame:
+    """Read per-image rows of exactly one model output; outputs are never pooled.
+
+    A CSV with an ``output_name`` column holding several outputs requires ``output_name``.
+    """
     resolved_csv = resolve_input_csv(csv_path)
-    return pd.read_csv(resolved_csv)
+    frame = pd.read_csv(resolved_csv)
+    if OUTPUT_NAME_COLUMN not in frame.columns:
+        if output_name is not None:
+            raise ValueError(f"{resolved_csv} has no {OUTPUT_NAME_COLUMN!r} column")
+        return frame
+    frame[OUTPUT_NAME_COLUMN] = frame[OUTPUT_NAME_COLUMN].astype(str)
+    names = list(dict.fromkeys(frame[OUTPUT_NAME_COLUMN]))
+    if output_name is None:
+        if len(names) > 1:
+            raise ValueError(
+                f"{resolved_csv} holds outputs {names}; select one output_name, since a "
+                "comparison never pools different outputs"
+            )
+        return frame
+    if output_name not in names:
+        raise ValueError(f"{resolved_csv} has no rows for output {output_name!r}; found {names}")
+    return frame[frame[OUTPUT_NAME_COLUMN] == output_name]
 
 
-def load_metric_values(csv_path: str | Path, column: str) -> np.ndarray:
-    df = _load_metric_frame(csv_path)
+def load_metric_values(
+    csv_path: str | Path, column: str, output_name: str | None = None
+) -> np.ndarray:
+    df = _load_metric_frame(csv_path, output_name)
 
     if column not in df.columns:
         raise ValueError(f"Column '{column}' not found. Available columns: {list(df.columns)}")
@@ -252,19 +277,38 @@ def align_paired_frames(
     csv_b: str | Path,
     sample_id_column: str,
     metric_column: str,
+    output_name: str | None = None,
 ) -> pd.DataFrame:
-    frame_a = _load_metric_frame(csv_a)
-    frame_b = _load_metric_frame(csv_b)
+    """Align two per-image CSVs by ``(sample_id, output_name)`` for one output.
+
+    Each alignment key must be unique in each CSV; rows are never matched by sample ID
+    alone across different outputs.
+    """
+    frame_a = _load_metric_frame(csv_a, output_name)
+    frame_b = _load_metric_frame(csv_b, output_name)
 
     for frame_name, frame in [("A", frame_a), ("B", frame_b)]:
         if sample_id_column not in frame.columns:
             raise ValueError(f"Column '{sample_id_column}' not found in CSV {frame_name}")
         if metric_column not in frame.columns:
             raise ValueError(f"Column '{metric_column}' not found in CSV {frame_name}")
+    keys = [sample_id_column]
+    if OUTPUT_NAME_COLUMN in frame_a.columns and OUTPUT_NAME_COLUMN in frame_b.columns:
+        keys.append(OUTPUT_NAME_COLUMN)
+        if set(frame_a[OUTPUT_NAME_COLUMN]) != set(frame_b[OUTPUT_NAME_COLUMN]):
+            raise ValueError(
+                f"CSV A output {sorted(set(frame_a[OUTPUT_NAME_COLUMN]))} differs from CSV B "
+                f"output {sorted(set(frame_b[OUTPUT_NAME_COLUMN]))}"
+            )
+    elif OUTPUT_NAME_COLUMN in frame_a.columns or OUTPUT_NAME_COLUMN in frame_b.columns:
+        raise ValueError(f"Only one CSV has an {OUTPUT_NAME_COLUMN!r} column")
+    for frame_name, frame in [("A", frame_a), ("B", frame_b)]:
+        if frame.duplicated(subset=keys).any():
+            raise ValueError(f"CSV {frame_name} has duplicate {keys} rows")
 
-    subset_a = frame_a[[sample_id_column, metric_column]].rename(columns={metric_column: "value_a"})
-    subset_b = frame_b[[sample_id_column, metric_column]].rename(columns={metric_column: "value_b"})
-    merged = subset_a.merge(subset_b, on=sample_id_column, how="inner")
+    subset_a = frame_a[[*keys, metric_column]].rename(columns={metric_column: "value_a"})
+    subset_b = frame_b[[*keys, metric_column]].rename(columns={metric_column: "value_b"})
+    merged = subset_a.merge(subset_b, on=keys, how="inner")
     merged["value_a"] = pd.to_numeric(merged["value_a"], errors="coerce")
     merged["value_b"] = pd.to_numeric(merged["value_b"], errors="coerce")
     merged = merged.dropna(subset=["value_a", "value_b"]).copy()

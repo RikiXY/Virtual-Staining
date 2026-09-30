@@ -7,11 +7,7 @@ import pytest
 import torch
 from PIL import Image
 
-from virtual_staining.data.manifest import (
-    MANIFEST_SCHEMA_VERSION,
-    ManifestMetadata,
-    ManifestRecord,
-)
+from virtual_staining.data.manifest import ManifestRecord
 from virtual_staining.inference.outputs import generated_path_for_record
 from virtual_staining.inference.runner import predict_batch
 from virtual_staining.inference.single import (
@@ -27,35 +23,35 @@ from virtual_staining.models.generator import ConcatUNetGenerator
 
 
 def test_manifest_inference_passes_named_inputs_in_order() -> None:
-    generator = ConcatUNetGenerator(("AF", "LF", "TH"), base_channels=4)
+    generator = ConcatUNetGenerator(("AF", "LF", "TH"), ("PAS", "HE"), base_channels=4)
     generator.eval()
     inputs = {name: torch.zeros(1, 3, 32, 32) for name in ("AF", "LF", "TH")}
-    output = predict_batch(generator, inputs, torch.device("cpu"))
-    assert output.shape == (1, 3, 32, 32)
+    outputs = predict_batch(generator, inputs, torch.device("cpu"), ("PAS", "HE"))
+    assert list(outputs) == ["PAS", "HE"]
+    assert all(output.shape == (1, 3, 32, 32) for output in outputs.values())
 
 
-def test_output_naming_uses_target_suffix(tmp_path: Path) -> None:
-    metadata = ManifestMetadata(MANIFEST_SCHEMA_VERSION, ("LF",), "LF", "target")
+def test_output_naming_uses_each_output_domain_suffix(tmp_path: Path) -> None:
     record = ManifestRecord(
-        "S1__x00000000_y00000000",
-        "S1",
-        "test",
-        {"LF": Path("splits/test/input.png")},
-        Path("splits/test/target.TIFF"),
-        0,
-        0,
-        16,
-        16,
+        sample_id="S1__x00000000_y00000000",
+        set_id="S1",
+        split="test",
+        input_paths={"LF": Path("splits/test/input.png")},
+        target_paths={"HE": Path("splits/test/he.TIFF"), "PAS": Path("splits/test/pas.png")},
+        foreground_mask_paths={"HE": None, "PAS": None},
+        x=0,
+        y=0,
+        width=16,
+        height=16,
     )
-    assert (
-        generated_path_for_record(record, tmp_path).name
-        == "S1__x00000000_y00000000_target_generated.tiff"
+    assert generated_path_for_record(record, tmp_path, "HE") == (
+        tmp_path / "HE" / "S1__x00000000_y00000000_generated.tiff"
     )
-    assert metadata.target_modality == "target"
+    assert generated_path_for_record(record, tmp_path, "PAS").suffix == ".png"
 
 
 def test_predict_images_passes_all_modalities_in_generator_order() -> None:
-    generator = ConcatUNetGenerator(("LF", "AF"), base_channels=4)
+    generator = ConcatUNetGenerator(("LF", "AF"), ("HE",), base_channels=4)
     generator.eval()
     images = {
         "AF": Image.new("RGB", (32, 32), color=(40, 50, 60)),
@@ -69,22 +65,22 @@ def test_predict_images_passes_all_modalities_in_generator_order() -> None:
 
     original_forward = generator.forward
 
-    def recording_forward(inputs: dict[str, torch.Tensor]) -> torch.Tensor:
+    def recording_forward(inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         seen.append(tuple(inputs))
         return original_forward(inputs)
 
     generator.forward = recording_forward  # type: ignore[method-assign]
     runtime = InferenceRuntime(
-        generator, PredictionContract(("LF", "AF"), (32, 32)), torch.device("cpu")
+        generator, PredictionContract(("LF", "AF"), ("HE",), (32, 32)), torch.device("cpu")
     )
     output = _predict_images(images, runtime, transform)  # type: ignore[arg-type]
 
-    assert output.shape == (3, 32, 32)
+    assert output["HE"].shape == (3, 32, 32)
     assert seen == [("LF", "AF")]
 
 
 def test_tiled_prediction_uses_shared_coordinates_for_all_modalities() -> None:
-    generator = ConcatUNetGenerator(("LF", "AF"), base_channels=4)
+    generator = ConcatUNetGenerator(("LF", "AF"), ("HE", "PAS"), base_channels=4)
     generator.eval()
     images = {
         "LF": Image.new("RGB", (8, 8), color=(10, 20, 30)),
@@ -94,9 +90,9 @@ def test_tiled_prediction_uses_shared_coordinates_for_all_modalities() -> None:
 
     def recording_predict(
         tiles: dict[str, Image.Image], runtime: InferenceRuntime, transform: object
-    ) -> torch.Tensor:
+    ) -> dict[str, torch.Tensor]:
         seen.append(tuple(tile.size for tile in tiles.values()))
-        return torch.zeros(3, 4, 4)
+        return {"HE": torch.zeros(3, 4, 4), "PAS": torch.ones(3, 4, 4)}
 
     import virtual_staining.inference.single as single
 
@@ -104,13 +100,19 @@ def test_tiled_prediction_uses_shared_coordinates_for_all_modalities() -> None:
     single._predict_images = recording_predict  # type: ignore[assignment]
     try:
         runtime = InferenceRuntime(
-            generator, PredictionContract(("LF", "AF"), (4, 4)), torch.device("cpu")
+            generator, PredictionContract(("LF", "AF"), ("HE", "PAS"), (4, 4)), torch.device("cpu")
         )
         output = _run_tiled_prediction(images, runtime, tile_overlap=0)
     finally:
         single._predict_images = original
 
-    assert output.shape == (3, 8, 8)
+    # One prediction per tile feeds one accumulator per output.
+    assert {name: tuple(value.shape) for name, value in output.items()} == {
+        "HE": (3, 8, 8),
+        "PAS": (3, 8, 8),
+    }
+    assert torch.equal(output["HE"], torch.zeros(3, 8, 8))
+    assert torch.equal(output["PAS"], torch.ones(3, 8, 8))
     assert seen == [((4, 4), (4, 4))] * 4
 
 
@@ -130,7 +132,7 @@ def test_directory_inputs_pair_exact_relative_paths_and_preserve_subdirectories(
 
     runtime = InferenceRuntime(
         predictor=lambda inputs: pytest.fail("predictor must not run"),
-        contract=PredictionContract(("LF", "AF"), (4, 4)),
+        contract=PredictionContract(("LF", "AF"), ("HE",), (4, 4)),
         device=torch.device("cpu"),
     )
     results: list[SingleInferenceResult] = []
@@ -144,13 +146,13 @@ def test_directory_inputs_pair_exact_relative_paths_and_preserve_subdirectories(
         runtime: object,
         input_images: dict[str, Path],
         *,
-        output_path: Path,
+        output_paths: dict[str, Path],
         mode: str,
         tile_overlap: int,
     ) -> SingleInferenceResult:
         result = SingleInferenceResult(
             input_paths=input_images,
-            output_path=output_path,
+            output_paths=output_paths,
             image_size=(4, 4),
             mode=mode,
             device="cpu",
@@ -169,10 +171,9 @@ def test_directory_inputs_pair_exact_relative_paths_and_preserve_subdirectories(
     assert isinstance(result, DirectoryInferenceResult)
 
     assert result.input_dirs == {"LF": lf_root, "AF": af_root}
-    assert [item.output_path.relative_to(tmp_path / "out").as_posix() for item in results] == [
-        "nested/sample_target_generated.png",
-        "top_target_generated.png",
-    ]
+    assert [
+        item.output_paths["HE"].relative_to(tmp_path / "out").as_posix() for item in results
+    ] == ["nested/HE/sample_generated.png", "HE/top_generated.png"]
     assert all(tuple(item.input_paths) == ("LF", "AF") for item in results)
 
 
@@ -200,7 +201,7 @@ def test_file_inputs_reject_unequal_dimensions_before_prediction(
     _write_image(af_path, (5, 4))
     runtime = InferenceRuntime(
         predictor=lambda inputs: pytest.fail("predictor must not run"),
-        contract=PredictionContract(("LF", "AF"), (4, 4)),
+        contract=PredictionContract(("LF", "AF"), ("HE",), (4, 4)),
         device=torch.device("cpu"),
     )
 

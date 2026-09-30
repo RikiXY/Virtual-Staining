@@ -90,7 +90,7 @@ def test_large_tiled_inference_requires_a_compatible_input(
     Image.new("RGB", (8, 8)).save(image_path)
     runtime = InferenceRuntime(
         lambda inputs: pytest.fail("predictor must not run"),
-        PredictionContract(("LF",), (4, 4)),
+        PredictionContract(("LF",), ("HE",), (4, 4)),
         torch.device("cpu"),
     )
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 16)
@@ -116,14 +116,18 @@ def _slide(path: Path, mpp: float | None, seed: int = 0) -> np.ndarray:
     return pixels
 
 
-def _identity_runtime(calls: list[int] | None = None) -> InferenceRuntime:
-    def predictor(inputs: dict[str, torch.Tensor]) -> torch.Tensor:
+def _identity_runtime(
+    calls: list[int] | None = None, outputs: tuple[str, ...] = ("HE",)
+) -> InferenceRuntime:
+    """HE reproduces LF; PAS is its inverse, so each output is individually checkable."""
+
+    def predictor(inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         if calls is not None:
             calls.append(1)
-        return inputs["LF"]
+        return {name: inputs["LF"] if name == "HE" else -inputs["LF"] for name in outputs}
 
     return InferenceRuntime(
-        predictor, PredictionContract(("AF", "LF"), (64, 64)), torch.device("cpu")
+        predictor, PredictionContract(("AF", "LF"), outputs, (64, 64)), torch.device("cpu")
     )
 
 
@@ -264,11 +268,11 @@ def test_wsi_predictor_failure_cleans_scratch_and_keeps_existing_output(tmp_path
     output.parent.mkdir()
     output.write_bytes(b"previous result")
 
-    def failing(inputs: dict[str, torch.Tensor]) -> torch.Tensor:
-        return inputs["LF"][:, :, :-1]
+    def failing(inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        return {"HE": inputs["LF"][:, :, :-1]}
 
     runtime = InferenceRuntime(
-        failing, PredictionContract(("AF", "LF"), (64, 64)), torch.device("cpu")
+        failing, PredictionContract(("AF", "LF"), ("HE",), (64, 64)), torch.device("cpu")
     )
     with pytest.raises(ValueError, match="same-grid"):
         _run_wsi(runtime, inputs, output)
@@ -295,3 +299,79 @@ def test_wsi_writer_failure_does_not_publish(
         _run_wsi(_identity_runtime(), inputs, output)
     assert _output_listing(output) == ["generated.tif"]
     assert output.read_bytes() == b"previous result"
+
+
+def test_multi_output_wsi_uses_one_traversal_and_the_same_grid_for_every_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs = _wsi_inputs(tmp_path, 0.5, 0.5)
+    regions: list[Path] = []
+    original = OpenSlideRegionImageReader.read_region
+
+    def recording_read_region(self, x, y, width, height):
+        regions.append(self.path)
+        return original(self, x, y, width, height)
+
+    monkeypatch.setattr(OpenSlideRegionImageReader, "read_region", recording_read_region)
+    calls: list[int] = []
+    out = tmp_path / "out"
+
+    result = _run_single_image_inference(
+        _identity_runtime(calls, outputs=("PAS", "HE")),
+        inputs,
+        out,
+        mode="tile",
+        tile_overlap=8,
+    )
+    monkeypatch.setattr(OpenSlideRegionImageReader, "read_region", original)
+
+    # One predictor call and one region read per input for every tile, not per output.
+    tiles = len(calls)
+    assert tiles == 6 * 5  # x starts 0,56,...,236 (6); y starts 0,56,112,168,192 (5)
+    input_reads = [path for path in regions if path in inputs.values()]
+    assert len(input_reads) == 2 * tiles
+    assert result.output_paths == {
+        "PAS": out / "PAS" / "af_generated.tif",
+        "HE": out / "HE" / "af_generated.tif",
+    }
+    for name in ("PAS", "HE"):
+        assert sorted(p.name for p in (out / name).iterdir()) == ["af_generated.tif"]
+    expected = open_image_reader(inputs["LF"])
+    try:
+        source = expected.read_region(0, 0, *WSI_SIZE).astype(int)
+    finally:
+        expected.close()
+    for name, pixels in (("HE", source), ("PAS", 255 - source)):
+        reader = open_image_reader(result.output_paths[name])
+        try:
+            assert reader.size == WSI_SIZE
+            assert reader.metadata.mpp_x == pytest.approx(0.5)
+            np.testing.assert_allclose(
+                reader.read_region(0, 0, *WSI_SIZE).astype(int), pixels, atol=1
+            )
+        finally:
+            reader.close()
+
+
+def test_wsi_scratch_preflight_scales_with_the_output_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import virtual_staining.inference.single as single
+
+    inputs = _wsi_inputs(tmp_path, 0.5, 0.5)
+    one_output = WSI_SIZE[0] * WSI_SIZE[1] * 3 * 5
+    # Enough for one output's accumulator and raw file, not for two.
+    monkeypatch.setattr(
+        single.shutil, "disk_usage", lambda path: SimpleNamespace(free=one_output + 1)
+    )
+    calls: list[int] = []
+    with pytest.raises(OSError, match=rf"2 output\(s\) needs at least {2 * one_output} bytes"):
+        _run_single_image_inference(
+            _identity_runtime(calls, outputs=("PAS", "HE")),
+            inputs,
+            tmp_path / "out",
+            mode="tile",
+            tile_overlap=8,
+        )
+    assert calls == []
+    _run_wsi(_identity_runtime(), inputs, tmp_path / "single" / "generated.tif")

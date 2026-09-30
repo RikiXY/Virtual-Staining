@@ -196,11 +196,28 @@ class LossConfig:
         }
 
 
-def configured_loss_names(losses: LossConfig | None) -> list[str]:
-    """Role-qualified term names, the component columns of the training history."""
+def output_component_key(key: str, output: str) -> str:
+    """The per-output component key of a reconstruction term, e.g. ``generator_l1__HE``."""
+    return f"{key}__{output}"
+
+
+def configured_loss_names(
+    losses: LossConfig | None, outputs: tuple[str, ...] | None = None
+) -> list[str]:
+    """Role-qualified term names, the component columns of the training history.
+
+    With ``outputs``, every reconstruction term is reported once per output
+    (``generator_<term>__<output>``); adversarial terms stay joint.
+    """
     if losses is None:
         return []
-    names = [f"generator_{term.name}" for term in losses.generator]
+    names: list[str] = []
+    for term in losses.generator:
+        key = f"generator_{term.name}"
+        if outputs is None or term.definition.context == "adversarial":
+            names.append(key)
+        else:
+            names.extend(output_component_key(key, output) for output in outputs)
     names.extend(f"discriminator_{term.name}" for term in losses.discriminator)
     return names
 

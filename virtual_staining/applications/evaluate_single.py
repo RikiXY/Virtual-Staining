@@ -14,6 +14,7 @@ from virtual_staining.evaluation.reports import (
 )
 from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.metrics import MetricResult
+from virtual_staining.utils.artifacts import GENERATED_SUFFIX
 
 __all__ = [
     "SingleEvalResult",
@@ -67,7 +68,7 @@ def _run_single(request: _EvaluateRequest) -> SingleEvalResult:
     from virtual_staining.evaluation.evaluator import evaluate_pair
 
     target_files = collect_image_files(request.target_dir, "_target", "Target")
-    generated_files = collect_image_files(request.generated_dir, "_target_generated", "Generated")
+    generated_files = collect_image_files(request.generated_dir, GENERATED_SUFFIX, "Generated")
 
     if request.sample_id not in target_files:
         raise ValueError(
@@ -87,6 +88,8 @@ def _run_single(request: _EvaluateRequest) -> SingleEvalResult:
 
     row = build_metric_row(
         request.sample_id,
+        # The per-output directory of a generated artifact names its output.
+        generated_path.parent.name,
         target_path,
         generated_path,
         shape,

@@ -152,7 +152,7 @@ def test_evaluate_config_dispatches_pipeline_stage(
 
 def test_evaluate_pair_dispatches_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "sample_target.png"
-    generated = tmp_path / "sample_target_generated.png"
+    generated = tmp_path / "HE" / "sample_generated.png"
     output_dir = tmp_path / "evaluation"
     captured: list[tuple[Path, Path, Path | None]] = []
 
@@ -206,7 +206,7 @@ def test_infer_images_passes_repeated_named_inputs(
         return SimpleNamespace(
             input_paths={"LF": Path("lf.png"), "AF": Path("af.png")},
             checkpoint_path=Path("checkpoint.pth"),
-            output_path=output_path,
+            output_paths={"stained": output_path},
             mode=kwargs["mode"],
         )
 

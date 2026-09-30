@@ -21,7 +21,8 @@
 #   train    - reads data.domains train/ and val/ (test/ only as leakage context).
 #   infer    - translates the test split of an aligned, prepared manifest
 #              (<dataset_root>/manifests/manifest.csv, or manifest_path) whose modalities
-#              include model.inputs[0] and model.target. Without such a manifest, stop
+#              include model.inputs[0] as an input and model.outputs[0] as a target.
+#              Without such a manifest, stop
 #              after `train` or use `vs infer-images`.
 #   evaluate - protocol unpaired: compares generated images with the real test/ images
 #              of the reference domain in data.domains.
@@ -110,7 +111,7 @@ data:
   # Required value for cyclegan (the default `paired` is rejected).
   pairing: unpaired
   # Required for unpaired. Keys must be exactly model.inputs[0] (domain A) and
-  # model.target (domain B). Each value is either
+  # model.outputs[0] (domain B). Each value is either
   #   - a directory containing train/, val/ and test/ (searched recursively), or
   #   - a path/glob containing the literal {split} (replaced by train, val, test).
   # Relative values resolve from dataset_root and must stay inside it. The two
@@ -153,8 +154,10 @@ data:
 model:
   # Required. Exactly one entry: domain A.
   inputs: [label_free]
-  # Required. Domain B; must differ from domain A.
-  target: stained
+  # Required. Exactly one entry: domain B; must differ from domain A. CycleGAN keeps its
+  # two-domain design: the A_to_B and B_to_A directions are alternative predictions of
+  # one checkpoint, never several simultaneous outputs, so more entries are rejected.
+  outputs: [stained]
   generator:
     # Required value for cyclegan (the default concat_unet is Pix2Pix-only and rejected).
     architecture: resnet
@@ -250,6 +253,10 @@ training:
     expansion_factor: 1
     # Optional; default light. light | medium | strong.
     intensity: light
+    # Optional; resolved and recorded like the other keys: [] for light. Names the
+    # inputs that would receive photometric transforms (never targets or masks); it has
+    # no effect while augmentation is disabled.
+    photometric_inputs: []
 
   # Required. Loss terms per optimised network. Each term:
   #   name     - required; a built-in CycleGAN loss valid for the role (below).
@@ -348,11 +355,12 @@ inference:
   # Optional; default <run>/artifacts/output_test (infer) or artifacts/output_single|
   # output_images (vs infer-images). Used as written (working-directory relative).
   # output_dir: local_workspace/results/example_cyclegan_run/artifacts/output_test
-  # Optional; default A_to_B. A_to_B translates model.inputs[0] -> model.target
-  # (label_free -> stained, reading each test record's inputs); B_to_A uses the second
+  # Optional; default A_to_B. A_to_B translates model.inputs[0] -> model.outputs[0]
+  # (label_free -> stained, reading each test record's input); B_to_A uses the second
   # generator of the same checkpoint (stained -> label_free, reading each record's
-  # target). Output files carry the direction in their names
-  # (<sample>_A_to_B_generated.<ext>), so both directions can share one directory.
+  # aligned target). Each file is named by what it predicts:
+  # <output_dir>/<predicted domain>/<sample>_generated.<ext> (stained/ for A_to_B,
+  # label_free/ for B_to_A), so both directions can share one output directory.
   direction: A_to_B
 
 # --- Evaluation (`evaluate` stage) ----------------------------------------------

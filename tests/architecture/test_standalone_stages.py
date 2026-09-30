@@ -129,7 +129,7 @@ def test_dataset_builder_needs_only_preprocessing_config_and_slide_sets(tmp_path
     slide_sets = []
     for set_id in ("set-1", "set-2"):
         (sources / set_id).mkdir(parents=True)
-        for name in ("lf", "af", "target"):
+        for name in ("lf", "af", "he"):
             Image.fromarray(image).save(sources / set_id / f"{name}.png")
         slide_sets.append(
             SlideSet(
@@ -138,7 +138,7 @@ def test_dataset_builder_needs_only_preprocessing_config_and_slide_sets(tmp_path
                     SlideAsset("LF", sources / set_id / "lf.png", already_aligned=True),
                     SlideAsset("AF", sources / set_id / "af.png", already_aligned=True),
                 ),
-                SlideAsset("target", sources / set_id / "target.png", already_aligned=True),
+                (SlideAsset("HE", sources / set_id / "he.png", already_aligned=True),),
                 "LF",
             )
         )
@@ -146,7 +146,7 @@ def test_dataset_builder_needs_only_preprocessing_config_and_slide_sets(tmp_path
     config = PreprocessingConfig(
         dataset_root=dataset_root,
         # The inventory is only read when resolving SlideSets from YAML; here they are given.
-        inputs=InputConfig(sentinel / "inputs.csv", ("LF", "AF"), "LF", "target"),
+        inputs=InputConfig(sentinel / "inputs.csv", ("LF", "AF"), "LF", ("HE",)),
         patching=PatchingConfig(patch_size=(8, 8), grid_movement=(8, 8), margin=0),
         split=SplitConfig(unit="set", train=0.5, val=0.5, test=0.0),
     )
@@ -156,7 +156,7 @@ def test_dataset_builder_needs_only_preprocessing_config_and_slide_sets(tmp_path
 
     _assert_untouched(accessed, sentinel, before)
     layout = DatasetLayout(dataset_root)
-    metadata = ManifestMetadata(MANIFEST_SCHEMA_VERSION, ("LF", "AF"), "LF", "target")
+    metadata = ManifestMetadata(MANIFEST_SCHEMA_VERSION, ("LF", "AF"), ("HE",), "LF")
     manifest = DatasetManifest.from_csv(layout.manifest_path, dataset_root, metadata)
     manifest.validate(check_files_exist=True, require_splits={"train", "val"})
     assert result.train_count + result.val_count == len(manifest) == 4
@@ -209,7 +209,7 @@ def test_image_path_inference_runs_from_runtime_factory_and_named_paths(
 ) -> None:
     sentinel = _sentinel(tmp_path / "sentinel")
     before = _tree(sentinel)
-    generator = ConcatUNetGenerator(("LF",), base_channels=4).eval()
+    generator = ConcatUNetGenerator(("LF",), ("HE",), base_channels=4).eval()
     source = write_rgb_image(tmp_path / "images" / "sample.png", size=(32, 32))
     output = tmp_path / "predictions" / "sample_generated.png"
 
@@ -217,7 +217,7 @@ def test_image_path_inference_runs_from_runtime_factory_and_named_paths(
         # checkpoint_path is identity metadata carried by the injected runtime, never read.
         return InferenceRuntime(
             predictor=generator,
-            contract=PredictionContract(("LF",), (32, 32)),
+            contract=PredictionContract(("LF",), ("HE",), (32, 32)),
             device=torch.device("cpu"),
             checkpoint_path=sentinel / "run/checkpoints/ep000.pth",
             default_single_output_dir=sentinel / "absent_single",
@@ -229,7 +229,7 @@ def test_image_path_inference_runs_from_runtime_factory_and_named_paths(
 
     _assert_untouched(accessed, sentinel, before)
     assert isinstance(result, SingleInferenceResult)
-    assert result.output_path == output
+    assert result.output_paths == {"HE": output}
     with Image.open(output) as image:
         assert image.size == (32, 32)
 
@@ -242,8 +242,8 @@ def test_evaluation_runs_from_explicit_records_and_output_dir(
     target = write_rgb_image(tmp_path / "pairs" / "a_target.png", color=(10, 20, 30))
     generated = write_rgb_image(tmp_path / "pairs" / "a_generated.png", color=(12, 20, 30))
     samples = [
-        EvaluationSample("a", "S1", target, generated),
-        EvaluationSample("b", "S1", target, tmp_path / "pairs" / "b_missing.png"),
+        EvaluationSample("a", "HE", "S1", target, generated),
+        EvaluationSample("b", "HE", "S1", target, tmp_path / "pairs" / "b_missing.png"),
     ]
     output_dir = tmp_path / "evaluation"
 

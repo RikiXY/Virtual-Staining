@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from typing import cast
 
 import torch
 import torch.nn as nn
@@ -10,7 +9,6 @@ from torch.amp import autocast
 
 from virtual_staining.config.losses import LossConfig, configured_loss_names
 from virtual_staining.metrics import ResolvedMetric
-from virtual_staining.models.generator import concat_inputs
 from virtual_staining.training.helpers import LossComponentAccumulator, unpack_batch
 from virtual_staining.training.losses import ConfiguredLossEvaluator, LossEvaluationContext
 from virtual_staining.training.preview import ValidationPreview, ValidationPreviewSink
@@ -30,9 +28,12 @@ def validate_epoch(
     losses: LossConfig | None,
     device: torch.device,
     amp_enabled: bool,
-    image_metrics: Mapping[str, ResolvedMetric],
+    input_names: tuple[str, ...],
+    output_names: tuple[str, ...],
+    image_metrics: Mapping[str, tuple[str, ResolvedMetric]],
     preview_sink: ValidationPreviewSink | None = None,
 ) -> EpochMetrics:
+    """Validate a Pix2Pix epoch; image metrics compare each output only with its target."""
     generator_was_training = generator.training
     discriminator_was_training = discriminator.training
     generator.eval()
@@ -41,22 +42,29 @@ def validate_epoch(
     try:
         total_loss_G = 0.0
         total_loss_D = 0.0
-        component_totals = LossComponentAccumulator(configured_loss_names(losses))
+        component_totals = LossComponentAccumulator(configured_loss_names(losses, output_names))
         needs_discriminator = loss_evaluator.needs_discriminator_logits
-        image_metric_totals = ValidationImageMetricAccumulator(image_metrics)
+        image_metric_totals = {
+            output: ValidationImageMetricAccumulator(
+                {
+                    column: metric
+                    for column, (name, metric) in image_metrics.items()
+                    if name == output
+                }
+            )
+            for output in output_names
+        }
         count = 0
         with torch.no_grad():
-            input_names = cast(tuple[str, ...], generator.input_names)
             for batch_index, batch in enumerate(val_loader):
-                inputs, target, masks = unpack_batch(batch, device, input_names)
-                condition = concat_inputs(inputs, input_names)
+                inputs, targets, masks = unpack_batch(batch, device, input_names, output_names)
                 with autocast(device_type=device.type, enabled=amp_enabled):
                     generated = generator(inputs)
                     context = LossEvaluationContext(epoch=epoch, masks=masks)
                     discriminator_fake: torch.Tensor | None = None
                     if needs_discriminator:
-                        discriminator_real = discriminator(condition, target)
-                        discriminator_fake_logits = discriminator(condition, generated)
+                        discriminator_real = discriminator(inputs, targets)
+                        discriminator_fake_logits = discriminator(inputs, generated)
                         discriminator_fake = discriminator_fake_logits
                         discriminator_loss = loss_evaluator.discriminator_total(
                             discriminator_real=discriminator_real,
@@ -66,8 +74,8 @@ def validate_epoch(
                     else:
                         discriminator_loss = None
                     generator_loss = loss_evaluator.generator_total(
-                        prediction=generated,
-                        target=target,
+                        predictions=generated,
+                        targets=targets,
                         discriminator_fake=discriminator_fake,
                         context=context,
                     )
@@ -88,19 +96,16 @@ def validate_epoch(
                     discriminator_loss.total.item() if discriminator_loss is not None else 0.0
                 )
                 total_loss_G += generator_loss.total.item()
-                image_metric_totals.add_batch(generated, target)
+                for output, accumulator in image_metric_totals.items():
+                    accumulator.add_batch(generated[output], targets[output])
                 count += 1
                 if preview_sink is not None and preview_sink.wants(epoch, batch_index):
+                    images = {"input": inputs[input_names[0]].detach()}
+                    for output in output_names:
+                        images[f"output__{output}"] = generated[output].detach()
+                        images[f"target__{output}"] = targets[output].detach()
                     preview_sink.write(
-                        ValidationPreview(
-                            epoch=epoch,
-                            batch_index=batch_index,
-                            images={
-                                "input": inputs[input_names[0]].detach(),
-                                "output": generated.detach(),
-                                "target": target.detach(),
-                            },
-                        )
+                        ValidationPreview(epoch=epoch, batch_index=batch_index, images=images)
                     )
 
         averages = component_totals.average(count)
@@ -113,7 +118,11 @@ def validate_epoch(
             raw=averages.raw,
             weighted=averages.weighted,
             current_weight=averages.current_weight,
-            image=image_metric_totals.mean(),
+            image={
+                column: value
+                for accumulator in image_metric_totals.values()
+                for column, value in accumulator.mean().items()
+            },
         )
     finally:
         if generator_was_training:

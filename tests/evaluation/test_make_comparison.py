@@ -35,7 +35,7 @@ def test_save_diagnostic_plots_delegates_to_canonical_plotters(
 ) -> None:
     sample_id = "00000_00000"
     target = write_rgb_image(tmp_path / f"{sample_id}_target.png")
-    generated = write_rgb_image(tmp_path / f"{sample_id}_target_generated.png")
+    generated = write_rgb_image(tmp_path / "HE" / f"{sample_id}_generated.png")
     called: list[str] = []
 
     def _record(name: str):
@@ -52,10 +52,11 @@ def test_save_diagnostic_plots_delegates_to_canonical_plotters(
     paths = diagnostics.save_diagnostic_plots(generated, target, tmp_path / "diagnostics")
 
     assert called == ["error", "scatter", "intensity"]
+    # Diagnostics are labelled by (sample_id, output_name), never by sample alone.
     assert [path.name for path in paths] == [
-        f"{sample_id}_error_histogram.png",
-        f"{sample_id}_target_vs_generated_scatter_by_channel.png",
-        f"{sample_id}_intensity_overlay_histogram.png",
+        f"{sample_id}__HE_error_histogram.png",
+        f"{sample_id}__HE_target_vs_generated_scatter_by_channel.png",
+        f"{sample_id}__HE_intensity_overlay_histogram.png",
     ]
 
 
@@ -102,7 +103,7 @@ def test_build_metric_case_artifacts_saves_panel_without_metric_suptitle(
     sample_id = "00000_00000"
     source_path, target_path = write_rgb_pair(tmp_path / "splits" / "test", sample_id)
     generated_path = write_rgb_image(
-        tmp_path / "generated" / f"{sample_id}_target_generated.png",
+        tmp_path / "generated" / "HE" / f"{sample_id}_generated.png",
         color=(32, 64, 96),
     )
     seen_suptitles: list[str | None] = []
@@ -203,10 +204,10 @@ def test_panels_rank_each_metric_by_its_recorded_direction(tmp_path: Path) -> No
         sample_id = f"s{index}"
         _, target = write_rgb_pair(tmp_path / "pairs", sample_id)
         generated = write_rgb_image(
-            tmp_path / "generated" / f"{sample_id}_target_generated.png",
+            tmp_path / "generated" / "HE" / f"{sample_id}_generated.png",
             color=(shade, shade, shade),
         )
-        samples.append(EvaluationSample(sample_id, "S1", target, generated))
+        samples.append(EvaluationSample(sample_id, "HE", "S1", target, generated))
     definitions = {
         "brightness": MetricDefinition("brightness", "1", "tests", _brightness, True),
         "mae": BUILTIN_METRIC_DEFINITIONS["mae"],
@@ -218,7 +219,8 @@ def test_panels_rank_each_metric_by_its_recorded_direction(tmp_path: Path) -> No
 
     assert isinstance(result, FromMetricsResult)
     selected = result.per_metric_representative_rows
-    assert (selected["brightness"]["best"]["sample_id"], selected["mae"]["best"]["sample_id"]) == (
-        "s2",
-        "s0",
-    )
+    assert result.available_metrics == ["HE/brightness", "HE/mae"]
+    assert (
+        selected["HE/brightness"]["best"]["sample_id"],
+        selected["HE/mae"]["best"]["sample_id"],
+    ) == ("s2", "s0")

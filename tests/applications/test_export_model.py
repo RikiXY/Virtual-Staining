@@ -13,8 +13,11 @@ import pytest
 import torch
 import yaml
 
+from tests.config_helpers import pix2pix_config_data, write_config_data
 from tests.external_method.test_tiny_reconstruction import _definitions, _mapping, _paired_dataset
 from tests.external_method.tiny_reconstruction import TINY_RESIDUAL, TinyReconstruction
+from tests.image_helpers import write_rgb_image
+from tests.manifest_helpers import make_manifest_record, manifest_metadata
 from virtual_staining.applications.export_model import (
     BUNDLE_SCHEMA_VERSION,
     ExportCheckpointSelection,
@@ -25,6 +28,8 @@ from virtual_staining.applications.export_model import (
 from virtual_staining.applications.train import train
 from virtual_staining.checkpoint_contract import CheckpointCompatibilityError
 from virtual_staining.config.run import RunConfig
+from virtual_staining.data.layout import DatasetLayout
+from virtual_staining.data.manifest import DatasetManifest
 from virtual_staining.definitions import DefinitionNotAvailableError, Definitions
 from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.inference.runner import load_inference_generator, predict_batch
@@ -224,7 +229,9 @@ def test_moved_bundle_reconstructs_without_the_run_or_dataset(tmp_path: Path) ->
     assert verify_model_bundle(moved, definitions).root == moved.resolve()
     config = RunConfig.from_yaml(moved / "config" / "resolved.yaml", definitions)
     model, path = load_inference_generator(config, RunLayout(moved), _CPU, moved / checkpoint)
-    output = predict_batch(model, {"source": torch.rand(1, 3, 32, 32) * 2 - 1}, _CPU)
+    output = predict_batch(model, {"source": torch.rand(1, 3, 32, 32) * 2 - 1}, _CPU, ("target",))[
+        "target"
+    ]
 
     assert path == moved / checkpoint
     assert tiny.built == {"network": 1}
@@ -513,3 +520,69 @@ def test_verification_rejects_non_strict_json(run: Path, tmp_path: Path) -> None
 
     with pytest.raises(ValueError, match="not strict JSON"):
         verify_model_bundle(bundle, _definitions()[0])
+
+
+def _two_output_pix2pix_run(root: Path) -> tuple[Path, dict[str, torch.Tensor]]:
+    """Train a tiny N=1/M=2 Pix2Pix run; return its root and one prediction per output."""
+    records = []
+    for index, split in enumerate(("train", "train", "val", "test")):
+        sample_id = f"{index * 256:05}_00000"
+        paths = {
+            name: Path(f"splits/{split}/{sample_id}__{name}.png") for name in ("LF", "PAS", "HE")
+        }
+        for offset, path in enumerate(paths.values()):
+            write_rgb_image(root / "dataset" / path, size=(32, 32), color=(50 * offset, 40, index))
+        records.append(
+            make_manifest_record(
+                sample_id,
+                split,
+                set_id=f"S{index}",
+                input_paths={"LF": paths["LF"]},
+                target_paths={"PAS": paths["PAS"], "HE": paths["HE"]},
+            )
+        )
+    metadata = manifest_metadata(("LF",), ("PAS", "HE"))
+    layout = DatasetLayout(root / "dataset")
+    DatasetManifest(tuple(records), root / "dataset", metadata).to_csv(layout.manifest_path)
+    layout.manifest_metadata_path.write_text(json.dumps(metadata.to_dict()), encoding="utf-8")
+    data = pix2pix_config_data(root, inputs=("LF",), outputs=("PAS", "HE"))
+    data["dataset_root"] = str(root / "dataset")
+    data["data"] = {"pairing": "paired", "group_validation": "unavailable"}
+    data["training"]["epochs"] = 1
+    data["inference"] = {"checkpoint_policy": "best", "checkpoint_metric": "val_ssim__HE"}
+    config_path = write_config_data(root / "run.yaml", data)
+    config = RunConfig.from_yaml(config_path)
+    train(config, config_path)
+    model, _ = load_inference_generator(config, RunLayout.from_project(config.project), _CPU)
+    torch.manual_seed(3)
+    probe = {"LF": torch.rand(1, 3, 32, 32) * 2 - 1}
+    return RunLayout.from_project(config.project).root, {
+        **predict_batch(model, probe, _CPU, ("PAS", "HE")),
+        "probe": probe["LF"],
+    }
+
+
+def test_two_output_pix2pix_bundle_reconstructs_every_named_output_after_a_move(
+    tmp_path: Path,
+) -> None:
+    run, expected = _two_output_pix2pix_run(tmp_path / "source")
+    exported = export_model_bundle(
+        run, tmp_path / "exported", [_best("val_ssim__HE")], definitions=builtin_definitions()
+    )
+    checkpoint = exported.index["selections"][0]["checkpoint"]
+    moved = tmp_path / "elsewhere" / "bundle"
+    moved.parent.mkdir()
+    shutil.move(tmp_path / "exported", moved)
+    shutil.rmtree(tmp_path / "source")
+
+    assert verify_model_bundle(moved, builtin_definitions()).root == moved.resolve()
+    config = RunConfig.from_yaml(moved / "config" / "resolved.yaml")
+    assert config.model.outputs == ("PAS", "HE")
+    payload = torch.load(moved / checkpoint, map_location="cpu", weights_only=True)
+    assert (payload["format_version"], payload["method"]["outputs"]) == (4, ["PAS", "HE"])
+    model, _ = load_inference_generator(config, RunLayout(moved), _CPU, moved / checkpoint)
+    restored = predict_batch(model, {"LF": expected["probe"]}, _CPU, ("PAS", "HE"))
+
+    assert list(restored) == ["PAS", "HE"]
+    for name in ("PAS", "HE"):
+        assert torch.equal(restored[name], expected[name])

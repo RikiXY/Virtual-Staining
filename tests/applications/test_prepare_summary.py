@@ -17,7 +17,7 @@ def _config(root: Path) -> PreprocessingConfig:
             Path("manifests/slide_sets.csv"),
             ("source", "aux"),
             "source",
-            "target",
+            ("HE",),
         ),
     )
 
@@ -30,7 +30,7 @@ def _sets() -> tuple[SlideSet, ...]:
                 SlideAsset("source", Path("slides/p1-source.tif"), already_aligned=True),
                 SlideAsset("aux", Path("slides/p1-aux.tif"), already_aligned=True),
             ),
-            SlideAsset("target", Path("slides/p1-target.tif"), already_aligned=True),
+            (SlideAsset("HE", Path("slides/p1-target.tif"), already_aligned=True),),
             "source",
         ),
         SlideSet(
@@ -39,7 +39,7 @@ def _sets() -> tuple[SlideSet, ...]:
                 SlideAsset("source", Path("slides/p2-source.tif"), already_aligned=True),
                 SlideAsset("aux", Path("slides/p2-aux.tif"), already_aligned=False),
             ),
-            SlideAsset("target", Path("slides/p2-target.tif"), already_aligned=True),
+            (SlideAsset("HE", Path("slides/p2-target.tif"), already_aligned=True),),
             "source",
         ),
     )
@@ -52,8 +52,8 @@ def test_prepare_summary_reports_slide_sets(
         _log_prepare_summary(_config(tmp_path), _sets(), reused=False)
 
     assert caplog.messages[0] == f"Prepare summary | dataset={tmp_path} | sets=2 | action=build"
-    assert caplog.messages[1] == "Set P1 | inputs=source,aux | target=target | reference=source"
-    assert caplog.messages[2] == "Set P2 | inputs=source,aux | target=target | reference=source"
+    assert caplog.messages[1] == "Set P1 | inputs=source,aux | targets=HE | reference=source"
+    assert caplog.messages[2] == "Set P2 | inputs=source,aux | targets=HE | reference=source"
 
 
 def test_prepare_summary_reports_reuse(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:

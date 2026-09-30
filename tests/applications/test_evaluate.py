@@ -12,6 +12,7 @@ import pytest
 
 from tests.config_helpers import (
     cyclegan_config_data,
+    pix2pix_config_data,
     write_config_data,
     write_run_config,
     yaml_section,
@@ -26,7 +27,7 @@ from tests.manifest_helpers import (
 from virtual_staining.applications.evaluate import (
     EVALUATION_METADATA_JSON,
     evaluate,
-    paired_sample,
+    paired_samples,
 )
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.consumption import load_snapshot
@@ -40,7 +41,7 @@ from virtual_staining.evaluation.unpaired import (
 from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.methods.builtin import builtin_definitions
 from virtual_staining.metrics import DEFAULT_METRIC_NAMES, MetricDefinition, MetricResult
-from virtual_staining.utils.artifacts import generated_filename
+from virtual_staining.utils.artifacts import generated_path
 
 
 def _write_evaluate_config(
@@ -52,7 +53,7 @@ def _write_evaluate_config(
 ) -> Path:
     return write_run_config(
         tmp_path,
-        "model:\n  inputs: [label_free]\n  target: stained\n"
+        "model:\n  inputs: [label_free]\n  outputs: [stained]\n"
         + yaml_section("evaluation", section_yaml),
         filename=filename,
         dataset_root=dataset_root,
@@ -76,7 +77,7 @@ def test_evaluate_writes_stage_scoped_snapshot_files(tmp_path: Path) -> None:
     write_aligned_test_manifest(dataset_root, ["00000_00000"])
 
     write_rgb_pair(target_dir, "00000_00000")
-    write_rgb_image(generated_dir / "00000_00000_target_generated.png")
+    write_rgb_image(generated_path(generated_dir, "00000_00000", "stained", ".png"))
 
     yaml_file = _write_evaluate_config(
         tmp_path,
@@ -108,7 +109,7 @@ def test_evaluate_preserves_existing_training_snapshot_files(tmp_path: Path) -> 
     write_aligned_test_manifest(dataset_root, ["00000_00000"])
 
     write_rgb_pair(target_dir, "00000_00000")
-    write_rgb_image(generated_dir / "00000_00000_target_generated.png")
+    write_rgb_image(generated_path(generated_dir, "00000_00000", "stained", ".png"))
 
     yaml_file = _write_evaluate_config(
         tmp_path,
@@ -170,7 +171,7 @@ def test_evaluate_raises_if_required_test_split_missing(tmp_path: Path) -> None:
                 "val",
                 ext=".png",
                 input_paths={"label_free": Path("splits/test/00000_00000_source.png")},
-                target_path=Path("splits/test/00000_00000_target.png"),
+                target_paths={"stained": Path("splits/test/00000_00000_target.png")},
             ),
         ),
     )
@@ -201,8 +202,8 @@ def test_evaluate_records_from_manifest_test_split(tmp_path: Path) -> None:
 
     for sample_id in ["00000_00000", "00256_00000"]:
         write_rgb_pair(target_dir, sample_id)
-        write_rgb_image(generated_dir / generated_filename(sample_id, ".PNG"))
-    write_rgb_image(generated_dir / "99999_99999_target_generated.png")
+        write_rgb_image(generated_path(generated_dir, sample_id, "stained", ".PNG"))
+    write_rgb_image(generated_path(generated_dir, "99999_99999", "stained", ".png"))
 
     output_dir = tmp_path / "results" / "eval_run" / "evaluation"
     yaml_file = _write_evaluate_config(
@@ -233,7 +234,7 @@ def test_evaluate_writes_stage_metadata_json(tmp_path: Path) -> None:
     generated_dir.mkdir()
     write_aligned_test_manifest(dataset_root, ["00000_00000"])
     write_rgb_pair(target_dir, "00000_00000")
-    write_rgb_image(generated_dir / "00000_00000_target_generated.png")
+    write_rgb_image(generated_path(generated_dir, "00000_00000", "stained", ".png"))
 
     output_dir = tmp_path / "results" / "eval_run" / "evaluation"
     yaml_file = _write_evaluate_config(
@@ -340,6 +341,7 @@ def test_evaluate_coverage_csv_has_correct_columns(tmp_path: Path) -> None:
         reader = csv.DictReader(handle)
         assert reader.fieldnames == [
             "sample_id",
+            "output_name",
             "set_id",
             "status",
             "reason",
@@ -402,33 +404,63 @@ def _metadata(output_dir: Path) -> dict[str, Any]:
     return json.loads((output_dir / EVALUATION_METADATA_JSON).read_text(encoding="utf-8"))
 
 
-def test_paired_sample_maps_method_and_direction_to_reference(tmp_path: Path) -> None:
+def test_paired_samples_map_method_and_direction_to_reference(tmp_path: Path) -> None:
     record = make_manifest_record(
         "00000_00000",
         "test",
         ext=".png",
         input_paths={"label_free": Path("a/x_source.png")},
-        target_path=Path("b/x_target.png"),
+        target_paths={"stained": Path("b/x_target.png")},
     )
     pix2pix = RunConfig.from_yaml(
-        write_run_config(tmp_path, "model:\n  inputs: [label_free]\n  target: stained")
+        write_run_config(tmp_path, "model:\n  inputs: [label_free]\n  outputs: [stained]")
     )
     root = pix2pix.project.dataset_root
     generated = tmp_path / "generated"
 
-    sample = paired_sample(pix2pix, record, generated)
+    (sample,) = paired_samples(pix2pix, record, generated)
     assert sample.target_path == root / "b/x_target.png"
-    assert sample.generated_path == generated / "00000_00000_target_generated.png"
-    assert (sample.sample_id, sample.set_id) == ("00000_00000", "P1")
+    assert sample.generated_path == generated_path(generated, "00000_00000", "stained", ".png")
+    assert (sample.sample_id, sample.output_name, sample.set_id) == (
+        "00000_00000",
+        "stained",
+        "P1",
+    )
 
-    a_to_b = paired_sample(_cyclegan_eval_config(tmp_path, "A_to_B")[0], record, generated)
+    (a_to_b,) = paired_samples(_cyclegan_eval_config(tmp_path, "A_to_B")[0], record, generated)
     assert a_to_b.target_path.relative_to(tmp_path / "dataset") == Path("b/x_target.png")
-    assert a_to_b.generated_path == generated / "00000_00000_A_to_B_generated.png"
+    assert a_to_b.generated_path == generated / "stained" / "00000_00000_generated.png"
 
-    b_to_a = paired_sample(_cyclegan_eval_config(tmp_path, "B_to_A")[0], record, generated)
+    (b_to_a,) = paired_samples(_cyclegan_eval_config(tmp_path, "B_to_A")[0], record, generated)
     assert b_to_a.target_path.relative_to(tmp_path / "dataset") == Path("a/x_source.png")
-    assert b_to_a.generated_path == generated / "00000_00000_B_to_A_generated.png"
-    assert (b_to_a.sample_id, b_to_a.set_id) == ("00000_00000", "P1")
+    assert b_to_a.generated_path == generated / "label_free" / "00000_00000_generated.png"
+    assert (b_to_a.sample_id, b_to_a.output_name, b_to_a.set_id) == (
+        "00000_00000",
+        "label_free",
+        "P1",
+    )
+
+
+def test_paired_samples_expand_every_selected_output(tmp_path: Path) -> None:
+    record = make_manifest_record(
+        "s1",
+        "test",
+        x=0,
+        y=0,
+        input_paths={"LF": Path("a/lf.png")},
+        target_paths={"HE": Path("b/he.png"), "PAS": Path("b/pas.tif")},
+    )
+    data = pix2pix_config_data(tmp_path, inputs=("LF",), outputs=("PAS", "HE"))
+    generated = tmp_path / "generated"
+
+    samples = paired_samples(RunConfig.from_mapping(data), record, generated)
+
+    assert [(s.sample_id, s.output_name) for s in samples] == [("s1", "PAS"), ("s1", "HE")]
+    assert [s.target_path.name for s in samples] == ["pas.tif", "he.png"]
+    assert [s.generated_path for s in samples] == [
+        generated / "PAS" / "s1_generated.tif",
+        generated / "HE" / "s1_generated.png",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -441,14 +473,14 @@ def test_cyclegan_paired_evaluation_uses_direction_reference(
     sample_ids = ["00000_00000", "00256_00000"]
     _write_aligned_cyclegan_dataset(tmp_path, sample_ids)
     wrong_color = _SOURCE_COLOR if direction == "A_to_B" else _TARGET_COLOR
-    opposite = "B_to_A" if direction == "A_to_B" else "A_to_B"
+    opposite = "label_free" if reference_domain == "stained" else "stained"
     for sample_id in sample_ids:
         write_rgb_image(
-            tmp_path / "generated" / generated_filename(sample_id, ".png", direction),
+            generated_path(tmp_path / "generated", sample_id, reference_domain, ".png"),
             color=reference_color,
         )
         write_rgb_image(
-            tmp_path / "generated" / generated_filename(sample_id, ".png", opposite),
+            generated_path(tmp_path / "generated", sample_id, opposite, ".png"),
             color=wrong_color,
         )
     config, path = _cyclegan_eval_config(tmp_path, direction, protocol="paired")
@@ -460,16 +492,17 @@ def test_cyclegan_paired_evaluation_uses_direction_reference(
         rows = list(csv.DictReader(handle))
     assert [row["sample_id"] for row in rows] == sample_ids
     assert all(float(row["mae"]) == 0.0 for row in rows)
-    assert all(f"_{direction}_generated" in row["generated_path"] for row in rows)
+    assert all(f"/{reference_domain}/" in row["generated_path"] for row in rows)
+    assert {row["output_name"] for row in rows} == {reference_domain}
     assert (output_dir / "summary_set.csv").exists()
     assert (output_dir / "summary_patient.csv").exists()
     metadata = _metadata(output_dir)
-    assert metadata["schema_version"] == 2
+    assert metadata["schema_version"] == 3
     assert metadata["method"] == "cyclegan"
     assert metadata["training_pairing"] == "unpaired"
     assert metadata["evaluation_protocol"] == "paired"
     assert metadata["inference_direction"] == direction
-    assert metadata["reference_domain"] == reference_domain
+    assert metadata["reference_domains"] == [reference_domain]
     assert metadata["pairwise_metrics_available"] is True
     assert metadata["counts"] == {"requested_count": 2, "evaluated_count": 2, "excluded_count": 0}
     assert metadata["artifacts"]["evaluation_result"] == str(output_dir / "evaluation_result.json")
@@ -478,7 +511,7 @@ def test_cyclegan_paired_evaluation_uses_direction_reference(
 
 def test_cyclegan_paired_evaluation_requires_aligned_manifest(tmp_path: Path) -> None:
     _write_domains(tmp_path, {"label_free": 2, "stained": 2})
-    write_rgb_image(tmp_path / "generated" / "x_A_to_B_generated.png")
+    write_rgb_image(tmp_path / "generated" / "stained" / "x_generated.png")
     config, path = _cyclegan_eval_config(tmp_path, protocol="paired")
 
     with pytest.raises(FileNotFoundError, match="aligned held-out test manifest"):
@@ -503,14 +536,17 @@ def test_cyclegan_unpaired_evaluation_compares_collections(
     tmp_path: Path, direction: str, reference_domain: str, source_domain: str
 ) -> None:
     _write_domains(tmp_path, {reference_domain: 3, source_domain: 1})
-    opposite = "B_to_A" if direction == "A_to_B" else "A_to_B"
     generated_dir = tmp_path / "generated"
     expected_generated = [
-        write_rgb_image(generated_dir / "case1" / f"x_{direction}_generated.png", size=(8, 8)),
-        write_rgb_image(generated_dir / "case2" / f"y_{direction}_generated.png", size=(12, 4)),
+        write_rgb_image(
+            generated_dir / "case1" / reference_domain / "x_generated.png", size=(8, 8)
+        ),
+        write_rgb_image(
+            generated_dir / "case2" / reference_domain / "y_generated.png", size=(12, 4)
+        ),
     ]
-    write_rgb_image(generated_dir / "case1" / f"x_{opposite}_generated.png")
-    write_rgb_image(generated_dir / "case1" / "unrelated.png")
+    write_rgb_image(generated_dir / "case1" / source_domain / "x_generated.png")
+    write_rgb_image(generated_dir / "case1" / reference_domain / "unrelated.png")
     config, path = _cyclegan_eval_config(tmp_path, direction)
 
     evaluate(config, path)
@@ -533,7 +569,7 @@ def test_cyclegan_unpaired_evaluation_compares_collections(
     assert metadata["training_pairing"] == "unpaired"
     assert metadata["inference_direction"] == direction
     assert metadata["source_domains"] == [source_domain]
-    assert metadata["reference_domain"] == reference_domain
+    assert metadata["reference_domains"] == [reference_domain]
     assert metadata["pairwise_metrics_available"] is False
     assert metadata["counts"] == {"generated_count": 2, "reference_count": 3}
     assert metadata["artifacts"]["unpaired_feature_plot"] is None
@@ -559,7 +595,7 @@ def test_pix2pix_unpaired_evaluation_uses_explicit_reference_collection(tmp_path
     write_aligned_test_manifest(dataset_root, sample_ids)
     for sample_id in sample_ids:
         write_rgb_pair(dataset_root / "splits" / "test", sample_id)
-        write_rgb_image(tmp_path / "generated" / f"{sample_id}_target_generated.png")
+        write_rgb_image(tmp_path / "generated" / "stained" / f"{sample_id}_generated.png")
     reference = [
         write_rgb_image(dataset_root / "real_he" / "test" / f"he_{i}.png", color=(i * 60, 9, 9))
         for i in range(3)
@@ -606,7 +642,7 @@ def test_explicit_reference_collection_overrides_data_domains(tmp_path: Path) ->
     held_out = [
         write_rgb_image(tmp_path / "dataset" / "held_out" / "test" / f"h{i}.png") for i in range(2)
     ]
-    write_rgb_image(tmp_path / "generated" / "x_A_to_B_generated.png")
+    write_rgb_image(tmp_path / "generated" / "stained" / "x_generated.png")
     config, path = _cyclegan_eval_config(
         tmp_path, "A_to_B", reference_collection="held_out/{split}/*.png"
     )
@@ -626,15 +662,15 @@ def test_explicit_reference_collection_overrides_data_domains(tmp_path: Path) ->
 
 def test_cyclegan_unpaired_evaluation_rejects_empty_generated(tmp_path: Path) -> None:
     _write_domains(tmp_path, {"label_free": 1, "stained": 1})
-    write_rgb_image(tmp_path / "generated" / "x_B_to_A_generated.png")
+    write_rgb_image(tmp_path / "generated" / "label_free" / "x_generated.png")
     config, path = _cyclegan_eval_config(tmp_path, "A_to_B")
 
-    with pytest.raises(ValueError, match="No A_to_B generated images"):
+    with pytest.raises(ValueError, match="No generated 'stained' images"):
         evaluate(config, path)
 
 
 def test_cyclegan_unpaired_evaluation_rejects_missing_or_empty_reference(tmp_path: Path) -> None:
-    write_rgb_image(tmp_path / "generated" / "x_A_to_B_generated.png")
+    write_rgb_image(tmp_path / "generated" / "stained" / "x_generated.png")
     config, path = _cyclegan_eval_config(tmp_path, "A_to_B")
     with pytest.raises(FileNotFoundError, match="no 'test' split"):
         evaluate(config, path)
@@ -647,7 +683,7 @@ def test_cyclegan_unpaired_evaluation_rejects_missing_or_empty_reference(tmp_pat
 def test_protocol_switches_remove_stale_reports(tmp_path: Path) -> None:
     _write_aligned_cyclegan_dataset(tmp_path, ["00000_00000"])
     _write_domains(tmp_path, {"label_free": 2, "stained": 2})
-    write_rgb_image(tmp_path / "generated" / "00000_00000_A_to_B_generated.png")
+    write_rgb_image(tmp_path / "generated" / "stained" / "00000_00000_generated.png")
     output_dir = tmp_path / "evaluation"
     unrelated = output_dir / "notes.txt"
     output_dir.mkdir()
@@ -658,7 +694,7 @@ def test_protocol_switches_remove_stale_reports(tmp_path: Path) -> None:
     evaluate(*_cyclegan_eval_config(tmp_path, protocol="paired", save_graphs=True))
     assert (output_dir / "per_image_metrics.csv").exists()
     assert (output_dir / "metrics_boxplot.png").exists()
-    assert (output_dir / "mae_histogram.png").exists()
+    assert (output_dir / "stained__mae_histogram.png").exists()
     assert not (output_dir / "removed_metric_histogram.png").exists()
     assert "stale" not in (output_dir / "coverage.csv").read_text(encoding="utf-8")
 
@@ -689,7 +725,7 @@ def test_pix2pix_evaluation_writes_paired_metadata(tmp_path: Path) -> None:
     write_aligned_test_manifest(dataset_root, ["00000_00000", "00256_00000"])
     write_rgb_pair(target_dir, "00000_00000")
     write_rgb_pair(target_dir, "00256_00000")
-    write_rgb_image(tmp_path / "generated" / "00000_00000_target_generated.png")
+    write_rgb_image(tmp_path / "generated" / "stained" / "00000_00000_generated.png")
     output_dir = tmp_path / "evaluation"
     yaml_file = _write_evaluate_config(
         tmp_path,
@@ -706,7 +742,7 @@ def test_pix2pix_evaluation_writes_paired_metadata(tmp_path: Path) -> None:
     assert metadata["evaluation_protocol"] == "paired"
     assert metadata["inference_direction"] is None
     assert metadata["source_domains"] == ["label_free"]
-    assert metadata["reference_domain"] == "stained"
+    assert metadata["reference_domains"] == ["stained"]
     assert metadata["pairwise_metrics_available"] is True
     assert metadata["counts"] == {"requested_count": 2, "evaluated_count": 1, "excluded_count": 1}
     assert metadata["artifacts"]["coverage_csv"] == str(output_dir / "coverage.csv")
@@ -730,7 +766,9 @@ def test_configured_external_metric_runs_through_the_evaluate_stage(tmp_path: Pa
     target_dir = dataset_root / "splits" / "test"
     write_aligned_test_manifest(dataset_root, ["00000_00000"])
     write_rgb_pair(target_dir, "00000_00000")
-    write_rgb_image(tmp_path / "generated" / "00000_00000_target_generated.png", color=(51, 51, 51))
+    write_rgb_image(
+        tmp_path / "generated" / "stained" / "00000_00000_generated.png", color=(51, 51, 51)
+    )
     output_dir = tmp_path / "evaluation"
     yaml_file = _write_evaluate_config(
         tmp_path,
@@ -750,13 +788,13 @@ def test_configured_external_metric_runs_through_the_evaluate_stage(tmp_path: Pa
         row = next(csv.DictReader(handle))
     assert float(row["mean_rgb"]) == pytest.approx(0.2)
     assert "ssim" not in row
-    assert (output_dir / "mean_rgb_histogram.png").exists()
+    assert (output_dir / "stained__mean_rgb_histogram.png").exists()
     with (output_dir / "set_metrics.csv").open(newline="", encoding="utf-8") as handle:
         assert "mean_rgb_finite_mean" in next(csv.DictReader(handle))
     result = json.loads((output_dir / "evaluation_result.json").read_text(encoding="utf-8"))
     assert result["metrics"][0]["name"] == "mean_rgb"
     assert result["metrics"][0]["higher_is_better"] is None
-    assert _metadata(output_dir)["schema_version"] == 2
+    assert _metadata(output_dir)["schema_version"] == 3
 
 
 def test_unknown_configured_metric_fails_before_evaluation(tmp_path: Path) -> None:
@@ -764,3 +802,108 @@ def test_unknown_configured_metric_fails_before_evaluation(tmp_path: Path) -> No
 
     with pytest.raises(ValueError, match="'mean_rgb' is not a registered metric definition"):
         RunConfig.from_yaml(yaml_file)
+
+
+def _two_output_run(tmp_path: Path, input_failures: str) -> tuple[RunConfig, Path, Path]:
+    dataset_root = tmp_path / "dataset"
+    records = []
+    for sample_id in ("s1", "s2"):
+        paths = {name: Path(f"splits/test/{sample_id}_{name}.png") for name in ("LF", "HE", "PAS")}
+        for name, path in paths.items():
+            write_rgb_image(
+                dataset_root / path, color=(10, 20, 30) if name != "PAS" else (90, 0, 0)
+            )
+        records.append(
+            make_manifest_record(
+                sample_id,
+                "test",
+                x=0,
+                y=0,
+                input_paths={"LF": paths["LF"]},
+                target_paths={"HE": paths["HE"], "PAS": paths["PAS"]},
+            )
+        )
+    metadata = manifest_metadata(("LF",), ("HE", "PAS"))
+    write_manifest_csv(dataset_root, records, metadata=metadata)
+    (dataset_root / "manifests" / "manifest_metadata.json").write_text(
+        json.dumps(metadata.to_dict()), encoding="utf-8"
+    )
+    with (dataset_root / "manifests" / "slide_sets.csv").open("w", encoding="utf-8") as handle:
+        handle.write("set_id,split,patient_id,specimen_id,status\nP1,test,PT1,SP1,processed\n")
+    data = pix2pix_config_data(tmp_path, inputs=("LF",), outputs=("PAS", "HE"))
+    data["evaluation"] = {
+        "generated_dir": str(tmp_path / "generated"),
+        "output_dir": str(tmp_path / "evaluation"),
+        "input_failures": input_failures,
+        "bootstrap_iterations": 5,
+    }
+    path = write_config_data(tmp_path / "run.yaml", data)
+    return RunConfig.from_yaml(path), path, tmp_path / "evaluation"
+
+
+def test_two_output_evaluation_is_per_output_without_pooling(tmp_path: Path) -> None:
+    config, path, output_dir = _two_output_run(tmp_path, "strict")
+    for sample_id in ("s1", "s2"):
+        write_rgb_image(
+            generated_path(tmp_path / "generated", sample_id, "HE", ".png"), color=(10, 20, 30)
+        )
+        write_rgb_image(
+            generated_path(tmp_path / "generated", sample_id, "PAS", ".png"), color=(0, 0, 0)
+        )
+
+    evaluate(config, path)
+
+    with (output_dir / "per_image_metrics.csv").open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [(row["sample_id"], row["output_name"]) for row in rows] == [
+        ("s1", "PAS"),
+        ("s1", "HE"),
+        ("s2", "PAS"),
+        ("s2", "HE"),
+    ]
+    assert {row["output_name"]: float(row["mae"]) for row in rows} == {
+        "PAS": pytest.approx(30 / 255),
+        "HE": 0.0,
+    }
+    with (output_dir / "summary.csv").open(newline="", encoding="utf-8") as handle:
+        summary = [row for row in csv.DictReader(handle) if row["metric"] == "mae"]
+    assert [(row["output_name"], row["count"]) for row in summary] == [("PAS", "2"), ("HE", "2")]
+    with (output_dir / "summary_set.csv").open(newline="", encoding="utf-8") as handle:
+        assert {row["output_name"] for row in csv.DictReader(handle)} == {"PAS", "HE"}
+    snapshot = load_snapshot(RunLayout.from_project(config.project).consumed_data("evaluate"))
+    assert snapshot.selection["correspondence"] == "manifest_sample_id_output_name"
+    assert sorted(
+        {(row.sample_id, row.domain) for row in snapshot.rows if row.role == "generated"}
+    ) == [
+        ("s1", "HE"),
+        ("s1", "PAS"),
+        ("s2", "HE"),
+        ("s2", "PAS"),
+    ]
+    assert _metadata(output_dir)["reference_domains"] == ["PAS", "HE"]
+
+
+def test_a_missing_output_never_hides_a_present_one(tmp_path: Path) -> None:
+    for mode in ("strict", "permissive"):
+        root = tmp_path / mode
+        config, path, output_dir = _two_output_run(root, mode)
+        for sample_id in ("s1", "s2"):
+            write_rgb_image(generated_path(root / "generated", sample_id, "HE", ".png"))
+        write_rgb_image(generated_path(root / "generated", "s1", "PAS", ".png"))
+
+        if mode == "strict":
+            with pytest.raises(EvaluationCoverageError, match="1 of 4 samples"):
+                evaluate(config, path)
+        else:
+            evaluate(config, path)
+        with (output_dir / "coverage.csv").open(newline="", encoding="utf-8") as handle:
+            coverage = {
+                (row["sample_id"], row["output_name"]): row for row in csv.DictReader(handle)
+            }
+        assert coverage["s2", "PAS"]["reason"] == "missing_generated"
+        assert coverage["s2", "HE"]["status"] == "evaluated"
+        if mode == "permissive":
+            assert coverage["s2", "PAS"]["status"] == "excluded"
+            with (output_dir / "per_image_metrics.csv").open(newline="", encoding="utf-8") as h:
+                evaluated = [(row["sample_id"], row["output_name"]) for row in csv.DictReader(h)]
+            assert ("s2", "HE") in evaluated and ("s2", "PAS") not in evaluated

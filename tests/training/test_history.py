@@ -5,26 +5,26 @@ from pathlib import Path
 
 import pytest
 
-from virtual_staining.methods.builtin import PIX2PIX_VALIDATION_METRICS
+from virtual_staining.methods.builtin import pix2pix_validation_metrics
 from virtual_staining.training.helpers import metrics_fieldnames
 from virtual_staining.training.history import TrainingHistory
 from virtual_staining.training.runtime import MethodMetrics
 
-VALIDATION_IMAGE_METRIC_NAMES = list(PIX2PIX_VALIDATION_METRICS)
+VALIDATION_IMAGE_METRIC_NAMES = list(pix2pix_validation_metrics(("HE",)))
 
 
 def _metrics(epoch: int, *, validation: bool = True) -> tuple[MethodMetrics, MethodMetrics | None]:
     train = MethodMetrics(
         losses={"loss_G": 1.0 + epoch, "loss_D": 2.0 + epoch},
         component_totals={"generator": 1.0 + epoch, "discriminator": 2.0 + epoch},
-        raw={"generator_l1": 3.0 + epoch},
-        weighted={"generator_l1": 4.0 + epoch},
-        current_weight={"generator_l1": 1.0},
+        raw={"generator_l1__HE": 3.0 + epoch},
+        weighted={"generator_l1__HE": 4.0 + epoch},
+        current_weight={"generator_l1__HE": 1.0},
     )
     val = (
         MethodMetrics(
             losses={"loss_G": 5.0 + epoch, "loss_D": 6.0 + epoch},
-            image={"val_ssim": 0.5 + epoch},
+            image={"val_ssim__HE": 0.5 + epoch},
         )
         if validation
         else None
@@ -36,7 +36,7 @@ def test_history_writes_one_union_csv_and_flushes(tmp_path: Path) -> None:
     path = tmp_path / "metrics" / "epochs.csv"
     with TrainingHistory(
         path,
-        ["generator_l1"],
+        ["generator_l1__HE"],
         resume_at=0,
         metric_names=("loss_G", "loss_D"),
         component_total_names=("generator", "discriminator"),
@@ -49,7 +49,7 @@ def test_history_writes_one_union_csv_and_flushes(tmp_path: Path) -> None:
     assert rows[0]["epoch"] == "0"
     assert rows[0]["loss_G_train"] == "1.000000"
     assert rows[0]["loss_G_val"] == "5.000000"
-    assert reported["val_ssim"] == 0.5
+    assert reported["val_ssim__HE"] == 0.5
     assert rows[0]["loss_D_val"] == "6.000000"
     assert not (tmp_path / "metrics" / "train.csv").exists()
 
@@ -67,7 +67,7 @@ def test_history_blanks_validation_columns_when_validation_does_not_run(tmp_path
         history.write_epoch(0, *_metrics(0, validation=False))
     row = next(csv.DictReader(path.open(newline="", encoding="utf-8")))
     assert row["loss_G_val"] == ""
-    assert row["val_ssim"] == ""
+    assert row["val_ssim__HE"] == ""
 
 
 def test_resume_reconciles_epoch_history(tmp_path: Path) -> None:

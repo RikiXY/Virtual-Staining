@@ -26,6 +26,7 @@ from virtual_staining.data.manifest import (
     load_manifest_or_raise,
     load_set_groups,
     manifest_sources,
+    require_model_modalities,
 )
 from virtual_staining.data.unpaired import resolve_domain_images
 from virtual_staining.evaluation.evaluator import EvaluationSample, evaluate_samples
@@ -47,7 +48,11 @@ from virtual_staining.evaluation.unpaired import (
 from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.inference.outputs import generated_path_for_record
-from virtual_staining.inference.runner import inference_direction, inference_input_names
+from virtual_staining.inference.runner import (
+    inference_direction,
+    inference_input_names,
+    inference_output_names,
+)
 from virtual_staining.metrics import ResolvedMetric, resolve_metrics
 from virtual_staining.split_contract import TEST_SPLIT
 from virtual_staining.utils.artifacts import collect_generated_artifacts
@@ -55,11 +60,11 @@ from virtual_staining.utils.artifacts import collect_generated_artifacts
 logger = logging.getLogger(__name__)
 
 EVALUATION_METADATA_JSON = "evaluation_metadata.json"
-EVALUATION_METADATA_SCHEMA_VERSION = 2
+EVALUATION_METADATA_SCHEMA_VERSION = 3
 PAIRED_EVALUATION_ADAPTER = "paired_evaluation/1"
 UNPAIRED_EVALUATION_ADAPTER = "unpaired_evaluation/1"
 _GROUP_UNITS = ("set", "specimen", "patient")
-# Every file the evaluate stage may write, plus ``*_histogram.png`` (one per requested
+# Every file the evaluate stage may write, plus ``*_histogram.png`` (one per output and
 # metric); nothing else in output_dir is ever removed.
 EVALUATION_OWNED_OUTPUTS: tuple[str, ...] = (
     PER_IMAGE_METRICS_CSV,
@@ -95,45 +100,40 @@ def evaluation_generated_dir(config: RunConfig, paths: RunLayout) -> Path:
     return configured or paths.output_test_dir
 
 
-def reference_domain(config: RunConfig) -> str:
-    """Return the real domain the generated images are compared against."""
-    return (
-        config.model.inputs[0] if inference_direction(config) == "B_to_A" else config.model.target
-    )
+def reference_domains(config: RunConfig) -> tuple[str, ...]:
+    """The real domains generated images are compared against: the predicted outputs.
 
-
-def paired_sample(
-    config: RunConfig, record: ManifestRecord, generated_dir: Path
-) -> EvaluationSample:
-    """Map one aligned manifest record to its reference and direction-aware generated image.
-
-    Pix2Pix and CycleGAN A_to_B: real target (B) <- generated B.
-    CycleGAN B_to_A: real ``model.inputs[0]`` (A) <- generated A.
+    Pix2Pix and CycleGAN A_to_B compare each output with its real target; CycleGAN B_to_A
+    compares generated A with the real ``model.inputs[0]``.
     """
-    direction = inference_direction(config)
-    reference = (
-        record.input_paths[config.model.inputs[0]] if direction == "B_to_A" else record.target_path
-    )
-    return EvaluationSample(
-        sample_id=record.sample_id,
-        set_id=record.set_id,
-        target_path=config.project.dataset_root / reference,
-        generated_path=generated_path_for_record(record, generated_dir, direction),
+    return inference_output_names(config)
+
+
+def paired_samples(
+    config: RunConfig, record: ManifestRecord, generated_dir: Path
+) -> tuple[EvaluationSample, ...]:
+    """One explicit pair per predicted output of an aligned manifest record.
+
+    Each pair is ``(sample_id, output_name)``: the record's real file of that domain and
+    the generated artifact of that output. Outputs are never pooled.
+    """
+    root = config.project.dataset_root
+    return tuple(
+        EvaluationSample(
+            sample_id=record.sample_id,
+            output_name=name,
+            set_id=record.set_id,
+            target_path=root / record.domain_path(name),
+            generated_path=generated_path_for_record(record, generated_dir, name),
+        )
+        for name in reference_domains(config)
     )
 
 
 def load_paired_evaluation_manifest(config: RunConfig) -> DatasetManifest:
     try:
         manifest = load_manifest_or_raise(config.project)
-        if config.data.pairing == "unpaired" and (
-            config.model.inputs[0] not in manifest.metadata.input_modalities
-            or config.model.target != manifest.metadata.target_modality
-        ):
-            raise ValueError(
-                f"manifest modalities {list(manifest.metadata.input_modalities)} -> "
-                f"{manifest.metadata.target_modality!r} do not match domains "
-                f"{config.model.inputs[0]!r} -> {config.model.target!r}"
-            )
+        require_model_modalities(manifest, config.model.inputs, config.model.outputs)
         manifest.validate(check_files_exist=True, require_splits={"test"})
     except (FileNotFoundError, ValueError) as exc:
         if config.data.pairing != "unpaired":
@@ -146,16 +146,26 @@ def load_paired_evaluation_manifest(config: RunConfig) -> DatasetManifest:
     return manifest
 
 
-def unpaired_generated_collection(config: RunConfig, generated_dir: Path) -> tuple[Path, ...]:
-    """Return the direction-specific generated images under ``generated_dir``; none fails."""
-    direction = inference_direction(config)
-    generated = (
-        collect_generated_artifacts(generated_dir, direction) if generated_dir.is_dir() else ()
-    )
-    if not generated:
+def unpaired_output(config: RunConfig) -> str:
+    """The one predicted output an unpaired collection diagnostic describes."""
+    outputs = reference_domains(config)
+    if len(outputs) != 1:
         raise ValueError(
-            f"No {direction} generated images found under {generated_dir}; run inference "
-            f"with inference.direction={direction} or set evaluation.generated_dir."
+            f"Unpaired evaluation needs exactly one predicted output, got {list(outputs)}"
+        )
+    return outputs[0]
+
+
+def unpaired_generated_collection(config: RunConfig, generated_dir: Path) -> tuple[Path, ...]:
+    """Return the generated images of the predicted output under ``generated_dir``."""
+    output = unpaired_output(config)
+    generated = collect_generated_artifacts(generated_dir, output) if generated_dir.is_dir() else ()
+    if not generated:
+        direction = inference_direction(config)
+        hint = f" with inference.direction={direction}" if direction is not None else ""
+        raise ValueError(
+            f"No generated {output!r} images found under {generated_dir / output}; run "
+            f"inference{hint} or set evaluation.generated_dir."
         )
     return generated
 
@@ -184,7 +194,7 @@ def unpaired_reference_spec(config: RunConfig) -> str:
     """
     if config.evaluation is not None and config.evaluation.reference_collection is not None:
         return config.evaluation.reference_collection
-    domain = reference_domain(config)
+    domain = unpaired_output(config)
     if domain not in config.data.domains:
         raise ValueError(
             f"Unpaired evaluation requires an independent real reference collection for "
@@ -199,7 +209,7 @@ def _evaluation_context(config: RunConfig, protocol: EvaluationProtocol) -> dict
         "protocol": protocol,
         "method": config.method.name,
         "direction": inference_direction(config),
-        "reference_domain": reference_domain(config),
+        "reference_domains": list(reference_domains(config)),
     }
 
 
@@ -211,17 +221,19 @@ def paired_evaluation_snapshot(
 ) -> DataSnapshot:
     """Snapshot the exact generated/reference correspondence handed to the evaluator.
 
-    Each sample contributes one ``reference`` and one ``generated`` row sharing its
-    ``sample_id``; that shared ID is the explicit correspondence. A generated file that is
+    Each ``(sample_id, output_name)`` pair contributes one ``reference`` and one
+    ``generated`` row sharing that ``sample_id`` and naming the output as ``domain``;
+    that shared identity is the explicit correspondence. A generated file that is
     requested but absent is recorded with ``status=missing``, never as read.
     """
     groups = load_set_groups(config.project)
-    domain = reference_domain(config)
+    by_sample = {record.sample_id: record for record in records}
     rows: list[AssetRow] = []
-    for sample, record in zip(samples, records, strict=True):
+    for sample in samples:
+        record = by_sample[sample.sample_id]
         specimen, patient = groups.get(record.set_id, ("", ""))
         common: dict[str, Any] = {
-            "domain": domain,
+            "domain": sample.output_name,
             "split": record.split,
             "sample_id": sample.sample_id,
             "set_id": sample.set_id,
@@ -251,7 +263,7 @@ def paired_evaluation_snapshot(
         roots={"dataset": config.project.dataset_root, "generated": generated_dir},
         hash_policy=config.data.hash_policy,
         group_validation=config.data.group_validation,
-        selection={"split": TEST_SPLIT, "correspondence": "manifest_sample_id"},
+        selection={"split": TEST_SPLIT, "correspondence": "manifest_sample_id_output_name"},
         context=_evaluation_context(config, "paired"),
         sources=manifest_sources(config.project),
         allow_missing=True,
@@ -265,7 +277,7 @@ def unpaired_evaluation_snapshot(
     generated_dir: Path,
 ) -> DataSnapshot:
     """Snapshot two independent collections; no per-image correspondence is created."""
-    domain = reference_domain(config)
+    domain = unpaired_output(config)
     root = config.project.dataset_root
     reference_spec = unpaired_reference_spec(config)
     reference_rows = [
@@ -376,7 +388,7 @@ def _write_metadata(
         "evaluation_protocol": protocol,
         "inference_direction": inference_direction(config),
         "source_domains": list(inference_input_names(config)),
-        "reference_domain": reference_domain(config),
+        "reference_domains": list(reference_domains(config)),
         "pairwise_metrics_available": protocol == "paired",
         "generated_dir": str(generated_dir),
         "counts": counts,
@@ -402,7 +414,9 @@ def _evaluate_paired(
     manifest = load_paired_evaluation_manifest(config)
     session.result(requested_metrics=[metric.name for metric in metrics])
     records = manifest.filter_split("test").records
-    samples = tuple(paired_sample(config, record, generated_dir) for record in records)
+    samples = tuple(
+        sample for record in records for sample in paired_samples(config, record, generated_dir)
+    )
     # The evaluator receives exactly the samples the snapshot describes.
     snapshot = paired_evaluation_snapshot(config, samples, records, generated_dir)
     session.bind_inputs(snapshot)

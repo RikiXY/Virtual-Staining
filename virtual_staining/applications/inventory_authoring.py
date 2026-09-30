@@ -1,7 +1,8 @@
 """Author the raw paired slide-set inventory from explicit asset mappings.
 
 Every input, target, and mask mapping is named by the caller; nothing is inferred from
-folder names, positions, dimensions, or image content, and no asset is ever opened. The
+folder names, positions, dimensions, or image content, and no asset is ever opened. A
+key matches a set only when every input and every target has exactly one asset. The
 inventory schema stays owned by ``virtual_staining.data.slide_sets``: a written
 inventory is published only after that canonical loader has read it back.
 """
@@ -22,6 +23,7 @@ from virtual_staining.data.slide_sets import (
     SET_ID_PATTERN,
     SlideAsset,
     SlideSet,
+    asset_column,
     load_slide_set_inventory,
 )
 from virtual_staining.utils.files import publish_file_no_replace
@@ -47,49 +49,55 @@ _GLOB_CHARS = frozenset("*?[")
 class InventoryRequest:
     """Explicit asset mappings for one paired inventory.
 
-    ``inputs`` and ``input_masks`` are ordered ``(modality, spec)`` pairs. A spec is a
-    ``dataset_root``-relative directory or glob; a relative ``metadata`` path is
+    ``inputs``, ``targets`` and their masks are ordered ``(modality, spec)`` pairs. A
+    spec is a ``dataset_root``-relative directory or glob; a relative ``metadata`` path is
     relative to ``dataset_root`` too.
     """
 
     dataset_root: Path
     inputs: tuple[tuple[str, str], ...]
-    target_modality: str
-    target: str
+    targets: tuple[tuple[str, str], ...]
     reference: str
     input_masks: tuple[tuple[str, str], ...] = ()
-    target_mask: str | None = None
+    target_masks: tuple[tuple[str, str], ...] = ()
     metadata: Path | None = None
     key_rule: KeyRule = "relative-path"
 
     def __post_init__(self) -> None:
-        names = self.modalities
-        if not names:
-            raise ValueError("at least one input mapping is required")
-        duplicates = sorted({name for name in names if names.count(name) > 1})
-        if duplicates:
-            raise ValueError(f"duplicate input names: {duplicates}")
-        invalid = [name for name in names if not MODALITY_NAME_PATTERN.fullmatch(name)]
-        if invalid:
-            raise ValueError(f"invalid input names: {invalid}")
-        if self.reference not in names:
+        for role, names in (("input", self.modalities), ("target", self.target_modalities)):
+            if not names:
+                raise ValueError(f"at least one {role} mapping is required")
+            duplicates = sorted({name for name in names if names.count(name) > 1})
+            if duplicates:
+                raise ValueError(f"duplicate {role} names: {duplicates}")
+            invalid = [name for name in names if not MODALITY_NAME_PATTERN.fullmatch(name)]
+            if invalid:
+                raise ValueError(f"invalid {role} names: {invalid}")
+        shared = sorted(set(self.modalities) & set(self.target_modalities))
+        if shared:
+            raise ValueError(f"target names must differ from every input name: {shared}")
+        if self.reference not in self.modalities:
             raise ValueError(f"reference {self.reference!r} is not an input name")
-        if not self.target_modality.strip():
-            raise ValueError("target modality must not be blank")
-        if self.target_modality in names:
-            raise ValueError("target modality must differ from every input name")
-        mask_names = [name for name, _ in self.input_masks]
-        unknown = sorted(set(mask_names) - set(names))
-        if unknown:
-            raise ValueError(f"input masks name unknown inputs: {unknown}")
-        if len(set(mask_names)) != len(mask_names):
-            raise ValueError("at most one mask mapping per input")
+        for role, masks, names in (
+            ("input", self.input_masks, self.modalities),
+            ("target", self.target_masks, self.target_modalities),
+        ):
+            mask_names = [name for name, _ in masks]
+            unknown = sorted(set(mask_names) - set(names))
+            if unknown:
+                raise ValueError(f"{role} masks name unknown {role}s: {unknown}")
+            if len(set(mask_names)) != len(mask_names):
+                raise ValueError(f"at most one mask mapping per {role}")
         if self.key_rule not in KEY_RULES:
             raise ValueError(f"key rule must be one of: {', '.join(KEY_RULES)}")
 
     @property
     def modalities(self) -> tuple[str, ...]:
         return tuple(name for name, _ in self.inputs)
+
+    @property
+    def target_modalities(self) -> tuple[str, ...]:
+        return tuple(name for name, _ in self.targets)
 
 
 @dataclass(frozen=True)
@@ -238,9 +246,11 @@ def _read_metadata(
     if not path.is_file():
         issue(f"file not found: {path}")
         return {}, issues
-    names = request.modalities
-    allowed = {"key", "set_id", "patient_id", "specimen_id", "target_aligned", "target_slide_id"}
-    allowed.update(f"input__{name}_{field}" for name in names for field in ("aligned", "slide_id"))
+    allowed = {"key", "set_id", "patient_id", "specimen_id"}
+    for role, names in (("input", request.modalities), ("target", request.target_modalities)):
+        allowed.update(
+            asset_column(role, name, field) for name in names for field in ("aligned", "slide_id")
+        )
     rows: dict[str, dict[str, str]] = {}
     try:
         with path.open(newline="", encoding="utf-8") as handle:
@@ -256,6 +266,8 @@ def _read_metadata(
                     issue(f"column {field!r} is not allowed; masks come from mask mappings")
                 elif field.startswith("input__"):
                     issue(f"column {field!r} names no input modality of this request")
+                elif field.startswith("target__"):
+                    issue(f"column {field!r} names no target modality of this request")
                 else:
                     issue(f"column {field!r} is unknown")
             for number, row in enumerate(reader, start=2):
@@ -296,13 +308,15 @@ def preview_inventory(request: InventoryRequest) -> InventoryPreview:
     rule = request.key_rule
     issues: list[InventoryIssue] = []
     sources: set[str] = set()
-    target = request.target_modality
     found = {
         name: _scan(root, f"input {name}", spec, rule, issues, sources, required=True)
         for name, spec in request.inputs
     }
-    found[target] = _scan(
-        root, f"target {target}", request.target, rule, issues, sources, required=True
+    found.update(
+        {
+            name: _scan(root, f"target {name}", spec, rule, issues, sources, required=True)
+            for name, spec in request.targets
+        }
     )
 
     all_keys = sorted(set().union(*found.values()))
@@ -319,10 +333,11 @@ def preview_inventory(request: InventoryRequest) -> InventoryPreview:
                 )
             )
         elif all(len(assets[key]) == 1 for assets in found.values()):
-            if found[target][key][0] in {found[name][key][0] for name in request.modalities}:
+            paths = [assets[key][0] for assets in found.values()]
+            if len(set(paths)) != len(paths):
                 issues.append(
                     InventoryIssue(
-                        "conflict", f"key {key!r}: target is the same file as an input", key
+                        "conflict", f"key {key!r}: two mappings resolve to the same file", key
                     )
                 )
             else:
@@ -335,8 +350,9 @@ def preview_inventory(request: InventoryRequest) -> InventoryPreview:
     mask_specs = [
         (f"input__{name}", f"input mask {name}", spec) for name, spec in request.input_masks
     ]
-    if request.target_mask is not None:
-        mask_specs.append(("target", "target mask", request.target_mask))
+    mask_specs.extend(
+        (f"target__{name}", f"target mask {name}", spec) for name, spec in request.target_masks
+    )
     for prefix, label, spec in mask_specs:
         masks[prefix] = _scan(root, label, spec, rule, issues, sources, required=False)
         issues.extend(
@@ -364,7 +380,9 @@ def preview_inventory(request: InventoryRequest) -> InventoryPreview:
         slide_set = SlideSet(
             set_id=set_id,
             inputs=tuple(asset(f"input__{name}", name, key, row) for name in request.modalities),
-            target=asset("target", target, key, row),
+            targets=tuple(
+                asset(f"target__{name}", name, key, row) for name in request.target_modalities
+            ),
             reference_modality=request.reference,
             patient_id=row.get("patient_id") or None,
             specimen_id=row.get("specimen_id") or None,
@@ -392,12 +410,11 @@ def _limitations(request: InventoryRequest, matches: list[InventoryMatch]) -> tu
     sets = [match.slide_set for match in matches]
     limitations = [NAME_LIMITATION, REFERENCE_LIMITATION]
     unknown = sum(
-        any(item.already_aligned is None for item in (*slide_set.inputs, slide_set.target))
-        for slide_set in sets
+        any(item.already_aligned is None for item in slide_set.assets) for slide_set in sets
     )
     if unknown:
         limitations.append(
-            f"{unknown} set(s) leave non-reference or target alignment blank (unknown); "
+            f"{unknown} set(s) leave non-reference input or target alignment blank (unknown); "
             "nothing was inferred from names, keys, directories, or dimensions."
         )
     absent = [
@@ -412,26 +429,35 @@ def _limitations(request: InventoryRequest, matches: list[InventoryMatch]) -> tu
     return tuple(limitations)
 
 
-_OPTIONAL_TAIL = ("target_mask", "target_slide_id", "patient_id", "specimen_id")
-
-
 def render_inventory_csv(preview: InventoryPreview) -> str:
     """The canonical wide CSV for ``preview``: rows by ``set_id``, deterministic columns."""
-    names = preview.request.modalities
+    request = preview.request
+    assets = [
+        *(("input", name) for name in request.modalities),
+        *(("target", name) for name in request.target_modalities),
+    ]
     required = [
         "set_id",
-        *(f"input__{name}_{field}" for name in names for field in ("path", "aligned")),
-        "target_path",
-        "target_aligned",
+        *(
+            asset_column(role, name, field)
+            for role, name in assets
+            for field in ("path", "aligned")
+        ),
     ]
-    optional = [f"input__{name}_{field}" for name in names for field in ("mask", "slide_id")]
+    optional = [
+        *(
+            asset_column(role, name, field)
+            for role, name in assets
+            for field in ("mask", "slide_id")
+        ),
+        "patient_id",
+        "specimen_id",
+    ]
     rows = [
         _csv_row(match.slide_set)
         for match in sorted(preview.matches, key=lambda item: item.slide_set.set_id)
     ]
-    columns = required + [
-        column for column in (*optional, *_OPTIONAL_TAIL) if any(row[column] for row in rows)
-    ]
+    columns = required + [column for column in optional if any(row[column] for row in rows)]
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, columns, lineterminator="\n", extrasaction="ignore")
     writer.writeheader()
@@ -445,8 +471,11 @@ def _csv_row(slide_set: SlideSet) -> dict[str, str]:
         "patient_id": slide_set.patient_id or "",
         "specimen_id": slide_set.specimen_id or "",
     }
-    assets = [(f"input__{item.modality}", item) for item in slide_set.inputs]
-    for prefix, item in [*assets, ("target", slide_set.target)]:
+    assets = [
+        *((f"input__{item.modality}", item) for item in slide_set.inputs),
+        *((f"target__{item.modality}", item) for item in slide_set.targets),
+    ]
+    for prefix, item in assets:
         aligned = item.already_aligned
         row[f"{prefix}_path"] = item.path.as_posix()
         row[f"{prefix}_aligned"] = "" if aligned is None else str(aligned).lower()
@@ -502,7 +531,7 @@ def write_inventory(preview: InventoryPreview, output: Path | str | None = None)
             current.dataset_root,
             modalities=request.modalities,
             reference_modality=request.reference,
-            target_modality=request.target_modality,
+            target_modalities=request.target_modalities,
         )
         if loaded != expected:
             raise ValueError("canonical loader did not reproduce the previewed slide sets")
