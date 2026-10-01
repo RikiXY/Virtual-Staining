@@ -6,33 +6,57 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import matplotlib
-import pytest
 
-from virtual_staining.evaluation.plotting import METRIC_NAMES, save_dataset_plots
-from virtual_staining.evaluation.summaries import build_summary_rows
+from virtual_staining.evaluation.plotting import histogram_edges, save_dataset_plots
+from virtual_staining.evaluation.reports import build_metric_row
+from virtual_staining.metrics import (
+    BUILTIN_METRIC_DEFINITIONS,
+    MetricDefinition,
+    MetricResult,
+    ResolvedMetric,
+)
+
+_METRICS = tuple(
+    BUILTIN_METRIC_DEFINITIONS[name].resolve({}, name) for name in ("mae", "psnr", "pcc_gray")
+)
 
 
-def _row(value: float) -> dict[str, object]:
-    return {metric: value for metric in METRIC_NAMES}
+def _row(value: float, **overrides: MetricResult) -> dict[str, object]:
+    results = {metric.name: MetricResult.of(value) for metric in _METRICS} | overrides
+    return build_metric_row("s", "HE", "t.png", "g.png", (8, 8, 3), results, set_id="S")
 
 
-def test_save_dataset_plots_creates_expected_files(tmp_path: Path) -> None:
-    rows = [_row(0.5), _row(0.6), _row(0.7)]
+def test_save_dataset_plots_writes_one_histogram_per_requested_metric(tmp_path: Path) -> None:
+    saved_paths = save_dataset_plots([_row(0.5), _row(0.6), _row(0.7)], _METRICS, tmp_path)
 
-    saved_paths = save_dataset_plots(rows, tmp_path)
-
-    expected_names = {f"{metric}_histogram.png" for metric in METRIC_NAMES}
-    expected_names.add("metrics_boxplot.png")
-
-    assert {path.name for path in saved_paths} == expected_names
+    assert {path.name for path in saved_paths} == {
+        "HE__mae_histogram.png",
+        "HE__psnr_histogram.png",
+        "HE__pcc_gray_histogram.png",
+        "metrics_boxplot.png",
+    }
     assert all(path.is_file() for path in saved_paths)
+
+
+def test_save_dataset_plots_never_mixes_outputs_in_one_histogram(tmp_path: Path) -> None:
+    rows = [_row(0.5), {**_row(0.9), "output_name": "PAS"}]
+
+    saved_paths = save_dataset_plots(rows, _METRICS[:1], tmp_path)
+
+    assert sorted(path.name for path in saved_paths) == [
+        "HE__mae_histogram.png",
+        "PAS__mae_histogram.png",
+        "metrics_boxplot.png",
+    ]
 
 
 def test_plotting_from_worker_thread_uses_non_interactive_backend(tmp_path: Path) -> None:
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         with ThreadPoolExecutor(max_workers=1) as executor:
-            saved_paths = executor.submit(save_dataset_plots, [_row(0.5)], tmp_path).result()
+            saved_paths = executor.submit(
+                save_dataset_plots, [_row(0.5)], _METRICS, tmp_path
+            ).result()
 
     assert matplotlib.get_backend().lower() == "agg"
     assert all(path.is_file() for path in saved_paths)
@@ -44,58 +68,50 @@ def test_plotting_from_worker_thread_uses_non_interactive_backend(tmp_path: Path
 # ---------------------------------------------------------------------------
 
 
-def test_save_dataset_plots_skips_inf_psnr_without_crashing(tmp_path: Path) -> None:
-    """save_dataset_plots must not crash when PSNR is inf (identical images)."""
-    row = dict(_row(0.5))
-    row["psnr"] = float("inf")
-    saved_paths = save_dataset_plots([row, _row(0.6)], tmp_path / "inf_psnr")
+def test_save_dataset_plots_ignores_non_finite_results(tmp_path: Path) -> None:
+    rows = [
+        _row(0.5, psnr=MetricResult.of(math.inf), pcc_gray=MetricResult.undefined("constant")),
+        _row(0.6, pcc_gray=MetricResult.undefined("constant")),
+    ]
+    saved_paths = save_dataset_plots(rows, _METRICS, tmp_path)
     assert all(p.is_file() for p in saved_paths)
 
 
-def test_save_dataset_plots_skips_nan_pcc_without_crashing(tmp_path: Path) -> None:
-    """save_dataset_plots must not crash when PCC metrics are nan (constant images)."""
-    row = dict(_row(0.5))
-    row["pcc_gray"] = float("nan")
-    row["pcc_rgb_mean"] = float("nan")
-    saved_paths = save_dataset_plots([row, _row(0.6)], tmp_path / "nan_pcc")
-    assert all(p.is_file() for p in saved_paths)
+def test_unknown_metric_histogram_uses_data_not_an_invented_range(tmp_path: Path) -> None:
+    custom = MetricDefinition("custom", "1", "tests", lambda *_: {}, higher_is_better=None).resolve(
+        {}, "custom"
+    )
+    assert isinstance(custom, ResolvedMetric)
+
+    edges = histogram_edges([3.0, 7.0], custom.definition.plot_range)
+
+    assert (edges[0], edges[-1]) == (3.0, 7.0)
+    assert (histogram_edges([0.2], (0.0, 1.0))[0], histogram_edges([0.2], (0.0, 1.0))[-1]) == (
+        0.0,
+        1.0,
+    )
 
 
-def test_save_dataset_plots_all_non_finite_without_crashing(tmp_path: Path) -> None:
-    """save_dataset_plots must not crash when every value for a metric is non-finite."""
-    rows: list[dict[str, object]] = [{metric: float("inf") for metric in METRIC_NAMES}]
-    saved_paths = save_dataset_plots(rows, tmp_path / "all_nonfinite")
-    assert all(p.is_file() for p in saved_paths)
+def test_plotting_existing_report_preserves_recorded_metric_range(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import matplotlib.pyplot as plt
 
+    from virtual_staining.evaluation.reports import MetricInfo
 
-# ---------------------------------------------------------------------------
-# build_summary_rows: non-finite count tracking
-# ---------------------------------------------------------------------------
+    limits = []
+    original = plt.xlim
 
+    def record_limits(*args, **kwargs):
+        if args:
+            limits.append(args)
+        return original(*args, **kwargs)
 
-def test_build_summary_rows_tracks_non_finite_count() -> None:
-    """build_summary_rows must count non-finite values and compute stats over finite ones."""
-    rows = [_row(0.5), _row(0.6)]
-    rows_with_inf = [dict(rows[0]), rows[1]]
-    rows_with_inf[0]["psnr"] = float("inf")
-
-    summary = build_summary_rows(rows_with_inf)
-    psnr_row = next(r for r in summary if r["metric"] == "psnr")
-
-    assert psnr_row["non_finite_count"] == 1
-    assert psnr_row["finite_count"] == 1
-    assert psnr_row["mean"] == pytest.approx(0.6)
-
-
-def test_build_summary_rows_all_non_finite_returns_nan_stats() -> None:
-    """build_summary_rows must return nan for stats when all values are non-finite."""
-    rows: list[dict[str, object]] = [{metric: float("nan") for metric in METRIC_NAMES}]
-
-    summary = build_summary_rows(rows)
-    pcc_row = next(r for r in summary if r["metric"] == "pcc_gray")
-
-    assert pcc_row["non_finite_count"] == 1
-    assert pcc_row["finite_count"] == 0
-    mean_val = pcc_row["mean"]
-    assert isinstance(mean_val, float)
-    assert math.isnan(mean_val)
+    monkeypatch.setattr(plt, "xlim", record_limits)
+    paths = save_dataset_plots(
+        [_row(0.5)],
+        (MetricInfo("mae", False, plot_range=(0.2, 0.8)),),
+        tmp_path,
+    )
+    assert (0.2, 0.8) in limits
+    assert all(path.is_file() for path in paths)

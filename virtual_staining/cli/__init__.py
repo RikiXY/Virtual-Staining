@@ -6,9 +6,8 @@ import logging
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
-from virtual_staining.applications.train import ProgressReporter
 from virtual_staining.cli._common import (
     add_config_argument,
     add_log_level_argument,
@@ -16,7 +15,9 @@ from virtual_staining.cli._common import (
 )
 from virtual_staining.cli._progress import render_training_progress
 
-VALID_STAGES = ("prepare", "train", "infer", "evaluate")
+if TYPE_CHECKING:
+    from virtual_staining.applications.train import ProgressReporter
+
 Command = Callable[[list[str] | None], None]
 
 
@@ -35,7 +36,10 @@ _COMMAND_HELP = {
     "convert": "Convert TIFF images to OpenSlide-compatible pyramidal BigTIFFs.",
     "panels": "Build source/generated/target comparison panels.",
     "organize": "Organize run outputs by metric ranking.",
+    "export-model": "Export selected run checkpoints as a portable local model bundle.",
     "queue": "Execute pipeline runs from a queue file.",
+    "config": "Resolve or check a run config without running any stage.",
+    "inventory": "Preview or write the raw paired slide-set inventory from explicit mappings.",
     "status": "Check the runtime environment and optional hardware support.",
 }
 
@@ -102,6 +106,8 @@ def _run_stage_command(stage: str, argv: list[str] | None) -> None:
 
 
 def _run_pipeline(argv: list[str] | None) -> None:
+    from virtual_staining.applications.pipeline import VALID_STAGES
+
     parser = argparse.ArgumentParser(prog="vs run", description=_COMMAND_HELP["run"])
     add_config_argument(parser)
     parser.add_argument(
@@ -149,7 +155,10 @@ def _commands() -> dict[str, Command]:
         "convert": lambda argv: _run_cli_module("convert", argv),
         "panels": lambda argv: _run_cli_module("compare_panels", argv),
         "organize": lambda argv: _run_cli_module("organize", argv),
+        "export-model": lambda argv: _run_cli_module("export_model", argv),
         "queue": _run_queue,
+        "config": lambda argv: _run_cli_module("config", argv),
+        "inventory": lambda argv: _run_cli_module("inventory", argv),
         "status": lambda argv: _run_cli_module("status", argv),
     }
 

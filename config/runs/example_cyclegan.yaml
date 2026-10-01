@@ -1,0 +1,409 @@
+# =============================================================================
+# CycleGAN (unpaired) run configuration - exhaustive annotated reference.
+# =============================================================================
+#
+# Every field the parser resolves for this experiment is written out below with its
+# effective value; options that cannot be active together are shown as commented
+# alternatives next to the field that owns them. This file is self-contained: every
+# public field that applies to a CycleGAN run is explained here. (Pix2Pix-only
+# sections - `preprocessing`, loss params/masks - are not repeated.) After defaults are
+# resolved this file is the same experiment as config/runs/minimal_cyclegan.yaml (a
+# test asserts RunConfig.to_dict() equality).
+#
+# This is a worked configuration, not a recommendation; the weights, epochs and
+# decay point follow the common CycleGAN recipe and must be chosen per study.
+#
+# Stages. There is no `preprocessing` section: raw unpaired domain folders need no
+# preparation, so `prepare` would fail for this file. Run the stages explicitly:
+#   vs run --config config/runs/local/my_cyclegan.yaml --stages train infer evaluate
+# (plain `vs run` without --stages runs prepare -> train -> infer -> evaluate and stops
+# at prepare.)
+#   train    - reads data.domains train/ and val/ (test/ only as leakage context).
+#   infer    - translates the test split of an aligned, prepared manifest
+#              (<dataset_root>/manifests/manifest.csv, or manifest_path) whose modalities
+#              include model.inputs[0] as an input and model.outputs[0] as a target.
+#              Without such a manifest, stop
+#              after `train` or use `vs infer-images`.
+#   evaluate - protocol unpaired: compares generated images with the real test/ images
+#              of the reference domain in data.domains.
+#
+# Unknown keys are rejected at every level. Relative project paths (dataset_root,
+# results_path, manifest_path, inference.output_dir, evaluation.generated_dir,
+# evaluation.output_dir) are used as written, i.e. they resolve from the process
+# working directory (run commands from the repository root). Other bases are stated
+# next to the field that uses them.
+#
+# NOT YAML KEYS - command-line only (never add these to this file):
+#   vs run --stages train infer evaluate   stage subset/order; default is all four
+#   vs queue --queue <queue.yaml>          run several configs in sequence
+#   vs infer-images --config <run.yaml>    translate arbitrary images in inference.direction
+#     --input PATH                 one image or a directory
+#     --input MODALITY=PATH        named form; the name is the source domain of the
+#                                  direction (label_free=... for A_to_B,
+#                                  stained=... for B_to_A)
+#     --output PATH                explicit output file/dir (else inference.output_dir,
+#                                  else <run>/artifacts/output_single|output_images)
+#     --recursive                  walk --input directories recursively
+#     --mode auto|resize|tile      full-size tiled vs one resized patch per image
+#     --tile-overlap N             tile overlap in pixels
+#     --output-format same|...     output extension when --output is not a file
+#   vs evaluate --pair TARGET GENERATED [--output-dir DIR]
+#                                  one-off image-pair metrics; ignores this run config
+# =============================================================================
+
+# --- Project -----------------------------------------------------------------
+
+# Required. Base directory for data.domains and data.group_metadata; also holds the
+# aligned prepared test manifest (and its manifests/ and metadata/ companion files)
+# that `infer` and an explicit paired evaluation read. Used as written.
+dataset_root: local_workspace/datasets/your_sample
+
+# Optional; default (omitted or null) is <dataset_root>/manifests/manifest.csv.
+# Consumer-side override of the manifest CSV read by `infer` and by
+# evaluation.protocol: paired; CycleGAN training never reads a manifest.
+# It is NOT a preparation output: `prepare` always writes
+# <dataset_root>/manifests/manifest.csv and never creates the file named here, so the
+# override must already exist when `infer` reaches it. Used exactly as written (a
+# relative path resolves from the working directory, NOT from dataset_root).
+# Only the CSV is replaced; record paths inside it stay relative to dataset_root.
+# Companion files are still read from <dataset_root>:
+#   manifests/manifest_metadata.json - REQUIRED (declares the schema and modalities).
+#   manifests/slide_sets.csv         - optional: adds specimen_id/patient_id to each
+#                                      set_id; without it only set_id is available.
+#                                      Exception: paired evaluation currently opens it
+#                                      for its grouped summaries whenever a sample was
+#                                      evaluated, so that stage fails without it.
+#   metadata/split_assignment.csv    - optional; read only by paired (Pix2Pix) training.
+#   metadata/dataset_fingerprint.json - optional provenance, recorded as null if absent.
+# An external manifest therefore needs: the current manifest CSV schema, the metadata
+# file above, every referenced file present, and the splits the stage reads (test
+# for inference and paired evaluation). No earlier `prepare` run is required. The
+# usual file-existence, data.hash_policy and group-leakage checks still apply.
+# manifest_path: local_workspace/manifests/manifest_subset.csv
+
+# Required. Parent of every run directory; this run writes to <results_path>/<run_name>/.
+results_path: local_workspace/results
+# Required non-blank string. Reusing a name reuses (and overwrites) that run directory.
+run_name: example_cyclegan_run
+
+# Optional; default [256, 256]. [width, height] in pixels - width FIRST ([320, 256] =
+# 320 px wide, 256 px tall). Images are resized to it for training and inference. The
+# ResNet generator needs both dimensions to be multiples of 4 and at least 8.
+image_size: [256, 256]
+
+# --- Method ------------------------------------------------------------------
+
+method:
+  # Optional; default pix2pix, so cyclegan must be explicit. cyclegan: two generators
+  # (A->B, B->A) and two discriminators trained with adversarial + cycle-consistency
+  # losses from unpaired collections. Requires data.pairing: unpaired and the resnet
+  # generator.
+  name: cyclegan
+  # Optional; default 50 (resolved explicitly for cyclegan). Integer >= 0: per-domain
+  # history of generated images shown to the discriminators; once full, each new fake is
+  # swapped for a stored one with probability 0.5. 0 disables the pools. Pool contents
+  # are checkpointed. (Pix2Pix rejects this key.)
+  replay_buffer_size: 50
+
+# --- Consumed-data policy ------------------------------------------------------
+
+data:
+  # Required value for cyclegan (the default `paired` is rejected).
+  pairing: unpaired
+  # Required for unpaired. Keys must be exactly model.inputs[0] (domain A) and
+  # model.outputs[0] (domain B). Each value is either
+  #   - a directory containing train/, val/ and test/ (searched recursively), or
+  #   - a path/glob containing the literal {split} (replaced by train, val, test).
+  # Relative values resolve from dataset_root and must stay inside it. The two
+  # collections are independent: no correspondence is inferred from position,
+  # filename or directory. An epoch has max(len(A), len(B)) samples (the shorter
+  # domain wraps around); the domain-B draw is a function of the training seed, epoch
+  # and index.
+  domains:
+    label_free: domains/label_free
+    stained: "prepared/{split}/stained/**/*.tif"
+  # Optional; default content. How each tracked stage identifies the files it read
+  # (metadata/consumed_data/<stage>/):
+  #   content    - SHA-256 of every consumed file, checked stable while it is read;
+  #                appropriate for a verified freeze of the data behind a result.
+  #   membership - locators, sizes and metadata only. Cheaper, but explicitly does NOT
+  #                establish that the bytes are the ones used before.
+  hash_policy: content
+  # Optional; default auto. Biological split-independence check across train/val/test.
+  # Raw domain folders carry no biological identity; IDs come only from
+  # data.group_metadata.
+  #   auto        - validate at the strongest unit every file has an ID for
+  #                 (patient > specimen > set); fails if none is complete, so it needs
+  #                 group_metadata.
+  #   patient | specimen | set - require that unit's ID on every file, then validate it.
+  #   unavailable - make NO positive independence claim (recorded as a limitation).
+  #                 Not a way to disable checking: IDs that are supplied are still
+  #                 checked and an ID seen in two splits still fails. It does not make a
+  #                 split acceptable for publication.
+  group_validation: unavailable
+  # Optional; unpaired only. CSV with exactly the columns
+  #   path,domain,split,set_id,specimen_id,patient_id
+  # where path is relative to dataset_root; a relative CSV location also resolves from
+  # dataset_root. Group IDs come only from this file, never from filenames or
+  # directories; a row whose domain/split contradicts the resolved file fails.
+  # With it, e.g. group_validation: auto can validate patient/specimen/set independence.
+  # group_metadata: domains/groups.csv
+
+# --- Model -------------------------------------------------------------------
+
+model:
+  # Required. Exactly one entry: domain A.
+  inputs: [label_free]
+  # Required. Exactly one entry: domain B; must differ from domain A. CycleGAN keeps its
+  # two-domain design: the A_to_B and B_to_A directions are alternative predictions of
+  # one checkpoint, never several simultaneous outputs, so more entries are rejected.
+  outputs: [stained]
+  generator:
+    # Required value for cyclegan (the default concat_unet is Pix2Pix-only and rejected).
+    architecture: resnet
+    # Optional; default 64. Width of the first convolution.
+    base_channels: 64
+    # Optional; must be instance (the resnet default); batch is rejected.
+    norm: instance
+    # Optional; default 9. Integer >= 1 residual blocks.
+    blocks: 9
+    # dropout and bilinear are concat_unet-only keys and are rejected here.
+  discriminator:
+    # One unconditional PatchGAN per domain.
+    ndf: 64             # optional; default 64. Width of the first convolution.
+    norm: instance      # optional; batch | instance; default instance.
+    # Optional; default false. true is rejected: LSGAN scores raw discriminator outputs,
+    # so a sigmoid output layer is not a supported output semantic.
+    use_sigmoid: false
+
+# --- Training (`train` stage) --------------------------------------------------
+# Epoch numbers below are zero-based epoch indices.
+
+training:
+  # Optional; default 8. Positive integer, samples per optimiser step.
+  batch_size: 1
+  # Required. Positive integer number of epochs.
+  epochs: 200
+  # Optional; defaults 2e-4. > 0; Adam learning rates of generators / discriminators.
+  lr_g: 0.0002
+  lr_d: 0.0002
+  # Optional; defaults 0.5 / 0.999. In [0, 1); Adam betas shared by all optimisers.
+  beta1: 0.5
+  beta2: 0.999
+  # Optional; default null = a random seed is drawn at start (and recorded), so the run
+  # is not repeatable. Also seeds the domain-B draw; pin it for a repeatable run.
+  seed: 42
+  # Optional; default min(4, CPU count) - machine dependent, so it is pinned here and in
+  # the minimal file. Integer >= 0 DataLoader worker processes (0 = main process).
+  num_workers: 4
+  # Optional; defaults 10 / 10. Positive integers in epochs: validate every N epochs /
+  # save <run>/checkpoints/epNNN.pth every N epochs.
+  validate_rate: 10
+  checkpoint_rate: 10
+  # Optional; default 3. Positive integer: ranked candidates kept per validation metric in
+  # checkpoints/best.json (read by inference.checkpoint_policy best/top_k). Checkpoint
+  # files themselves are not deleted.
+  checkpoint_top_k: 3
+  # Optional; default 15. Positive integer: report progress every N batches.
+  log_rate: 15
+  # Optional; default null = start from scratch. latest = newest epNNN.pth in this run's
+  # checkpoints/; otherwise a .pth path, relative paths resolving from
+  # <results_path>/<run_name>/checkpoints/ (e.g. ep099.pth). Restores models,
+  # optimisers, schedulers and replay pools.
+  resume: null
+
+  scheduler:
+    # Optional; default none (constant learning rates).
+    #   none              - no other scheduler key has any effect.
+    #   linear_decay      - constant through decay_start_epoch, then linear to 0 at
+    #                       `epochs`. Needs decay_start_epoch (integer, 0 <= value < epochs).
+    #   reduce_on_plateau - multiply the rates by factor when the monitor stops
+    #                       improving. Uses monitor, mode, factor, patience, min_lr.
+    # Keys of an unselected scheduler are parsed but dropped from the resolved config.
+    name: linear_decay
+    decay_start_epoch: 100
+    # reduce_on_plateau alternative:
+    # name: reduce_on_plateau
+    # monitor: loss_G_val # default loss_G_val. CycleGAN validation reports its
+    #                     # training-objective losses only, so loss_G_val is the only
+    #                     # accepted monitor; the paired image-fidelity metrics
+    #                     # (val_ssim, val_psnr, val_mae, ...) are rejected.
+    # mode: min           # min | max; default min for loss_G_val.
+    # factor: 0.5         # default 0.1; in (0, 1).
+    # patience: 5         # default 10; >= 0 validation events without improvement.
+    # min_lr: 0.0         # default 0.0; >= 0 floor.
+
+  # Optional; default: absent/null = no early stopping (this experiment).
+  # early_stopping:
+  #   monitor: loss_G_val # required for CycleGAN (it has no default monitor). A
+  #                       # validation CSV column: loss_G_val, loss_D_val,
+  #                       # loss_val_total_{generator|discriminator}, or
+  #                       # loss_val_{raw|weighted|current_weight}_{generator|discriminator}_<loss>
+  #                       # (e.g. loss_val_raw_generator_cycle_l1). CycleGAN reports no
+  #                       # paired val_* image-fidelity metrics; they are rejected.
+  #   mode: min           # min | max; default min for these loss columns.
+  #   patience: 15        # default 15; >= 0, counted in validation events (not epochs).
+  #   min_delta: 0.0      # default 0.0; >= 0 improvement required to reset patience.
+
+  augmentation:
+    # Optional; default false. CycleGAN requires false (true is rejected). The other two
+    # keys are still resolved and recorded:
+    enabled: false
+    # Optional; default 1. Integer >= 1 (train epoch multiplier when augmentation is on).
+    expansion_factor: 1
+    # Optional; default light. light | medium | strong.
+    intensity: light
+    # Optional; resolved and recorded like the other keys: [] for light. Names the
+    # inputs that would receive photometric transforms (never targets or masks); it has
+    # no effect while augmentation is disabled.
+    photometric_inputs: []
+
+  # Required. Loss terms per optimised network. Each term:
+  #   name     - required; a built-in CycleGAN loss valid for the role (below).
+  #   weight   - required; finite number >= 0. 0 (or enabled: false) keeps the term
+  #              configured but inactive.
+  #   enabled  - optional; default true.
+  #   params   - optional; default {}. No CycleGAN loss takes params, so it must stay {}
+  #              (any key is rejected).
+  #   schedule - optional; default {type: constant}. Multiplies weight per epoch (below).
+  # A name may appear once per role. CycleGAN losses (Pix2Pix's adversarial_bce, l1 and
+  # ssim are rejected):
+  #   adversarial_lsgan - least-squares (MSE) adversarial loss on raw discriminator
+  #                       outputs; an active term is required in both generator and
+  #                       discriminator.
+  #   cycle_l1          - generator only; L1 of A->B->A and B->A->B reconstructions
+  #                       against the real images; an active term is required.
+  #   identity_l1       - generator only, optional; L1 of each generator applied to real
+  #                       images of its own output domain (enabled: false or weight 0
+  #                       drops the identity passes).
+  # The weights here are illustrative.
+  losses:
+    generator:
+      - name: adversarial_lsgan
+        weight: 1.0
+        enabled: true
+        params: {}
+        schedule:
+          type: constant
+      - name: cycle_l1
+        weight: 10.0
+        enabled: true
+        params: {}
+        schedule:
+          type: constant
+      - name: identity_l1
+        weight: 5.0
+        enabled: true
+        params: {}
+        schedule:
+          type: constant
+          # Schedule types (multiplier m applied to weight at epoch e; fields a type does
+          # not use are dropped from the resolved config):
+          #   constant             - m = 1.
+          #   linear_warmup        - m = 0 at e <= start_epoch, rising linearly to 1 at
+          #                          e >= end_epoch.
+          #   linear_decay         - m = 1 at e <= start_epoch, falling linearly to 0 at
+          #                          e >= end_epoch.
+          #   cosine               - cosine from 1 at e <= start_epoch to 0 at
+          #                          e >= end_epoch.
+          #     start_epoch: optional, default 0, >= 0; end_epoch: required, >= start_epoch.
+          #   step                 - m = 1 before `epoch`, m = factor from `epoch` on.
+          #     epoch: required, >= 0; factor: optional, default 0.0, finite >= 0.
+          #   turn_on_after_epoch  - m = 0 before `epoch`, 1 from `epoch` on.
+          #   turn_off_after_epoch - m = 1 before `epoch`, 0 from `epoch` on.
+          #     epoch: required, >= 0.
+          # e.g. drop the identity term from epoch 100:
+          # type: turn_off_after_epoch
+          # epoch: 100
+          # e.g. ramp it in over the first 10 epochs:
+          # type: linear_warmup
+          # start_epoch: 0
+          # end_epoch: 10
+          # e.g. halve it from epoch 100:
+          # type: step
+          # epoch: 100
+          # factor: 0.5
+    discriminator:
+      - name: adversarial_lsgan
+        weight: 1.0
+        enabled: true
+        params: {}
+        schedule:
+          type: constant
+
+# --- Inference (`infer` stage) --------------------------------------------------
+# Translates the manifest test split (see manifest_path) into
+# <run>/artifacts/output_test/ unless output_dir is set.
+
+inference:
+  # One of checkpoint_policy / checkpoint_path is required. Policies read this run's
+  # <results_path>/<run_name>/checkpoints/:
+  #   latest - newest epNNN.pth (no metric needed; checkpoint_rank not allowed).
+  #   best   - rank-1 entry of best.json for checkpoint_metric (required).
+  #   top_k  - entry checkpoint_rank (default 1) of best.json for checkpoint_metric
+  #            (required). best.json keeps only training.checkpoint_top_k ranks.
+  # The metric must be loss_G_val for CycleGAN (val_* image metrics are rejected): it
+  # selects the checkpoint with the lowest validation training objective, which is not a
+  # measure of biological or clinical fidelity.
+  checkpoint_policy: best
+  checkpoint_metric: loss_G_val
+  # Optional positive integer; allowed only with best/top_k.
+  # checkpoint_rank: 2
+  # Alternative to a policy: an explicit checkpoint file; relative paths resolve from the
+  # run root <results_path>/<run_name>/. Takes precedence over checkpoint_policy.
+  # checkpoint_path: checkpoints/ep199.pth
+  # Optional; default <run>/artifacts/output_test (infer) or artifacts/output_single|
+  # output_images (vs infer-images). Used as written (working-directory relative).
+  # output_dir: local_workspace/results/example_cyclegan_run/artifacts/output_test
+  # Optional; default A_to_B. A_to_B translates model.inputs[0] -> model.outputs[0]
+  # (label_free -> stained, reading each test record's input); B_to_A uses the second
+  # generator of the same checkpoint (stained -> label_free, reading each record's
+  # aligned target). Each file is named by what it predicts:
+  # <output_dir>/<predicted domain>/<sample>_generated.<ext> (stained/ for A_to_B,
+  # label_free/ for B_to_A), so both directions can share one output directory.
+  direction: A_to_B
+
+# --- Evaluation (`evaluate` stage) ----------------------------------------------
+
+evaluation:
+  # Optional; default unpaired for cyclegan.
+  #   unpaired - method-independent: compares per-image RGB/luminance mean and std
+  #              distributions of the generated images with an independent real
+  #              reference collection (by default the test/ collection of the reference
+  #              domain in data.domains: target domain for A_to_B, domain A for B_to_A):
+  #              Wasserstein distance, two-sample KS test. No pairs are formed. These are
+  #              low-order appearance diagnostics only; they do not establish
+  #              sample-level, biological or clinical fidelity.
+  #   paired   - allowed only when an aligned held-out test manifest exists: per-image
+  #              fidelity metrics (MAE, RMSE, PSNR, SSIM, PCC) against its reference
+  #              (target for A_to_B, domain-A input for B_to_A), plus set/specimen/
+  #              patient summaries. data.domains images are never treated as pairs.
+  protocol: unpaired
+  # Optional; unpaired protocol only (rejected with paired). Overrides the data.domains
+  # reference collection above: a directory holding test/ (searched recursively) or a
+  # path/glob containing the literal {split}; relative values resolve against
+  # dataset_root. data.group_metadata is not applied to it.
+  # reference_collection: held_out/stained
+  # Optional; paired protocol only (rejected with unpaired). Ordered list of
+  # {name, options} metric requests; omitted, the built-in default set mae, mse, rmse,
+  # psnr, ssim, pcc_gray, pcc_rgb_mean. Each result is finite, positive_infinity,
+  # undefined or unavailable; summaries average finite values only.
+  # metrics:
+  #   - name: mae
+  #   - name: ssim
+  # Optional; default strict. strict fails the paired evaluation on a known input failure
+  # (missing/unreadable/non-RGB file, shape mismatch), recording it in coverage.csv;
+  # permissive excludes such samples and continues. Only strict is accepted with the
+  # unpaired protocol, which always fails on unreadable images.
+  input_failures: strict
+  # Optional; default false. true also writes plots (unpaired: feature distributions).
+  save_graphs: false
+  # Optional; defaults <run>/artifacts/output_test (where infer writes) and
+  # <run>/evaluation. Used as written (working-directory relative).
+  # generated_dir: local_workspace/results/example_cyclegan_run/artifacts/output_test
+  # output_dir: local_workspace/results/example_cyclegan_run/evaluation
+  # Optional; default 10000. Integer >= 0 bootstrap resamples for the grouped confidence
+  # intervals of the paired protocol; unused by unpaired but resolved and recorded.
+  bootstrap_iterations: 10000
+  # Optional; default 0. Integer seed of that bootstrap resampling.
+  bootstrap_seed: 0

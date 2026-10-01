@@ -4,7 +4,6 @@ from typing import Any
 import torch
 import torch.nn as nn
 
-# Fixed conv-block hyperparameters for the standard UNet architecture.
 _CONV_KERNEL = 3
 _CONV_PADDING = 1
 _POOL_KERNEL = 2
@@ -19,14 +18,7 @@ def _make_norm(norm: str, channels: int) -> nn.Module:
 
 
 class DoubleConv(nn.Module):
-    """
-    Block consisting of two consecutive convolutions, each followed by
-    batch normalisation and ReLU activation.
-
-    Args:
-        in_channels (int): Number of input channels.
-        out_channels (int): Number of output channels.
-    """
+    """Two convolutions, each followed by batch or instance normalization and ReLU."""
 
     def __init__(self, in_channels: int, out_channels: int, norm: str) -> None:
         super().__init__()
@@ -56,12 +48,7 @@ class DoubleConv(nn.Module):
 
 
 class Down(nn.Module):
-    """
-    Downsampling block for U-Net-style architectures.
-
-    Reduces the spatial resolution via max pooling and then applies
-    a `DoubleConv` block to extract richer features.
-    """
+    """U-Net downsampling via max pooling followed by ``DoubleConv``."""
 
     def __init__(self, in_channels: int, out_channels: int, norm: str) -> None:
         super().__init__()
@@ -108,10 +95,7 @@ class Up(nn.Module):
 
 
 class OutConv(nn.Module):
-    """
-    Final 1x1 convolution that maps the features
-    to the required number of output channels.
-    """
+    """Final 1x1 convolution mapping features to output channels."""
 
     def __init__(self, in_channels: int, out_channels: int) -> None:
         super().__init__()
@@ -131,16 +115,6 @@ class UNetGenerator(nn.Module):
         dropout: bool = False,
         bilinear: bool = False,
     ) -> None:
-        """
-        Args:
-            in_channels (int): Number of input channels.
-            out_channels (int): Number of output channels.
-            base_channels (int): Number of filters in the first encoder block;
-                doubles at each depth level.
-            norm (str): Normalization family used throughout the generator.
-            dropout (bool): Whether to apply decoder dropout in the deepest three up blocks.
-            bilinear (bool): Whether to use bilinear upsampling or transposed convolution.
-        """
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -173,31 +147,153 @@ class UNetGenerator(nn.Module):
         return torch.tanh(self.outc(x))
 
 
+def concat_named(
+    images: Mapping[str, torch.Tensor],
+    names: tuple[str, ...],
+    role: str,
+    *,
+    like: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Concatenate RGB NCHW ``images`` in exactly the ordered ``names`` along channels.
+
+    Every tensor must share the batch and spatial shape of the first one (or of ``like``).
+    """
+    if tuple(images) != names:
+        raise ValueError(f"{role} must have exact ordered names {names}, got {tuple(images)}")
+    reference = like if like is not None else images[names[0]]
+    for name in names:
+        value = images[name]
+        if not isinstance(value, torch.Tensor) or value.ndim != 4 or value.shape[1] != 3:
+            raise ValueError(f"{role} {name!r} must be an RGB NCHW tensor")
+        if value.shape[0] != reference.shape[0] or value.shape[2:] != reference.shape[2:]:
+            raise ValueError(
+                f"{role} {name!r} has shape {tuple(value.shape)}; every image must share "
+                f"batch and spatial shape {(reference.shape[0], *reference.shape[2:])}"
+            )
+    return torch.cat([images[name] for name in names], dim=1)
+
+
 def concat_inputs(inputs: Mapping[str, torch.Tensor], input_names: tuple[str, ...]) -> torch.Tensor:
-    if tuple(inputs) != input_names:
-        raise ValueError(
-            f"Generator inputs must have exact ordered names {input_names}, got {tuple(inputs)}"
-        )
-    return torch.cat([inputs[name] for name in input_names], dim=1)
+    return concat_named(inputs, input_names, "Generator inputs")
+
+
+def split_named(tensor: torch.Tensor, names: tuple[str, ...]) -> dict[str, torch.Tensor]:
+    """Split ``3 * len(names)`` channels into one RGB tensor per name, in order."""
+    return {name: tensor[:, 3 * index : 3 * index + 3] for index, name in enumerate(names)}
+
+
+def _check_names(names: tuple[str, ...], role: str) -> None:
+    if not names or len(set(names)) != len(names):
+        raise ValueError(f"{role} must be non-empty and unique")
 
 
 class ConcatUNetGenerator(nn.Module):
+    """U-Net over the channel-concatenated named inputs, split into named RGB outputs.
+
+    ``input_names``/``output_names`` are construction context derived from the model I/O,
+    never component options: the U-Net sees ``3 * N`` input and ``3 * M`` output channels.
+    """
+
     def __init__(
         self,
         input_names: tuple[str, ...],
+        output_names: tuple[str, ...],
         channels_per_input: int = 3,
         **unet_kwargs: Any,
     ) -> None:
         super().__init__()
-        if not input_names or len(set(input_names)) != len(input_names):
-            raise ValueError("input_names must be non-empty and unique")
+        _check_names(input_names, "input_names")
+        _check_names(output_names, "output_names")
+        if set(input_names) & set(output_names):
+            raise ValueError("input_names and output_names must be disjoint")
         self.input_names = input_names
+        self.output_names = output_names
         self.channels_per_input = channels_per_input
         self.unet = UNetGenerator(
             in_channels=len(input_names) * channels_per_input,
-            out_channels=3,
+            out_channels=3 * len(output_names),
             **unet_kwargs,
         )
 
-    def forward(self, inputs: Mapping[str, torch.Tensor]) -> torch.Tensor:
-        return self.unet(concat_inputs(inputs, self.input_names))
+    def forward(self, inputs: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        return split_named(self.unet(concat_inputs(inputs, self.input_names)), self.output_names)
+
+
+RESNET_SIZE_MULTIPLE = 4
+
+
+class ResnetBlock(nn.Module):
+    def __init__(self, channels: int) -> None:
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.ReflectionPad2d(1),
+            nn.Conv2d(channels, channels, kernel_size=3),
+            nn.InstanceNorm2d(channels),
+            nn.ReLU(inplace=True),
+            nn.ReflectionPad2d(1),
+            nn.Conv2d(channels, channels, kernel_size=3),
+            nn.InstanceNorm2d(channels),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + self.block(x)
+
+
+class ResnetGenerator(nn.Module):
+    """CycleGAN ResNet generator mapping one RGB tensor to one RGB tensor."""
+
+    def __init__(
+        self,
+        in_channels: int = 3,
+        out_channels: int = 3,
+        base_channels: int = 64,
+        blocks: int = 9,
+    ) -> None:
+        super().__init__()
+        if blocks < 1:
+            raise ValueError("ResnetGenerator requires at least one residual block")
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.base_channels = base_channels
+        self.blocks = blocks
+        b = base_channels
+        layers: list[nn.Module] = [
+            nn.ReflectionPad2d(3),
+            nn.Conv2d(in_channels, b, kernel_size=7),
+            nn.InstanceNorm2d(b),
+            nn.ReLU(inplace=True),
+        ]
+        for mult in (1, 2):
+            layers += [
+                nn.Conv2d(b * mult, b * mult * 2, kernel_size=3, stride=2, padding=1),
+                nn.InstanceNorm2d(b * mult * 2),
+                nn.ReLU(inplace=True),
+            ]
+        layers += [ResnetBlock(b * 4) for _ in range(blocks)]
+        for mult in (4, 2):
+            layers += [
+                nn.ConvTranspose2d(
+                    b * mult, b * mult // 2, kernel_size=3, stride=2, padding=1, output_padding=1
+                ),
+                nn.InstanceNorm2d(b * mult // 2),
+                nn.ReLU(inplace=True),
+            ]
+        layers += [
+            nn.ReflectionPad2d(3),
+            nn.Conv2d(b, out_channels, kernel_size=7),
+            nn.Tanh(),
+        ]
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim != 4 or x.shape[1] != self.in_channels:
+            raise ValueError(
+                f"ResnetGenerator expects NCHW input with {self.in_channels} channels, "
+                f"got shape {tuple(x.shape)}"
+            )
+        if x.shape[-2] % RESNET_SIZE_MULTIPLE or x.shape[-1] % RESNET_SIZE_MULTIPLE:
+            raise ValueError(
+                f"ResnetGenerator spatial dimensions must be multiples of {RESNET_SIZE_MULTIPLE}, "
+                f"got {tuple(x.shape[-2:])}"
+            )
+        return self.model(x)

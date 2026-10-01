@@ -9,13 +9,41 @@ from typing import Any
 
 from PIL import Image
 
-from virtual_staining.inference.runner import (
-    CheckpointGeneratorMetadata,
-    inspect_checkpoint_generator,
-    load_checkpoint_generator,
-    resolve_inference_device,
+from virtual_staining.checkpoint_contract import (
+    CHECKPOINT_FORMAT_VERSION,
+    ValidatedCheckpoint,
+    read_checkpoint,
+    validate_checkpoint,
 )
-from virtual_staining.inference.single import predict_single_patch, validate_patch_image
+from virtual_staining.config.run import RunConfig
+from virtual_staining.inference.runner import resolve_inference_device
+from virtual_staining.inference.single import (
+    InferenceRuntime,
+    PredictionContract,
+    predict_single_patch,
+    validate_patch_image,
+)
+from virtual_staining.methods.builtin import config_from_pix2pix_checkpoint
+
+
+def _read_ui_checkpoint(path: Path) -> tuple[RunConfig, ValidatedCheckpoint]:
+    """Resolve built-in Pix2Pix metadata through the same definitions as the CLI."""
+    payload = read_checkpoint(path)
+    if not isinstance(payload, dict) or payload.get("format_version") != CHECKPOINT_FORMAT_VERSION:
+        raise ValueError(f"Unsupported format version; expected {CHECKPOINT_FORMAT_VERSION}.")
+    try:
+        config = config_from_pix2pix_checkpoint(payload)
+        checkpoint = validate_checkpoint(
+            payload, config.method.definition.checkpoint_identity(config), path
+        )
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise ValueError("Malformed checkpoint reconstruction metadata.") from exc
+    if len(config.model.inputs) != 1:
+        raise ValueError("The single-patch UI requires exactly one input modality.")
+    if len(config.model.outputs) != 1:
+        raise ValueError("The single-patch UI requires exactly one output modality.")
+    return config, checkpoint
+
 
 logger = logging.getLogger(__name__)
 
@@ -153,9 +181,18 @@ class UIInferenceService:
         for checkpoint_path in sorted(root.rglob("*.pth")):
             identifier = checkpoint_path.relative_to(root).as_posix()
             try:
-                metadata = inspect_checkpoint_generator(checkpoint_path)
-                descriptor = self._descriptor_from_metadata(identifier, metadata)
-                self._validate_ui_compatibility(descriptor)
+                config, _ = _read_ui_checkpoint(checkpoint_path)
+                descriptor = ModelDescriptor(
+                    identifier=identifier,
+                    checkpoint_filename=checkpoint_path.name,
+                    input_domains=config.model.inputs,
+                    target_domain=config.model.outputs[0],
+                    architecture_id=config.method.options.generator.name,
+                    model_class="ConcatUNetGenerator",
+                    checkpoint_schema_version=CHECKPOINT_FORMAT_VERSION,
+                    image_size=config.project.image_size,
+                    channels_per_input=3,
+                )
             except (EOFError, OSError, pickle.UnpicklingError, RuntimeError, ValueError) as exc:
                 logger.warning("Skipping incompatible UI checkpoint %s: %s", checkpoint_path, exc)
                 issues.append(CatalogIssue(identifier, _checkpoint_issue_message(exc)))
@@ -192,7 +229,27 @@ class UIInferenceService:
         descriptor = self.validate_input(model_identifier, image)
         checkpoint_path = self._checkpoint_paths[model_identifier]
         try:
-            runtime = load_checkpoint_generator(checkpoint_path, resolve_inference_device())
+            config, checkpoint = _read_ui_checkpoint(checkpoint_path)
+            if (config.model.inputs, config.model.outputs, config.project.image_size) != (
+                descriptor.input_domains,
+                (descriptor.target_domain,),
+                descriptor.image_size,
+            ):
+                raise ValueError("Checkpoint changed; refresh the model catalog.")
+            device = resolve_inference_device()
+            runtime = InferenceRuntime(
+                predictor=config.method.definition.build_inference_model(
+                    config,
+                    checkpoint,
+                    direction=None,
+                    device=device,
+                ),
+                contract=PredictionContract(
+                    config.model.inputs, config.model.outputs, config.project.image_size
+                ),
+                device=device,
+                checkpoint_path=checkpoint_path,
+            )
             generated = predict_single_patch(runtime, image)
         except (OSError, RuntimeError, ValueError) as exc:
             logger.exception("UI inference failed for checkpoint %s", checkpoint_path)
@@ -247,8 +304,18 @@ class UIInferenceService:
                 generated_filename=image_path.name,
             )
             sidecar_json = json.dumps(saved_provenance.to_dict(), indent=2) + "\n"
-            result.generated_image.save(image_path, format="PNG")
-            sidecar_path.write_text(sidecar_json, encoding="utf-8")
+            image_file = image_path.open("xb")
+            sidecar_created = False
+            try:
+                with image_file, sidecar_path.open("x", encoding="utf-8") as sidecar:
+                    sidecar_created = True
+                    result.generated_image.save(image_file, format="PNG")
+                    sidecar.write(sidecar_json)
+            except Exception:
+                image_path.unlink(missing_ok=True)
+                if sidecar_created:
+                    sidecar_path.unlink(missing_ok=True)
+                raise
         except (OSError, ValueError) as exc:
             logger.exception("Could not save UI inference result in %s", directory)
             raise UIInferenceError(
@@ -266,33 +333,6 @@ class UIInferenceService:
 
     def _resolve_from_working_directory(self, path: Path) -> Path:
         return path if path.is_absolute() else self.working_directory / path
-
-    @staticmethod
-    def _descriptor_from_metadata(
-        identifier: str, metadata: CheckpointGeneratorMetadata
-    ) -> ModelDescriptor:
-        return ModelDescriptor(
-            identifier=identifier,
-            checkpoint_filename=metadata.checkpoint_path.name,
-            input_domains=metadata.input_names,
-            target_domain=metadata.target_modality,
-            architecture_id=metadata.architecture,
-            model_class=metadata.generator_class,
-            checkpoint_schema_version=metadata.format_version,
-            image_size=metadata.image_size,
-            channels_per_input=metadata.channels_per_input,
-        )
-
-    @staticmethod
-    def _validate_ui_compatibility(descriptor: ModelDescriptor) -> None:
-        if len(descriptor.input_domains) != 1:
-            raise ValueError(
-                "The single-patch UI supports checkpoints with exactly one input modality."
-            )
-        if descriptor.channels_per_input != 3:
-            raise ValueError(
-                "The single-patch UI supports RGB checkpoints with three input channels."
-            )
 
 
 def _safe_source_filename(filename: str) -> str:
@@ -315,7 +355,7 @@ def _available_output_paths(directory: Path, source_filename: str) -> tuple[Path
 def _checkpoint_issue_message(exc: Exception) -> str:
     message = str(exc)
     if "format version" in message:
-        return "Unsupported checkpoint schema; this UI requires the current v3 format."
+        return "Unsupported checkpoint schema; this UI requires the current v4 format."
     if isinstance(exc, (EOFError, pickle.UnpicklingError)):
         return "Unreadable checkpoint file."
     return message or "Checkpoint is not compatible with single-patch inference."

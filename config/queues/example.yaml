@@ -1,19 +1,34 @@
+# Local run queue - exhaustive annotated reference.
+#   vs queue --queue config/queues/local/my_queue.yaml     (--queue is a CLI flag)
+#
+# Before any job runs, preflight parses every job's run config (RunConfig.from_yaml);
+# one invalid or missing config fails the queue with nothing executed. Jobs then run
+# one after another. Queue state is written to
+# local_workspace/queues/<name>.state.json (for a queue under config/queues/;
+# elsewhere, <queue file>.state.json). Unknown keys are rejected.
+# For a controlled ablation (the optional `ablation` block) see
+# config/queues/example_ablation.yaml.
+
+# Required non-blank string; names the state file.
 name: example
+# Optional; default false. false = stop at the first failed job (later jobs stay
+# pending). true = record the failure and continue; the queue still ends `failed`.
 continue_on_failure: false
-# Optional controlled-ablation guardrails. When present, queue preflight compares
-# resolved run configs and fails if any undeclared field differs.
-# ablation:
-#   fixed_fields:
-#     - model.generator.base_channels
-#     - training.epochs
-#   variable_fields:
-#     - run_name
-#     - training.losses.generator
-#     - training.losses.discriminator
-#     - training.scheduler.name
+
+# Required non-empty list. Each job:
+#   config_path - required. Run YAML; a relative path resolves from THIS queue file's
+#                 directory, not from the working directory.
+#   label       - optional string recorded in the queue state (and ablation summary).
+#   notes       - optional free text, recorded likewise.
+#   stages      - optional non-empty list from prepare, train, infer, evaluate, run in the
+#                 order given. Omitted = the complete sequence prepare, train, infer,
+#                 evaluate (so a config without `preprocessing` needs explicit stages).
+# Point config_path at your own copies under config/runs/local/.
 jobs:
-  - config_path: ../runs/local/run_a.yaml
-    label: baseline
-  - config_path: ../runs/local/run_b.yaml
+  - config_path: ../runs/example.yaml
+    label: pix2pix_baseline
+    notes: complete pipeline, stages omitted
+  - config_path: ../runs/example_cyclegan.yaml
+    label: cyclegan_baseline
+    notes: raw unpaired domains need no prepare stage
     stages: [train, infer, evaluate]
-    notes: retry with lower learning rate

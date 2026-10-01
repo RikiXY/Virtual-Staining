@@ -2,128 +2,96 @@
 
 ## Layer Model
 
-The package is organised in three layers. Dependencies flow downward only -
-upper layers may import from lower layers, never the reverse.
+Dependencies flow from adapters to applications to library packages; library code
+never imports applications or the CLI.
 
-| Layer | Description | Examples |
-|---|---|---|
-| **Library** | Reusable package code with explicit, testable I/O boundaries. Some modules are pure helpers; others are side-effecting services. | `metrics.py`, `utils/`, `config/`, `experiment/`, `models/`, `data/`, `training/`, `inference/`, `evaluation/` |
-| **Application** | Use-case orchestrators that wire core modules together | `applications/` |
-| **Adapter** | Entry points that translate CLI or browser interactions into application calls | `cli/`, `ui/` |
+| Layer | Responsibility |
+|---|---|
+| Library | Reusable computation and services with explicit I/O boundaries |
+| `applications/` | Use-case composition, input selection, and tracked stage lifecycles |
+| `cli/`, `ui/` | Command-line and browser adapters over application services |
+
+Library services may read and write files. Standalone stages consume their natural
+inputs without requiring a tracked run; their public boundaries are documented in
+[Library Stage API](library_api.md).
 
 ## Package Map
 
-| Package | Responsibility |
+| Package or contract | Semantic owner |
 |---|---|
-| `metrics.py` | Image metric computations, directions, quality thresholds, and validation image metric names |
-| `checkpoint_contract.py` | Neutral v3 checkpoint format and generator metadata validation |
-| `checkpoint_selection.py` | Neutral `best.json` ranking, policy, and metric-direction selection |
-| `utils/` | Shared primitives: image dimensions and image I/O helpers |
-| `config/` | Sole owner of YAML-facing dataclasses and strict parsers for every config section |
-| `experiment/` | Run paths, stage snapshots, run metadata, manifest/config hashing, and environment snapshots |
-| `models/` | `ConcatUNetGenerator`, internal `UNetGenerator`, and `PatchGANDiscriminator` |
-| `data/` | Slide sets, manifests, dataset building, and dataset-owned provenance/fingerprints |
-| `training/` | Training mechanics, validation, history, losses, resume state, and callback-driven progress events |
-| `inference/` | Reusable checkpoint loading and runtime inference; application code owns runtime composition |
-| `evaluation/` | Set evaluation, diagnostic plots, representative selection, comparison panels, and summaries |
-| `applications/` | Public application API plus user-visible use-case and stage lifecycle owners; no `argparse` |
-| `cli/` | The `argparse` entrypoint, terminal rendering, and thin adapters over `applications/` |
-| `ui/` | NiceGUI presentation code consuming only the public application API |
+| `config/` | Framework configuration and resolution against explicit definitions |
+| `definitions.py` | Method, component, and metric registration boundary |
+| `data/` | Dataset layout, paired manifests, unpaired collections, preparation, registration, and data provenance |
+| `models/` | Network components and model-I/O normalization; no training state |
+| `methods/` | Built-in method options, topology, objectives, optimization, and restorable state |
+| `training/` | Method-independent epochs, validation cadence, history, checkpointing, and early stopping |
+| `inference/` | Definition-driven model loading and shared image/directory/tiled/WSI prediction |
+| `evaluation/` | Paired reports, unpaired diagnostics, grouping, comparisons, and panels |
+| `experiment/` | Run and comparison layouts, tracked sessions, config/environment snapshots, and events |
+| `checkpoint_contract.py`, `checkpoint_selection.py` | Checkpoint compatibility and selection semantics |
+| `metrics.py`, `loss_definitions.py` | Evaluation metric definitions and built-in loss primitives respectively |
+| `utils/`, `split_contract.py` | Shared low-level utilities and split vocabulary |
+
+The browser adapter calls `applications.api.ApplicationService`; it shares config
+resolution, checkpoint validation, prediction transport, and evaluation services with
+the CLI. Its patch catalog reconstructs the supported built-in method through its
+definition. Plotting uses a non-interactive backend and a shared lock for worker threads.
+
+## Translation Methods
+
+Methods and network components enter through explicit definitions. Generic configuration
+resolves framework fields while each definition validates its own options and
+cross-section rules. This boundary is torch-free; config resolution does not load a
+training runtime. The built-in definition set is a default, not a dependency of the
+generic training or inference layers. Checkpoint metadata identifies supplied definitions
+and never imports code. Extension contracts and examples belong to
+[Library Stage API](library_api.md#extending-with-explicit-definitions).
+
+Concrete methods depend on generic training and inference contracts, never the reverse.
+A method owns its topology, objective composition, optimization, prediction directions,
+and opaque checkpoint state. The Trainer owns the epoch and history lifecycle without
+assuming a GAN, a fixed number of networks, or how named image channels are packed.
+Inference constructs only the prediction network and shares one image-path transport
+between caller-owned predictors and checkpoint-backed models.
+
+Loss primitives are shared, but their composition is method-owned. Evaluation metric
+definitions and method-owned validation/checkpoint metrics remain separate contracts.
+The application selects the evaluation protocol independently of training pairing.
+Paired reports retain output identity; unpaired diagnostics describe collection
+appearance and do not establish sample-level fidelity. Persisted score meanings are in
+[Run Output Format](run_format.md#evaluation-outputs).
 
 ## Purity and I/O Boundaries
 
-The library layer is intentionally mixed:
+Applications select the actual stage inputs and bind their provenance; sessions do not
+infer consumption from files that happen to exist. `ExperimentSession` owns tracked
+train/infer/evaluate lifecycles, local metadata, and best-effort reporters. Preparation
+is dataset-owned and emits no experiment run events. Dataset paths belong to
+`DatasetLayout`, run paths to `RunLayout`, and shared comparison paths to `ResultsLayout`.
+See [dataset provenance](dataset_format.md#prepared-layout) and
+[consumed-data snapshots](run_format.md#consumed-data-snapshots) for their distinct identities.
 
-- some modules are pure or mostly pure helpers
-- some modules are side-effecting services that read/write files, logs, checkpoints, or outputs
+Registration geometry, estimation, independent QC, and inverse resampling belong to
+`data/alignment/`, which depends on no preparation or run configuration. Callers own
+readers, cleanup, explicit reference selection, and failure policy. Existing preparation
+adapts its coordinate declarations to candidate requests; it does not certify biological
+correspondence or apply study QC. See the [alignment API](library_api.md#registration-and-resampling).
 
-Typical examples:
-
-| Kind | Example | Notes |
-|---|---|---|
-| Pure helper | `metrics.py` | Metric computations over arrays |
-| I/O helper | `utils/image_io.py` | Reads/writes image files |
-| Mostly pure indexing/data model | `data/dataset.py` | Dataset indexing and manifest-backed lookup |
-| Side-effecting preprocessing service | `data/builder.py` | Builds datasets, writes patches/manifests/metadata |
-| Side-effecting training service | `training/trainer.py` | Training loop, checkpoint and epoch-history writes; the active session owns run metadata/logging |
-| Side-effecting inference service | `inference/runner.py`, `inference/single.py` | Reusable model loading and prediction plus single-image output writing |
-| Side-effecting evaluation service | `evaluation/` runners/report writers | Metrics computation plus report/CSV output |
-
-The architectural boundary is not “no I/O in library code.” The actual rule is:
-
-- reusable package code should keep I/O explicit and testable
-- orchestration belongs in `applications/`
-The `ExperimentSession` owns each train/infer/evaluate lifecycle: stage snapshots,
-strict local metadata writes, and best-effort reporter callbacks. Preparation is
-dataset-owned and writes only dataset provenance. Dataset provenance lives in
-`data/provenance.py`; run provenance lives in `experiment/snapshots.py`.
-Training model construction and dataset wiring terminate in the reusable `Trainer`;
-its `ProgressUpdate` callback is silent unless an adapter supplies a reporter.
-The CLI supplies terminal rendering, while application/library callers remain
-presentation-neutral. Infer-images runtime creation belongs to `applications/`;
-`inference/single.py` accepts an already-loaded `InferenceRuntime`.
-CLI commands consume focused use-case modules in `applications/`. NiceGUI consumes
-only `applications/api.py`, which is the stable Python-facing facade for checkpoint
-discovery, inference, single-sample evaluation, run discovery/evaluation, representative
-samples, and comparison. Its request/result dataclasses keep presentation code unaware
-of checkpoint reconstruction, metric modules, config parsing, CSV schemas, and run
-directory conventions. `applications/ui_inference.py` remains a compatibility
-implementation behind that facade for the original strict single-patch workflow.
-
-Within training, `trainer.py` owns epoch orchestration, `validator.py` owns validation
-inference, `history.py` owns metric CSV persistence, `checkpoints.py` owns model/training
-state, `checkpoint_contract.py` owns the neutral v3 contract, and
-`checkpoint_selection.py` owns `best.json` ranking and resolution. Evaluation keeps
-plot primitives in `diagnostics.py`, representative-row policy in `selection.py`,
-and composed image layouts in `panels.py`.
+Model export is an application utility, not a pipeline stage. It uses the existing
+configuration, checkpoint, and inference contracts; it introduces no separate model
+loader or registry.
 
 ## Architectural Rules
 
-These constraints are enforced by convention and checked in code review:
+- `argparse`, `sys.exit()`, and terminal presentation belong only in `cli/`.
+  Applications accept typed inputs and raise exceptions; library and application
+  diagnostics use `logging`. Progress remains silent unless a caller supplies a reporter.
+- Library packages never import `applications/` or `cli/`; command adapters delegate
+  to applications.
+- `training/` and `inference/` never import concrete `methods/`.
+- `config/` does not depend on runtime domains; definitions provide the extension boundary.
+- `utils/`, `metrics.py`, and `split_contract.py` remain dependency leaves within the package.
 
-- **No `argparse` outside `cli/`** - application and core modules accept typed
-  dataclasses, not raw CLI strings.
-- **Core and application modules use `logging`**, never `print`, so callers can
-  suppress or redirect output.
-- **No `sys.exit()` outside `cli/`** - applications raise exceptions; the CLI
-  layer converts them to exit codes.
-- **UI imports only `applications.api`** - browser pages never import model,
-  inference, evaluation, or config implementations directly.
-
-The library graph is an enforced direct-edge DAG:
-
-```text
-cli -> applications, cli, metrics, ui
-applications -> checkpoint_contract, checkpoint_selection, config, data, evaluation,
-                experiment, inference, metrics, models, training, utils
-config -> config, checkpoint_selection, metrics, utils
-checkpoint_selection -> metrics
-data -> config, data, utils
-models -> models
-experiment -> config, experiment
-training -> checkpoint_contract, checkpoint_selection, config, experiment, metrics,
-            models, training, utils
-inference -> checkpoint_contract, checkpoint_selection, config, data, experiment,
-             inference, models, utils
-ui -> applications
-evaluation -> config, evaluation, metrics, utils
-utils -> utils
-```
-
-`tests/architecture/test_package_dependencies.py` resolves absolute, relative,
-nested, and `TYPE_CHECKING` imports with the standard library. It reports the
-source file and illegal import, and verifies the allowlist topologically sorts.
-
-## Configuration Policy
-
-| Data type | Format | Example path |
-|---|---|---|
-| User experiment config | YAML | `config/runs/example.yaml` |
-| Run identity and stage events | JSON/JSONL | `results/<run>/metadata/run.json`, `events.jsonl` |
-| Stage snapshots and environment | YAML/JSON | `results/<run>/config/<stage>/`, `metadata/environments/` |
-| Per-epoch training losses | CSV | `results/<run>/metrics/epochs.csv` |
-| Per-image evaluation metrics | CSV | `results/<run>/evaluation/per_image_metrics.csv` |
-| Dataset manifest and fingerprint | CSV/JSON | `datasets/<name>/manifests/manifest.csv`, `metadata/dataset_fingerprint.json` |
-
-See [`docs/run_format.md`](run_format.md) for the full run output directory layout
-and file schemas.
+Configuration options live in the [annotated run YAMLs](../config/runs/example.yaml);
+persisted schemas live in [Run Output Format](run_format.md) and
+[Dataset Format](dataset_format.md).

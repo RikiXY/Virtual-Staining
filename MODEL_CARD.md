@@ -2,12 +2,17 @@
 
 ## Model Summary
 
+This card describes the Pix2Pix reference implementation and its intended use and
+limitations. It does not describe a released trained-model artifact, a particular
+checkpoint, a frozen publication study, or measured performance. Datasets, weights,
+configurations, and measured results belong to each concrete experiment.
+
 | Property | Value |
 |---|---|
 | Task | Image-to-image translation for virtual staining |
 | Architecture | Pix2Pix-style conditional GAN with U-Net generator and PatchGAN discriminator |
-| Input | Label-free microscopy patch (RGB, configurable size; default `256x256`) |
-| Output | Virtually stained microscopy patch (RGB, same size as input) |
+| Input | N ordered named RGB patches (`model.inputs`, e.g. `[AF, LF]`; configurable size, default `256x256`) |
+| Output | M ordered named virtually stained RGB patches (`model.outputs`, e.g. `[HE]` or `[HE, PAS]`), same grid as the inputs |
 | Framework | PyTorch |
 | Language | Python 3.11+ |
 
@@ -31,11 +36,14 @@ Intended uses:
 
 ## Architecture
 
-The repository implements a Pix2Pix-style conditional GAN.
+This card covers the Pix2Pix reference method, a Pix2Pix-style conditional GAN. The
+repository's second built-in method, CycleGAN, is not described by this card.
 
 **Generator**
 
-- U-Net generator implemented in PyTorch.
+- U-Net generator implemented in PyTorch over the channel-concatenated named inputs
+  (`3*N` channels) with `3*M` output channels split back into the named outputs; one
+  output is the `M=1` case of the same model.
 - Default encoder/decoder width starts at 64 channels and increases by depth.
 - Downsampling uses max pooling followed by double-convolution blocks.
 - Upsampling uses transposed convolutions by default (`bilinear: false` in the example config).
@@ -44,8 +52,9 @@ The repository implements a Pix2Pix-style conditional GAN.
 
 **Discriminator**
 
-- PatchGAN discriminator operating on the concatenated input and target/generated image pair.
-- Default input channel count is 6 (`3 + 3` for RGB source and RGB target/generated).
+- One joint conditional PatchGAN discriminator scoring all named inputs together with
+  all real or all generated outputs.
+- Its input channel count is `3*N + 3*M` (6 for one input and one output).
 - Uses a final patchwise logit map rather than a single image-level prediction.
 - Keeps the standard PatchGAN receptive field of approximately `70x70`.
 - Uses raw logits by default (`use_sigmoid: false`).
@@ -54,23 +63,31 @@ The repository implements a Pix2Pix-style conditional GAN.
 
 - Adversarial term: `BCEWithLogitsLoss`.
 - Reconstruction term: `L1Loss`.
-- Combined generator objective: adversarial loss plus weighted L1 loss.
+- Combined generator objective: one joint adversarial term plus, per reconstruction term,
+  the weighted arithmetic mean of that term over the outputs (one output keeps its
+  exact scale). This training mean is not an evaluation score.
 - Default L1 weight in the example training config: `25.0`.
+- Several outputs are an engineering capability; nothing in this repository shows that
+  predicting several stains jointly helps any of them.
 
 ## Training Data
 
-The model is trained on paired label-free / stained microscopy images after
-preprocessing and patch extraction.
+Training uses experiment-specific paired label-free / stained microscopy images
+after preprocessing and patch extraction.
 
-- Patches are extracted from aligned full-size source/target image pairs.
+- Patches are extracted from source slide sets onto one reference grid for every
+  named input and target.
 - Patch size is configurable; the standard example configuration uses `256x256`.
-- Default data split is patch-level train/validation/test.
+- Default preparation split is patch-level train/validation/test; `set`, `specimen`,
+  and `patient` grouped splits are also supported when the corresponding real
+  metadata are supplied.
 - Quality filters remove patches using foreground ratio, white ratio, and largest
   white component ratio thresholds.
 
 ## Evaluation Metrics
 
-The evaluation pipeline computes the following metrics on the test split:
+Built-in paired evaluation metrics available to request against corresponding
+test references include:
 
 | Metric | Description |
 |---|---|
@@ -82,15 +99,22 @@ The evaluation pipeline computes the following metrics on the test split:
 | PCC (gray) | Pearson Correlation Coefficient on grayscale images |
 | PCC (RGB) | Mean Pearson Correlation Coefficient across RGB channels |
 
-This repository does not publish fixed benchmark values in the codebase. Metric
+Only requested metrics are evaluated, and results remain separate for each named
+output. See [the run-output contract](docs/run_format.md) for validity, coverage,
+aggregation, and persisted result semantics.
+
+This card reports no fixed benchmark values. Metric
 values should be taken from the run-specific evaluation outputs generated for a
 particular dataset and experiment.
 
 ## Limitations
 
-- **Patch-level split**: the default split draws train, validation, and test
-  patches from the same slide. Reported test metrics therefore reflect same-slide
-  internal validation, not independent slide-level or patient-level generalization.
+- **Split independence**: default patch-level splitting can place patches from the
+  same specimen or patient in different partitions and does not establish
+  unseen-specimen or unseen-patient performance. Grouped splits exist, but their
+  labels must be real rather than inferred; a set is not automatically a patient
+  or specimen. Actual independence depends on the experiment's split choice and
+  available metadata; unknown metadata must narrow the claim.
 - **Registration sensitivity**: supervision quality depends on alignment between
   label-free and stained images. Registration errors directly degrade training quality.
 - **Dataset specificity**: performance depends on the tissue type, staining process,

@@ -193,12 +193,15 @@ def render_run_summary(result: RunEvaluationResult, container) -> None:
         rows = [
             {
                 "metric": metric.upper().replace("_", " "),
-                "mean": format_value(values["mean"]),
-                "median": format_value(values["median"]),
-                "std": format_value(values["std"]),
-                "min": format_value(values["min"]),
-                "max": format_value(values["max"]),
+                "mean": format_value(values["finite_mean"]),
+                "median": format_value(values["finite_median"]),
+                "std": format_value(values["finite_std"]),
+                "min": format_value(values["finite_min"]),
+                "max": format_value(values["finite_max"]),
                 "n": int(values["finite_count"]),
+                "infinite": int(values.get("positive_infinity_count", 0)),
+                "undefined": int(values.get("undefined_count", 0)),
+                "unavailable": int(values.get("unavailable_count", 0)),
             }
             for metric, values in result.summary.items()
         ]
@@ -212,7 +215,10 @@ def render_run_summary(result: RunEvaluationResult, container) -> None:
                     ("std", "Std", "right"),
                     ("min", "Min", "right"),
                     ("max", "Max", "right"),
-                    ("n", "N", "right"),
+                    ("n", "Finite N", "right"),
+                    ("infinite", "+∞", "right"),
+                    ("undefined", "Undefined", "right"),
+                    ("unavailable", "Unavailable", "right"),
                 )
             ],
             rows=rows,
@@ -222,10 +228,11 @@ def render_run_summary(result: RunEvaluationResult, container) -> None:
             "w-full"
         ):
             available_metrics = [
-                metric for metric in result.summary if result.rows and metric in result.rows[0]
+                name.removesuffix("_status") for name in result.rows[0] if name.endswith("_status")
             ]
             sample_columns = [
                 {"name": "sample_id", "label": "Sample", "field": "sample_id", "align": "left"},
+                {"name": "output_name", "label": "Output", "field": "output_name", "align": "left"},
                 *[
                     {
                         "name": metric,
@@ -239,14 +246,21 @@ def render_run_summary(result: RunEvaluationResult, container) -> None:
             sample_rows = [
                 {
                     "sample_id": row.get("sample_id", ""),
-                    **{metric: format_value(float(row[metric])) for metric in available_metrics},
+                    "output_name": row.get("output_name", ""),
+                    "identity": f"{row.get('output_name')}/{row.get('sample_id')}",
+                    **{
+                        metric: format_value(float(row[metric]))
+                        if row.get(metric)
+                        else row.get(f"{metric}_status", "unavailable")
+                        for metric in available_metrics
+                    },
                 }
                 for row in result.rows
             ]
             ui.table(
                 columns=sample_columns,
                 rows=sample_rows,
-                row_key="sample_id",
+                row_key="identity",
                 pagination=10,
             ).props("flat bordered dense").classes("w-full")
 
@@ -286,8 +300,18 @@ def render_plots(
             for path in selected_paths:
                 with ui.column().classes("vs-subtle rounded-lg p-3 gap-2 min-w-0"):
                     metric = path.stem.removesuffix("_histogram")
-                    values = _finite_row_values(rows, metric)
-                    ui.label(metric.replace("_", " ").upper()).classes("text-base font-medium")
+                    output, _, name = metric.rpartition("__")
+                    values = (
+                        _finite_row_values(
+                            tuple(row for row in rows if row.get("output_name") == output), name
+                        )
+                        if output
+                        else _finite_row_values(rows, metric)
+                    )
+                    metric = name if output else metric
+                    ui.label(f"{output}: {metric.upper()}" if output else metric.upper()).classes(
+                        "text-base font-medium"
+                    )
                     if values and metric in EVALUATION_METRIC_RANGES:
                         ui.echart(_histogram_options(metric, values)).classes(
                             "vs-evaluation-chart w-full h-80"
@@ -448,12 +472,19 @@ def _histogram_options(metric: str, values: list[float], bin_count: int = 24) ->
 
 def select_evaluation_plot_paths(paths: tuple[Path, ...]) -> tuple[Path, ...]:
     """Keep the dashboard concise while preserving all saved artifacts on disk."""
-    by_name = {path.name.lower(): path for path in paths}
-    selected = tuple(by_name[name] for name in EVALUATION_PLOT_PRIORITY if name in by_name)
-    if selected:
-        return selected
-    return tuple(
-        path
-        for path in paths
-        if path.name.lower() not in {"metrics_boxplot.png", "pcc_gray_histogram.png"}
-    )[:4]
+    groups: dict[str, dict[str, Path]] = {}
+    for path in paths:
+        output, _, name = path.name.lower().rpartition("__")
+        groups.setdefault(output, {})[name] = path
+    selected: list[Path] = []
+    for by_name in groups.values():
+        priority = [by_name[name] for name in EVALUATION_PLOT_PRIORITY if name in by_name]
+        selected.extend(
+            priority
+            or [
+                path
+                for name, path in by_name.items()
+                if name not in {"metrics_boxplot.png", "pcc_gray_histogram.png"}
+            ][:4]
+        )
+    return tuple(selected)

@@ -4,12 +4,18 @@ import argparse
 from pathlib import Path
 
 from virtual_staining.applications.organize import (
-    DEFAULT_METRICS,
     OrganizeRequest,
     OrganizeResult,
     organize,
 )
 from virtual_staining.cli._output import print_info, print_section, style
+
+
+def _direction(value: str) -> tuple[str, bool]:
+    metric, _, direction = value.partition("=")
+    if not metric or direction not in {"higher", "lower"}:
+        raise argparse.ArgumentTypeError("expected METRIC=higher or METRIC=lower")
+    return metric, direction == "higher"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -61,8 +67,22 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--metrics",
         nargs="+",
-        default=DEFAULT_METRICS,
-        help="Metrics to use for sorting.",
+        default=None,
+        help=(
+            "Metrics to use for sorting. Default: the metrics recorded in "
+            "evaluation_result.json next to the CSV, else the built-in default set."
+        ),
+    )
+    parser.add_argument(
+        "--direction",
+        action="append",
+        default=[],
+        metavar="METRIC=higher|lower",
+        type=_direction,
+        help=(
+            "Ranking direction of a metric; required for a metric that is neither recorded "
+            "in evaluation_result.json nor built in. Repeatable."
+        ),
     )
     parser.add_argument(
         "--top-k",
@@ -117,7 +137,8 @@ def main(argv: list[str] | None = None) -> None:
                 metrics_csv=args.metrics_csv,
                 output_dir=args.output_dir,
                 top_k=args.top_k,
-                metrics=tuple(args.metrics),
+                metrics=tuple(args.metrics) if args.metrics is not None else None,
+                directions=dict(args.direction),
                 mode=args.mode,
                 overwrite=args.overwrite,
                 include_all_ranked=args.include_all_ranked,

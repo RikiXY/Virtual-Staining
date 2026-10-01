@@ -144,7 +144,7 @@ def run_ui(
     results_directory: Path = Path("results"),
     *,
     training_config_directory: Path = Path("config/runs/local"),
-    host: str = "0.0.0.0",
+    host: str = "127.0.0.1",
     port: int = 8080,
 ) -> None:
     """Configure and launch the single-entry-point NiceGUI application."""

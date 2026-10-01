@@ -9,7 +9,16 @@ import pytest
 from tests.config_helpers import write_run_config
 from virtual_staining import cli
 from virtual_staining.applications.evaluate_single import SingleEvalResult
-from virtual_staining.cli import compare, compare_panels, evaluate, infer_images, organize
+from virtual_staining.applications.export_model import ExportCheckpointSelection
+from virtual_staining.cli import (
+    compare,
+    compare_panels,
+    evaluate,
+    export_model,
+    infer_images,
+    organize,
+)
+from virtual_staining.metrics import MetricResult
 
 COMMANDS = (
     "prepare",
@@ -22,7 +31,10 @@ COMMANDS = (
     "convert",
     "panels",
     "organize",
+    "export-model",
     "queue",
+    "config",
+    "inventory",
     "status",
 )
 
@@ -143,7 +155,7 @@ def test_evaluate_config_dispatches_pipeline_stage(
 
 def test_evaluate_pair_dispatches_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "sample_target.png"
-    generated = tmp_path / "sample_target_generated.png"
+    generated = tmp_path / "HE" / "sample_generated.png"
     output_dir = tmp_path / "evaluation"
     captured: list[tuple[Path, Path, Path | None]] = []
 
@@ -153,13 +165,10 @@ def test_evaluate_pair_dispatches_paths(tmp_path: Path, monkeypatch: pytest.Monk
             target=a,
             generated=b,
             metrics={
-                "mae": 0.1,
-                "mse": 0.01,
-                "rmse": 0.1,
-                "psnr": 20.0,
-                "ssim": 0.9,
-                "pcc_gray": 0.9,
-                "pcc_rgb_mean": 0.9,
+                "mae": MetricResult.of(0.1),
+                "psnr": MetricResult.of(float("inf")),
+                "ssim": MetricResult.unavailable("image smaller than the SSIM window"),
+                "pcc_gray": MetricResult.undefined("constant input"),
             },
             shape=(16, 16, 3),
             single_case_csv=output_dir / "sample.csv",
@@ -200,7 +209,7 @@ def test_infer_images_passes_repeated_named_inputs(
         return SimpleNamespace(
             input_paths={"LF": Path("lf.png"), "AF": Path("af.png")},
             checkpoint_path=Path("checkpoint.pth"),
-            output_path=output_path,
+            output_paths={"stained": output_path},
             mode=kwargs["mode"],
         )
 
@@ -232,12 +241,81 @@ def test_infer_images_passes_repeated_named_inputs(
         (compare.main, []),
         (compare_panels.main, []),
         (organize.main, []),
+        (export_model.main, []),
     ],
 )
 def test_utility_commands_without_args_fail(main: object, argv: list[str]) -> None:
     with pytest.raises(SystemExit) as exc:
         main(argv)  # type: ignore[misc]
     assert exc.value.code != 0
+
+
+def test_export_model_passes_typed_selectors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[tuple[Path, Path, list[ExportCheckpointSelection]]] = []
+
+    def fake_export(run: Path, output: Path, selections: list[ExportCheckpointSelection]):
+        captured.append((run, output, selections))
+        return SimpleNamespace(root=output, index={"selections": []})
+
+    monkeypatch.setattr(export_model, "export_model_bundle", fake_export)
+    cli.main(
+        [
+            "export-model",
+            "--run-path",
+            str(tmp_path / "run"),
+            "--output",
+            str(tmp_path / "bundle"),
+            "--checkpoint",
+            "ep010.pth",
+            "--latest",
+            "--best",
+            "val_ssim",
+            "--best",
+            "val_psnr",
+            "--top-k",
+            "val_ssim",
+            "2",
+        ]
+    )
+
+    assert captured == [
+        (
+            tmp_path / "run",
+            tmp_path / "bundle",
+            [
+                ExportCheckpointSelection("explicit", checkpoint_path=Path("ep010.pth")),
+                ExportCheckpointSelection("latest"),
+                ExportCheckpointSelection("best", metric="val_ssim"),
+                ExportCheckpointSelection("best", metric="val_psnr"),
+                ExportCheckpointSelection("top_k", metric="val_ssim", rank=2),
+            ],
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "selectors", [[], ["--top-k", "val_ssim", "0"], ["--top-k", "val_ssim", "two"]]
+)
+def test_export_model_rejects_missing_or_invalid_selectors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selectors: list[str]
+) -> None:
+    monkeypatch.setattr(export_model, "export_model_bundle", pytest.fail)
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["export-model", "--run-path", "run", "--output", "out", *selectors])
+    assert exc.value.code == 2
+
+
+def test_export_model_reports_failures_as_exit_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*args: object) -> None:
+        raise FileExistsError("Export destination already exists: out")
+
+    monkeypatch.setattr(export_model, "export_model_bundle", fail)
+    with pytest.raises(SystemExit, match="already exists"):
+        cli.main(["export-model", "--run-path", "run", "--output", "out", "--latest"])
 
 
 def test_makefile_exposes_only_development_targets() -> None:

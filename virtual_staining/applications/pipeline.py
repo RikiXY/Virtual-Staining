@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal, cast
+from typing import cast
 
 from virtual_staining.applications.evaluate import evaluate
 from virtual_staining.applications.infer import infer
 from virtual_staining.applications.prepare import prepare
 from virtual_staining.applications.train import ProgressReporter, train
 from virtual_staining.config.run import RunConfig
+from virtual_staining.definitions import Definitions
+from virtual_staining.experiment.stages import VALID_STAGES, StageName
 
-StageName = Literal["prepare", "train", "infer", "evaluate"]
-VALID_STAGES: tuple[StageName, ...] = ("prepare", "train", "infer", "evaluate")
 DEFAULT_FULL_RUN_STAGES = VALID_STAGES
 
 
@@ -20,11 +20,11 @@ def run_stage(
     stage: str,
     *,
     progress_reporter: ProgressReporter | None = None,
+    definitions: Definitions | None = None,
 ) -> object:
-    """Run one user-visible experiment stage."""
-    return run_stages(config_path, (stage,), progress_reporter=progress_reporter)[
-        cast(StageName, stage)
-    ]
+    return run_stages(
+        config_path, (stage,), progress_reporter=progress_reporter, definitions=definitions
+    )[cast(StageName, stage)]
 
 
 def run_stages(
@@ -32,8 +32,9 @@ def run_stages(
     stages: Sequence[str] = DEFAULT_FULL_RUN_STAGES,
     *,
     progress_reporter: ProgressReporter | None = None,
+    definitions: Definitions | None = None,
 ) -> dict[StageName, object]:
-    """Load one run config and execute selected stages in order."""
+    """Run stages of one YAML run; ``definitions`` defaults to the built-in set."""
     unknown = [stage for stage in stages if stage not in VALID_STAGES]
     if unknown:
         raise ValueError(
@@ -41,7 +42,7 @@ def run_stages(
         )
 
     path = config_path.resolve()
-    config = RunConfig.from_yaml(path)
+    config = RunConfig.from_yaml(path, definitions)
     results: dict[StageName, object] = {}
     for stage in stages:
         stage_name = cast(StageName, stage)

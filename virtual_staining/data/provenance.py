@@ -1,60 +1,23 @@
 from __future__ import annotations
 
-import hashlib
 import json
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from virtual_staining.data.slide_sets import SlideAsset, SlideSet
+import numpy as np
 
-
-@dataclass(frozen=True)
-class DatasetSnapshotPaths:
-    input_config: Path
-    resolved_config: Path
-    environment: Path
-
-
-def resolve_prepare_snapshot_paths(dataset_root: Path) -> DatasetSnapshotPaths:
-    """Return canonical snapshot destinations for prepare-stage artifacts."""
-    return DatasetSnapshotPaths(
-        input_config=dataset_root / "config" / "input.yaml",
-        resolved_config=dataset_root / "config" / "resolved.yaml",
-        environment=dataset_root / "metadata" / "environment.json",
-    )
-
-
-def _hash_bytes(payload: bytes) -> str:
-    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
-
-
-def _canonical_json_bytes(payload: Any) -> bytes:
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
-        "utf-8"
-    )
-
-
-def compute_file_sha256(path: Path) -> str:
-    """Return sha256:<hex> for a file's content."""
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
-
-
-def build_file_provenance(path: Path) -> dict[str, Any]:
-    """Return canonical provenance for one source dataset file."""
-    resolved = path.resolve()
-    stat = resolved.stat()
-    return {
-        "path": str(resolved),
-        "size": stat.st_size,
-        "mtime_ns": stat.st_mtime_ns,
-        "sha256": compute_file_sha256(resolved),
-    }
+from virtual_staining.data.alignment import RegistrationBackend
+from virtual_staining.data.manifest import MANIFEST_SCHEMA_VERSION
+from virtual_staining.data.slide_sets import (
+    RegistrationEvidence,
+    SlideAsset,
+    SlideSet,
+    resolve_registration_evidence,
+)
+from virtual_staining.utils.hashing import sha256_bytes, sha256_file, sha256_json
 
 
 def _cached_file_provenance(
@@ -62,12 +25,15 @@ def _cached_file_provenance(
     *,
     cache: dict[str, Any],
     force: bool,
+    verified: Mapping[str, str],
 ) -> dict[str, Any]:
     resolved = path.resolve()
     stat = resolved.stat()
     key = str(resolved)
     cached = cache.get(key, {})
-    if (
+    if key in verified:
+        digest = verified[key]
+    elif (
         not force
         and cached.get("size") == stat.st_size
         and cached.get("mtime_ns") == stat.st_mtime_ns
@@ -75,7 +41,7 @@ def _cached_file_provenance(
     ):
         digest = cached["sha256"]
     else:
-        digest = compute_file_sha256(resolved)
+        digest = sha256_file(resolved)
     value = {
         "path": key,
         "size": stat.st_size,
@@ -96,18 +62,41 @@ def _asset_payload(asset: SlideAsset) -> dict[str, Any]:
     }
 
 
-def canonical_set_payload(slide_sets: tuple[SlideSet, ...]) -> list[dict[str, Any]]:
+def _canonical_set_payload(slide_sets: tuple[SlideSet, ...]) -> list[dict[str, Any]]:
     return [
         {
             "set_id": item.set_id,
             "reference_modality": item.reference_modality,
             "inputs": [_asset_payload(asset) for asset in item.inputs],
-            "target": _asset_payload(item.target),
+            "targets": [_asset_payload(asset) for asset in item.targets],
             "patient_id": item.patient_id,
             "specimen_id": item.specimen_id,
         }
         for item in sorted(slide_sets, key=lambda value: value.set_id)
     ]
+
+
+def registration_evidence_metadata(evidence: RegistrationEvidence) -> list[dict[str, Any]]:
+    """Canonical map identities; array content is a digest, never expanded JSON."""
+    return json.loads(
+        json.dumps(
+            [
+                dict(
+                    set_id=set_id,
+                    modality=modality,
+                    asset=asdict(item.asset),
+                    kind=item.kind,
+                    grid=item.grid.to_dict(),
+                    source=item.source,
+                    values_sha256=sha256_bytes(
+                        np.packbits(item.values, bitorder="little").tobytes()
+                    ),
+                )
+                for (set_id, modality), maps in sorted(evidence.items())
+                for item in sorted(maps, key=lambda item: item.kind)
+            ]
+        )
+    )
 
 
 def build_dataset_fingerprint_metadata(
@@ -119,7 +108,15 @@ def build_dataset_fingerprint_metadata(
     hash_cache_path: Path | None = None,
     force_hash_verification: bool = False,
     prepared_at: str | None = None,
+    verified_hashes: Mapping[str, str] | None = None,
+    registration_backend: RegistrationBackend | None = None,
+    registration_evidence: RegistrationEvidence | None = None,
 ) -> dict[str, Any]:
+    """Build preparation lineage: what dataset this configuration and these sources produce.
+
+    ``verified_hashes`` (resolved path -> digest) come from a content-verified consumed-data
+    snapshot and take precedence over the size/mtime hash cache.
+    """
     cache: dict[str, Any] = {}
     if hash_cache_path is not None and hash_cache_path.exists():
         try:
@@ -128,7 +125,7 @@ def build_dataset_fingerprint_metadata(
             cache = {}
     files: list[dict[str, Any]] = []
     for item in sorted(slide_sets, key=lambda value: value.set_id):
-        for asset in (*item.inputs, item.target):
+        for asset in item.assets:
             assets = (("mask", asset.mask_path),) if asset.mask_path is not None else ()
             for role, relative in ((asset.modality, asset.path), *assets):
                 files.append(
@@ -137,31 +134,42 @@ def build_dataset_fingerprint_metadata(
                         "modality": asset.modality,
                         "role": role,
                         **_cached_file_provenance(
-                            dataset_root / relative, cache=cache, force=force_hash_verification
+                            dataset_root / relative,
+                            cache=cache,
+                            force=force_hash_verification,
+                            verified=verified_hashes or {},
                         ),
                     }
                 )
     if hash_cache_path is not None:
         hash_cache_path.parent.mkdir(parents=True, exist_ok=True)
         hash_cache_path.write_text(json.dumps(cache, indent=2), encoding="utf-8")
-    canonical_sets = canonical_set_payload(slide_sets)
-    canonical_inventory_hash = _hash_bytes(_canonical_json_bytes(canonical_sets))
-    raw_inventory_sha256 = (
-        compute_file_sha256(inventory_path) if inventory_path is not None else None
-    )
+    canonical_sets = _canonical_set_payload(slide_sets)
+    canonical_inventory_hash = sha256_json(canonical_sets)
+    raw_inventory_sha256 = sha256_file(inventory_path) if inventory_path is not None else None
     dataset_root_resolved = str(dataset_root.resolve())
     semantic_config = json.loads(json.dumps(preprocessing_config))
-    preprocessing_hash = _hash_bytes(_canonical_json_bytes(semantic_config))
+    preprocessing_hash = sha256_json(semantic_config)
     fingerprint_payload = {
         "dataset_root": dataset_root_resolved,
         "preprocessing": semantic_config,
         "canonical_inventory": canonical_sets,
         "files": files,
-        "schema_version": "3.0",
+        "schema_version": MANIFEST_SCHEMA_VERSION,
     }
+    registration: dict[str, Any] = (
+        {"registration": registration_backend.metadata} if registration_backend else {}
+    )
+    evidence = registration_evidence_metadata(
+        resolve_registration_evidence(slide_sets, registration_evidence)
+    )
+    if evidence:
+        registration["registration_evidence"] = evidence
+    fingerprint_payload.update(registration)
     return {
-        "schema_version": "3.0",
-        "fingerprint": _hash_bytes(_canonical_json_bytes(fingerprint_payload)),
+        **registration,
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "fingerprint": sha256_json(fingerprint_payload),
         "prepared_at": prepared_at or datetime.now(UTC).isoformat(),
         "dataset_root": dataset_root_resolved,
         "preprocessing": semantic_config,
@@ -173,7 +181,6 @@ def build_dataset_fingerprint_metadata(
 
 
 def save_dataset_fingerprint(metadata: dict[str, Any], dest: Path) -> None:
-    """Persist dataset fingerprint metadata as canonical JSON."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     with dest.open("w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2)

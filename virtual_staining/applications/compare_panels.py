@@ -11,13 +11,14 @@ from virtual_staining.evaluation.panels import (
     save_comparison_panel,
     save_metric_diagnostics_summary,
 )
+from virtual_staining.evaluation.reports import metric_info, ranking_direction
 from virtual_staining.evaluation.selection import (
-    METRIC_SELECTION_ORDER,
-    extract_generated_sample_id,
     select_representative_rows,
     write_metric_selection_summary,
 )
 from virtual_staining.evaluation.summaries import read_per_image_metrics_csv, read_summary_csv
+from virtual_staining.experiment.run_layout import RunLayout
+from virtual_staining.utils.artifacts import generated_identity
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,8 @@ class SinglePanelResult:
 
 @dataclass
 class FromMetricsResult:
+    """Representative cases per ``<output>/<metric>``; outputs are never pooled."""
+
     run_path: Path
     available_metrics: list[str]
     per_metric_representative_rows: dict[str, dict[str, dict[str, str]]]
@@ -48,7 +51,6 @@ class FromMetricsResult:
 
 
 def compare_panels(request: ComparePanelsRequest) -> SinglePanelResult | FromMetricsResult:
-    """Run a single-pair panel comparison or metric-based representative comparisons."""
     if request.mode == "single":
         return _run_single(request)
     if request.mode == "from_metrics":
@@ -57,40 +59,23 @@ def compare_panels(request: ComparePanelsRequest) -> SinglePanelResult | FromMet
 
 
 def _infer_run_dir_from_generated_path(generated_path: str | Path) -> Path:
-    path = Path(generated_path).resolve()
-    base = path.parent if path.is_file() else path
-    parts = base.parts
-
-    if "results" not in parts:
+    try:
+        return RunLayout.from_artifact_path(Path(generated_path)).root
+    except ValueError as exc:
         raise ValueError(
-            "Could not infer run directory from generated path. Expected a path like "
-            ".../results/NAME_RUN/artifacts/output_test/..."
-        )
+            f"{exc} Generated paths must be inside a run's artifacts subtree."
+        ) from None
 
-    results_index = parts.index("results")
 
-    if results_index + 1 >= len(parts):
-        raise ValueError(
-            "Could not infer NAME_RUN from generated path. Expected a path like "
-            ".../results/NAME_RUN/artifacts/output_test/..."
-        )
-
-    run_dir = Path(*parts[: results_index + 2])
-
-    if run_dir.parent.name != "results":
-        raise ValueError(
-            "Could not infer a valid run directory inside results/. "
-            "Please provide --save-path explicitly."
-        )
-
-    return run_dir
+def _generated_label(generated_image: str | Path) -> str:
+    sample_id, output_name = generated_identity(generated_image)
+    return f"{sample_id}__{output_name}"
 
 
 def _infer_default_save_path(generated_image: str | Path) -> Path:
     generated_path = Path(generated_image)
-    sample_id = extract_generated_sample_id(generated_path)
-    run_dir = _infer_run_dir_from_generated_path(generated_path)
-    return run_dir / "comparisons" / f"{sample_id}_comparison.png"
+    layout = RunLayout.from_artifact_path(generated_path)
+    return layout.comparisons_dir / f"{_generated_label(generated_path)}_comparison.png"
 
 
 def _infer_diagnostics_dir(save_path: str | Path) -> Path:
@@ -98,9 +83,7 @@ def _infer_diagnostics_dir(save_path: str | Path) -> Path:
 
 
 def _infer_case_diagnostics_dir(save_path: str | Path, generated_image: str | Path) -> Path:
-    diagnostics_dir = _infer_diagnostics_dir(save_path)
-    sample_id = extract_generated_sample_id(generated_image)
-    return diagnostics_dir / sample_id
+    return _infer_diagnostics_dir(save_path) / _generated_label(generated_image)
 
 
 def _run_single(request: ComparePanelsRequest) -> SinglePanelResult:
@@ -136,36 +119,43 @@ def _run_single(request: ComparePanelsRequest) -> SinglePanelResult:
 
 def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
     assert request.run_path is not None
-    run_path = request.run_path.resolve()
-    evaluation_dir = run_path / "evaluation"
-    summary_csv = evaluation_dir / "summary.csv"
-    per_image_csv = evaluation_dir / "per_image_metrics.csv"
+    layout = RunLayout(request.run_path.resolve())
+    run_path = layout.root
+    summary_csv = layout.summary_csv
+    per_image_csv = layout.per_image_metrics
     summary_rows = read_summary_csv(summary_csv)
     per_image_rows = read_per_image_metrics_csv(per_image_csv)
-    metrics_dir = run_path / "comparisons" / "metrics"
+    metrics_dir = layout.comparisons_dir / "metrics"
     metrics_dir.mkdir(parents=True, exist_ok=True)
     selection_summary_rows: list[dict[str, object]] = []
     saved_aggregated_paths: list[Path] = []
-    available_metrics = [metric for metric in METRIC_SELECTION_ORDER if metric in summary_rows]
+    # Metrics without a declared ranking direction have no best/worst and are skipped.
+    # An unknown metric (no metadata, not built-in) fails in ranking_direction.
+    # Selection is per (output, metric): each output is ranked among its own rows only.
+    directions: dict[tuple[str, str], bool] = {}
+    for output, summaries in summary_rows.items():
+        for metric, summary in summaries.items():
+            info = metric_info(per_image_csv, metric)
+            if summary["finite_count"] > 0 and (info is None or info.higher_is_better is not None):
+                directions[output, metric] = ranking_direction(per_image_csv, metric)
+    available_metrics = [f"{output}/{metric}" for output, metric in directions]
 
     if not available_metrics:
-        raise ValueError(
-            f"No supported metrics found in {summary_csv}. "
-            f"Expected one of: {', '.join(METRIC_SELECTION_ORDER)}"
-        )
+        raise ValueError(f"No rankable metric with finite values found in {summary_csv}.")
 
     per_metric_representative_rows: dict[str, dict[str, dict[str, str]]] = {}
 
-    for metric_name in available_metrics:
-        metric_summary = summary_rows[metric_name]
-        metric_dir = metrics_dir / metric_name
+    for (output, metric_name), higher_is_better in directions.items():
+        metric_summary = summary_rows[output][metric_name]
+        metric_dir = metrics_dir / output / metric_name
         metric_dir.mkdir(parents=True, exist_ok=True)
         representative_rows = select_representative_rows(
             metric_name,
             metric_summary,
-            per_image_rows,
+            [row for row in per_image_rows if row["output_name"] == output],
+            higher_is_better=higher_is_better,
         )
-        per_metric_representative_rows[metric_name] = representative_rows
+        per_metric_representative_rows[f"{output}/{metric_name}"] = representative_rows
         metric_selection_rows: list[dict[str, object]] = []
         metric_diagnostic_entries: list[DiagnosticEntry] = []
 
@@ -176,6 +166,7 @@ def _run_from_metrics(request: ComparePanelsRequest) -> FromMetricsResult:
                 row=row,
                 metric_summary=metric_summary,
                 metric_dir=metric_dir,
+                higher_is_better=higher_is_better,
             )
             selection_summary_rows.append(selection_row)
             metric_selection_rows.append(selection_row)

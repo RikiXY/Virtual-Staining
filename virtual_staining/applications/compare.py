@@ -20,7 +20,7 @@ from virtual_staining.evaluation.comparison import (
     save_unpaired_report_txt,
     save_unpaired_summary_json,
 )
-from virtual_staining.evaluation.plotting import get_metric_plot_range
+from virtual_staining.evaluation.reports import MetricInfo, metric_info
 from virtual_staining.evaluation.statistics import (
     PairedSummary,
     UnpairedComparison,
@@ -32,7 +32,7 @@ from virtual_staining.evaluation.statistics import (
     load_metric_values,
     resolve_input_csv,
 )
-from virtual_staining.metrics import get_metric_thresholds, is_higher_better_metric
+from virtual_staining.experiment.run_layout import ResultsLayout, RunLayout
 
 
 @dataclass(frozen=True)
@@ -53,6 +53,8 @@ class CompareRequest:
     thresholds: tuple[float, ...] | None = None
     tolerance: float = 0.0
     sample_id_column: str = "sample_id"
+    #: The one model output compared; required when a CSV holds several outputs.
+    output_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,7 @@ class _ResolvedCompareRequest:
     thresholds: tuple[float, ...]
     tolerance: float
     sample_id_column: str
+    output_name: str | None
 
 
 @dataclass
@@ -86,7 +89,6 @@ class CompareResult:
 
 
 def compare(request: CompareRequest) -> CompareResult:
-    """Run the full comparison pipeline for paired or unpaired metric distributions."""
     if request.mode not in {"paired", "unpaired"}:
         raise ValueError(f"Unsupported comparison mode: {request.mode}")
     resolved = _resolve_request(request)
@@ -99,7 +101,33 @@ def _resolve_request(request: CompareRequest) -> _ResolvedCompareRequest:
     csv_b = _resolve_csv(request.run_b, request.csv_b, "B")
     label_a = request.label_a or _infer_label(request.run_a, request.csv_a, "A")
     label_b = request.label_b or _infer_label(request.run_b, request.csv_b, "B")
-    default_min, default_max = get_metric_plot_range(request.column)
+    info = _column_info(csv_a, csv_b, request.column)
+    higher_is_better = (
+        request.higher_is_better
+        if request.higher_is_better is not None
+        else info.higher_is_better
+        if info is not None
+        else None
+    )
+    if higher_is_better is None:
+        raise ValueError(
+            f"Ranking direction of {request.column!r} is unknown (no evaluation result "
+            "metadata declares it and it is not a built-in metric); pass it explicitly."
+        )
+    if info is not None and info.plot_range is not None:
+        default_min, default_max = info.plot_range
+    else:
+        # Plain data-driven axis: no scientific range is assumed for an unknown metric.
+        values = np.concatenate(
+            [
+                load_metric_values(csv_a, request.column, request.output_name),
+                load_metric_values(csv_b, request.column, request.output_name),
+            ]
+        )
+        values = values[np.isfinite(values)]
+        default_min, default_max = (
+            (float(values.min()), float(values.max())) if values.size else (0.0, 1.0)
+        )
     min_value = request.min_value if request.min_value is not None else default_min
     max_value = request.max_value if request.max_value is not None else default_max
     if min_value == max_value:
@@ -115,22 +143,29 @@ def _resolve_request(request: CompareRequest) -> _ResolvedCompareRequest:
         label_b=label_b,
         column=request.column,
         output_dir=output_dir,
-        higher_is_better=(
-            request.higher_is_better
-            if request.higher_is_better is not None
-            else is_higher_better_metric(request.column)
-        ),
+        higher_is_better=higher_is_better,
         bins=request.bins,
         min_value=float(min_value),
         max_value=float(max_value),
+        # Presentation heuristics only; none are assumed for an unknown metric.
         thresholds=(
             request.thresholds
             if request.thresholds is not None
-            else tuple(get_metric_thresholds(request.column))
+            else tuple(sorted(info.thresholds))
+            if info is not None
+            else ()
         ),
         tolerance=request.tolerance,
         sample_id_column=request.sample_id_column,
+        output_name=request.output_name,
     )
+
+
+def _column_info(csv_a: Path, csv_b: Path, column: str) -> MetricInfo | None:
+    info_a, info_b = metric_info(csv_a, column), metric_info(csv_b, column)
+    if info_a and info_b and info_a.higher_is_better != info_b.higher_is_better:
+        raise ValueError(f"The two results declare different ranking directions for {column!r}")
+    return info_a or info_b
 
 
 def _resolve_csv(run_path: Path | None, csv_path: str | Path | None, label: str) -> Path:
@@ -139,13 +174,12 @@ def _resolve_csv(run_path: Path | None, csv_path: str | Path | None, label: str)
     if run_path is None:
         assert csv_path is not None
         return resolve_input_csv(csv_path)
-    run_path = run_path.resolve()
-    if not run_path.is_dir():
-        raise NotADirectoryError(f"Run directory not found: {run_path}")
-    path = run_path / "evaluation" / "per_image_metrics.csv"
+    run_layout = RunLayout(run_path.resolve())
+    path = run_layout.per_image_metrics
     if not path.is_file():
         raise FileNotFoundError(
-            f"Could not find per_image_metrics.csv for run '{run_path.name}'. Expected: {path}"
+            f"Could not find per_image_metrics.csv for run '{run_layout.root.name}'. "
+            f"Expected: {path}"
         )
     return path
 
@@ -161,33 +195,33 @@ def _infer_label(run_path: Path | None, csv_path: str | Path | None, fallback: s
     return path.stem
 
 
+def _run_root_for_csv(path: Path) -> Path | None:
+    resolved = path.resolve()
+    if resolved.name == "per_image_metrics.csv" and resolved.parent.name == "evaluation":
+        return resolved.parent.parent
+    return None
+
+
 def _default_output_dir(request: CompareRequest, csv_a: Path, label_a: str, label_b: str) -> Path:
-    results_root = next(
-        (
-            path.resolve().parent
-            for path in (request.run_a, request.run_b)
-            if path is not None and path.resolve().parent.name == "results"
-        ),
-        None,
-    )
-    if results_root is None:
-        parts = csv_a.resolve().parts
-        results_root = (
-            Path(*parts[: parts.index("results") + 1])
-            if "results" in parts
-            else Path("local_workspace") / "results"
-        )
-    return (
-        results_root
-        / "comparisons"
-        / f"{label_a}_vs_{label_b}"
-        / f"{request.mode}_{request.column}"
-    )
+    name = f"{request.mode}_{request.column}"
+    if request.output_name is not None:
+        name = f"{name}__{request.output_name}"
+    for run_path in (request.run_a, request.run_b):
+        if run_path is not None:
+            return (
+                ResultsLayout(run_path.resolve().parent).comparisons_dir
+                / f"{label_a}_vs_{label_b}"
+                / name
+            )
+    run_root = _run_root_for_csv(csv_a)
+    if run_root is not None:
+        return ResultsLayout(run_root.parent).comparisons_dir / f"{label_a}_vs_{label_b}" / name
+    return Path("local_workspace") / "results" / "comparisons" / f"{label_a}_vs_{label_b}" / name
 
 
 def _compare_unpaired(request: _ResolvedCompareRequest) -> CompareResult:
-    values_a = load_metric_values(request.csv_a, request.column)
-    values_b = load_metric_values(request.csv_b, request.column)
+    values_a = load_metric_values(request.csv_a, request.column, request.output_name)
+    values_b = load_metric_values(request.csv_b, request.column, request.output_name)
     thresholds = list(request.thresholds)
 
     group_a = compute_unpaired_group_stats(
@@ -265,6 +299,7 @@ def _compare_paired(request: _ResolvedCompareRequest) -> CompareResult:
         csv_b=request.csv_b,
         sample_id_column=request.sample_id_column,
         metric_column=request.column,
+        output_name=request.output_name,
     )
     summary = compute_paired_summary(
         merged=merged,

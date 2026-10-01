@@ -1,22 +1,29 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypeAlias
 
 import torch
 import torch.nn as nn
 from torch.amp import autocast
 from torchvision import transforms
 
-from virtual_staining.checkpoint_contract import (
-    check_generator_arch,
-    validate_checkpoint_metadata,
-)
-from virtual_staining.checkpoint_selection import resolve_best_checkpoint_path
+from virtual_staining.checkpoint_contract import read_checkpoint, validate_checkpoint
+from virtual_staining.checkpoint_selection import resolve_checkpoint_path
 from virtual_staining.config.run import RunConfig
-from virtual_staining.experiment.run_paths import RunPaths
-from virtual_staining.models.generator import ConcatUNetGenerator
-from virtual_staining.utils.dimensions import to_torchvision_hw
+from virtual_staining.experiment.run_layout import RunLayout
+from virtual_staining.models.io_contract import (
+    MODEL_OUTPUT_RANGE,
+    build_model_input_transform,
+    denormalize_model_output,
+)
+
+#: ``{input_name: NCHW tensor in [-1, 1]}`` -> ``{output_name: NCHW RGB tensor in [-1, 1]}``.
+Predictor: TypeAlias = Callable[[dict[str, torch.Tensor]], Mapping[str, torch.Tensor]]
+#: Slack for float noise around the declared output range; anything further out is rejected.
+OUTPUT_RANGE_TOLERANCE = 1e-3
 
 
 @dataclass
@@ -26,203 +33,79 @@ class InferenceResult:
     num_samples: int = 0
 
 
-@dataclass(frozen=True)
-class LoadedCheckpointGenerator:
-    """Generator and inference metadata reconstructed from one checkpoint."""
+def validate_prediction(
+    outputs: object, reference: torch.Tensor, output_names: tuple[str, ...]
+) -> dict[str, torch.Tensor]:
+    """Enforce the named same-grid RGB output contract before anything is published.
 
-    generator: nn.Module
-    checkpoint_path: Path
-    image_size: tuple[int, int]
-    input_names: tuple[str, ...]
-    target_modality: str
-    channels_per_input: int
-    device: torch.device
-
-
-@dataclass(frozen=True)
-class CheckpointGeneratorMetadata:
-    """Validated metadata needed to describe and reconstruct one generator."""
-
-    checkpoint_path: Path
-    format_version: int
-    image_size: tuple[int, int]
-    input_names: tuple[str, ...]
-    target_modality: str
-    channels_per_input: int
-    generator_class: str
-    architecture: str
-    base_channels: int
-    norm: str
-    dropout: bool
-    bilinear: bool
+    ``reference`` is one NCHW predictor input. The predictor must return a mapping with
+    exactly ``output_names`` in order (one output is a one-item mapping), each value a
+    finite ``(N, 3, H, W)`` tensor on exactly that grid within the declared range. Nothing
+    is cropped, padded, resized, selected or clamped away.
+    """
+    if not isinstance(outputs, Mapping):
+        raise TypeError(
+            "Predictor must return a mapping of output name to RGB tensor, got "
+            f"{type(outputs).__name__}"
+        )
+    if tuple(outputs) != output_names:
+        raise ValueError(
+            f"Predictor outputs {tuple(outputs)} must be exactly {output_names} in that order"
+        )
+    expected = (reference.shape[0], 3, *reference.shape[-2:])
+    low, high = MODEL_OUTPUT_RANGE
+    for name, output in outputs.items():
+        if not isinstance(output, torch.Tensor):
+            raise TypeError(f"Predictor output {name!r} must be a tensor")
+        if tuple(output.shape) != expected:
+            raise ValueError(
+                f"Predictor output {name!r} shape {tuple(output.shape)} violates the same-grid "
+                f"RGB contract: expected {expected} (input batch, 3 channels, input height/width)"
+            )
+        if not output.is_floating_point():
+            raise TypeError(
+                f"Predictor output {name!r} must be a floating tensor, got {output.dtype}"
+            )
+        if not bool(torch.isfinite(output).all()):
+            raise ValueError(f"Predictor output {name!r} contains NaN or Inf values")
+        if (
+            float(output.min()) < low - OUTPUT_RANGE_TOLERANCE
+            or float(output.max()) > high + OUTPUT_RANGE_TOLERANCE
+        ):
+            raise ValueError(
+                f"Predictor output {name!r} must lie in [{low}, {high}], got "
+                f"[{float(output.min()):.4g}, {float(output.max()):.4g}]"
+            )
+    return dict(outputs)
 
 
 @torch.no_grad()
 def predict_batch(
-    generator: nn.Module,
+    predictor: Predictor,
     inputs: dict[str, torch.Tensor],
     device: torch.device,
-) -> torch.Tensor:
+    output_names: tuple[str, ...],
+) -> dict[str, torch.Tensor]:
+    """Run a caller-prepared predictor once; the predictor itself is never moved or mutated.
+
+    Returns every named output denormalized to [0, 1], in ``output_names`` order.
+    """
+    moved = {name: value.to(device) for name, value in inputs.items()}
     with autocast(device_type=device.type, enabled=device.type == "cuda"):
-        output = generator({name: value.to(device) for name, value in inputs.items()})
-    return (output * 0.5 + 0.5).clamp(0, 1)
+        outputs = predictor(moved)
+    validated = validate_prediction(outputs, next(iter(moved.values())), output_names)
+    return {name: denormalize_model_output(value) for name, value in validated.items()}
 
 
 def resolve_inference_device() -> torch.device:
-    """Return the device used by inference entry points."""
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def build_inference_transform(image_size: tuple[int, int]) -> transforms.Compose:
-    """Build the image transform expected by the generator."""
-    return transforms.Compose(
-        [
-            transforms.Resize(to_torchvision_hw(image_size)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5] * 3, [0.5] * 3),
-        ]
-    )
+    return build_model_input_transform(image_size)
 
 
-def _load_checkpoint_payload(checkpoint_path: Path, map_location: torch.device | str) -> dict:
-    checkpoint_path = Path(checkpoint_path)
-    checkpoint = torch.load(checkpoint_path, map_location=map_location, weights_only=False)
-    if not isinstance(checkpoint, dict):
-        raise ValueError(f"Checkpoint '{checkpoint_path}' must contain a mapping.")
-    return checkpoint
-
-
-def _checkpoint_generator_metadata(
-    checkpoint: dict, checkpoint_path: Path
-) -> CheckpointGeneratorMetadata:
-    """Validate current checkpoint-only inference metadata without building a model."""
-
-    checkpoint_arch = validate_checkpoint_metadata(checkpoint, checkpoint_path)
-    generator_arch = checkpoint_arch["generator"]
-
-    input_names_value = generator_arch.get("input_names")
-    if not isinstance(input_names_value, list) or any(
-        not isinstance(name, str) or not name.strip() for name in input_names_value
-    ):
-        raise ValueError("Checkpoint generator input_names must contain non-empty strings.")
-    input_names = tuple(input_names_value)
-    if not input_names or len(set(input_names)) != len(input_names):
-        raise ValueError("Checkpoint generator input_names must be non-empty and unique.")
-
-    image_size_value = checkpoint.get("image_size")
-    if (
-        not isinstance(image_size_value, (list, tuple))
-        or len(image_size_value) != 2
-        or any(isinstance(value, bool) or not isinstance(value, int) for value in image_size_value)
-        or any(value <= 0 for value in image_size_value)
-    ):
-        raise ValueError(
-            "Checkpoint image_size must contain two positive integers for "
-            "checkpoint-only inference."
-        )
-    image_size = (image_size_value[0], image_size_value[1])
-
-    if generator_arch.get("class") != "ConcatUNetGenerator":
-        raise ValueError(
-            "Checkpoint generator class is not supported for checkpoint-only inference: "
-            f"{generator_arch.get('class')!r}."
-        )
-    in_channels = generator_arch.get("in_channels")
-    if (
-        isinstance(in_channels, bool)
-        or not isinstance(in_channels, int)
-        or in_channels <= 0
-        or in_channels % len(input_names) != 0
-    ):
-        raise ValueError(
-            "Checkpoint generator in_channels must be a positive multiple of its input count."
-        )
-    if generator_arch.get("out_channels") != 3:
-        raise ValueError("Checkpoint-only inference currently requires three output channels.")
-
-    base_channels = generator_arch.get("base_channels")
-    if isinstance(base_channels, bool) or not isinstance(base_channels, int) or base_channels <= 0:
-        raise ValueError("Checkpoint generator base_channels must be a positive integer.")
-    norm = generator_arch.get("norm")
-    if norm not in {"batch", "instance"}:
-        raise ValueError(f"Checkpoint generator norm is not supported: {norm!r}.")
-    dropout = generator_arch.get("dropout")
-    bilinear = generator_arch.get("bilinear")
-    if not isinstance(dropout, bool) or not isinstance(bilinear, bool):
-        raise ValueError("Checkpoint generator dropout and bilinear metadata must be booleans.")
-
-    target_modality = generator_arch.get("target_modality")
-    if not isinstance(target_modality, str) or not target_modality.strip():
-        raise ValueError("Checkpoint generator target_modality must be a non-empty string.")
-    if not isinstance(checkpoint.get("generator_state_dict"), dict):
-        raise ValueError("Checkpoint has no valid generator_state_dict.")
-
-    channels_per_input = in_channels // len(input_names)
-    return CheckpointGeneratorMetadata(
-        checkpoint_path=checkpoint_path,
-        format_version=int(checkpoint["format_version"]),
-        image_size=image_size,
-        input_names=input_names,
-        target_modality=target_modality,
-        channels_per_input=channels_per_input,
-        generator_class=str(generator_arch["class"]),
-        architecture=str(generator_arch["architecture"]),
-        base_channels=base_channels,
-        norm=norm,
-        dropout=dropout,
-        bilinear=bilinear,
-    )
-
-
-def inspect_checkpoint_generator(checkpoint_path: Path) -> CheckpointGeneratorMetadata:
-    """Read and validate metadata for checkpoint-only inference without building a model."""
-    path = Path(checkpoint_path)
-    checkpoint = _load_checkpoint_payload(path, "cpu")
-    return _checkpoint_generator_metadata(checkpoint, path)
-
-
-def load_checkpoint_generator(
-    checkpoint_path: Path,
-    device: torch.device,
-) -> LoadedCheckpointGenerator:
-    """Reconstruct a generator using only a current-format checkpoint."""
-    checkpoint_path = Path(checkpoint_path)
-    checkpoint = _load_checkpoint_payload(checkpoint_path, device)
-    metadata = _checkpoint_generator_metadata(checkpoint, checkpoint_path)
-
-    generator = ConcatUNetGenerator(
-        metadata.input_names,
-        channels_per_input=metadata.channels_per_input,
-        base_channels=metadata.base_channels,
-        norm=metadata.norm,
-        dropout=metadata.dropout,
-        bilinear=metadata.bilinear,
-    ).to(device)
-    checkpoint_arch = checkpoint["architecture"]
-    check_generator_arch(checkpoint_arch, generator, target_modality=metadata.target_modality)
-
-    state_dict = checkpoint["generator_state_dict"]
-    try:
-        generator.load_state_dict(state_dict)
-    except RuntimeError as exc:
-        raise ValueError(
-            "Checkpoint generator weights do not match its architecture metadata."
-        ) from exc
-    generator.eval()
-
-    return LoadedCheckpointGenerator(
-        generator=generator,
-        checkpoint_path=checkpoint_path,
-        image_size=metadata.image_size,
-        input_names=metadata.input_names,
-        target_modality=metadata.target_modality,
-        channels_per_input=metadata.channels_per_input,
-        device=device,
-    )
-
-
-def _resolve_checkpoint(config: RunConfig, paths: RunPaths) -> Path:
-    """Resolve the inference checkpoint path from RunConfig."""
+def resolve_inference_checkpoint(config: RunConfig, paths: RunLayout) -> Path:
     if config.inference is None:
         raise ValueError("RunConfig.inference is required to run inference.")
 
@@ -231,56 +114,68 @@ def _resolve_checkpoint(config: RunConfig, paths: RunPaths) -> Path:
         if not checkpoint_path.is_absolute():
             checkpoint_path = paths.root / checkpoint_path
         return checkpoint_path
-
-    if config.inference.checkpoint_policy == "latest":
-        candidates = sorted(paths.checkpoints_dir.glob("ep*.pth"))
-        if not candidates:
-            raise FileNotFoundError(
-                f"checkpoint_policy='latest' but no checkpoints found in {paths.checkpoints_dir}"
-            )
-        return candidates[-1]
-
-    if config.inference.checkpoint_policy in {"best", "top_k"}:
-        return resolve_best_checkpoint_path(
-            paths.checkpoints_dir,
-            policy=config.inference.checkpoint_policy,
-            metric=config.inference.checkpoint_metric,
-            rank=config.inference.checkpoint_rank or 1,
+    if config.inference.checkpoint_policy is None:
+        raise ValueError(
+            "inference.checkpoint_path or inference.checkpoint_policy must be set in the config."
         )
-
-    raise ValueError(
-        "inference.checkpoint_path or inference.checkpoint_policy must be set in the config."
+    return resolve_checkpoint_path(
+        paths.checkpoints_dir,
+        policy=config.inference.checkpoint_policy,
+        metric=config.inference.checkpoint_metric,
+        rank=config.inference.checkpoint_rank or 1,
     )
+
+
+def inference_output_dir(config: RunConfig, paths: RunLayout) -> Path:
+    """Return ``inference.output_dir``, defaulting to the run's test output directory."""
+    configured = config.inference.output_dir if config.inference is not None else None
+    return configured or paths.output_test_dir
+
+
+def inference_direction(config: RunConfig) -> str | None:
+    """Return the selected prediction direction, or None for single-direction methods.
+
+    Methods with several directions default to their first declared direction.
+    """
+    directions = config.method.definition.prediction_directions
+    if len(directions) < 2:
+        return None
+    configured = config.inference.direction if config.inference is not None else None
+    return configured or directions[0]
+
+
+def inference_input_names(config: RunConfig) -> tuple[str, ...]:
+    """Return the named inputs the configured inference direction consumes."""
+    return config.method.definition.prediction_inputs(config, inference_direction(config))
+
+
+def inference_output_names(config: RunConfig) -> tuple[str, ...]:
+    """Return the ordered named outputs the configured inference direction produces."""
+    return config.method.definition.prediction_outputs(config, inference_direction(config))
 
 
 def load_inference_generator(
     config: RunConfig,
-    paths: RunPaths,
+    paths: RunLayout,
     device: torch.device,
+    checkpoint_path: Path | None = None,
 ) -> tuple[nn.Module, Path]:
-    """Load and validate the configured generator checkpoint."""
-    checkpoint_path = _resolve_checkpoint(config, paths)
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    """Build the prediction network through the selected method definition.
 
-    stored_size = checkpoint.get("image_size")
-    if stored_size is not None and tuple(stored_size) != tuple(config.project.image_size):
-        raise ValueError(
-            "Image size mismatch between checkpoint and inference config. "
-            f"Checkpoint image_size={tuple(stored_size)}, "
-            f"config image_size={tuple(config.project.image_size)}."
-        )
-
-    checkpoint_arch = validate_checkpoint_metadata(checkpoint, checkpoint_path)
-
-    generator_config = config.model.generator
-    generator = ConcatUNetGenerator(
-        config.model.inputs,
-        base_channels=generator_config.base_channels,
-        norm=generator_config.norm,
-        dropout=generator_config.dropout,
-        bilinear=generator_config.bilinear,
-    ).to(device)
-    check_generator_arch(checkpoint_arch, generator, target_modality=config.model.target)
-    generator.load_state_dict(checkpoint["generator_state_dict"])
+    The checkpoint must name registered definitions and match the config's semantic
+    identity before the definition builds anything; only the prediction network is
+    constructed (no optimizer, scheduler, objective or unused network).
+    """
+    if checkpoint_path is None:
+        checkpoint_path = resolve_inference_checkpoint(config, paths)
+    definition = config.method.definition
+    payload = read_checkpoint(checkpoint_path)
+    config.definitions.require_checkpoint(payload, checkpoint_path)
+    checkpoint = validate_checkpoint(
+        payload, definition.checkpoint_identity(config), checkpoint_path
+    )
+    generator = definition.build_inference_model(
+        config, checkpoint, direction=inference_direction(config), device=device
+    )
     generator.eval()
     return generator, checkpoint_path

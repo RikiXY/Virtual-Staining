@@ -19,6 +19,7 @@ matplotlib.use("Agg", force=True)
 P = ParamSpec("P")
 R = TypeVar("R")
 
+# ponytail: process-wide Matplotlib lock; use isolated processes if plotting throughput matters.
 PLOT_LOCK = RLock()
 
 

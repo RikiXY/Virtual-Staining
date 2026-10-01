@@ -157,12 +157,15 @@ def _add_direction_arguments(parser: argparse.ArgumentParser) -> None:
     direction.add_argument(
         "--higher-is-better",
         action="store_true",
-        help="Override the default metric direction for metrics like SSIM and PSNR.",
+        help=(
+            "Rank higher values as better. Default: the direction recorded in "
+            "evaluation_result.json or of a built-in metric; required for unknown metrics."
+        ),
     )
     direction.add_argument(
         "--lower-is-better",
         action="store_true",
-        help="Override the default metric direction for metrics like MAE and RMSE.",
+        help="Rank lower values as better (see --higher-is-better).",
     )
 
 
@@ -217,6 +220,14 @@ def _add_common_comparison_arguments(parser: argparse.ArgumentParser) -> None:
         help="Metric column to compare.",
     )
     parser.add_argument(
+        "--output-name",
+        default=None,
+        help=(
+            "Model output to compare (the output_name column). Required when a CSV holds "
+            "several outputs; outputs are never pooled."
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         default=None,
         help=(
@@ -242,8 +253,8 @@ def _add_unpaired_subparser(subparsers: Any) -> None:
         type=float,
         default=None,
         help=(
-            "Minimum metric value used for shared histogram bins. "
-            "If omitted, inferred from metric defaults."
+            "Minimum metric value used for shared histogram bins. If omitted, the "
+            "metric's presentation range, else the smallest finite value."
         ),
     )
     parser.add_argument(
@@ -251,8 +262,8 @@ def _add_unpaired_subparser(subparsers: Any) -> None:
         type=float,
         default=None,
         help=(
-            "Maximum metric value used for shared histogram bins. "
-            "If omitted, inferred from metric defaults."
+            "Maximum metric value used for shared histogram bins. If omitted, the "
+            "metric's presentation range, else the largest finite value."
         ),
     )
     parser.add_argument(
@@ -267,8 +278,8 @@ def _add_unpaired_subparser(subparsers: Any) -> None:
         type=float,
         default=None,
         help=(
-            "Thresholds used for share-above or share-below statistics. "
-            "If omitted, inferred from metric defaults."
+            "Presentation thresholds for share-above or share-below statistics (not "
+            "acceptance criteria). If omitted, the metric's presentation thresholds, if any."
         ),
     )
     parser.set_defaults(mode="unpaired")
@@ -279,7 +290,8 @@ def _add_paired_subparser(subparsers: Any) -> None:
         "paired",
         help="Compare two paired metric distributions on the same samples.",
         description=(
-            "Compare two paired metric distributions by aligning rows on the same sample_id. "
+            "Compare two paired metric distributions by aligning rows on the same sample_id "
+            "and output_name. "
             "Useful when the two runs share the same test samples."
         ),
     )
@@ -300,8 +312,8 @@ def _add_paired_subparser(subparsers: Any) -> None:
         type=float,
         default=None,
         help=(
-            "Minimum metric value used for shared histogram bins. "
-            "If omitted, inferred from metric defaults."
+            "Minimum metric value used for shared histogram bins. If omitted, the "
+            "metric's presentation range, else the smallest finite value."
         ),
     )
     parser.add_argument(
@@ -309,8 +321,8 @@ def _add_paired_subparser(subparsers: Any) -> None:
         type=float,
         default=None,
         help=(
-            "Maximum metric value used for shared histogram bins. "
-            "If omitted, inferred from metric defaults."
+            "Maximum metric value used for shared histogram bins. If omitted, the "
+            "metric's presentation range, else the largest finite value."
         ),
     )
     parser.add_argument(
@@ -380,6 +392,7 @@ def _build_request(args: argparse.Namespace) -> CompareRequest:
         ),
         tolerance=getattr(args, "tolerance", 0.0),
         sample_id_column=getattr(args, "sample_id_column", "sample_id"),
+        output_name=args.output_name,
     )
 
 

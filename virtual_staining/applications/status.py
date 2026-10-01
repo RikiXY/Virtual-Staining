@@ -16,13 +16,18 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from virtual_staining.experiment.environment import RuntimeInfo
+
 REQUIRED_PACKAGES = (
     ("Albumentations", "albumentations", "albumentations"),
     ("Matplotlib", "matplotlib", "matplotlib.pyplot"),
+    ("NiceGUI", "nicegui", "nicegui"),
     ("NumPy", "numpy", "numpy"),
     ("OpenCV", "opencv-python-headless", "cv2"),
+    ("OpenSlide", "openslide-python", "openslide"),
     ("pandas", "pandas", "pandas"),
     ("Pillow", "pillow", "PIL.Image"),
+    ("pyvips", "pyvips", "pyvips"),
     ("PyYAML", "pyyaml", "yaml"),
     ("scikit-image", "scikit-image", "skimage.metrics"),
     ("SciPy", "scipy", "scipy.stats"),
@@ -51,15 +56,28 @@ def _required_packages() -> tuple[list[dict[str, Any]], dict[str, ModuleType]]:
     for label, distribution, module_name in REQUIRED_PACKAGES:
         version = _distribution_version(distribution)
         captured = io.StringIO()
+        library_version = None
         try:
             with contextlib.redirect_stdout(captured), contextlib.redirect_stderr(captured):
                 module = importlib.import_module(module_name)
+                if module_name == "openslide":
+                    library_version = module.__library_version__
+                    module.OpenSlide.detect_format(str(Path(__file__)))
+                elif module_name == "pyvips":
+                    library_version = ".".join(str(module.version(index)) for index in range(3))
+                    module.Image.black(1, 1).avg()
             modules[module_name] = module
             error = None if version is not None else "Distribution metadata not found"
         except Exception as exc:
             error = _error_text(exc, captured.getvalue())
         results.append(
-            {"name": label, "distribution": distribution, "version": version, "error": error}
+            {
+                "name": label,
+                "distribution": distribution,
+                "version": version,
+                "library_version": library_version,
+                "error": error,
+            }
         )
     return results, modules
 
@@ -165,38 +183,6 @@ def _memory_status() -> dict[str, int | float] | None:
     }
 
 
-def _git_status() -> dict[str, str | bool | None]:
-    try:
-        commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5
-        )
-        dirty = subprocess.run(
-            ["git", "status", "--porcelain"], capture_output=True, text=True, timeout=5
-        )
-        if commit.returncode != 0 or dirty.returncode != 0:
-            return {"commit": None, "dirty": None}
-        return {"commit": commit.stdout.strip(), "dirty": bool(dirty.stdout.strip())}
-    except (OSError, subprocess.SubprocessError):
-        return {"commit": None, "dirty": None}
-
-
-def _openslide_status() -> dict[str, Any]:
-    result: dict[str, Any] = {
-        "version": _distribution_version("openslide-python"),
-        "library_version": None,
-        "usable": False,
-        "error": None,
-    }
-    try:
-        openslide = importlib.import_module("openslide")
-        result["library_version"] = getattr(openslide, "__library_version__", None)
-        openslide.OpenSlide.detect_format(str(Path(__file__)))
-        result["usable"] = True
-    except Exception as exc:
-        result["error"] = _error_text(exc)
-    return result
-
-
 def _nvidia_status() -> dict[str, Any]:
     executable = shutil.which("nvidia-smi")
     result: dict[str, Any] = {"executable": executable, "usable": False, "gpus": [], "error": None}
@@ -264,7 +250,7 @@ def _cuda_status(torch: Any | None, import_error: str | None) -> dict[str, Any]:
 
 
 def collect_status() -> dict[str, Any]:
-    """Collect a complete, non-mutating health report for the active runtime."""
+    runtime = RuntimeInfo.collect(())
     packages, modules = _required_packages()
     torch_error = next(item["error"] for item in packages if item["distribution"] == "torch")
     try:
@@ -272,18 +258,20 @@ def collect_status() -> dict[str, Any]:
     except metadata.PackageNotFoundError:
         from virtual_staining import __version__ as package_version
 
+    cuda = _cuda_status(modules.get("torch"), torch_error)
+    cuda["build_version"] = runtime.cuda_version
+    cuda["available"] = runtime.cuda_available
     return {
         "healthy": all(item["error"] is None for item in packages),
         "virtual_staining": package_version,
-        "python": sys.version.split()[0],
+        "python": runtime.python,
         "python_executable": sys.executable,
         "os": _os_status(),
         "memory": _memory_status(),
-        "git": _git_status(),
+        "git": {"commit": runtime.git_commit, "dirty": runtime.git_dirty},
         "packages": packages,
-        "openslide": _openslide_status(),
         "nvidia": _nvidia_status(),
-        "cuda": _cuda_status(modules.get("torch"), torch_error),
+        "cuda": cuda,
     }
 
 

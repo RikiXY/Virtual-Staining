@@ -5,18 +5,21 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import cv2
 import numpy as np
 import pytest
+import torch
+import yaml
 
-from tests.config_helpers import write_queue_config, write_run_config
+from tests.config_helpers import write_config_data, write_queue_config, write_run_config
 from virtual_staining.applications.pipeline import run_stage, run_stages
 from virtual_staining.applications.prepare import prepare
 from virtual_staining.applications.run_queue import run_queue
+from virtual_staining.checkpoint_contract import CHECKPOINT_FORMAT_VERSION
 from virtual_staining.config.run import RunConfig
-from virtual_staining.data.preprocessing import AlignmentMetadata
 
 
 def _make_synthetic_dataset(dataset_root: Path, size: int = 192) -> Path:
@@ -38,7 +41,7 @@ def _make_synthetic_dataset(dataset_root: Path, size: int = 192) -> Path:
     cv2.imwrite(str(dataset_root / "target.tif"), target.astype(np.uint8))
     (dataset_root / "inputs").mkdir()
     (dataset_root / "inputs" / "slide_sets.csv").write_text(
-        "set_id,input__source_path,input__source_aligned,target_path,target_aligned\n"
+        "set_id,input__source_path,input__source_aligned,target__target_path,target__target_aligned\n"
         "P1,source.tif,true,target.tif,true\n",
         encoding="utf-8",
     )
@@ -50,43 +53,12 @@ def _white_mask(img: np.ndarray, _params: object) -> np.ndarray:
     return np.full((img.shape[0], img.shape[1]), 255, dtype=np.uint8)
 
 
-def _identity_align(
-    _src: np.ndarray,
-    tgt: np.ndarray,
-    mask_1: np.ndarray | None = None,
-    mask_2: np.ndarray | None = None,
-    scale: float = 0.5,
-    **_kwargs: object,
-) -> tuple[np.ndarray, AlignmentMetadata]:
-    """Return an identity matrix with valid alignment metadata."""
-    del _src, tgt, mask_1, mask_2, scale
-    eye = np.eye(2, 3, dtype=np.float64)
-    metadata = AlignmentMetadata(
-        n_keypoints_src=100,
-        n_keypoints_tgt=100,
-        n_matches=50,
-        n_inliers=45,
-        inlier_ratio=0.9,
-        scale_x=1.0,
-        scale_y=1.0,
-        rotation_deg=0.0,
-        translation_x=0.0,
-        translation_y=0.0,
-        warp_matrix=eye.tolist(),
-    )
-    return eye, metadata
-
-
 @contextmanager
 def _patched_prepare_dependencies() -> Iterator[None]:
     with (
         patch(
-            "virtual_staining.data.builder.calculate_mask_with_multiple_parameters",
+            "virtual_staining.data.slide_set_processor.calculate_mask_with_multiple_parameters",
             side_effect=_white_mask,
-        ),
-        patch(
-            "virtual_staining.data.builder.estimate_affine_from_scaled",
-            side_effect=_identity_align,
         ),
     ):
         yield
@@ -98,12 +70,16 @@ def _write_smoke_config(tmp_path: Path, dataset_root: Path, *, run_name: str = "
         """\
         image_size: [64, 64]
 
+        # One slide set is patch-split, so no set-level independence can be claimed.
+        data:
+          group_validation: unavailable
+
         preprocessing:
           inputs:
             inventory: inputs/slide_sets.csv
             modalities: [source]
             reference: source
-            target_modality: target
+            target_modalities: [target]
           patching:
             patch_size: [64, 64]
             grid_movement: [64, 64]
@@ -125,7 +101,7 @@ def _write_smoke_config(tmp_path: Path, dataset_root: Path, *, run_name: str = "
 
         model:
           inputs: [source]
-          target: target
+          outputs: [target]
           generator:
             base_channels: 16
           discriminator:
@@ -139,15 +115,15 @@ def _write_smoke_config(tmp_path: Path, dataset_root: Path, *, run_name: str = "
           checkpoint_rate: 1
           log_rate: 1
 
-        losses:
-          generator:
-            - name: adversarial_bce
-              weight: 1.0
-            - name: l1
-              weight: 25.0
-          discriminator:
-            - name: adversarial_bce
-              weight: 1.0
+          losses:
+            generator:
+              - name: adversarial_bce
+                weight: 1.0
+              - name: l1
+                weight: 25.0
+            discriminator:
+              - name: adversarial_bce
+                weight: 1.0
 
         inference:
           checkpoint_policy: latest
@@ -160,6 +136,10 @@ def _write_smoke_config(tmp_path: Path, dataset_root: Path, *, run_name: str = "
         results_path=tmp_path / "runs",
         run_name=run_name,
     )
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _write_queue_file(
@@ -189,11 +169,29 @@ def test_full_pipeline_smoke(tmp_path: Path) -> None:
     assert prepared.val_count > 0
     assert prepared.test_count > 0
 
+    run_root = tmp_path / "runs" / "smoke_run"
     run_stage(config_path, "train")
-    run_stage(config_path, "infer")
-    run_stage(config_path, "evaluate")
+    checkpoint = torch.load(
+        run_root / "checkpoints" / "ep000.pth", map_location="cpu", weights_only=True
+    )
+    assert checkpoint["format_version"] == CHECKPOINT_FORMAT_VERSION
+    assert checkpoint["method"]["name"] == "pix2pix"
 
-    metrics_csv = tmp_path / "runs" / "smoke_run" / "evaluation" / "per_image_metrics.csv"
+    # Resume the latest checkpoint in a fresh runtime; inference then resolves the newest one.
+    resume_data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    resume_data["training"].update(epochs=2, resume="latest")
+    resume_path = write_config_data(tmp_path / "smoke_resume.yaml", resume_data)
+    run_stage(resume_path, "train")
+    run_stage(resume_path, "infer")
+    run_stage(resume_path, "evaluate")
+
+    infer_record = _read_json(run_root / "metadata" / "stages" / "infer.json")
+    assert infer_record["details"]["checkpoint_path"] == str(run_root / "checkpoints" / "ep001.pth")
+    generated = sorted((run_root / "artifacts" / "output_test").iterdir())
+    assert [path.name for path in generated] == ["target"]
+    assert all(path.name.endswith("_generated.tif") for path in generated[0].iterdir())
+
+    metrics_csv = run_root / "evaluation" / "per_image_metrics.csv"
     assert metrics_csv.exists()
 
     with metrics_csv.open(newline="", encoding="utf-8") as handle:
@@ -201,9 +199,29 @@ def test_full_pipeline_smoke(tmp_path: Path) -> None:
 
     assert rows
     assert rows[0]["sample_id"]
-    run_root = tmp_path / "runs" / "smoke_run"
-    run_data = json.loads((run_root / "metadata" / "run.json").read_text(encoding="utf-8"))
+    metadata = _read_json(run_root / "evaluation" / "evaluation_metadata.json")
+    assert metadata["method"] == "pix2pix"
+    assert metadata["evaluation_protocol"] == "paired"
+    assert metadata["pairwise_metrics_available"] is True
+    assert metadata["counts"]["evaluated_count"] == len(rows)
+    run_data = _read_json(run_root / "metadata" / "run.json")
     assert run_data["stages_present"] == ["train", "infer", "evaluate"]
+    for stage in ("train", "infer", "evaluate"):
+        record = _read_json(run_root / "metadata" / "stages" / f"{stage}.json")
+        assert record["status"] == "completed"
+        snapshot = _read_json(Path(record["consumed_data"]["metadata_path"]))
+        assert snapshot["snapshot_id"] == record["consumed_data"]["snapshot_id"]
+        assert snapshot["group_validation"]["status"] in {"unavailable", "not_applicable"}
+        assert (run_root / "config" / stage / "resolved.yaml").is_file()
+        assert (run_root / "metadata" / "environments" / f"{stage}.json").is_file()
+    assert (
+        run_data["training_data"]["snapshot_id"]
+        == _read_json(run_root / "metadata" / "stages" / "train.json")["consumed_data"][
+            "snapshot_id"
+        ]
+    )
+    assert metadata["generated_producer"]["status"] == "linked"
+    assert (dataset_root / "metadata" / "consumed_data" / "prepare" / "snapshot.json").is_file()
     assert (run_root / "logs" / "run.log").is_file()
     assert (run_root / "metrics" / "epochs.csv").is_file()
     for legacy in ("training.log", "train.csv", "validation.csv", "all.csv"):

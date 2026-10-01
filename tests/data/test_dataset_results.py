@@ -1,10 +1,31 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from virtual_staining.data.builder import DatasetBuildResult
+from virtual_staining.data.manifest import MANIFEST_SCHEMA_VERSION
+
+
+def test_dataset_build_metadata_version_and_round_trip(tmp_path: Path) -> None:
+    result = DatasetBuildResult(8, 1, 2, 3, tmp_path)
+    path = tmp_path / "dataset_build.json"
+    result.save(path, num_sets=2, num_sets_excluded=0)
+    assert json.loads(path.read_text())["schema_version"] == MANIFEST_SCHEMA_VERSION
+    assert DatasetBuildResult.load(path, output_root=tmp_path) == result
+
+
+@pytest.mark.parametrize("version", [None, "2.0", "unknown", 3.0])
+def test_dataset_build_metadata_rejects_invalid_version(tmp_path: Path, version: object) -> None:
+    path = tmp_path / "dataset_build.json"
+    data: dict[str, object] = {"patches": {"train": 8, "val": 1, "test": 2, "discarded": 3}}
+    if version is not None:
+        data["schema_version"] = version
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="Invalid dataset build metadata"):
+        DatasetBuildResult.load(path, output_root=tmp_path)
 
 
 def test_dataset_build_result_fields() -> None:

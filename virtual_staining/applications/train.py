@@ -2,31 +2,47 @@ from __future__ import annotations
 
 import logging
 import random
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-from torchvision import transforms
 
 from virtual_staining.config.run import RunConfig
+from virtual_staining.data.consumption import (
+    DataSnapshot,
+    build_snapshot,
+)
 from virtual_staining.data.dataset import PairedManifestDataset
-from virtual_staining.data.manifest import load_manifest_or_raise
+from virtual_staining.data.manifest import (
+    load_manifest_or_raise,
+    load_set_groups,
+    manifest_sources,
+    paired_record_rows,
+    prepared_split_unit,
+    require_model_modalities,
+)
+from virtual_staining.data.unpaired import UnpairedImageDataset, resolve_domain_collections
 from virtual_staining.experiment.session import ExperimentSession
-from virtual_staining.models.discriminator import PatchGANDiscriminator
-from virtual_staining.models.generator import ConcatUNetGenerator
+from virtual_staining.models.io_contract import build_model_input_transform
+from virtual_staining.split_contract import TEST_SPLIT, TRAIN_SPLIT, VAL_SPLIT, DatasetSplit
 from virtual_staining.training.augmentation import build_training_paired_transform
+from virtual_staining.training.preview import ValidationPreviewWriter
 from virtual_staining.training.progress import ProgressReporter, ProgressUpdate, format_progress_log
 from virtual_staining.training.results import TrainingResult
 from virtual_staining.training.trainer import Trainer
-from virtual_staining.utils.dimensions import to_torchvision_hw
+
+if TYPE_CHECKING:
+    from virtual_staining.training.benchmarking import TrainingBenchmarkRecorder
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["ProgressReporter", "ProgressUpdate", "format_progress_log", "train"]
 
 
-def set_seed(seed: int) -> None:
+def _set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
@@ -37,9 +53,154 @@ def set_seed(seed: int) -> None:
 
 
 def _requires_foreground_masks(config: RunConfig) -> bool:
-    if config.training is None:
-        return False
-    return any(term.requires_mask for term in config.training.losses.generator)
+    return config.training is not None and config.method.definition.requires_foreground_mask(config)
+
+
+PAIRED_TRAIN_ADAPTER = "paired_manifest_train/1"
+UNPAIRED_TRAIN_ADAPTER = "unpaired_domains_train/1"
+
+
+def _paired_datasets(
+    config: RunConfig,
+    transform: Callable[[Any], Any],
+    seed: int,
+) -> tuple[PairedManifestDataset, PairedManifestDataset, dict[str, object], DataSnapshot]:
+    assert config.training is not None
+    training = config.training
+    manifest = load_manifest_or_raise(config.project)
+    require_model_modalities(manifest, config.model.inputs, config.model.outputs)
+    manifest.validate(check_files_exist=True, require_splits={"train", "val"})
+    train_manifest = manifest.filter_split("train")
+    val_manifest = manifest.filter_split("val")
+    include_mask = _requires_foreground_masks(config)
+
+    # The snapshot and the datasets are built from these same filtered manifest objects.
+    groups = load_set_groups(config.project)
+    rows = paired_record_rows(
+        (*train_manifest.records, *val_manifest.records),
+        input_names=config.model.inputs,
+        target_names=config.model.outputs,
+        include_masks=include_mask,
+        groups=groups,
+    )
+    # Held-out test records are not consumed but share the split partition, so the same
+    # files they would supply are checked for file, content, and group leakage.
+    test_context = paired_record_rows(
+        manifest.filter_split("test").records,
+        input_names=config.model.inputs,
+        target_names=config.model.outputs,
+        include_masks=include_mask,
+        groups=groups,
+    )
+    snapshot = build_snapshot(
+        rows,
+        kind="consumed",
+        adapter=PAIRED_TRAIN_ADAPTER,
+        roots={"dataset": config.project.dataset_root},
+        hash_policy=config.data.hash_policy,
+        group_validation=config.data.group_validation,
+        validation_context=test_context,
+        patch_split=prepared_split_unit(config.project) == "patch",
+        selection={
+            "pairing": "paired",
+            "splits": ["train", "val"],
+            "inputs": list(config.model.inputs),
+            "targets": list(config.model.outputs),
+            "foreground_masks": include_mask,
+        },
+        sources=manifest_sources(config.project),
+    )
+
+    train_paired_transform = build_training_paired_transform(
+        training.augmentation,
+        image_size=config.project.image_size,
+        seed=seed,
+        input_names=config.model.inputs,
+        target_names=config.model.outputs,
+    )
+    train_dataset = PairedManifestDataset(
+        train_manifest,
+        input_names=config.model.inputs,
+        target_names=config.model.outputs,
+        transform=None if train_paired_transform is not None else transform,
+        paired_transform=train_paired_transform,
+        include_foreground_mask=include_mask,
+        virtual_expansion_factor=training.augmentation.effective_expansion_factor,
+    )
+    val_dataset = PairedManifestDataset(
+        val_manifest,
+        input_names=config.model.inputs,
+        target_names=config.model.outputs,
+        transform=transform,
+        include_foreground_mask=include_mask,
+    )
+    logger.info(
+        "Loaded manifest: %s train samples (%s effective), %s val samples",
+        len(train_manifest),
+        len(train_dataset),
+        len(val_dataset),
+    )
+    details: dict[str, object] = {
+        "train_sample_count": len(train_manifest),
+        "effective_train_sample_count": (
+            len(train_manifest) * training.augmentation.effective_expansion_factor
+        ),
+    }
+    return train_dataset, val_dataset, details, snapshot
+
+
+def _unpaired_datasets(
+    config: RunConfig,
+    transform: Callable[[Any], Any],
+    seed: int,
+) -> tuple[UnpairedImageDataset, UnpairedImageDataset, DataSnapshot]:
+    domain_a, domain_b = config.model.inputs[0], config.model.outputs[0]
+    splits: tuple[tuple[DatasetSplit, int | None], ...] = ((TRAIN_SPLIT, seed), (VAL_SPLIT, None))
+    # The held-out test collections of both domains are resolved only as leakage context.
+    paths, resolved = resolve_domain_collections(
+        config.data.domains,
+        config.project.dataset_root,
+        splits=[*(split for split, _ in splits), TEST_SPLIT],
+        roles={domain_a: "input", domain_b: "target"},
+        group_metadata=config.data.group_metadata,
+    )
+    rows = [row for row in resolved if row.split != TEST_SPLIT]
+    test_context = [row for row in resolved if row.split == TEST_SPLIT]
+    # Domain membership only: epoch pairings are a seeded sampling operation, not
+    # correspondence, so no A/B pair is ever recorded.
+    snapshot = build_snapshot(
+        rows,
+        kind="consumed",
+        adapter=UNPAIRED_TRAIN_ADAPTER,
+        roots={"dataset": config.project.dataset_root},
+        hash_policy=config.data.hash_policy,
+        group_validation=config.data.group_validation,
+        validation_context=test_context,
+        selection={
+            "pairing": "unpaired",
+            "splits": [split for split, _ in splits],
+            "domains": {"A": domain_a, "B": domain_b},
+            "domain_specs": {name: config.data.domains[name] for name in (domain_a, domain_b)},
+            "group_metadata": str(config.data.group_metadata)
+            if config.data.group_metadata
+            else None,
+        },
+    )
+    datasets = []
+    for split, pairing_seed in splits:
+        paths_a, paths_b = paths[split, domain_a], paths[split, domain_b]
+        logger.info(
+            "Unpaired %s split: %s %s images, %s %s images",
+            split,
+            len(paths_a),
+            domain_a,
+            len(paths_b),
+            domain_b,
+        )
+        datasets.append(
+            UnpairedImageDataset(paths_a, paths_b, transform=transform, pairing_seed=pairing_seed)
+        )
+    return datasets[0], datasets[1], snapshot
 
 
 def train(
@@ -47,79 +208,55 @@ def train(
     config_path: Path,
     *,
     progress_reporter: ProgressReporter | None = None,
+    benchmark_recorder: TrainingBenchmarkRecorder | None = None,
 ) -> TrainingResult:
-    """Build training components, persist provenance, and execute training."""
     if config.training is None:
         raise ValueError("RunConfig.training must be present for train().")
     training = config.training
 
     with ExperimentSession.open(config=config, config_path=config_path, stage="train") as session:
         seed = training.seed if training.seed is not None else random.randint(0, 2**32 - 1)
-        set_seed(seed)
+        _set_seed(seed)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info("Device: %s", device)
-
-        manifest = load_manifest_or_raise(config.project)
-        if not set(config.model.inputs).issubset(manifest.metadata.input_modalities):
-            raise ValueError("model.inputs must be a subset of manifest input modalities")
-            raise ValueError("model.target must equal manifest target modality")
-        train_manifest = manifest.filter_split("train")
-        val_manifest = manifest.filter_split("val")
-
-        effective_train_sample_count = (
-            len(train_manifest) * training.augmentation.effective_expansion_factor
-        )
+        transform = build_model_input_transform(config.project.image_size)
+        if config.data.pairing == "unpaired":
+            train_dataset, val_dataset, snapshot = _unpaired_datasets(config, transform, seed)
+            dataset_details: dict[str, object] = {
+                "train_sample_count": len(train_dataset),
+                "effective_train_sample_count": len(train_dataset),
+                "pairing_policy": "independent_domains_seeded_draw",
+            }
+        else:
+            train_dataset, val_dataset, dataset_details, snapshot = _paired_datasets(
+                config, transform, seed
+            )
+        session.bind_inputs(snapshot)
         train_details = {
             "seed": seed,
             "device": str(device),
             "cuda_device_name": (
                 torch.cuda.get_device_name(device) if device.type == "cuda" else None
             ),
-            "train_sample_count": len(train_manifest),
-            "effective_train_sample_count": effective_train_sample_count,
+            **dataset_details,
             "augmentation_enabled": training.augmentation.enabled,
             "augmentation_intensity": training.augmentation.intensity,
             "augmentation_expansion_factor": training.augmentation.effective_expansion_factor,
-            "val_sample_count": len(val_manifest),
+            "val_sample_count": len(val_dataset),
         }
         session.result(**train_details)
-
-        transform = transforms.Compose(
-            [
-                transforms.Resize(to_torchvision_hw(config.project.image_size)),
-                transforms.ToTensor(),
-                transforms.Normalize([0.5] * 3, [0.5] * 3),
-            ]
+        # Implementation provenance of the registered definition; name and options are
+        # already part of the resolved config snapshot.
+        definition = config.method.definition
+        session.result(
+            method_definition={
+                "name": definition.name,
+                "version": definition.version,
+                "source": definition.source,
+            }
         )
-        train_paired_transform = build_training_paired_transform(
-            training.augmentation,
-            image_size=config.project.image_size,
-            seed=seed,
-            input_names=config.model.inputs,
-            reference_modality=config.preprocessing.inputs.reference
-            if config.preprocessing
-            else config.model.inputs[0],
-        )
-        train_dataset = PairedManifestDataset(
-            train_manifest,
-            input_names=config.model.inputs,
-            transform=None if train_paired_transform is not None else transform,
-            paired_transform=train_paired_transform,
-            include_foreground_mask=_requires_foreground_masks(config),
-            virtual_expansion_factor=training.augmentation.effective_expansion_factor,
-        )
-        val_dataset = PairedManifestDataset(
-            val_manifest,
-            input_names=config.model.inputs,
-            transform=transform,
-            include_foreground_mask=_requires_foreground_masks(config),
-        )
-        logger.info(
-            "Loaded manifest: %s train samples (%s effective), %s val samples",
-            len(train_manifest),
-            len(train_dataset),
-            len(val_dataset),
-        )
+        if benchmark_recorder is not None:
+            benchmark_recorder.set_workload(**train_details, batch_size=training.batch_size)
 
         train_loader_generator = torch.Generator()
         train_loader_generator.manual_seed(seed)
@@ -142,41 +279,35 @@ def train(
             generator=val_loader_generator,
         )
 
-        generator_config = config.model.generator
-        generator = ConcatUNetGenerator(
-            config.model.inputs,
-            base_channels=generator_config.base_channels,
-            norm=generator_config.norm,
-            dropout=generator_config.dropout,
-            bilinear=generator_config.bilinear,
-        ).to(device)
-        discriminator_config = config.model.discriminator
-        discriminator = PatchGANDiscriminator(
-            in_channels=(3 * len(config.model.inputs)) + 3,
-            ndf=discriminator_config.ndf,
-            norm=discriminator_config.norm,
-            use_sigmoid=discriminator_config.use_sigmoid,
-        ).to(device)
-
+        method = config.method.definition.build_training_runtime(
+            config,
+            device,
+            seed=seed,
+            benchmark_recorder=benchmark_recorder,
+        )
         trainer = Trainer(
             config=training,
             run_paths=session.paths,
-            generator=generator,
-            discriminator=discriminator,
+            method=method,
             train_loader=train_loader,
             val_loader=val_loader,
             device=device,
-            image_size=config.project.image_size,
-            train_dir=config.project.split_dir("train"),
             progress_reporter=progress_reporter,
-            val_dir=config.project.split_dir("val"),
-            losses=training.losses,
-            target_modality=config.model.target,
             experiment_session=session,
-            config_hash=session.config_hash,
+            config_hash=session.config_hash or "",
+            benchmark_recorder=benchmark_recorder,
+            preview_sink=ValidationPreviewWriter(
+                session.paths.output_val_dir, benchmark_recorder=benchmark_recorder
+            ),
         )
-        start_epoch = trainer.resume(training.resume) if training.resume is not None else 0
-        result = trainer.train(seed=seed, start_epoch=start_epoch)
+        if benchmark_recorder is not None:
+            benchmark_recorder.start_run()
+        try:
+            start_epoch = trainer.resume(training.resume) if training.resume is not None else 0
+            result = trainer.train(seed=seed, start_epoch=start_epoch)
+        finally:
+            if benchmark_recorder is not None:
+                benchmark_recorder.finish_run()
         session.result(
             final_epoch=result.final_epoch,
             stopped_early=result.stopped_early,

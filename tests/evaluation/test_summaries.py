@@ -6,118 +6,98 @@ from pathlib import Path
 
 import pytest
 
+from virtual_staining.evaluation.reports import build_metric_row
 from virtual_staining.evaluation.summaries import (
-    SUMMARY_METRIC_NAMES,
+    SUMMARY_FIELDNAMES,
     read_summary_csv,
     write_summary_csv,
 )
+from virtual_staining.metrics import MetricResult
+
+_NAMES = ["mae", "psnr", "pcc_gray", "ssim"]
 
 
-def _make_rows(n: int) -> list[dict[str, object]]:
-    return [
-        {
-            "sample_id": str(i),
-            "mae": 0.05 * i,
-            "mse": 0.01 * i,
-            "rmse": 0.1 * i,
-            "psnr": 30.0 + i,
-            "ssim": 0.9 - 0.01 * i,
-            "pcc_gray": 0.95,
-            "pcc_rgb_mean": 0.93,
-        }
-        for i in range(n)
+def _row(i: int, output: str = "HE", **overrides: MetricResult) -> dict[str, object]:
+    results = {
+        "mae": MetricResult.of(0.05 * i),
+        "psnr": MetricResult.of(30.0 + i),
+        "pcc_gray": MetricResult.of(0.95),
+        "ssim": MetricResult.of(0.9 - 0.01 * i),
+        **overrides,
+    }
+    return build_metric_row(str(i), output, "t.png", "g.png", (8, 8, 3), results, set_id="S")
+
+
+def _summary(tmp_path: Path, rows: list[dict[str, object]]) -> dict[str, dict[str, str]]:
+    path = write_summary_csv(rows, _NAMES, tmp_path)
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        assert reader.fieldnames == SUMMARY_FIELDNAMES
+        return {row["metric"]: row for row in reader}
+
+
+def test_summary_follows_the_requested_metric_order(tmp_path: Path) -> None:
+    assert list(_summary(tmp_path, [_row(0), _row(1)])) == _NAMES
+
+
+def test_summary_counts_every_status_and_averages_finite_values_only(tmp_path: Path) -> None:
+    rows = [
+        _row(0, psnr=MetricResult.of(math.inf), pcc_gray=MetricResult.undefined("constant")),
+        _row(1, ssim=MetricResult.unavailable("too small")),
+        _row(2),
     ]
 
+    summary = _summary(tmp_path, rows)
 
-def test_write_summary_csv_creates_file(tmp_path: Path) -> None:
-    path = write_summary_csv(_make_rows(5), tmp_path)
-    assert path.exists()
-
-
-def test_write_summary_csv_has_expected_columns(tmp_path: Path) -> None:
-    path = write_summary_csv(_make_rows(3), tmp_path)
-    with path.open() as f:
-        fieldnames = csv.DictReader(f).fieldnames or []
-    assert "metric" in fieldnames
-    assert "mean" in fieldnames
-    assert "std" in fieldnames
-    assert "count" in fieldnames
-    assert "finite_count" in fieldnames
-
-
-def test_write_summary_csv_handles_psnr_inf(tmp_path: Path) -> None:
-    rows: list[dict[str, object]] = [
-        {
-            "sample_id": "a",
-            "psnr": float("inf"),
-            "mae": 0.1,
-            "mse": 0.01,
-            "rmse": 0.1,
-            "ssim": 0.9,
-            "pcc_gray": 0.9,
-            "pcc_rgb_mean": 0.9,
-        },
-        {
-            "sample_id": "b",
-            "psnr": 30.0,
-            "mae": 0.2,
-            "mse": 0.04,
-            "rmse": 0.2,
-            "ssim": 0.8,
-            "pcc_gray": 0.8,
-            "pcc_rgb_mean": 0.8,
-        },
-    ]
-    path = write_summary_csv(rows, tmp_path)
-    with path.open() as f:
-        data = {row["metric"]: row for row in csv.DictReader(f)}
-    assert data["psnr"]["count"] == "2"
-    assert data["psnr"]["finite_count"] == "1"
-    assert data["psnr"]["non_finite_count"] == "1"
+    psnr = summary["psnr"]
+    assert (psnr["count"], psnr["finite_count"], psnr["positive_infinity_count"]) == ("3", "2", "1")
+    assert float(psnr["finite_mean"]) == pytest.approx(31.5)
+    assert (summary["pcc_gray"]["undefined_count"], summary["pcc_gray"]["finite_count"]) == (
+        "1",
+        "2",
+    )
+    assert summary["ssim"]["unavailable_count"] == "1"
+    assert float(summary["ssim"]["finite_mean"]) == pytest.approx(0.89)
+    for row in summary.values():
+        assert int(row["count"]) == sum(
+            int(row[f"{status}_count"])
+            for status in ("finite", "positive_infinity", "undefined", "unavailable")
+        )
 
 
-def test_write_summary_csv_empty_rows_writes_nan_means(tmp_path: Path) -> None:
-    path = write_summary_csv([], tmp_path)
-    with path.open() as f:
-        rows = list(csv.DictReader(f))
-    assert len(rows) == len(SUMMARY_METRIC_NAMES)
-    assert all(row["count"] == "0" for row in rows)
-    assert all(math.isnan(float(row["mean"])) for row in rows)
+def test_summary_without_finite_values_leaves_statistics_empty(tmp_path: Path) -> None:
+    rows = [_row(0, pcc_gray=MetricResult.undefined("constant"))]
+
+    summary = _summary(tmp_path, rows)
+
+    assert summary["pcc_gray"]["finite_mean"] == ""
+    summaries = read_summary_csv(tmp_path / "summary.csv")
+    assert math.isnan(summaries["HE"]["pcc_gray"]["finite_mean"])
 
 
 def test_read_write_summary_csv_roundtrip(tmp_path: Path) -> None:
-    path = write_summary_csv(_make_rows(3), tmp_path)
-    summary = read_summary_csv(path)
+    path = write_summary_csv([_row(0), _row(1), _row(2)], _NAMES, tmp_path)
+    mae = read_summary_csv(path)["HE"]["mae"]
 
-    mae = summary["mae"]
-    assert mae["count"] == 3.0
-    assert mae["finite_count"] == 3.0
-    assert mae["non_finite_count"] == 0.0
-    assert mae["mean"] == pytest.approx(0.05)
-    assert mae["median"] == pytest.approx(0.05)
-    assert mae["std"] == pytest.approx(0.05)
-    assert mae["min"] == pytest.approx(0.0)
-    assert mae["max"] == pytest.approx(0.1)
+    assert (mae["count"], mae["finite_count"], mae["undefined_count"]) == (3.0, 3.0, 0.0)
+    assert mae["finite_mean"] == pytest.approx(0.05)
+    assert mae["finite_median"] == pytest.approx(0.05)
+    assert mae["finite_std"] == pytest.approx(0.05)
+    assert (mae["finite_min"], mae["finite_max"]) == pytest.approx((0.0, 0.1))
 
 
-def test_read_summary_csv_roundtrip_with_preamble(tmp_path: Path) -> None:
-    path = write_summary_csv(
-        _make_rows(2),
-        tmp_path,
-        num_targets_found=2,
-        num_generated_found=2,
-        num_pairs_evaluated=2,
-        num_skipped=0,
-    )
+def test_summaries_are_per_output_and_never_pooled(tmp_path: Path) -> None:
+    rows = [_row(0, "PAS"), _row(0, "HE"), _row(2, "PAS"), _row(2, "HE", mae=MetricResult.of(1.0))]
 
-    summary = read_summary_csv(path)
-    psnr = summary["psnr"]
+    path = write_summary_csv(rows, ["mae"], tmp_path)
 
-    assert psnr["count"] == 2.0
-    assert psnr["finite_count"] == 2.0
-    assert psnr["non_finite_count"] == 0.0
-    assert psnr["mean"] == pytest.approx(30.5)
-    assert psnr["median"] == pytest.approx(30.5)
-    assert psnr["std"] == pytest.approx(math.sqrt(0.5))
-    assert psnr["min"] == pytest.approx(30.0)
-    assert psnr["max"] == pytest.approx(31.0)
+    with path.open(newline="", encoding="utf-8") as handle:
+        written = list(csv.DictReader(handle))
+    assert [(row["output_name"], row["metric"]) for row in written] == [
+        ("PAS", "mae"),
+        ("HE", "mae"),
+    ]
+    summaries = read_summary_csv(path)
+    assert summaries["PAS"]["mae"]["finite_mean"] == pytest.approx(0.05)
+    assert summaries["HE"]["mae"]["finite_mean"] == pytest.approx(0.5)
+    assert all(row["count"] == "2" for row in written)  # no row mixes the two outputs

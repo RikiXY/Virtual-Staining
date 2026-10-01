@@ -1,0 +1,38 @@
+# Controlled-ablation queue - annotated reference for the `ablation` block. The other
+# keys are documented in config/queues/example.yaml.
+#
+# Preflight compares the resolved configs (RunConfig.to_dict(), not raw YAML text) of all
+# jobs before anything runs, and fails the queue if any field differs outside
+# variable_fields. Loss lists are compared by loss name, so reordering terms is not a
+# difference. The summary (fixed values, per-job variable values, resolved-config hashes)
+# is written to local_workspace/queues/<name>.ablation.summary.json.
+#
+# These guardrails only prove that the resolved configs differ where declared. They do
+# not prove scientific equivalence of the arms (data, code and hardware can still differ)
+# or biological independence of their splits.
+
+name: example_ablation
+continue_on_failure: false
+
+ablation:
+  # Optional; default []. Dot paths into the resolved config (e.g. training.epochs,
+  # model.generator). A path covers everything beneath it, including list items
+  # (training.losses.generator covers training.losses.generator[0].weight). Listed
+  # fields must be identical across jobs and their baseline values are recorded.
+  fixed_fields:
+    - model
+    - preprocessing.split
+    - training.seed
+    - training.epochs
+  # Required, non-empty. The only paths allowed to differ. No path may appear in both
+  # lists, and neither list may repeat a path. Include run_name so each arm writes to its
+  # own run directory.
+  variable_fields:
+    - run_name
+    - training.losses.generator
+
+jobs:
+  - config_path: ../runs/minimal_pix2pix.yaml
+    label: adversarial_l1
+  - config_path: ../runs/example_ablation_ssim.yaml
+    label: adversarial_l1_ssim

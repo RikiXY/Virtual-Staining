@@ -77,8 +77,8 @@ def build_training_config_page(service: ApplicationService) -> None:
                         ).classes("w-full md:flex-1 vs-config-field")
                         target_modality = ui.input(
                             label="Target modality *",
-                            value="H&E",
-                            placeholder="e.g. H&E",
+                            value="HE",
+                            placeholder="e.g. HE",
                         ).classes("w-full md:flex-1 vs-config-field")
                     ui.label(
                         "Multiple inputs are accepted as comma-separated names and kept in "

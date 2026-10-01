@@ -1,37 +1,21 @@
 # Reproducibility
 
-Each pipeline stage records the supplied configuration and its resolved,
-canonical form:
+Tracked stages preserve the supplied YAML and its canonical resolved form. The input
+snapshot is an exact copy; the resolved snapshot contains parsed values and defaults.
+Loading the resolved YAML with the same definitions produces the same `RunConfig`.
 
-```text
-input YAML
-    -> RunConfig.from_yaml()
-    -> config/ typed section dataclasses and strict parsers
-    -> RunConfig.to_dict()
-    -> YAML with sorted keys
-    -> SHA-256
+Sorted YAML keys make the resolved file and its `sha256:<hex>` hash stable for equivalent
+effective configurations, regardless of input key order. This hash identifies config
+bytes only, excluding source data and the software environment. Artifact locations and
+stage bindings are documented in [Run Output Format](run_format.md#file-descriptions).
 
-The input snapshot is an exact copy of the YAML passed to the command. The
-resolved snapshot contains parsed values and defaults from every configured
-domain. Loading that resolved YAML produces the same `RunConfig`:
+Data identity is separate: [consumed-data snapshots](run_format.md#consumed-data-snapshots)
+describe the files selected by each tracked stage, while the
+[dataset fingerprint](dataset_format.md#prepared-layout) describes preparation lineage.
+Neither file identity nor matching configuration proves biological independence or
+scientific validity.
 
-```python
-RunConfig.from_yaml(resolved_path) == config
-```
-
-Sorted YAML keys make the resolved file and its `sha256:<hex>` hash stable for
-equivalent effective configurations, regardless of input key order. The hash
-identifies the resolved configuration bytes; it does not include source data or
-the software environment.
-
-Each run stage writes `config/<stage>/input.yaml`,
-`config/<stage>/resolved.yaml`, and `metadata/environments/<stage>.json`.
-The resolved YAML hash is stored in the stage record and event rather than in
-a standalone hash file. Preparation keeps its dataset-local
-`config/input.yaml`, `config/resolved.yaml`, `metadata/config_hash.txt`, and
-`metadata/environment.json` snapshots; dataset fingerprint construction and
-source-file hashing belong to `data/provenance.py`, while run snapshot writers
-belong to `experiment/snapshots.py`.
-
-See [Run Output Format](run_format.md) and [Dataset Format](dataset_format.md)
-for artifact locations and schemas.
+Environment snapshots record package versions, including OpenSlide Python, pyvips,
+PyTorch, NumPy, OpenCV, and Albumentations, plus optional CUDA/GPU facts. Version recording
+is best-effort provenance; `vs status` checks whether required packages and native WSI
+libraries are actually usable.

@@ -15,7 +15,7 @@ from virtual_staining.applications.train import ProgressReporter
 from virtual_staining.config.loader import load_yaml_mapping
 from virtual_staining.config.run import RunConfig
 from virtual_staining.config.validation import parse_bool_strict, reject_unknown_keys
-from virtual_staining.experiment.snapshots import compute_payload_hash
+from virtual_staining.utils.hashing import sha256_json
 
 _QUEUE_KEYS: frozenset[str] = frozenset({"name", "continue_on_failure", "jobs", "ablation"})
 _QUEUE_JOB_KEYS: frozenset[str] = frozenset({"config_path", "label", "notes", "stages"})
@@ -105,7 +105,7 @@ def _resolve_queue_state_path(queue_path: Path, queue_name: str) -> Path:
     return queue_path.with_suffix(".state.json")
 
 
-def load_local_run_queue(queue_path: Path) -> LocalRunQueue:
+def _load_local_run_queue(queue_path: Path) -> LocalRunQueue:
     data = load_yaml_mapping(queue_path)
     reject_unknown_keys(data, _QUEUE_KEYS, "queue")
 
@@ -295,7 +295,7 @@ def _build_ablation_summary(
                 "notes": job.notes,
                 "config_path": str(job.config_path),
                 "run_name": config.project.run_name,
-                "config_hash": compute_payload_hash(resolved_config),
+                "config_hash": sha256_json(resolved_config),
                 "variable_values": {
                     field: _get_dot_path(resolved_config, field)
                     for field in queue.ablation.variable_fields
@@ -427,7 +427,7 @@ def run_queue(
     *,
     progress_reporter: ProgressReporter | None = None,
 ) -> QueueState:
-    queue = load_local_run_queue(queue_path.resolve())
+    queue = _load_local_run_queue(queue_path.resolve())
     state = _initial_queue_state(queue)
     state.save(queue.state_path)
     try:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -40,6 +41,7 @@ from virtual_staining.applications.ui_inference import (
 from virtual_staining.config.run import RunConfig
 from virtual_staining.evaluation.diagnostics import compute_absolute_difference_map
 from virtual_staining.evaluation.plotting import save_dataset_plots
+from virtual_staining.evaluation.reports import metric_info, ranking_direction
 from virtual_staining.evaluation.selection import (
     infer_source_path_from_row,
     select_representative_rows,
@@ -48,7 +50,25 @@ from virtual_staining.evaluation.summaries import (
     read_per_image_metrics_csv,
     read_summary_csv,
 )
-from virtual_staining.metrics import DEFAULT_METRICS, MetricQuality, metric_quality
+from virtual_staining.experiment.run_layout import RunLayout
+from virtual_staining.metrics import BUILTIN_METRIC_DEFINITIONS, MetricResult, default_metrics
+from virtual_staining.utils.artifacts import require_output_name
+
+MetricQuality = Literal["very_good", "good", "fair", "poor", "very_poor", "unknown"]
+
+
+def metric_quality(metric_name: str, value: float) -> MetricQuality:
+    """Presentation hints from built-in thresholds, never a biological quality verdict."""
+    definition = BUILTIN_METRIC_DEFINITIONS.get(metric_name)
+    if definition is None or not math.isfinite(value) or len(definition.thresholds) != 3:
+        return "unknown"
+    first, middle, last = definition.thresholds
+    levels: tuple[MetricQuality, ...] = ("very_good", "good", "fair", "poor")
+    for threshold, level in zip((first, (first + middle) / 2, middle, last), levels, strict=True):
+        if (value >= threshold) if definition.higher_is_better else (value <= threshold):
+            return level
+    return "very_poor"
+
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +78,8 @@ ApplicationError = UIInferenceError
 InferenceResult = UIInferenceResult
 
 __all__ = [
+    "MetricQuality",
+    "metric_quality",
     "ApplicationError",
     "ApplicationService",
     "CatalogIssue",
@@ -68,7 +90,6 @@ __all__ = [
     "InferenceResult",
     "ModelCatalog",
     "ModelDescriptor",
-    "MetricQuality",
     "RepresentativeSample",
     "ResultProvenance",
     "RunDescriptor",
@@ -80,7 +101,6 @@ __all__ = [
     "SingleSampleResult",
     "TrainingConfigDocument",
     "TrainingConfigDraft",
-    "metric_quality",
 ]
 
 
@@ -120,7 +140,7 @@ class SingleSampleResult:
     inference: InferenceResult
     target_image: Image.Image
     difference_map: Image.Image
-    metrics: dict[str, float]
+    metrics: dict[str, MetricResult]
     output_directory: Path
     source_path: Path
     generated_path: Path
@@ -178,6 +198,7 @@ class ComparisonRequest:
     mode: Literal["paired", "unpaired"] = "paired"
     output_directory: Path | None = None
     tolerance: float = 0.0
+    output_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -235,7 +256,7 @@ class ApplicationService:
 
     @property
     def supported_metrics(self) -> tuple[str, ...]:
-        return tuple(DEFAULT_METRICS)
+        return tuple(metric.name for metric in default_metrics())
 
     def discover_models(self) -> ModelCatalog:
         return self._inference.discover_models()
@@ -313,7 +334,9 @@ class ApplicationService:
         sample_id = _safe_sample_id(source_filename)
         source_path = root / f"{sample_id}_source.png"
         target_path = root / f"{sample_id}_target.png"
-        generated_path = root / f"{sample_id}_target_generated.png"
+        output_name = request.inference.provenance.target_domain
+        require_output_name(output_name)
+        generated_path = root / "generated" / output_name / f"{sample_id}_generated.png"
         evaluation_dir = root / "evaluation"
         inference = replace(
             request.inference,
@@ -326,6 +349,7 @@ class ApplicationService:
             root.mkdir(parents=True, exist_ok=False)
             inference.source_image.save(source_path, format="PNG")
             request.target_image.save(target_path, format="PNG")
+            generated_path.parent.mkdir(parents=True)
             inference.generated_image.save(generated_path, format="PNG")
             (root / "provenance.json").write_text(
                 json.dumps(inference.provenance.to_dict(), indent=2) + "\n",
@@ -340,11 +364,18 @@ class ApplicationService:
                         "target_filename": request.target_filename,
                         "artifacts": {
                             "source": source_path.name,
-                            "generated": generated_path.name,
+                            "generated": str(generated_path.relative_to(root)),
                             "target": target_path.name,
                             "metrics": str(evaluation.single_case_csv.relative_to(root)),
                         },
-                        "metrics": evaluation.metrics,
+                        "metrics": {
+                            name: {
+                                "status": item.status,
+                                "value": item.value if item.status == "finite" else None,
+                                "reason": item.reason,
+                            }
+                            for name, item in evaluation.metrics.items()
+                        },
                     },
                     indent=2,
                 )
@@ -404,7 +435,7 @@ class ApplicationService:
             except (OSError, RuntimeError, TypeError, ValueError) as exc:
                 logger.exception("Configured evaluation failed for %s", config_path)
                 raise ApplicationError(f"Run evaluation failed: {exc}") from exc
-            run_path = self._resolve(config.project.run_root)
+            run_path = self._resolve(RunLayout.from_project(config.project).root)
         else:
             assert request.run_path is not None
             run_path = self._resolve(request.run_path)
@@ -438,6 +469,12 @@ class ApplicationService:
             / f"{request.mode}_{request.metric}"
         )
         try:
+            output_name = _select_output(
+                read_summary_csv(run_a / "evaluation" / "summary.csv"), request.output_name
+            )
+            require_output_name(output_name)
+            if request.output_directory is None:
+                output_dir /= output_name
             result = compare(
                 CompareRequest(
                     mode=request.mode,
@@ -446,11 +483,12 @@ class ApplicationService:
                     column=request.metric,
                     output_dir=output_dir,
                     tolerance=request.tolerance,
+                    output_name=output_name,
                 )
             )
-            representatives_a = self._representatives_for(run_a, request.metric)
-            representatives_b = self._representatives_for(run_b, request.metric)
-        except (OSError, RuntimeError, ValueError) as exc:
+            representatives_a = self._representatives_for(run_a, request.metric, output_name)
+            representatives_b = self._representatives_for(run_b, request.metric, output_name)
+        except (OSError, KeyError, TypeError, RuntimeError, ValueError) as exc:
             logger.exception("Run comparison failed for %s and %s", run_a, run_b)
             raise ApplicationError(f"Run comparison failed: {exc}") from exc
 
@@ -517,9 +555,9 @@ class ApplicationService:
         summary_path = evaluation_dir / "summary.csv"
         metrics_path = evaluation_dir / "per_image_metrics.csv"
         try:
-            summary = read_summary_csv(summary_path)
+            summaries = read_summary_csv(summary_path)
             rows = read_per_image_metrics_csv(metrics_path)
-        except (OSError, ValueError) as exc:
+        except (OSError, KeyError, TypeError, ValueError) as exc:
             raise ApplicationError(
                 f"Evaluation results are incomplete for run '{run_path.name}': {exc}"
             ) from exc
@@ -530,15 +568,41 @@ class ApplicationService:
         if ensure_plots and not tuple(evaluation_dir.glob("*.png")):
             try:
                 plot_rows = cast(list[dict[str, object]], list(rows))
-                save_dataset_plots(plot_rows, evaluation_dir)
+                save_dataset_plots(
+                    plot_rows,
+                    tuple(
+                        info
+                        for name in dict.fromkeys(
+                            name for group in summaries.values() for name in group
+                        )
+                        if (info := metric_info(metrics_path, name)) is not None
+                    ),
+                    evaluation_dir,
+                )
             except (OSError, RuntimeError, ValueError) as exc:
                 warnings.append(f"Metric plots could not be created: {exc}")
 
-        representatives = {
-            metric: self._representatives_from_rows(metric, metric_summary, rows)
-            for metric, metric_summary in summary.items()
-            if metric in self.supported_metrics
+        summary = {
+            f"{output}/{metric}": values
+            for output, metrics in summaries.items()
+            for metric, values in metrics.items()
         }
+        representatives = {}
+        for output, metrics in summaries.items():
+            output_rows = [row for row in rows if row["output_name"] == output]
+            for metric, values in metrics.items():
+                info = metric_info(metrics_path, metric)
+                if (
+                    values["finite_count"]
+                    and info is not None
+                    and info.higher_is_better is not None
+                ):
+                    representatives[f"{output}/{metric}"] = self._representatives_from_rows(
+                        metric,
+                        values,
+                        output_rows,
+                        higher_is_better=info.higher_is_better,
+                    )
         if build_representative_panels:
             try:
                 panels = compare_panels(
@@ -558,20 +622,40 @@ class ApplicationService:
             warnings=tuple(warnings),
         )
 
-    def _representatives_for(self, run_path: Path, metric: str) -> tuple[RepresentativeSample, ...]:
+    def _representatives_for(
+        self,
+        run_path: Path,
+        metric: str,
+        output_name: str,
+    ) -> tuple[RepresentativeSample, ...]:
         summary = read_summary_csv(run_path / "evaluation" / "summary.csv")
-        rows = read_per_image_metrics_csv(run_path / "evaluation" / "per_image_metrics.csv")
-        if metric not in summary:
-            raise ValueError(f"Metric '{metric}' is not available in run '{run_path.name}'.")
-        return self._representatives_from_rows(metric, summary[metric], rows)
+        metrics_path = run_path / "evaluation" / "per_image_metrics.csv"
+        rows = read_per_image_metrics_csv(metrics_path)
+        values = summary.get(output_name, {}).get(metric)
+        if values is None:
+            raise ValueError(
+                f"Metric '{output_name}/{metric}' is not available in run '{run_path.name}'."
+            )
+        if not values["finite_count"]:
+            return ()
+        return self._representatives_from_rows(
+            metric,
+            values,
+            [row for row in rows if row["output_name"] == output_name],
+            higher_is_better=ranking_direction(metrics_path, metric),
+        )
 
     @staticmethod
     def _representatives_from_rows(
         metric: str,
         metric_summary: dict[str, float],
         rows: list[dict[str, str]],
+        *,
+        higher_is_better: bool,
     ) -> tuple[RepresentativeSample, ...]:
-        selected = select_representative_rows(metric, metric_summary, rows)
+        selected = select_representative_rows(
+            metric, metric_summary, rows, higher_is_better=higher_is_better
+        )
         return tuple(
             RepresentativeSample(
                 kind=kind,
@@ -636,7 +720,7 @@ class ApplicationService:
         metrics_path = path / "evaluation" / "per_image_metrics.csv"
         sample_count: int | None = None
         if metrics_path.is_file():
-            with suppress(OSError):
+            with suppress(OSError, KeyError, ValueError):
                 sample_count = len(read_per_image_metrics_csv(metrics_path))
         return RunDescriptor(
             identifier=path.name,
@@ -686,3 +770,13 @@ def _representative_source_path(row: dict[str, str]) -> Path | None:
     with suppress(OSError, ValueError):
         return infer_source_path_from_row(row)
     return None
+
+
+def _select_output(summary: dict, requested: str | None) -> str:
+    if requested is not None:
+        if requested not in summary:
+            raise ValueError(f"Unknown output {requested!r}; available outputs: {list(summary)}")
+        return requested
+    if len(summary) != 1:
+        raise ValueError(f"Choose an output to compare; available outputs: {list(summary)}")
+    return next(iter(summary))

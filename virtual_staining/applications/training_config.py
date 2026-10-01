@@ -7,10 +7,7 @@ from typing import Any
 
 import yaml
 
-from virtual_staining.config.model import ModelConfig
-from virtual_staining.config.project import ProjectConfig
 from virtual_staining.config.run import RunConfig
-from virtual_staining.config.training import TrainingConfig
 
 
 class TrainingConfigError(ValueError):
@@ -69,7 +66,7 @@ def build_training_config(draft: TrainingConfigDraft) -> TrainingConfigDocument:
         "run_name": run_name,
         "model": {
             "inputs": list(input_modalities),
-            "target": target_modality,
+            "outputs": [target_modality],
         },
         "training": {
             "epochs": draft.epochs,
@@ -92,20 +89,11 @@ def build_training_config(draft: TrainingConfigDraft) -> TrainingConfigDocument:
     }
 
     try:
-        config = RunConfig(
-            project=ProjectConfig.from_mapping(data),
-            model=ModelConfig.from_mapping(data["model"]),
-            training=TrainingConfig.from_mapping(data["training"]),
-            preprocessing=None,
-            inference=None,
-            evaluation=None,
-        )
+        RunConfig.from_mapping(data)
     except (KeyError, TypeError, ValueError) as exc:
         raise TrainingConfigError(str(exc)) from exc
 
     yaml_text = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
-    if config.training is None:  # pragma: no cover - guarded by construction above
-        raise TrainingConfigError("Training configuration is missing.")
     return TrainingConfigDocument(filename=f"{_filename_stem(run_name)}.yaml", yaml_text=yaml_text)
 
 

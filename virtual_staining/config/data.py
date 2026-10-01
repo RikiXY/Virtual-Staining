@@ -6,8 +6,16 @@ from math import isclose
 from pathlib import Path
 from typing import Any
 
-from virtual_staining.config.validation import parse_bool_strict, reject_unknown_keys
+from virtual_staining.config.validation import (
+    check_modality_names,
+    parse_bool_strict,
+    parse_modality_names,
+    reject_superseded_keys,
+    reject_unknown_keys,
+)
+from virtual_staining.split_contract import DATASET_SPLITS
 from virtual_staining.utils.dimensions import parse_wh_size
+from virtual_staining.utils.image_io import SUPPORTED_IMAGE_BACKENDS
 
 MASK_STRATEGY_CONNECTED_COMPONENTS = "connected_components"
 MASK_STRATEGY_HSV = "hsv"
@@ -17,7 +25,9 @@ ALLOWED_MASK_STRATEGIES: tuple[str, str] = (
 )
 
 _SECTION_KEYS = frozenset({"inputs", "patching", "masks", "alignment", "filtering", "split", "io"})
-_MODality_NAME = __import__("re").compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
+_SUPERSEDED_INPUT_KEYS = {
+    "target_modality": "preprocessing.inputs.target_modalities (an ordered list of names)"
+}
 
 
 def _mapping(value: object, name: str) -> dict[str, Any]:
@@ -55,25 +65,22 @@ class InputConfig:
     inventory: Path
     modalities: tuple[str, ...]
     reference: str
-    target_modality: str
+    target_modalities: tuple[str, ...]
     hash_verification: str = "cached"
 
     def __post_init__(self) -> None:
-        modalities = tuple(self.modalities)
+        modalities = check_modality_names(tuple(self.modalities), "inputs.modalities")
+        targets = check_modality_names(tuple(self.target_modalities), "inputs.target_modalities")
         object.__setattr__(self, "modalities", modalities)
-        if not modalities:
-            raise ValueError("inputs.modalities must contain at least one modality")
-        if len(set(modalities)) != len(modalities):
-            raise ValueError("inputs.modalities must contain unique names")
-        invalid = [name for name in modalities if not _MODality_NAME.fullmatch(name)]
-        if invalid:
-            raise ValueError(f"inputs.modalities contains invalid names: {invalid}")
+        object.__setattr__(self, "target_modalities", targets)
         if self.reference not in modalities:
             raise ValueError("inputs.reference must name one of inputs.modalities")
-        if not self.target_modality.strip():
-            raise ValueError("inputs.target_modality must not be blank")
-        if self.target_modality in modalities:
-            raise ValueError("inputs.target_modality must differ from every input modality")
+        shared = sorted(set(targets) & set(modalities))
+        if shared:
+            raise ValueError(
+                "inputs.target_modalities must differ from every input modality; "
+                f"both name {shared}"
+            )
         if self.hash_verification not in {"cached", "always"}:
             raise ValueError("inputs.hash_verification must be 'cached' or 'always'")
 
@@ -161,7 +168,7 @@ class PreprocessingConfig:
             raise ValueError("patching.margin must be greater than or equal to 0")
         if self.io.max_memory_gb is not None and self.io.max_memory_gb <= 0:
             raise ValueError("io.max_memory_gb must be greater than 0 when provided")
-        if self.io.backend not in {"auto", "pillow", "openslide"}:
+        if self.io.backend not in SUPPORTED_IMAGE_BACKENDS:
             raise ValueError("io.backend must be auto, pillow, or openslide")
         if self.masks.generation not in {"never", "if_missing", "always"}:
             raise ValueError("masks.generation must be never, if_missing, or always")
@@ -210,19 +217,17 @@ class PreprocessingConfig:
         if "split" not in data:
             raise ValueError("preprocessing requires split")
         inputs_data = _mapping(data["inputs"], "inputs")
+        reject_superseded_keys(inputs_data, _SUPERSEDED_INPUT_KEYS, "preprocessing.inputs")
         reject_unknown_keys(
             inputs_data,
             frozenset(
-                {"inventory", "modalities", "reference", "target_modality", "hash_verification"}
+                {"inventory", "modalities", "reference", "target_modalities", "hash_verification"}
             ),
             "preprocessing.inputs",
         )
-        for required in ("inventory", "modalities", "reference", "target_modality"):
+        for required in ("inventory", "modalities", "reference", "target_modalities"):
             if required not in inputs_data:
                 raise ValueError(f"preprocessing.inputs requires {required}")
-        raw_modalities = inputs_data["modalities"]
-        if isinstance(raw_modalities, str) or not isinstance(raw_modalities, Sequence):
-            raise TypeError("preprocessing.inputs.modalities must be a sequence")
         patching = _mapping(data.get("patching"), "patching")
         reject_unknown_keys(
             patching,
@@ -272,10 +277,10 @@ class PreprocessingConfig:
         split_data = _mapping(data["split"], "split")
         reject_unknown_keys(
             split_data,
-            frozenset({"unit", "train", "val", "test", "seed", "assignment_file"}),
+            frozenset({"unit", *DATASET_SPLITS, "seed", "assignment_file"}),
             "preprocessing.split",
         )
-        for required in ("unit", "train", "val", "test"):
+        for required in ("unit", *DATASET_SPLITS):
             if required not in split_data:
                 raise ValueError(f"preprocessing.split requires {required}")
         io_data = _mapping(data.get("io"), "io")
@@ -287,9 +292,13 @@ class PreprocessingConfig:
             dataset_root=dataset_root,
             inputs=InputConfig(
                 inventory=Path(inputs_data["inventory"]),
-                modalities=tuple(str(value) for value in raw_modalities),
+                modalities=parse_modality_names(
+                    inputs_data["modalities"], "preprocessing.inputs.modalities"
+                ),
                 reference=str(inputs_data["reference"]),
-                target_modality=str(inputs_data["target_modality"]),
+                target_modalities=parse_modality_names(
+                    inputs_data["target_modalities"], "preprocessing.inputs.target_modalities"
+                ),
                 hash_verification=str(inputs_data.get("hash_verification", "cached")),
             ),
             patching=PatchingConfig(
@@ -362,6 +371,7 @@ class PreprocessingConfig:
         result.pop("dataset_root")
         result["inputs"]["inventory"] = str(self.inputs.inventory)
         result["inputs"]["modalities"] = list(self.inputs.modalities)
+        result["inputs"]["target_modalities"] = list(self.inputs.target_modalities)
         result["patching"]["patch_size"] = list(self.patching.patch_size)
         result["patching"]["grid_movement"] = list(self.patching.grid_movement)
         if self.split.assignment_file is not None:

@@ -17,7 +17,6 @@ from virtual_staining.evaluation.selection import (
     build_selection_summary_row,
     infer_source_path_from_row,
 )
-from virtual_staining.metrics import is_higher_better_metric
 from virtual_staining.utils.image_io import open_rgb
 
 DiagnosticPathKey = Literal[
@@ -44,17 +43,18 @@ def build_metric_case_artifacts(
     row: dict[str, str],
     metric_summary: dict[str, float],
     metric_dir: Path,
+    *,
+    higher_is_better: bool,
 ) -> tuple[dict[str, object], DiagnosticEntry]:
-    """Build and save the artefacts for a representative case."""
     sample_id = row["sample_id"]
     metric_value = float(row[metric_name])
 
     if kind == "best":
-        summary_key = "max" if is_higher_better_metric(metric_name) else "min"
+        summary_key = "finite_max" if higher_is_better else "finite_min"
     elif kind == "worst":
-        summary_key = "min" if is_higher_better_metric(metric_name) else "max"
+        summary_key = "finite_min" if higher_is_better else "finite_max"
     elif kind == "median":
-        summary_key = "median"
+        summary_key = "finite_median"
     else:
         raise ValueError(f"Unsupported representative kind: {kind}")
 
@@ -72,24 +72,19 @@ def build_metric_case_artifacts(
     )
 
     diagnostics_case_dir = metric_dir / "diagnostics" / f"{kind}_{sample_id}"
-    diagnostic_paths = save_diagnostic_plots(
+    error_histogram, scatter, intensity_overlay = save_diagnostic_plots(
         generated_path=generated_path,
         target_path=target_path,
         save_dir=diagnostics_case_dir,
     )
-    diagnostic_paths_by_name = {path.name: path for path in diagnostic_paths}
     diagnostic_entry: DiagnosticEntry = {
         "kind": kind,
         "sample_id": sample_id,
         "metric_value": metric_value,
         "comparison_path": saved_path,
-        "error_histogram_path": diagnostic_paths_by_name[f"{sample_id}_error_histogram.png"],
-        "intensity_overlay_histogram_path": diagnostic_paths_by_name[
-            f"{sample_id}_intensity_overlay_histogram.png"
-        ],
-        "target_vs_generated_scatter_by_channel_path": diagnostic_paths_by_name[
-            f"{sample_id}_target_vs_generated_scatter_by_channel.png"
-        ],
+        "error_histogram_path": error_histogram,
+        "intensity_overlay_histogram_path": intensity_overlay,
+        "target_vs_generated_scatter_by_channel_path": scatter,
     }
     selection_row = build_selection_summary_row(
         metric_name=metric_name,
@@ -113,7 +108,6 @@ def save_comparison_panel(
     save_path: str | Path,
     suptitle: str | None = None,
 ) -> Path:
-    """Saves a panel with source, generated, target and MAE map."""
     source_img = open_rgb(source_path)
     generated_img = open_rgb(generated_path)
     target_img = open_rgb(target_path)
@@ -153,13 +147,12 @@ def save_comparison_panel(
 
 
 @serialized_plot
-def save_stacked_image_panel(
+def _save_stacked_image_panel(
     image_paths: list[str | Path],
     save_path: str | Path,
     row_titles: list[str] | None = None,
     suptitle: str | None = None,
 ) -> Path:
-    """Saves a vertical panel composed of already-generated images."""
     if not image_paths:
         raise ValueError("No image paths provided for stacked panel.")
 
@@ -202,7 +195,6 @@ def save_metric_diagnostics_summary(
     metric_dir: str | Path,
     diagnostic_entries: list[DiagnosticEntry],
 ) -> list[Path]:
-    """Saves aggregated panels for a metric across best, median and worst cases."""
     metric_dir = Path(metric_dir)
     output_specs: list[tuple[DiagnosticPathKey, str, str]] = [
         (
@@ -239,7 +231,7 @@ def save_metric_diagnostics_summary(
             )
             for entry in diagnostic_entries
         ]
-        saved_path = save_stacked_image_panel(
+        saved_path = _save_stacked_image_panel(
             image_paths=image_paths,
             save_path=metric_dir / filename,
             row_titles=row_titles,

@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 def build_run_comparison(service: ApplicationService, runs: tuple[RunDescriptor, ...]) -> None:
     evaluated = tuple(item for item in runs if item.has_evaluation)
     run_options = {str(item.path): run_label(item) for item in evaluated}
-    result_cache: dict[tuple[str, str, str, str], ComparisonResult] = {}
+    result_cache: dict[tuple[str, str, str, str, str], ComparisonResult] = {}
     request_guard = AsyncRequestGuard()
     # NiceGUI pages may be deleted while background work is awaiting completion.
     # Invalidating the guard prevents stale callbacks from updating detached elements.
@@ -45,6 +45,9 @@ def build_run_comparison(service: ApplicationService, runs: tuple[RunDescriptor,
             with ui.row().classes("w-full flex-col md:flex-row gap-4"):
                 run_a = ui.select(run_options, label="Run A").classes("flex-1")
                 run_b = ui.select(run_options, label="Run B").classes("flex-1")
+            output_name = ui.input(
+                label="Output name", placeholder="Required for runs with multiple outputs"
+            ).classes("w-full")
             with ui.row().classes("w-full flex-col sm:flex-row gap-4"):
                 metric = ui.select(
                     list(service.supported_metrics),
@@ -87,9 +90,15 @@ def build_run_comparison(service: ApplicationService, runs: tuple[RunDescriptor,
         except ValueError as exc:
             ui.notify(str(exc), type="warning")
             return
-        cache_key = (run_a_value, run_b_value, metric_value, mode_value)
+        cache_key = (
+            run_a_value,
+            run_b_value,
+            metric_value,
+            mode_value,
+            str(output_name.value or ""),
+        )
         request_generation = request_guard.start()
-        controls = (run_a, run_b, metric, comparison_mode)
+        controls = (run_a, run_b, metric, comparison_mode, output_name)
         for control in controls:
             control.disable()
         compare_button.disable()
@@ -104,6 +113,7 @@ def build_run_comparison(service: ApplicationService, runs: tuple[RunDescriptor,
                         run_b=Path(run_b_value),
                         metric=metric_value,
                         mode=mode_value,
+                        output_name=str(output_name.value or "").strip() or None,
                     ),
                 )
                 if completed is not None:
@@ -151,6 +161,7 @@ def build_run_comparison(service: ApplicationService, runs: tuple[RunDescriptor,
     run_a.on_value_change(lambda _event: reset_result())
     run_b.on_value_change(lambda _event: reset_result())
     metric.on_value_change(lambda _event: reset_result())
+    output_name.on_value_change(lambda _event: reset_result())
     comparison_mode.on_value_change(lambda _event: reset_result())
     compare_button.on_click(execute)
     client.on_connect(reset_result)

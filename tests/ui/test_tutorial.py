@@ -1,3 +1,4 @@
+from nicegui import ui
 from nicegui.client import Client
 from nicegui.page import page
 
@@ -10,14 +11,12 @@ def test_tutorial_navigation_and_numbered_steps_have_stable_layout() -> None:
         build_tutorial()
 
     footer = next(
-        element
-        for element in client.elements.values()
-        if "vs-tutorial-footer" in element._classes
+        element for element in client.elements.values() if "vs-tutorial-footer" in element._classes
     )
     step_numbers = [
         element
         for element in client.elements.values()
-        if "vs-step-number" in element._classes
+        if isinstance(element, ui.badge) and "vs-step-number" in element._classes
     ]
 
     assert len(footer.default_slot.children) == 3

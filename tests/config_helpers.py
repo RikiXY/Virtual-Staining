@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -37,14 +38,7 @@ def write_run_config(
         content += f"{section}\n"
     data = yaml.safe_load(content)
     if "model" not in data:
-        data["model"] = {"inputs": ["label_free"], "target": "stained"}
-    training = data.get("training")
-    if isinstance(training, dict):
-        training["augmentation"] = data.pop("augmentation", training.get("augmentation", {}))
-        training["losses"] = data.pop("losses", training.get("losses", {}))
-    preprocessing = data.get("preprocessing")
-    if isinstance(preprocessing, dict) and "image_size" in preprocessing:
-        preprocessing["patch_size"] = preprocessing.pop("image_size")
+        data["model"] = {"inputs": ["label_free"], "outputs": ["stained"]}
     content = yaml.safe_dump(data, sort_keys=False)
     return write_yaml(tmp_path / filename, content)
 
@@ -65,3 +59,89 @@ def write_queue_config(
         f"{jobs}\n"
     )
     return write_yaml(tmp_path / "config" / "queues" / f"{name}.yaml", content)
+
+
+def cyclegan_config_data(tmp_path: Path) -> dict[str, Any]:
+    """Return a canonical tiny CycleGAN run configuration mapping for tests to adjust."""
+    return {
+        "dataset_root": str(tmp_path / "dataset"),
+        "results_path": str(tmp_path / "results"),
+        "run_name": "cyclegan_run",
+        "image_size": [32, 32],
+        "method": {"name": "cyclegan"},
+        "data": {
+            "pairing": "unpaired",
+            "domains": {"label_free": "domains/label_free", "stained": "domains/stained"},
+            # The synthetic domains carry no biological identities.
+            "group_validation": "unavailable",
+        },
+        "model": {
+            "inputs": ["label_free"],
+            "outputs": ["stained"],
+            "generator": {"architecture": "resnet", "base_channels": 4, "blocks": 1},
+            "discriminator": {"ndf": 4},
+        },
+        "training": {
+            "batch_size": 2,
+            "epochs": 2,
+            "seed": 7,
+            "num_workers": 0,
+            "validate_rate": 1,
+            "checkpoint_rate": 1,
+            "log_rate": 1,
+            "losses": {
+                "generator": [
+                    {"name": "adversarial_lsgan", "weight": 1.0},
+                    {"name": "cycle_l1", "weight": 10.0},
+                    {"name": "identity_l1", "weight": 5.0},
+                ],
+                "discriminator": [{"name": "adversarial_lsgan", "weight": 1.0}],
+            },
+        },
+        "inference": {"checkpoint_policy": "latest"},
+    }
+
+
+def pix2pix_config_data(
+    tmp_path: Path,
+    *,
+    inputs: tuple[str, ...] = ("LF", "AF"),
+    outputs: tuple[str, ...] = ("stained",),
+    image_size: tuple[int, int] = (32, 32),
+) -> dict[str, Any]:
+    """Return a canonical tiny Pix2Pix run configuration mapping for tests to adjust."""
+    return {
+        "dataset_root": str(tmp_path / "dataset"),
+        "results_path": str(tmp_path / "results"),
+        "run_name": "run",
+        "image_size": list(image_size),
+        "method": {"name": "pix2pix"},
+        "model": {
+            "inputs": list(inputs),
+            "outputs": list(outputs),
+            "generator": {"base_channels": 4},
+            "discriminator": {"ndf": 4},
+        },
+        "training": {
+            "batch_size": 1,
+            "epochs": 2,
+            "seed": 0,
+            "num_workers": 0,
+            "validate_rate": 1,
+            "checkpoint_rate": 1,
+            "losses": {
+                "generator": [
+                    {"name": "adversarial_bce", "weight": 1.0},
+                    {"name": "l1", "weight": 100.0},
+                ],
+                "discriminator": [{"name": "adversarial_bce", "weight": 1.0}],
+            },
+        },
+    }
+
+
+def write_config_data(path: Path, data: dict[str, Any]) -> Path:
+    """Write a run configuration mapping as YAML and return its path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return path

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from typing import Any
 
+import albumentations as A
+import cv2
 import numpy as np
 import torch
 from PIL import Image
@@ -10,7 +13,20 @@ from PIL import Image
 from virtual_staining.config.training import AugmentationConfig, AugmentationIntensity
 
 
+def photometric_stream_seed(seed: int, modality: str) -> int:
+    """Stable 32-bit seed of one input's photometric stream (SHA-256, never ``hash()``)."""
+    digest = hashlib.sha256(f"photometric:{seed}:{modality}".encode()).digest()
+    return int.from_bytes(digest[:4], "big")
+
+
 class PairedAlbumentationsTransform:
+    """One geometry realization for every selected input, target and target mask.
+
+    Images keep continuous interpolation and masks nearest-neighbour. Each input in
+    ``photometric_inputs`` gets its own photometric stream seeded from the run seed and
+    its name; targets and masks never receive photometric transforms.
+    """
+
     def __init__(
         self,
         *,
@@ -18,54 +34,88 @@ class PairedAlbumentationsTransform:
         intensity: AugmentationIntensity,
         seed: int | None,
         input_names: tuple[str, ...],
-        reference_modality: str,
+        target_names: tuple[str, ...],
+        photometric_inputs: tuple[str, ...],
     ) -> None:
-        A, cv2 = _import_albumentations()
         if not input_names or len(set(input_names)) != len(input_names):
             raise ValueError("input_names must be non-empty and unique")
-        self.input_names = input_names
-        self.reference_modality = reference_modality
+        if not target_names or len(set(target_names)) != len(target_names):
+            raise ValueError("target_names must be non-empty and unique")
+        unknown = [name for name in photometric_inputs if name not in input_names]
+        if unknown:
+            raise ValueError(f"photometric_inputs {unknown} are not selected inputs")
         width, height = image_size
-        additional_targets = {"target": "image", "mask__foreground_mask": "mask"}
-        additional_targets.update({f"input__{name}": "image" for name in input_names[1:]})
+        if width != height:
+            raise ValueError("paired augmentation requires a square image_size (RandomRotate90)")
+        self.input_names = input_names
+        self.target_names = target_names
+        additional_targets = {f"input__{name}": "image" for name in input_names[1:]}
+        additional_targets.update({f"target__{name}": "image" for name in target_names})
+        additional_targets.update({f"mask__{name}": "mask" for name in target_names})
         self._geometry = A.Compose(
-            _geometry_transforms(A, cv2, width=width, height=height, intensity=intensity),
+            _geometry_transforms(width=width, height=height, intensity=intensity),
             additional_targets=additional_targets,
             seed=seed,
         )
-        photometric = _photometric_transforms(A, intensity)
-        self._photometric = (
-            A.Compose(photometric, seed=None if seed is None else seed + 1) if photometric else None
-        )
+        photometric = _photometric_transforms(intensity)
+        self._photometric = {
+            name: A.Compose(
+                _photometric_transforms(intensity),
+                seed=None if seed is None else photometric_stream_seed(seed, name),
+            )
+            for name in (photometric_inputs if photometric else ())
+        }
 
     def __call__(
         self,
         inputs: Mapping[str, Image.Image],
-        target: Image.Image,
-        masks: Mapping[str, Image.Image],
-    ) -> tuple[dict[str, torch.Tensor], torch.Tensor, dict[str, torch.Tensor]]:
+        targets: Mapping[str, Image.Image],
+        masks: Mapping[str, Mapping[str, Image.Image]],
+    ) -> tuple[
+        dict[str, torch.Tensor], dict[str, torch.Tensor], dict[str, dict[str, torch.Tensor]]
+    ]:
         if tuple(inputs) != self.input_names:
             raise ValueError(f"Inputs must have exact configured order {self.input_names}")
-        data: dict[str, np.ndarray] = {
-            "image": _pil_rgb_to_array(inputs[self.input_names[0]]),
-            "target": _pil_rgb_to_array(target),
-        }
+        if tuple(targets) != self.target_names:
+            raise ValueError(f"Targets must have exact configured order {self.target_names}")
+        unknown = [source for source in masks if source != "foreground_mask"]
+        if unknown:
+            raise ValueError(f"Unsupported mask sources {unknown}")
+        target_masks = masks.get("foreground_mask", {})
+        if target_masks and tuple(target_masks) != self.target_names:
+            raise ValueError(f"Masks must cover exactly the targets {self.target_names}")
+        data: dict[str, np.ndarray] = {"image": _pil_rgb_to_array(inputs[self.input_names[0]])}
         data.update(
             {f"input__{name}": _pil_rgb_to_array(inputs[name]) for name in self.input_names[1:]}
         )
-        for name, mask in masks.items():
-            data[f"mask__{name}"] = np.asarray(mask.convert("L"), dtype=np.uint8)
+        data.update({f"target__{name}": _pil_rgb_to_array(targets[name]) for name in targets})
+        data.update(
+            {
+                f"mask__{name}": np.asarray(mask.convert("L"), dtype=np.uint8)
+                for name, mask in target_masks.items()
+            }
+        )
         transformed = self._geometry(**data)
         arrays = {self.input_names[0]: transformed["image"]}
         arrays.update({name: transformed[f"input__{name}"] for name in self.input_names[1:]})
-        if self._photometric is not None and self.reference_modality in arrays:
-            arrays[self.reference_modality] = self._photometric(
-                image=arrays[self.reference_modality]
-            )["image"]
+        for name, photometric in self._photometric.items():
+            arrays[name] = photometric(image=arrays[name])["image"]
         return (
             {name: _rgb_array_to_normalized_tensor(arrays[name]) for name in self.input_names},
-            _rgb_array_to_normalized_tensor(transformed["target"]),
-            {name: _mask_array_to_tensor(transformed[f"mask__{name}"]) for name in masks},
+            {
+                name: _rgb_array_to_normalized_tensor(transformed[f"target__{name}"])
+                for name in self.target_names
+            },
+            (
+                {
+                    "foreground_mask": {
+                        name: _mask_array_to_tensor(transformed[f"mask__{name}"])
+                        for name in self.target_names
+                    }
+                }
+                if target_masks
+                else {}
+            ),
         )
 
 
@@ -75,33 +125,27 @@ def build_training_paired_transform(
     image_size: tuple[int, int],
     seed: int | None,
     input_names: tuple[str, ...],
-    reference_modality: str,
+    target_names: tuple[str, ...],
 ) -> PairedAlbumentationsTransform | None:
+    """The paired training transform, or None when augmentation is disabled.
+
+    ``config`` must be resolved (``RunConfig`` fills the effective ``photometric_inputs``).
+    """
     if not config.enabled:
         return None
+    if config.photometric_inputs is None:
+        raise ValueError("augmentation.photometric_inputs must be resolved before use")
     return PairedAlbumentationsTransform(
         image_size=image_size,
         intensity=config.intensity,
         seed=seed,
         input_names=input_names,
-        reference_modality=reference_modality,
+        target_names=target_names,
+        photometric_inputs=config.photometric_inputs,
     )
 
 
-def _import_albumentations() -> tuple[Any, Any]:
-    try:
-        import albumentations as A
-        import cv2
-    except ImportError as exc:
-        raise RuntimeError(
-            "augmentation.enabled=true requires the 'albumentations' dependency."
-        ) from exc
-    return A, cv2
-
-
-def _geometry_transforms(
-    A: Any, cv2: Any, *, width: int, height: int, intensity: AugmentationIntensity
-) -> list[Any]:
+def _geometry_transforms(*, width: int, height: int, intensity: AugmentationIntensity) -> list[Any]:
     affine_by_intensity = {
         "light": {"scale": (0.98, 1.02), "translate": 0.01, "rotate": 3, "p": 0.25},
         "medium": {"scale": (0.95, 1.05), "translate": 0.03, "rotate": 7, "p": 0.40},
@@ -137,7 +181,7 @@ def _geometry_transforms(
     ]
 
 
-def _photometric_transforms(A: Any, intensity: AugmentationIntensity) -> list[Any]:
+def _photometric_transforms(intensity: AugmentationIntensity) -> list[Any]:
     if intensity == "light":
         return []
     limits = {

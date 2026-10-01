@@ -1,172 +1,594 @@
-# Copy this file for a new experiment, then edit the values in one place.
-# Run with: make <target> CONFIG=config/runs/local/my_run.yaml
+# =============================================================================
+# Pix2Pix (paired) run configuration - exhaustive annotated reference.
+# =============================================================================
+#
+# Every field the parser resolves for this experiment is written out below with
+# its effective value; options that cannot be active at the same time are shown as
+# commented alternatives next to the field that owns them. After defaults are
+# resolved this file is the same experiment as config/runs/minimal_pix2pix.yaml
+# (a test asserts RunConfig.to_dict() equality), so copy whichever is easier to edit.
+#
+# This is a worked configuration, not a recommendation: loss weights, split ratios,
+# thresholds and checkpoint metrics must be chosen for your own study.
+#
+# Copy and run:
+#   cp config/runs/example.yaml config/runs/local/my_run.yaml
+#   vs run --config config/runs/local/my_run.yaml     # prepare -> train -> infer -> evaluate
+#
+# Unknown keys are rejected at every level. Relative project paths
+# (dataset_root, results_path, manifest_path, inference.output_dir,
+# evaluation.generated_dir, evaluation.output_dir) are used as written, i.e. they
+# resolve from the process working directory (run commands from the repository root).
+# Other bases are stated next to the field that uses them.
+#
+# NOT YAML KEYS - command-line only (never add these to this file):
+#   vs run --stages prepare train infer evaluate   stage subset/order; default is all four
+#   vs queue --queue <queue.yaml>                  queue file; see config/queues/example.yaml
+#   vs infer-images --config <run.yaml>
+#     --input PATH                 one image or a directory (single-input models)
+#     --input MODALITY=PATH        repeat once per model.inputs name (named multi-input)
+#     --output PATH                explicit output file (one model output only) or
+#                                  directory (else inference.output_dir, else
+#                                  <run>/artifacts/output_single|output_images); a
+#                                  directory receives <output>/<sample>_generated.<ext>
+#                                  for every model output
+#     --recursive                  walk --input directories recursively
+#     --mode auto|resize|tile      full-size tiled vs one resized patch per image
+#     --tile-overlap N             tile overlap in pixels
+#     --output-format same|...     output extension when --output is not a file
+#   vs evaluate --pair TARGET GENERATED [--output-dir DIR]
+#                                  one-off image-pair metrics; ignores this run config
+# =============================================================================
 
-# Dataset folder containing the configured full-size slide-set assets.
+# --- Project -----------------------------------------------------------------
+
+# Required. Directory holding the dataset (raw slide assets, the inventory, and the
+# prepared outputs: manifests/, splits/, metadata/). Read by every stage.
 dataset_root: local_workspace/datasets/your_sample
-# Optional: override the default manifest path
-# (defaults to dataset_root/manifests/manifest.csv).
-# manifest_path: local_workspace/datasets/your_sample/manifests/manifest.csv
 
-# All training, inference, and evaluation artifacts are grouped by run_name here.
+# Optional; default (omitted or null) is <dataset_root>/manifests/manifest.csv.
+# Consumer-side override only: the manifest CSV read by paired training, inference and
+# paired evaluation. It is NOT a preparation output: `prepare` always writes
+# <dataset_root>/manifests/manifest.csv and never creates the file named here, so in a
+# prepare -> train -> infer -> evaluate run an override must already exist (or be
+# omitted to consume what prepare wrote). The value is used exactly as written, so a
+# relative path resolves from the working directory, NOT from dataset_root.
+# Only the CSV is replaced; record paths inside it stay relative to dataset_root.
+# Companion files are still read from <dataset_root>:
+#   manifests/manifest_metadata.json - REQUIRED (declares the schema and modalities).
+#   manifests/slide_sets.csv         - optional: adds specimen_id/patient_id to each
+#                                      set_id; without it only set_id is available.
+#                                      Exception: paired evaluation currently opens it
+#                                      for its grouped summaries whenever a sample was
+#                                      evaluated, so that stage fails without it.
+#   metadata/split_assignment.csv    - optional: lets training detect a prepared
+#                                      patch-level split.
+#   metadata/dataset_fingerprint.json - optional provenance, recorded as null if absent.
+# An external manifest therefore needs: the current manifest CSV schema, the metadata
+# file above, every referenced file present, and the splits the stage reads (train+val
+# for training, test for inference and evaluation). No earlier `prepare` run is
+# required. The usual file-existence, data.hash_policy and group-leakage checks still apply.
+# manifest_path: local_workspace/manifests/manifest_subset.csv
+
+# Required. Parent of every run directory; this run writes to <results_path>/<run_name>/.
 results_path: local_workspace/results
+# Required non-blank string. Reusing a name reuses (and overwrites) that run directory.
 run_name: example_run
 
-# One size drives both patch extraction and model resize for the standard workflow.
-# Convention: [width, height] - e.g. [320, 256] means 320 px wide, 256 px tall.
+# Optional; default [256, 256]. [width, height] in pixels - width FIRST
+# ([320, 256] = 320 px wide, 256 px tall). The model input/output size, and the
+# default for preprocessing.patching.patch_size and grid_movement.
 image_size: [256, 256]
 
+# --- Method ------------------------------------------------------------------
+
+method:
+  # Optional; default pix2pix. pix2pix = supervised translation from pixel-aligned
+  # pairs (requires data.pairing: paired and the concat_unet generator).
+  # cyclegan = unpaired translation; see config/runs/example_cyclegan.yaml.
+  name: pix2pix
+  # replay_buffer_size is CycleGAN-only; setting it (even to 0) for pix2pix is an error.
+
+# --- Consumed-data policy ------------------------------------------------------
+
+data:
+  # Optional; default paired. paired = aligned records from the prepared manifest
+  # (Pix2Pix requires it). unpaired = two independent collections in data.domains
+  # (CycleGAN requires it).
+  pairing: paired
+  # data.domains is unpaired-only and must be omitted here.
+
+  # Optional; default content. How each tracked stage identifies the files it read
+  # (metadata/consumed_data/<stage>/):
+  #   content    - SHA-256 of every consumed file, checked stable while it is read;
+  #                appropriate for a verified freeze of the data behind a result.
+  #   membership - locators, sizes and metadata only. Cheaper, but explicitly does NOT
+  #                establish that the bytes are the ones used before.
+  hash_policy: content
+
+  # Optional; default auto. Biological split-independence check over the consumed
+  # files. Paired group IDs (set_id, specimen_id, patient_id) come from the prepared
+  # slide-set metadata, i.e. from the inventory columns - never from filenames.
+  #   auto        - validate at the strongest unit every asset has an ID for
+  #                 (patient > specimen > set); fails if none is complete.
+  #   patient | specimen | set - require that unit's ID on every asset, then validate it.
+  #   unavailable - make NO positive independence claim (recorded as a limitation).
+  #                 This does not disable checking: any supplied ID seen in two splits
+  #                 still fails. Sole exception: an explicit
+  #                 preprocessing.split.unit: patch puts patches of one set/specimen/
+  #                 patient into different splits by construction; with `unavailable`
+  #                 those shared groups are counted and recorded as a limitation, not
+  #                 treated as evidence of independence. `auto` or an explicit unit fails
+  #                 on a patch split. `unavailable` never makes a split publication-ready.
+  group_validation: auto
+  # data.group_metadata (a raw-collection group CSV) is unpaired-only; paired runs must
+  # omit it.
+
+# --- Model -------------------------------------------------------------------
+
 model:
-  inputs: [autofluorescence, label_free]
-  target: H&E
+  # The framework contract is N ordered named RGB inputs -> M ordered named RGB outputs.
+  # Names are machine identifiers matching [A-Za-z][A-Za-z0-9_-]* (e.g. HE for H&E);
+  # they are never sanitized. Inputs and outputs must not share a name.
+  #
+  # Required. Ordered, unique input modality names. For Pix2Pix they are concatenated
+  # channel-wise in this order; any subset (in any order) of
+  # preprocessing.inputs.modalities.
+  inputs: [AF, LF]
+  # Required. Ordered, unique output names; any subset (in any order) of
+  # preprocessing.inputs.target_modalities. One output (M=1) is the one-item case of the
+  # same representation - there is no singular spelling. Several outputs, e.g.
+  #   outputs: [HE, PAS]
+  # train one generator with 3*M output channels (split back by name, in this order)
+  # and one joint conditional discriminator over all inputs and all outputs. Every
+  # reconstruction loss term is the arithmetic mean of that term over the outputs, so
+  # M=1 keeps its exact scale; history columns report it per output
+  # (loss_*_raw_generator_l1__HE ...). Validation image metrics are per output
+  # (val_ssim__HE ...), and evaluation reports every output separately - no score
+  # averages different outputs. CycleGAN allows exactly one output.
+  outputs: [HE]
+
   generator:
+    # Optional; default concat_unet. The architecture is fixed by the method:
+    #   concat_unet - Pix2Pix only; keys: base_channels, norm, dropout, bilinear.
+    #   resnet      - CycleGAN only; keys: base_channels, norm, blocks (see
+    #                 example_cyclegan.yaml). Keys of the other architecture are rejected.
     architecture: concat_unet
+    # Optional; default 64. Width of the first convolution; deeper levels scale from it.
     base_channels: 64
+    # Optional; batch | instance. Default batch for concat_unet (resnet must use instance).
     norm: batch
+    # Optional; default false. concat_unet only: dropout in the decoder.
     dropout: false
+    # Optional; default false. concat_unet only. true (bilinear upsampling) is currently
+    # rejected; transposed convolutions are the only supported upsampling.
     bilinear: false
+
   discriminator:
+    # PatchGAN discriminator. For Pix2Pix one joint conditional discriminator scores the
+    # concatenated inputs plus all (real or generated) outputs: 3*N + 3*M channels.
+    # Optional; default 64. Width of the first convolution.
     ndf: 64
+    # Optional; batch | instance. Default instance.
     norm: instance
+    # Optional; default false. true is rejected: the adversarial losses consume raw
+    # logits (adversarial_bce applies the sigmoid inside BCE-with-logits; LSGAN scores
+    # raw outputs), so a sigmoid layer is not a supported output semantic.
     use_sigmoid: false
+
+# --- Preparation (`prepare` stage) --------------------------------------------
+# Builds patches, the manifest and the split under dataset_root from full-size slide
+# sets. The whole section is optional for the run, but `prepare` fails without it.
+# inputs and split are required when the section is present.
 
 preprocessing:
   inputs:
+    # Required. Slide-set inventory CSV; relative paths resolve from dataset_root. It is
+    # symmetric in inputs and targets. Required columns: set_id and, per input and per
+    # target, input__<name>_path, input__<name>_aligned, target__<name>_path,
+    # target__<name>_aligned. Optional: patient_id, specimen_id, input__<name>_mask,
+    # input__<name>_slide_id, target__<name>_mask, target__<name>_slide_id. Every
+    # configured target is required for every set; no two assets of a set may be the
+    # same file. `vs inventory` writes this file from explicit mappings.
+    # patient_id/specimen_id here are the only source of those biological identities.
     inventory: inputs/slide_sets.csv
-    modalities: [autofluorescence, label_free]
-    reference: label_free
-    target_modality: H&E
+    # Required. Ordered, unique input modality names; each must match
+    # [A-Za-z][A-Za-z0-9_-]* (they become inventory column and file-name parts).
+    modalities: [AF, LF]
+    # Required. One of modalities: the geometric frame every other image (inputs and
+    # every target) is aligned to, and the source of foreground ratios for
+    # filtering.foreground.policy: reference. Its inventory row must not declare
+    # *_aligned=false.
+    reference: LF
+    # Required. Ordered, unique target modality names (same identifier rule); each must
+    # differ from every input. Preparation aligns and extracts every target on the same
+    # sample grid and commits a sample only when all of them were written, e.g.
+    #   target_modalities: [HE, PAS]
+    # A model may then select any subset as model.outputs.
+    target_modalities: [HE]
+    # Optional; default cached. Source-file hashes in the dataset fingerprint:
+    #   cached - reuse the stored hash of an unchanged file; always - re-hash every run.
     hash_verification: cached
+
   patching:
+    # Optional; default image_size. [width, height] in full-resolution reference pixels.
     patch_size: [256, 256]
+    # Optional; default image_size. [x_step, y_step] in pixels between patch origins;
+    # smaller than patch_size gives overlapping patches.
     grid_movement: [256, 256]
+    # Optional; default 200. Integer >= 0, pixels skipped at every slide border.
     margin: 200
+    # Optional; default false. true also writes rejected patches under
+    # <dataset_root>/discarded_patches/ for inspection.
     save_discarded_patches: false
+
   masks:
+    # Optional; default if_missing. Tissue (foreground) masks:
+    #   never      - no masks: every pixel counts as foreground; requires
+    #                filtering.foreground.enabled: false (and no loss masks).
+    #   if_missing - use the inventory's *_mask file where given, else compute one.
+    #   always     - accepted; the current preparation code treats it like if_missing.
     generation: if_missing
+    # Optional; default connected_components. Mask algorithm when a mask is computed:
+    #   connected_components | hsv (colour-threshold segmentation).
     strategy: connected_components
-    scale: 0.25
-    lowres_filtering: true
+    # Optional; default 1.0. In (0, 1]: resolution fraction at which the preview used for
+    # mask computation and registration is read. Lower is faster and coarser; whole-slide
+    # images usually need well below 1.0.
+    scale: 1.0
+    # Optional; default false. Accepted and recorded in the preparation fingerprint; no
+    # separate behaviour in the current preparation code.
+    lowres_filtering: false
+    # Optional; default false. Accepted and recorded in the preparation fingerprint; no
+    # separate behaviour in the current preparation code.
     save_resolved_masks: false
+    # Optional; default false. true writes each kept patch's per-target foreground masks
+    # (<sample>__foreground_mask__<target>.*) next to it. A loss with
+    # params.mask.enabled: true needs these patch masks in the prepared dataset; the HE
+    # mask is only ever applied to HE, never to another target.
     save_patch_masks: false
+
   alignment:
+    # Optional; default auto. Per non-reference image, from its inventory *_aligned value:
+    #   auto   - estimate a transform unless the inventory declares it aligned (true).
+    #   always - accepted; currently identical to auto (a declared-aligned image is not
+    #            re-registered).
+    #   never  - never estimate; an image declared aligned=false is an error.
     mode: auto
+    # Optional; affine_sift is the only method: a global affine transform from SIFT
+    # matches on downscaled, tissue-masked previews. It is a geometric convenience, not a validated
+    # (clinical) registration; inspect the recorded alignment diagnostics.
     method: affine_sift
+    # Optional; default true. When no transform is estimated (declared aligned, or mode
+    # never), check that the image really matches the reference geometry.
     validate_declared: true
+    # Optional; default error. error - any failure while preparing a slide set (masks,
+    # alignment, patch extraction) stops prepare. skip_set - record the error and drop
+    # that set from the dataset (it then contributes no patches to any split).
     on_failure: error
+
   filtering:
     foreground:
+      # Optional; default true. Reject patches with too little tissue.
       enabled: true
+      # Optional; default reference. Whose mask gives the foreground ratio:
+      #   reference | target (every target must pass) | all | intersection | union
+      #   (of the patch masks).
       policy: reference
+      # Optional; default 0.25. In [0, 1]; minimum foreground fraction to keep a patch.
       min_ratio: 0.25
-    max_white_ratio: 0.70
-    max_largest_white_component_ratio: 0.20
+    # Optional; default 0.7. In [0, 1]; maximum fraction of near-white pixels.
+    max_white_ratio: 0.7
+    # Optional; default 250. Integer in [0, 255]; grey value at or above which a pixel
+    # counts as white.
+    white_threshold: 250
+    # Optional; default 0.2. In [0, 1]; maximum patch fraction covered by the largest
+    # connected white region (rejects tears/holes even when total white is low).
+    max_largest_white_component_ratio: 0.2
+
   split:
+    # Required. What is kept together in one split:
+    #   patch    - each patch independently: NOT biologically independent (neighbouring
+    #              patches of one slide land in train and test); needs
+    #              data.group_validation: unavailable.
+    #   set      - one inventory slide set (set_id).
+    #   specimen - all sets with the same specimen_id (column required).
+    #   patient  - all sets with the same patient_id (column required); the strongest.
+    # This example's patient split with 0.8/0.1/0.1 is illustrative only.
     unit: patient
-    train: 0.80
-    val: 0.10
-    test: 0.10
+    # Required. Fractions in [0, 1] that must sum to 1. Group units assign whole groups,
+    # so realised patch fractions differ; each non-zero split needs at least one group.
+    train: 0.8
+    val: 0.1
+    test: 0.1
+    # Optional; default 0. Integer seed of the deterministic hash-based assignment.
     seed: 42
+    # Optional; default null (computed from seed and ratios). A frozen assignment CSV with
+    # exactly the columns group_id,unit,split listing every group once; relative paths
+    # resolve from dataset_root. Its unit column must equal split.unit. Not allowed with
+    # unit: patch. When set, the ratios and seed do not decide the assignment.
+    assignment_file: null
+
   io:
+    # Optional; default true. true reads slides region-by-region through io.backend
+    # (needed for whole-slide images); false decodes each full image with Pillow.
     tiled: true
+    # Optional; default auto. auto | pillow | openslide. Reader for tiled access.
     backend: auto
-    max_memory_gb: 8.0
+    # Optional; default null (no limit). Positive number of GiB. Accepted and recorded in
+    # the preparation fingerprint; the current preparation code does not enforce it.
+    max_memory_gb: null
+
+# --- Training (`train` stage) --------------------------------------------------
+# Epoch numbers below are zero-based epoch indices.
 
 training:
+  # Optional; default 8. Positive integer, samples per optimiser step.
   batch_size: 8
+  # Required. Positive integer number of epochs.
   epochs: 100
 
+  # Optional; defaults 2e-4. > 0; Adam learning rates of generator / discriminator.
   lr_g: 0.0002
   lr_d: 0.0002
+  # Optional; defaults 0.5 / 0.999. In [0, 1); Adam betas shared by both optimisers.
   beta1: 0.5
   beta2: 0.999
 
+  # Optional; default null = a random seed is drawn at start (and recorded), so the run
+  # is not repeatable. Set an integer for reproducible initialisation and sampling.
   seed: 42
+  # Optional; default min(4, CPU count) - machine dependent, so it is pinned here and in
+  # the minimal file. Integer >= 0 DataLoader worker processes (0 = main process).
   num_workers: 4
 
+  # Optional; defaults 10 / 10. Positive integers in epochs: validate every N epochs /
+  # save <run>/checkpoints/epNNN.pth every N epochs.
   validate_rate: 10
   checkpoint_rate: 10
-  # Number of ranked validation checkpoint candidates to retain in checkpoints/best.json.
+  # Optional; default 3. Positive integer: ranked candidates kept per validation metric in
+  # checkpoints/best.json (read by inference.checkpoint_policy best/top_k). Checkpoint
+  # files themselves are not deleted.
   checkpoint_top_k: 3
+  # Optional; default 15. Positive integer: report progress every N batches.
   log_rate: 15
+  # Optional; default null = start from scratch. latest = newest epNNN.pth in this run's
+  # checkpoints/; otherwise a .pth path, relative paths resolving from
+  # <results_path>/<run_name>/checkpoints/ (e.g. ep049.pth).
   resume: null
-  # Optional optimizer learning-rate scheduler. Use name: none, linear_decay,
-  # or reduce_on_plateau. Epoch numbers are zero-based.
+
   scheduler:
+    # Optional; default none (constant learning rates).
+    #   none              - no other scheduler key has any effect.
+    #   linear_decay      - constant until decay_start_epoch, then linear to 0 at `epochs`.
+    #                       Needs decay_start_epoch (integer, 0 <= value < epochs).
+    #   reduce_on_plateau - multiply by factor when the monitor stops improving. Uses
+    #                       monitor, mode, factor, patience, min_lr.
+    # Keys of an unselected scheduler are parsed but dropped from the resolved config.
     name: none
-    # Linear decay example:
+    # linear_decay alternative:
     # name: linear_decay
     # decay_start_epoch: 50
-    # Plateau example:
+    #
+    # reduce_on_plateau alternative:
     # name: reduce_on_plateau
-    # monitor: val_ssim
-    # mode: max
-    # factor: 0.5
-    # patience: 5
-    # min_lr: 0.00002
-  # Optional early stopping based on validation CSV columns.
+    # monitor: val_ssim__HE # default loss_G_val. loss_G_val or a per-output validation
+    #                     # metric val_<metric>__<output> with <metric> one of ssim,
+    #                     # psnr, mae, rmse, pcc_gray, pcc_rgb_mean and <output> one of
+    #                     # model.outputs. CycleGAN: loss_G_val only (no val_* metrics).
+    # mode: max           # min | max; default follows the monitor (loss_G_val, val_mae*,
+    #                     # val_rmse* -> min; val_ssim*, val_psnr*, val_pcc_* -> max).
+    # factor: 0.5         # default 0.1; in (0, 1).
+    # patience: 5         # default 10; >= 0 validation events without improvement.
+    # min_lr: 0.00002     # default 0.0; >= 0 floor.
+
+  # Optional; default: absent/null = no early stopping (this experiment).
   # early_stopping:
-  #   monitor: val_ssim
-  #   mode: max
-  #   patience: 15
-  #   min_delta: 0.0
+  #   monitor: val_ssim__HE # default val_ssim__<output> for one model output; required
+  #                       # with several outputs (choose which output decides). A
+  #                       # validation CSV column: loss_G_val, loss_D_val, a val_* metric
+  #                       # listed under scheduler above, or a configured loss column
+  #                       # loss_val_total_{generator|discriminator} or
+  #                       # loss_val_{raw|weighted|current_weight}_{generator|discriminator}_<loss>
+  #                       # (reconstruction terms end in __<output>, e.g. ..._l1__HE).
+  #                       # CycleGAN: no val_* monitors.
+  #   mode: max           # min | max; default min for loss_* columns, else as for scheduler.
+  #   patience: 15        # default 15; >= 0, counted in validation events (not epochs).
+  #   min_delta: 0.0      # default 0.0; >= 0 improvement required to reset patience.
 
   augmentation:
-    # Training-only on-the-fly augmentation. No transformed patches are saved.
+    # Optional; default false. On-the-fly, training-only paired augmentation; nothing is
+    # saved. One sampled geometry (flips, RandomRotate90, affine) is applied to every
+    # selected input, every selected target and every target mask (masks use
+    # nearest-neighbour). Every preset includes RandomRotate90, so enabled: true requires
+    # a square image_size. CycleGAN requires false.
     enabled: false
-    # Effective train epoch length is multiplied by this factor when enabled.
+    # Optional; default 1. Integer >= 1; multiplies the train epoch length when enabled
+    # (ignored when disabled).
     expansion_factor: 1
-    # Supported values: light, medium, strong.
+    # Optional; default light. light | medium | strong transform strength. light is
+    # geometry only; medium/strong add photometric transforms.
     intensity: light
+    # Optional ordered, unique subset of model.inputs that receives photometric
+    # transforms, each input with its own stream seeded from training.seed and its name
+    # (repeatable only under the same complete execution setup). Targets and masks
+    # never receive photometric transforms. Omitted, it resolves to [] for light, else
+    # to [preprocessing.inputs.reference] when that input is selected, else to
+    # [model.inputs[0]]; the resolved config records the effective list. A non-empty
+    # list with light is rejected.
+    photometric_inputs: []
 
+  # Required. Loss terms per optimised network. Each term:
+  #   name     - required; a built-in loss valid for this method and role.
+  #   weight   - required; finite number >= 0. 0 (or enabled: false) keeps the term
+  #              configured but inactive.
+  #   enabled  - optional; default true.
+  #   params   - optional; default {}. Recorded VERBATIM in the resolved config (defaults
+  #              are not filled in), so writing a default value explicitly changes the
+  #              resolved-config hash. Allowed keys depend on the loss (below).
+  #   schedule - optional; default {type: constant}. Multiplies weight per epoch (below).
+  # A name may appear once per role. Built-in losses:
+  #   Pix2Pix : adversarial_bce (generator + discriminator; BCE on logits), l1 (generator),
+  #             ssim (generator; 1 - SSIM).
+  #   CycleGAN: adversarial_lsgan, cycle_l1, identity_l1 (see example_cyclegan.yaml).
+  # A loss of the other method is rejected. The weights here are illustrative.
   losses:
     generator:
       - name: adversarial_bce
         weight: 1.0
-      - name: l1
-        weight: 25.0
-      # Optional SSIM term. Leave disabled or set a nonzero weight intentionally.
-      - name: ssim
-        weight: 0.0
-        enabled: false
-        params:
-          data_range: 1.0
-          window_size: 11
-          sigma: 1.5
-          channel_mode: rgb
-          reduction: mean
-          mask:
-            enabled: false
-            source: foreground_mask
-            foreground_weight: 1.0
-            background_weight: 0.25
-            ignore_empty_mask: true
+        enabled: true
+        params: {}    # adversarial_bce takes no params.
         schedule:
           type: constant
+      - name: l1
+        weight: 25.0
+        enabled: true
+        # l1 params (all optional):
+        #   reduction: mean   # mean | sum | none
+        #   mask:             # foreground-weighted loss; see the ssim block below
+        params: {}
+        schedule:
+          type: constant
+          # Schedule alternatives (fields not used by a type are dropped):
+          #   constant             - multiplier 1.
+          #   linear_warmup        - 0 -> 1 between start_epoch and end_epoch.
+          #   linear_decay         - 1 -> 0 between start_epoch and end_epoch.
+          #   cosine               - cosine 1 -> 0 between start_epoch and end_epoch.
+          #     start_epoch: default 0, >= 0; end_epoch: required, >= start_epoch.
+          #   step                 - multiplier `factor` from `epoch` onward (1 before).
+          #     epoch: required, >= 0; factor: default 0.0, finite >= 0.
+          #   turn_on_after_epoch  - 0 before `epoch`, 1 from it.
+          #   turn_off_after_epoch - 1 before `epoch`, 0 from it.
+          #     epoch: required, >= 0.
+          # e.g.
+          # type: linear_warmup
+          # start_epoch: 0
+          # end_epoch: 10
+          # e.g.
+          # type: step
+          # epoch: 50
+          # factor: 0.5
+      # Optional SSIM term (not part of this experiment). Every params key shown:
+      # - name: ssim
+      #   weight: 1.0
+      #   params:
+      #     data_range: 1.0     # default 1.0; > 0. Images are compared on [0, 1].
+      #     window_size: 11     # default 11; positive odd integer <= patch height/width.
+      #     sigma: 1.5          # default 1.5; > 0 Gaussian window std.
+      #     channel_mode: rgb   # default rgb; rgb | gray (luma before SSIM).
+      #     reduction: mean     # default mean; mean | sum | none.
+      #     mask:               # l1 and ssim only.
+      #       enabled: true            # default false.
+      #       source: foreground_mask  # default and only value: the prepared patch mask.
+      #       foreground_weight: 1.0   # default 1.0; finite >= 0 weight inside tissue.
+      #       background_weight: 0.25  # default 1.0; finite >= 0 weight outside tissue.
+      #       ignore_empty_mask: true  # default true: samples with no foreground are
+      #                                # left out; false keeps them (background-weighted).
+      #   # Any enabled mask makes training load <sample>__foreground_mask__<target>
+      #   # files for every model output, so the dataset must be prepared with
+      #   # masks.save_patch_masks: true and a masking mode other than
+      #   # masks.generation: never. Each output's loss uses that output's own mask.
+      #   schedule:
+      #     type: turn_on_after_epoch
+      #     epoch: 20
     discriminator:
       - name: adversarial_bce
         weight: 1.0
+        enabled: true
+        params: {}
+        schedule:
+          type: constant
+
+# --- Inference (`infer` stage) --------------------------------------------------
+# Translates the manifest test split into <run>/artifacts/output_test/.
 
 inference:
-  # Supported policies:
-  # - latest: newest ep*.pth file in results_path/run_name/checkpoints
-  # - best: rank-1 checkpoint from checkpoints/best.json for checkpoint_metric
-  # - top_k: ranked checkpoint from checkpoints/best.json using checkpoint_rank
+  # One of checkpoint_policy / checkpoint_path is required. Policies read this run's
+  # <results_path>/<run_name>/checkpoints/:
+  #   latest - newest epNNN.pth (no metric; checkpoint_rank not allowed).
+  #   best   - rank-1 entry of best.json for checkpoint_metric (required).
+  #   top_k  - entry checkpoint_rank (default 1) of best.json for checkpoint_metric
+  #            (required). best.json keeps only training.checkpoint_top_k ranks.
+  # The metric only selects among validation candidates; it is not a clinical endpoint.
   checkpoint_policy: best
-  # Required for checkpoint_policy: best/top_k.
-  checkpoint_metric: val_ssim
-  # Optional for checkpoint_policy: top_k. Defaults to 1.
-  # checkpoint_rank: 1
-  # Or choose a checkpoint explicitly. Relative paths are resolved from
-  # the run root (results_path/run_name/).
+  # Required for best/top_k. loss_G_val or a per-output validation metric:
+  # val_ssim__<output>, val_psnr__<output>, val_mae__<output>, val_rmse__<output>,
+  # val_pcc_gray__<output> or val_pcc_rgb_mean__<output>, with <output> one of
+  # model.outputs (CycleGAN: loss_G_val only).
+  checkpoint_metric: val_ssim__HE
+  # Optional positive integer; allowed only with best/top_k.
+  # checkpoint_rank: 2
+  # Alternative to a policy: an explicit checkpoint file; relative paths resolve from the
+  # run root <results_path>/<run_name>/. Takes precedence over checkpoint_policy.
   # checkpoint_path: checkpoints/ep099.pth
-
-  # Output directory override. By default inference writes under the run artifacts tree.
+  # Optional; default <run>/artifacts/output_test (infer) or artifacts/output_single|
+  # output_images (vs infer-images). Used as written (working-directory relative).
+  # Every generated image is <output_dir>/<output>/<sample_id>_generated.<ext>, one per
+  # (sample, model output).
   # output_dir: local_workspace/results/example_run/artifacts/output_test
+  # inference.direction is CycleGAN-only; Pix2Pix rejects it.
+
+# --- Evaluation (`evaluate` stage) ----------------------------------------------
 
 evaluation:
-  # Evaluation targets come from test manifest records under project.dataset_root.
-  # Optional evaluation directory overrides. Defaults:
+  # Optional; default follows the method's training pairing (pix2pix -> paired,
+  # cyclegan -> unpaired). It chooses how evaluation inputs are read, never how the model
+  # was trained.
+  #   paired   - the normal/default protocol for paired-training methods: per-image
+  #              metrics (evaluation.metrics) of each generated test image against its
+  #              aligned manifest target, one explicit pair per (sample_id, output_name),
+  #              plus per-output set/specimen/patient summaries with bootstrap confidence
+  #              intervals. per_image_metrics.csv and every summary carry output_name;
+  #              no statistic is averaged across outputs.
+  #   unpaired - method-independent: compares per-image RGB/luminance mean and std
+  #              distributions of the generated collection with an independent real
+  #              reference collection (Wasserstein distance, two-sample KS test). No pairs
+  #              are formed and no per-image fidelity metrics are reported. These are
+  #              appearance-distribution diagnostics only; they do not establish
+  #              sample-level, biological or clinical fidelity. A Pix2Pix run must set
+  #              reference_collection, since it has no data.domains collection. It is
+  #              rejected for a model with several outputs (one collection cannot be
+  #              matched to several simultaneous outputs).
+  protocol: paired
+  # Optional; unpaired protocol only (rejected with paired). The independent real
+  # reference collection: a directory holding test/ (searched recursively) or a path/glob
+  # containing the literal {split}; relative values resolve against dataset_root. Never
+  # inferred from the paired manifest. Required for unpaired evaluation of a Pix2Pix run.
+  # reference_collection: reference/stained
+  # Optional; paired protocol only. Ordered list of {name, options} mappings; each name
+  # is a registered metric definition and becomes one per-image column group. Omitted,
+  # it is the built-in default set, in this order:
+  # metrics:
+  #   - name: mae
+  #   - name: mse
+  #   - name: rmse
+  #   - name: psnr
+  #   - name: ssim
+  #   - name: pcc_gray
+  #   - name: pcc_rgb_mean
+  # Also built in: pcc_r, pcc_g, pcc_b. Built-in metrics take no options (an external
+  # metric definition, supplied in Python, validates its own). All metrics read the full
+  # RGB image in [0, 1] as written: no resize, crop, clip or channel conversion. SSIM uses
+  # fixed scikit-image parameters (7x7 uniform window, K1=0.01, K2=0.03) and is reported
+  # unavailable for images smaller than 7 px. Every result has a status: finite,
+  # positive_infinity (e.g. PSNR of identical images), undefined (e.g. PCC of constant
+  # data) or unavailable; summaries count each and average finite values only. Unknown or
+  # repeated names and unknown options fail before anything is evaluated.
+  # Optional; paired protocol only; default strict. Known input failures (missing or
+  # unreadable file, non-RGB image, target/generated shape mismatch):
+  #   strict     - record them in coverage.csv and fail the evaluation.
+  #   permissive - exclude those samples (reason recorded in coverage.csv) and continue;
+  #                fails if nothing could be evaluated.
+  # Metric implementation or programming errors always fail, in either mode.
+  input_failures: strict
+  # Optional; default false. true also writes metric/feature plots.
+  save_graphs: false
+  # Optional; defaults <run>/artifacts/output_test and <run>/evaluation. Used as written
+  # (working-directory relative).
   # generated_dir: local_workspace/results/example_run/artifacts/output_test
   # output_dir: local_workspace/results/example_run/evaluation
-  save_graphs: true
-  # hide_graphs_path: false
+  # Optional; default 10000. Integer >= 0 bootstrap resamples for the grouped
+  # (set/specimen/patient) confidence intervals of the paired protocol.
+  bootstrap_iterations: 10000
+  # Optional; default 0. Integer seed of the bootstrap resampling.
+  bootstrap_seed: 0

@@ -3,12 +3,14 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-from virtual_staining.metrics import DEFAULT_METRICS, is_higher_better_metric
+from virtual_staining.evaluation.reports import ranking_direction, recorded_metrics
+from virtual_staining.metrics import DEFAULT_METRIC_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -19,18 +21,16 @@ IMAGE_COLUMNS = [
 ]
 
 
-def ensure_parent(path: Path) -> None:
-    """Creates the parent directory for a file path."""
+def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def place_file(src: Path, dst: Path, mode: str, overwrite: bool = False) -> None:
-    """Places a file by hardlink, symlink or copy."""
+def _place_file(src: Path, dst: Path, mode: str, overwrite: bool = False) -> None:
     if not src.exists():
         logger.warning("Missing file: %s", src)
         return
 
-    ensure_parent(dst)
+    _ensure_parent(dst)
 
     if dst.exists() or dst.is_symlink():
         if overwrite:
@@ -56,13 +56,11 @@ def place_file(src: Path, dst: Path, mode: str, overwrite: bool = False) -> None
         raise ValueError(f"Unsupported mode: {mode}")
 
 
-def get_existing_image_columns(df: pd.DataFrame) -> list[str]:
-    """Returns path columns available in the metrics CSV."""
+def _get_existing_image_columns(df: pd.DataFrame) -> list[str]:
     return [column for column in IMAGE_COLUMNS if column in df.columns]
 
 
-def infer_role_from_column(column: str) -> str:
-    """Infers the image role from a CSV column name."""
+def _infer_role_from_column(column: str) -> str:
     if column == "generated_path":
         return "generated"
     if column == "target_path":
@@ -73,14 +71,13 @@ def infer_role_from_column(column: str) -> str:
     return column.replace("_path", "")
 
 
-def export_ranked_subset(
+def _export_ranked_subset(
     df_subset: pd.DataFrame,
     destination_dir: Path,
     image_columns: list[str],
     mode: str,
     overwrite: bool,
 ) -> int:
-    """Exports a ranked DataFrame subset."""
     destination_dir.mkdir(parents=True, exist_ok=True)
     placed_files = 0
 
@@ -92,11 +89,11 @@ def export_ranked_subset(
                 continue
 
             src = Path(str(row[column]))
-            role = infer_role_from_column(column)
+            role = _infer_role_from_column(column)
             filename = f"{rank:04d}_{sample_id}_{role}{src.suffix}"
             dst = destination_dir / filename
             before_exists = dst.exists() or dst.is_symlink()
-            place_file(src, dst, mode=mode, overwrite=overwrite)
+            _place_file(src, dst, mode=mode, overwrite=overwrite)
             after_exists = dst.exists() or dst.is_symlink()
 
             if after_exists and (overwrite or not before_exists):
@@ -105,9 +102,10 @@ def export_ranked_subset(
     return placed_files
 
 
-def organize_metric(
+def _organize_metric(
     df: pd.DataFrame,
     metric: str,
+    higher_is_better: bool,
     output_dir: Path,
     image_columns: list[str],
     top_k: int,
@@ -115,17 +113,6 @@ def organize_metric(
     overwrite: bool,
     include_all_ranked: bool,
 ) -> dict[str, Any] | None:
-    """Organizes files for a single metric."""
-    if metric not in df.columns:
-        logger.warning("Metric %r not found in CSV; skipping", metric)
-        return None
-
-    try:
-        higher_is_better = is_higher_better_metric(metric)
-    except ValueError:
-        logger.warning("Unknown metric direction for %r; skipping", metric)
-        return None
-
     metric_values = pd.to_numeric(df[metric], errors="coerce")
     valid_df = df.loc[metric_values.notna()].copy()
     valid_df[metric] = metric_values[metric_values.notna()]
@@ -138,14 +125,14 @@ def organize_metric(
     worst_df = valid_df.sort_values(metric, ascending=higher_is_better).head(top_k)
     metric_dir = output_dir / metric
 
-    best_files = export_ranked_subset(
+    best_files = _export_ranked_subset(
         best_df,
         destination_dir=metric_dir / "best",
         image_columns=image_columns,
         mode=mode,
         overwrite=overwrite,
     )
-    worst_files = export_ranked_subset(
+    worst_files = _export_ranked_subset(
         worst_df,
         destination_dir=metric_dir / "worst",
         image_columns=image_columns,
@@ -156,7 +143,7 @@ def organize_metric(
     all_ranked_files = 0
     if include_all_ranked:
         ranked_df = valid_df.sort_values(metric, ascending=not higher_is_better)
-        all_ranked_files = export_ranked_subset(
+        all_ranked_files = _export_ranked_subset(
             ranked_df,
             destination_dir=metric_dir / "all_ranked",
             image_columns=image_columns,
@@ -175,8 +162,7 @@ def organize_metric(
     }
 
 
-def write_organization_summary(rows: list[dict[str, Any]], output_dir: Path) -> Path:
-    """Writes the organization summary CSV."""
+def _write_organization_summary(rows: list[dict[str, Any]], output_dir: Path) -> Path:
     summary_path = output_dir / "organization_summary.csv"
     pd.DataFrame(rows).to_csv(summary_path, index=False)
     return summary_path
@@ -191,13 +177,16 @@ def organize_by_metrics(
     mode: str = "hardlink",
     overwrite: bool = False,
     include_all_ranked: bool = False,
+    directions: Mapping[str, bool] | None = None,
 ) -> tuple[list[dict[str, Any]], Path | None, tuple[str, ...]]:
-    """
-    Read a per_image_metrics.csv and copy/link the top-N and worst-N images
-    per metric into <output_dir>/<metric>/best/ and <output_dir>/<metric>/worst/.
+    """Rank samples per metric; ``directions`` (higher is better) override recorded ones.
+
+    Without ``metrics``, ranks every recorded metric that declares a direction, or the
+    built-in default set when the CSV has no evaluation result metadata. An unknown
+    metric without an explicit direction is an error, never a guess.
     """
     df = pd.read_csv(csv_path)
-    image_columns = get_existing_image_columns(df)
+    image_columns = _get_existing_image_columns(df)
 
     if not image_columns:
         raise ValueError(
@@ -207,25 +196,46 @@ def organize_by_metrics(
     if "sample_id" not in df.columns:
         logger.warning("Column 'sample_id' not found; ranking will use fallback names")
 
-    selected_metrics = metrics if metrics is not None else list(DEFAULT_METRICS)
+    recorded = recorded_metrics(csv_path)
+    selected_metrics = (
+        metrics
+        if metrics is not None
+        else [info.name for info in recorded if info.higher_is_better is not None]
+        if recorded is not None
+        else list(DEFAULT_METRIC_NAMES)
+    )
+    explicit = directions or {}
 
     summary_rows: list[dict[str, Any]] = []
 
+    # Samples of different model outputs are ranked separately, never against each other.
+    outputs = (
+        [(str(name), df[df["output_name"] == name]) for name in dict.fromkeys(df["output_name"])]
+        if "output_name" in df.columns
+        else [(None, df)]
+    )
     for metric in selected_metrics:
-        result = organize_metric(
-            df=df,
-            metric=metric,
-            output_dir=output_dir,
-            image_columns=image_columns,
-            top_k=top_n,
-            mode=mode,
-            overwrite=overwrite,
-            include_all_ranked=include_all_ranked,
-        )
-
-        if result is None:
+        if metric not in df.columns:
+            logger.warning("Metric %r not found in CSV; skipping", metric)
             continue
+        for output_name, output_df in outputs:
+            result = _organize_metric(
+                df=output_df,
+                metric=metric,
+                higher_is_better=ranking_direction(csv_path, metric, explicit.get(metric)),
+                output_dir=output_dir if output_name is None else output_dir / output_name,
+                image_columns=image_columns,
+                top_k=top_n,
+                mode=mode,
+                overwrite=overwrite,
+                include_all_ranked=include_all_ranked,
+            )
 
-        summary_rows.append(result)
-    summary_csv = write_organization_summary(summary_rows, output_dir) if summary_rows else None
+            if result is None:
+                continue
+
+            summary_rows.append(
+                result if output_name is None else {"output_name": output_name, **result}
+            )
+    summary_csv = _write_organization_summary(summary_rows, output_dir) if summary_rows else None
     return summary_rows, summary_csv, tuple(image_columns)

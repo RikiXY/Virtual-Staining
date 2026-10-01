@@ -8,6 +8,7 @@ from nicegui import ui
 from nicegui.client import Client
 from nicegui.page import page
 from PIL import Image
+from PIL.GifImagePlugin import GifImageFile
 
 import virtual_staining.ui.experiment_comparison as comparison_ui
 from virtual_staining.applications.api import (
@@ -89,12 +90,12 @@ def test_compare_ui_reuses_paired_result_after_switching_modes(
     with Client(page("/comparison-mode-sequence-test")) as client:
         build_run_comparison(FakeService(), runs)  # type: ignore[arg-type]
         selects = [
-            element for element in client.elements.values() if element.tag == "nicegui-select"
+            element for element in client.elements.values() if isinstance(element, ui.select)
         ]
         compare_button = next(
             element
             for element in client.elements.values()
-            if element.tag == "q-btn" and getattr(element, "text", None) == "Compare runs"
+            if isinstance(element, ui.button) and getattr(element, "text", None) == "Compare runs"
         )
         wrapper = next(iter(compare_button._event_listeners.values())).handler
         assert wrapper is not None and wrapper.__closure__ is not None
@@ -194,7 +195,7 @@ def test_evaluation_dashboard_uses_interactive_histograms_when_rows_are_loaded(
     with Client(page("/interactive-evaluation-plots-test")) as client:
         render_plots(tuple(paths), ui.column(), tuple(rows))
 
-    charts = [element for element in client.elements.values() if element.tag == "nicegui-echart"]
+    charts = [element for element in client.elements.values() if isinstance(element, ui.echart)]
     assert len(charts) == 4
     assert not any(element.tag == "nicegui-image" for element in client.elements.values())
     assert all(chart.options["animationDuration"] == 700 for chart in charts)
@@ -286,8 +287,8 @@ def test_comparison_groups_cases_by_rank_and_balances_plot_cards(tmp_path: Path)
     ranked_labels = [
         element.text
         for element in sorted(client.elements.values(), key=lambda item: item.id)
-        if getattr(element, "text", None)
-        in {"Best cases", "Median cases", "Worst cases", "Run A", "Run B"}
+        if isinstance(element, ui.label)
+        and element.text in {"Best cases", "Median cases", "Worst cases", "Run A", "Run B"}
     ]
     assert len(plot_cards) == 4
     assert all("h-full" in card._classes for card in plot_cards)
@@ -346,11 +347,13 @@ def test_opacity_overlap_has_no_manual_slider() -> None:
     assert not any(element.tag == "q-slider" for element in client.elements.values())
     assert generated_layer._style["opacity"] == "0"
     assert any(
-        element.tag == "q-btn" and element._props.get("aria-label") == "Save opacity transition GIF"
+        isinstance(element, ui.button)
+        and element._props.get("aria-label") == "Save opacity transition GIF"
         for element in client.elements.values()
     )
     assert any(
-        element.tag == "q-btn" and element._props.get("aria-label") == "Save instant comparison GIF"
+        isinstance(element, ui.button)
+        and element._props.get("aria-label") == "Save instant comparison GIF"
         for element in client.elements.values()
     )
 
@@ -367,12 +370,13 @@ def test_comparison_play_button_animates_opacity_at_new_baseline_speed() -> None
     button = next(
         element
         for element in client.elements.values()
-        if element.tag == "q-btn" and element._props.get("aria-label") == "Play opacity animation"
+        if isinstance(element, ui.button)
+        and element._props.get("aria-label") == "Play opacity animation"
     )
     timer = next(
         element
         for element in client.elements.values()
-        if "vs-opacity-animation-timer" in element._classes
+        if isinstance(element, ui.timer) and "vs-opacity-animation-timer" in element._classes
     )
     generated_layer = next(
         element
@@ -382,13 +386,14 @@ def test_comparison_play_button_animates_opacity_at_new_baseline_speed() -> None
     speed_input = next(
         element
         for element in client.elements.values()
-        if element.tag == "q-input"
+        if isinstance(element, ui.number)
         and element._props.get("aria-label") == "Opacity animation speed"
     )
     repeat_button = next(
         element
         for element in client.elements.values()
-        if element.tag == "q-btn" and element._props.get("aria-label") == "Loop opacity animation"
+        if isinstance(element, ui.button)
+        and element._props.get("aria-label") == "Loop opacity animation"
     )
     assert speed_input.value == 1.0
 
@@ -440,7 +445,7 @@ def test_horizontal_slider_reveals_generated_image_over_target() -> None:
         for element in client.elements.values()
     )
     assert not any(
-        element.tag == "q-btn"
+        isinstance(element, ui.button)
         and element._props.get("aria-label")
         in {
             "Play reveal animation",
@@ -473,6 +478,7 @@ def test_comparison_exports_gif_and_current_reveal_pixels() -> None:
 
     gif = opacity_transition_gif(generated, target)
     with Image.open(BytesIO(gif)) as animation:
+        assert isinstance(animation, GifImageFile)
         assert animation.format == "GIF"
         assert animation.n_frames == 26
         animation.seek(animation.n_frames - 1)
@@ -486,6 +492,7 @@ def test_comparison_exports_gif_and_current_reveal_pixels() -> None:
 
     instant = instant_ab_gif(generated, target)
     with Image.open(BytesIO(instant)) as animation:
+        assert isinstance(animation, GifImageFile)
         assert animation.format == "GIF"
         assert animation.n_frames == 2
         assert animation.info["duration"] == 650
@@ -504,12 +511,13 @@ def test_instant_comparison_starts_and_stops_without_transition() -> None:
     button = next(
         element
         for element in client.elements.values()
-        if element.tag == "q-btn" and element._props.get("aria-label") == "Play instant comparison"
+        if isinstance(element, ui.button)
+        and element._props.get("aria-label") == "Play instant comparison"
     )
     timer = next(
         element
         for element in client.elements.values()
-        if "vs-hard-cut-animation-timer" in element._classes
+        if isinstance(element, ui.timer) and "vs-hard-cut-animation-timer" in element._classes
     )
     layer = next(
         element
@@ -603,3 +611,17 @@ def test_overlap_slider_requires_matching_image_dimensions() -> None:
         getattr(element, "text", None) == "Comparison unavailable"
         for element in client.elements.values()
     )
+
+
+def test_named_output_plots_keep_each_outputs_distributions() -> None:
+    paths = tuple(
+        Path(f"{output}__{name}")
+        for output in ("HE", "PAS")
+        for name in (
+            "ssim_histogram.png",
+            "psnr_histogram.png",
+            "mae_histogram.png",
+            "pcc_rgb_mean_histogram.png",
+        )
+    )
+    assert set(select_evaluation_plot_paths(paths)) == set(paths)

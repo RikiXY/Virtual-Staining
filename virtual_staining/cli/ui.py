@@ -51,7 +51,9 @@ def _build_parser() -> argparse.ArgumentParser:
             f"(default: ${TRAINING_CONFIG_DIRECTORY_ENV} or ./config/runs/local)."
         ),
     )
-    parser.add_argument("--host", default="0.0.0.0", help="Interface to bind (default: 0.0.0.0).")
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="Interface to bind (default: 127.0.0.1)."
+    )
     parser.add_argument("--port", type=int, default=8080, help="Port to bind (default: 8080).")
     add_log_level_argument(parser)
     return parser

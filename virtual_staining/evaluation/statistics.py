@@ -50,7 +50,6 @@ class PairedSummary:
 
 
 def resolve_input_csv(path_like: str | Path) -> Path:
-    """Resolves a direct CSV path or a directory containing per_image_metrics.csv."""
     path = Path(path_like)
 
     if path.is_dir():
@@ -65,15 +64,38 @@ def resolve_input_csv(path_like: str | Path) -> Path:
     raise ValueError(f"Input path does not exist: {path}")
 
 
-def load_metric_frame(csv_path: str | Path) -> pd.DataFrame:
-    """Loads a metrics CSV as a DataFrame."""
+OUTPUT_NAME_COLUMN = "output_name"
+
+
+def _load_metric_frame(csv_path: str | Path, output_name: str | None = None) -> pd.DataFrame:
+    """Read per-image rows of exactly one model output; outputs are never pooled.
+
+    A CSV with an ``output_name`` column holding several outputs requires ``output_name``.
+    """
     resolved_csv = resolve_input_csv(csv_path)
-    return pd.read_csv(resolved_csv)
+    frame = pd.read_csv(resolved_csv)
+    if OUTPUT_NAME_COLUMN not in frame.columns:
+        if output_name is not None:
+            raise ValueError(f"{resolved_csv} has no {OUTPUT_NAME_COLUMN!r} column")
+        return frame
+    frame[OUTPUT_NAME_COLUMN] = frame[OUTPUT_NAME_COLUMN].astype(str)
+    names = list(dict.fromkeys(frame[OUTPUT_NAME_COLUMN]))
+    if output_name is None:
+        if len(names) > 1:
+            raise ValueError(
+                f"{resolved_csv} holds outputs {names}; select one output_name, since a "
+                "comparison never pools different outputs"
+            )
+        return frame
+    if output_name not in names:
+        raise ValueError(f"{resolved_csv} has no rows for output {output_name!r}; found {names}")
+    return frame[frame[OUTPUT_NAME_COLUMN] == output_name]
 
 
-def load_metric_values(csv_path: str | Path, column: str) -> np.ndarray:
-    """Loads a numeric column from a CSV, discarding missing or invalid values."""
-    df = load_metric_frame(csv_path)
+def load_metric_values(
+    csv_path: str | Path, column: str, output_name: str | None = None
+) -> np.ndarray:
+    df = _load_metric_frame(csv_path, output_name)
 
     if column not in df.columns:
         raise ValueError(f"Column '{column}' not found. Available columns: {list(df.columns)}")
@@ -86,13 +108,12 @@ def load_metric_values(csv_path: str | Path, column: str) -> np.ndarray:
     return values
 
 
-def choose_threshold_favors(
+def _choose_threshold_favors(
     shares_a: dict[str, float],
     shares_b: dict[str, float],
     label_a: str,
     label_b: str,
 ) -> str:
-    """Chooses the favoured group by comparing the mean of the above/below-threshold shares."""
     mean_a = float(np.mean(list(shares_a.values()))) if shares_a else 0.0
     mean_b = float(np.mean(list(shares_b.values()))) if shares_b else 0.0
 
@@ -103,12 +124,11 @@ def choose_threshold_favors(
     return "tie"
 
 
-def choose_unpaired_better_label(
+def _choose_unpaired_better_label(
     group_a: UnpairedGroupStats,
     group_b: UnpairedGroupStats,
     comparison: UnpairedComparison,
 ) -> str:
-    """Chooses the better group by combining the main signals from the comparison."""
     score_a = 0
     score_b = 0
 
@@ -129,7 +149,7 @@ def choose_unpaired_better_label(
     return "tie"
 
 
-def choose_paired_better_label(
+def _choose_paired_better_label(
     mean_signed_delta: float,
     median_signed_delta: float,
     share_b_better: float,
@@ -137,7 +157,6 @@ def choose_paired_better_label(
     label_a: str,
     label_b: str,
 ) -> str:
-    """Chooses the better group in a paired comparison from the main signals."""
     score_a = 0
     score_b = 0
 
@@ -169,7 +188,6 @@ def compute_unpaired_group_stats(
     thresholds: Iterable[float],
     higher_is_better: bool,
 ) -> UnpairedGroupStats:
-    """Computes the essential descriptive statistics of an unpaired group."""
     p25, p75 = np.percentile(values, [25, 75])
 
     if higher_is_better:
@@ -198,7 +216,6 @@ def compute_unpaired_comparison(
     group_b: UnpairedGroupStats,
     higher_is_better: bool,
 ) -> UnpairedComparison:
-    """Computes the main comparisons between two unpaired distributions."""
     mann_whitney = mannwhitneyu(a, b, alternative="two-sided")
     ks = ks_2samp(a, b, alternative="two-sided")
 
@@ -233,7 +250,7 @@ def compute_unpaired_comparison(
             else "tie"
         )
 
-    threshold_favors = choose_threshold_favors(
+    threshold_favors = _choose_threshold_favors(
         group_a.threshold_shares,
         group_b.threshold_shares,
         group_a.label,
@@ -251,7 +268,7 @@ def compute_unpaired_comparison(
         mannwhitney_u=float(mann_whitney.statistic),
         mannwhitney_pvalue=float(mann_whitney.pvalue),
     )
-    comparison.better_label = choose_unpaired_better_label(group_a, group_b, comparison)
+    comparison.better_label = _choose_unpaired_better_label(group_a, group_b, comparison)
     return comparison
 
 
@@ -260,20 +277,38 @@ def align_paired_frames(
     csv_b: str | Path,
     sample_id_column: str,
     metric_column: str,
+    output_name: str | None = None,
 ) -> pd.DataFrame:
-    """Aligns two CSVs on the same sample_id for the paired comparison."""
-    frame_a = load_metric_frame(csv_a)
-    frame_b = load_metric_frame(csv_b)
+    """Align two per-image CSVs by ``(sample_id, output_name)`` for one output.
+
+    Each alignment key must be unique in each CSV; rows are never matched by sample ID
+    alone across different outputs.
+    """
+    frame_a = _load_metric_frame(csv_a, output_name)
+    frame_b = _load_metric_frame(csv_b, output_name)
 
     for frame_name, frame in [("A", frame_a), ("B", frame_b)]:
         if sample_id_column not in frame.columns:
             raise ValueError(f"Column '{sample_id_column}' not found in CSV {frame_name}")
         if metric_column not in frame.columns:
             raise ValueError(f"Column '{metric_column}' not found in CSV {frame_name}")
+    keys = [sample_id_column]
+    if OUTPUT_NAME_COLUMN in frame_a.columns and OUTPUT_NAME_COLUMN in frame_b.columns:
+        keys.append(OUTPUT_NAME_COLUMN)
+        if set(frame_a[OUTPUT_NAME_COLUMN]) != set(frame_b[OUTPUT_NAME_COLUMN]):
+            raise ValueError(
+                f"CSV A output {sorted(set(frame_a[OUTPUT_NAME_COLUMN]))} differs from CSV B "
+                f"output {sorted(set(frame_b[OUTPUT_NAME_COLUMN]))}"
+            )
+    elif OUTPUT_NAME_COLUMN in frame_a.columns or OUTPUT_NAME_COLUMN in frame_b.columns:
+        raise ValueError(f"Only one CSV has an {OUTPUT_NAME_COLUMN!r} column")
+    for frame_name, frame in [("A", frame_a), ("B", frame_b)]:
+        if frame.duplicated(subset=keys).any():
+            raise ValueError(f"CSV {frame_name} has duplicate {keys} rows")
 
-    subset_a = frame_a[[sample_id_column, metric_column]].rename(columns={metric_column: "value_a"})
-    subset_b = frame_b[[sample_id_column, metric_column]].rename(columns={metric_column: "value_b"})
-    merged = subset_a.merge(subset_b, on=sample_id_column, how="inner")
+    subset_a = frame_a[[*keys, metric_column]].rename(columns={metric_column: "value_a"})
+    subset_b = frame_b[[*keys, metric_column]].rename(columns={metric_column: "value_b"})
+    merged = subset_a.merge(subset_b, on=keys, how="inner")
     merged["value_a"] = pd.to_numeric(merged["value_a"], errors="coerce")
     merged["value_b"] = pd.to_numeric(merged["value_b"], errors="coerce")
     merged = merged.dropna(subset=["value_a", "value_b"]).copy()
@@ -291,7 +326,6 @@ def compute_paired_summary(
     tolerance: float,
     higher_is_better: bool,
 ) -> PairedSummary:
-    """Computes the main summary for the paired comparison."""
     raw_delta = merged["value_b"].to_numpy(dtype=float) - merged["value_a"].to_numpy(dtype=float)
     signed_delta = raw_delta if higher_is_better else -raw_delta
 
@@ -323,7 +357,7 @@ def compute_paired_summary(
         share_equal=share_equal,
         wilcoxon_statistic=wilcoxon_statistic,
         wilcoxon_pvalue=wilcoxon_pvalue,
-        better_label=choose_paired_better_label(
+        better_label=_choose_paired_better_label(
             mean_signed_delta=mean_signed_delta,
             median_signed_delta=median_signed_delta,
             share_b_better=share_b_better,
@@ -335,7 +369,6 @@ def compute_paired_summary(
 
 
 def flatten_unpaired_group_stats(group: UnpairedGroupStats) -> dict[str, Any]:
-    """Converts grouped unpaired stats into a flat CSV row."""
     row: dict[str, Any] = {
         "label": group.label,
         "n": group.n,

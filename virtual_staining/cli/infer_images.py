@@ -41,7 +41,8 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="output_path",
         default=None,
         help=(
-            "Output image path for file input, or output directory for directory input. "
+            "Output image path for file input of a one-output model; otherwise an output "
+            "directory receiving <output>/<sample>_generated.<ext> per model output. "
             "If omitted, writes to inference.output_dir or artifacts/output_images."
         ),
     )
@@ -78,15 +79,18 @@ def _build_parser() -> argparse.ArgumentParser:
 def _print_file_result(result: SingleInferenceResult) -> None:
     for name, path in result.input_paths.items():
         print_info(f"Input {name}", str(path))
-    print_info("Checkpoint", str(result.checkpoint_path))
+    if result.checkpoint_path is not None:
+        print_info("Checkpoint", str(result.checkpoint_path))
     print_info("Mode", result.mode)
-    print_info("Generated", style(str(result.output_path), "bold", "magenta"))
+    for name, path in result.output_paths.items():
+        print_info(f"Generated {name}", style(str(path), "bold", "magenta"))
 
 
 def _print_directory_result(result: DirectoryInferenceResult) -> None:
     for name, path in result.input_dirs.items():
         print_info(f"Input dir {name}", str(path))
-    print_info("Checkpoint", str(result.checkpoint_path))
+    if result.checkpoint_path is not None:
+        print_info("Checkpoint", str(result.checkpoint_path))
     print_info("Images", str(len(result.results)))
     print_info("Output dir", style(str(result.output_dir), "bold", "magenta"))
 

@@ -2,25 +2,31 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import Any, Literal, cast, get_args
 
-from virtual_staining.config.validation import parse_bool_strict, parse_choice, reject_unknown_keys
+from virtual_staining.config.validation import (
+    parse_bool_strict,
+    parse_choice,
+    parse_int,
+    reject_unknown_keys,
+    require_finite,
+)
+from virtual_staining.loss_definitions import (
+    LOSS_DEFINITIONS,
+    LossDefinition,
+    LossMaskConfig,
+    LossParams,
+    LossRole,
+)
 
 _LOSS_CONFIG_KEYS: frozenset[str] = frozenset({"generator", "discriminator"})
 _LOSS_TERM_KEYS: frozenset[str] = frozenset({"name", "weight", "enabled", "params", "schedule"})
 _LOSS_SCHEDULE_KEYS: frozenset[str] = frozenset(
     {"type", "start_epoch", "end_epoch", "epoch", "factor"}
 )
-_LOSS_MASK_KEYS: frozenset[str] = frozenset(
-    {"enabled", "source", "foreground_weight", "background_weight", "ignore_empty_mask"}
-)
-_SSIM_PARAM_KEYS: frozenset[str] = frozenset(
-    {"data_range", "window_size", "sigma", "channel_mode", "reduction", "mask"}
-)
-_L1_PARAM_KEYS: frozenset[str] = frozenset({"reduction", "mask"})
-_ADVERSARIAL_BCE_PARAM_KEYS: frozenset[str] = frozenset()
 
-LossName = Literal["adversarial_bce", "l1", "ssim"]
+# Static typing alias only; runtime validation uses LOSS_DEFINITIONS.
+LossName = Literal["adversarial_bce", "l1", "ssim", "adversarial_lsgan", "cycle_l1", "identity_l1"]
 LossScheduleType = Literal[
     "constant",
     "linear_warmup",
@@ -30,8 +36,6 @@ LossScheduleType = Literal[
     "turn_on_after_epoch",
     "turn_off_after_epoch",
 ]
-LossRole = Literal["generator", "discriminator"]
-LossMaskSource = Literal["foreground_mask"]
 
 
 @dataclass(frozen=True)
@@ -43,15 +47,7 @@ class LossScheduleConfig:
     factor: float = 0.0
 
     def validate(self) -> None:
-        valid = [
-            "constant",
-            "cosine",
-            "linear_decay",
-            "linear_warmup",
-            "step",
-            "turn_off_after_epoch",
-            "turn_on_after_epoch",
-        ]
+        valid = sorted(get_args(LossScheduleType))
         if self.type not in valid:
             raise ValueError(f"loss schedule type must be one of {valid}")
         if self.start_epoch < 0:
@@ -60,6 +56,7 @@ class LossScheduleConfig:
             raise ValueError("loss schedule end_epoch must be greater than or equal to start_epoch")
         if self.epoch is not None and self.epoch < 0:
             raise ValueError("loss schedule epoch must be greater than or equal to 0")
+        require_finite(self.factor, "loss schedule factor")
         if self.factor < 0:
             raise ValueError("loss schedule factor must be greater than or equal to 0")
         if self.type in {"linear_warmup", "linear_decay", "cosine"} and self.end_epoch is None:
@@ -120,32 +117,6 @@ class LossScheduleConfig:
 
 
 @dataclass(frozen=True)
-class LossMaskConfig:
-    enabled: bool = False
-    source: LossMaskSource = "foreground_mask"
-    foreground_weight: float = 1.0
-    background_weight: float = 1.0
-    ignore_empty_mask: bool = True
-
-    def validate(self) -> None:
-        if self.source != "foreground_mask":
-            raise ValueError("loss mask source must be one of ['foreground_mask']")
-        if self.foreground_weight < 0:
-            raise ValueError("loss mask foreground_weight must be greater than or equal to 0")
-        if self.background_weight < 0:
-            raise ValueError("loss mask background_weight must be greater than or equal to 0")
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "enabled": self.enabled,
-            "source": self.source,
-            "foreground_weight": self.foreground_weight,
-            "background_weight": self.background_weight,
-            "ignore_empty_mask": self.ignore_empty_mask,
-        }
-
-
-@dataclass(frozen=True)
 class LossTermConfig:
     name: LossName
     weight: float
@@ -154,23 +125,21 @@ class LossTermConfig:
     schedule: LossScheduleConfig = field(default_factory=LossScheduleConfig)
 
     def validate(self, role: LossRole) -> None:
-        if self.name not in {"adversarial_bce", "l1", "ssim"}:
-            raise ValueError("loss name must be one of ['adversarial_bce', 'l1', 'ssim']")
-        if self.name in {"l1", "ssim"} and role != "generator":
-            raise ValueError(f"loss '{self.name}' is supported only in losses.generator")
+        self.definition.validate_role(role)
+        require_finite(self.weight, f"loss '{self.name}' weight")
         if self.weight < 0:
             raise ValueError(f"loss '{self.name}' weight must be greater than or equal to 0")
         self.schedule.validate()
-        if self.name == "ssim":
-            reject_unknown_keys(self.params, _SSIM_PARAM_KEYS, f"loss '{self.name}' params")
-            _validate_ssim_params(self.params)
-        elif self.name == "l1":
-            reject_unknown_keys(self.params, _L1_PARAM_KEYS, f"loss '{self.name}' params")
-            _validate_l1_params(self.params)
-        else:
-            reject_unknown_keys(
-                self.params, _ADVERSARIAL_BCE_PARAM_KEYS, f"loss '{self.name}' params"
-            )
+        self.resolved_params()
+
+    @property
+    def definition(self) -> LossDefinition:
+        if self.name not in LOSS_DEFINITIONS:
+            raise ValueError(f"loss name must be one of {sorted(LOSS_DEFINITIONS)}")
+        return LOSS_DEFINITIONS[self.name]
+
+    def resolved_params(self) -> LossParams:
+        return self.definition.parse_params(self.params)
 
     @property
     def is_active(self) -> bool:
@@ -183,7 +152,7 @@ class LossTermConfig:
 
     @property
     def mask(self) -> LossMaskConfig:
-        return parse_loss_mask_config(self.params.get("mask"), f"loss '{self.name}' params.mask")
+        return self.resolved_params().mask
 
     @property
     def requires_mask(self) -> bool:
@@ -227,6 +196,32 @@ class LossConfig:
         }
 
 
+def output_component_key(key: str, output: str) -> str:
+    """The per-output component key of a reconstruction term, e.g. ``generator_l1__HE``."""
+    return f"{key}__{output}"
+
+
+def configured_loss_names(
+    losses: LossConfig | None, outputs: tuple[str, ...] | None = None
+) -> list[str]:
+    """Role-qualified term names, the component columns of the training history.
+
+    With ``outputs``, every reconstruction term is reported once per output
+    (``generator_<term>__<output>``); adversarial terms stay joint.
+    """
+    if losses is None:
+        return []
+    names: list[str] = []
+    for term in losses.generator:
+        key = f"generator_{term.name}"
+        if outputs is None or term.definition.context == "adversarial":
+            names.append(key)
+        else:
+            names.extend(output_component_key(key, output) for output in outputs)
+    names.extend(f"discriminator_{term.name}" for term in losses.discriminator)
+    return names
+
+
 def parse_loss_config(raw: Any) -> LossConfig:
     if raw is None:
         raw = {}
@@ -258,7 +253,7 @@ def _parse_loss_term(raw: Any, context: str) -> LossTermConfig:
     if "weight" not in raw:
         raise ValueError(f"{context}.weight is required")
 
-    name = parse_choice(raw["name"], f"{context}.name", {"adversarial_bce", "l1", "ssim"})
+    name = parse_choice(raw["name"], f"{context}.name", set(LOSS_DEFINITIONS))
     params = raw.get("params", {})
     if params is None:
         params = {}
@@ -282,44 +277,18 @@ def _parse_loss_schedule(raw: Any, context: str) -> LossScheduleConfig:
     schedule_type = parse_choice(
         raw.get("type", "constant"),
         f"{context}.type",
-        {
-            "constant",
-            "linear_warmup",
-            "linear_decay",
-            "step",
-            "cosine",
-            "turn_on_after_epoch",
-            "turn_off_after_epoch",
-        },
+        set(get_args(LossScheduleType)),
     )
     config = LossScheduleConfig(
         type=cast(LossScheduleType, schedule_type),
-        start_epoch=int(raw.get("start_epoch", 0)),
-        end_epoch=int(raw["end_epoch"]) if raw.get("end_epoch") is not None else None,
-        epoch=int(raw["epoch"]) if raw.get("epoch") is not None else None,
-        factor=float(raw.get("factor", 0.0)),
-    )
-    config.validate()
-    return config
-
-
-def parse_loss_mask_config(raw: Any, context: str = "loss mask") -> LossMaskConfig:
-    if raw is None:
-        return LossMaskConfig()
-    if not isinstance(raw, dict):
-        raise TypeError(f"{context} must be a YAML mapping")
-    reject_unknown_keys(raw, _LOSS_MASK_KEYS, context)
-    source = parse_choice(
-        raw.get("source", "foreground_mask"), f"{context}.source", {"foreground_mask"}
-    )
-    config = LossMaskConfig(
-        enabled=parse_bool_strict(raw.get("enabled", False), f"{context}.enabled"),
-        source=cast(LossMaskSource, source),
-        foreground_weight=float(raw.get("foreground_weight", 1.0)),
-        background_weight=float(raw.get("background_weight", 1.0)),
-        ignore_empty_mask=parse_bool_strict(
-            raw.get("ignore_empty_mask", True), f"{context}.ignore_empty_mask"
+        start_epoch=parse_int(raw.get("start_epoch", 0), f"{context}.start_epoch"),
+        end_epoch=(
+            parse_int(raw["end_epoch"], f"{context}.end_epoch")
+            if raw.get("end_epoch") is not None
+            else None
         ),
+        epoch=parse_int(raw["epoch"], f"{context}.epoch") if raw.get("epoch") is not None else None,
+        factor=float(raw.get("factor", 0.0)),
     )
     config.validate()
     return config
@@ -336,24 +305,3 @@ def _validate_unique_loss_names(terms: tuple[LossTermConfig, ...], role: str) ->
         raise ValueError(
             f"Duplicate loss name(s) in losses.{role}: {', '.join(sorted(duplicates))}"
         )
-
-
-def _validate_ssim_params(params: dict[str, Any]) -> None:
-    if float(params.get("data_range", 1.0)) <= 0:
-        raise ValueError("loss 'ssim' params.data_range must be greater than 0")
-    window_size = int(params.get("window_size", 11))
-    if window_size <= 0 or window_size % 2 == 0:
-        raise ValueError("loss 'ssim' params.window_size must be a positive odd integer")
-    if float(params.get("sigma", 1.5)) <= 0:
-        raise ValueError("loss 'ssim' params.sigma must be greater than 0")
-    if params.get("channel_mode", "rgb") not in {"rgb", "gray"}:
-        raise ValueError("loss 'ssim' params.channel_mode must be one of ['gray', 'rgb']")
-    if params.get("reduction", "mean") not in {"mean", "sum", "none"}:
-        raise ValueError("loss 'ssim' params.reduction must be one of ['mean', 'none', 'sum']")
-    parse_loss_mask_config(params.get("mask"), "loss 'ssim' params.mask")
-
-
-def _validate_l1_params(params: dict[str, Any]) -> None:
-    if params.get("reduction", "mean") not in {"mean", "sum", "none"}:
-        raise ValueError("loss 'l1' params.reduction must be one of ['mean', 'none', 'sum']")
-    parse_loss_mask_config(params.get("mask"), "loss 'l1' params.mask")

@@ -20,7 +20,7 @@ def _draft(**changes: object) -> TrainingConfigDraft:
         dataset_root="local_workspace/datasets/sample",
         results_path="local_workspace/results",
         input_modalities=("autofluorescence", "label_free"),
-        target_modality="H&E",
+        target_modality="HE",
         epochs=30,
         generator_adversarial_weight=1.0,
         reconstruction_weight=25.0,
@@ -47,7 +47,7 @@ def test_preview_builds_minimal_training_only_yaml(tmp_path: Path) -> None:
     assert set(data) == {"dataset_root", "results_path", "run_name", "model", "training"}
     assert data["model"] == {
         "inputs": ["autofluorescence", "label_free"],
-        "target": "H&E",
+        "outputs": ["HE"],
     }
     assert data["training"] == {
         "epochs": 30,

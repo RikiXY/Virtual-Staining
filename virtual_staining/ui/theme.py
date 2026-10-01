@@ -5,7 +5,7 @@ from nicegui import ui
 from virtual_staining.applications.api import MetricQuality
 
 # The palette is intentionally kept here so visual grading can be adjusted in one place.
-# Numeric, direction-aware cutoffs live in metrics.METRIC_SPECS and reach the UI via the API.
+# Numeric, direction-aware hints use the shared metric definitions through the API.
 METRIC_QUALITY_STYLES: dict[MetricQuality, tuple[str, str]] = {
     "very_good": ("Very good", "vs-metric--very-good"),
     "good": ("Good", "vs-metric--good"),

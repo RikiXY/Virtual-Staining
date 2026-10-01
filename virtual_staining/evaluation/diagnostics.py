@@ -7,7 +7,7 @@ import numpy as np
 from PIL import Image
 
 from virtual_staining.evaluation import serialized_plot
-from virtual_staining.evaluation.selection import extract_generated_sample_id
+from virtual_staining.utils.artifacts import generated_identity
 from virtual_staining.utils.image_io import open_rgb, to_float01
 
 
@@ -28,7 +28,7 @@ def compute_absolute_difference_map(
 
 
 @serialized_plot
-def make_error_histogram(
+def _make_error_histogram(
     target: np.ndarray,
     generated: np.ndarray,
     output_path: str | Path,
@@ -49,7 +49,7 @@ def make_error_histogram(
 
 
 @serialized_plot
-def make_intensity_overlay_histogram(
+def _make_intensity_overlay_histogram(
     target: np.ndarray,
     generated: np.ndarray,
     output_path: str | Path,
@@ -77,7 +77,7 @@ def make_intensity_overlay_histogram(
 
 
 @serialized_plot
-def make_scatter_by_channel(
+def _make_scatter_by_channel(
     target: np.ndarray,
     generated: np.ndarray,
     output_path: str | Path,
@@ -125,21 +125,22 @@ def save_diagnostic_plots(
 
     target = to_float01(target_img)
     generated = to_float01(generated_img)
-    sample_id = extract_generated_sample_id(generated_path)
+    sample_id, output_name = generated_identity(generated_path)
+    sample_id = f"{sample_id}__{output_name}"
     save_dir = Path(save_dir)
 
     return [
-        make_error_histogram(
+        _make_error_histogram(
             target,
             generated,
             save_dir / f"{sample_id}_error_histogram.png",
         ),
-        make_scatter_by_channel(
+        _make_scatter_by_channel(
             target,
             generated,
             save_dir / f"{sample_id}_target_vs_generated_scatter_by_channel.png",
         ),
-        make_intensity_overlay_histogram(
+        _make_intensity_overlay_histogram(
             target,
             generated,
             save_dir / f"{sample_id}_intensity_overlay_histogram.png",

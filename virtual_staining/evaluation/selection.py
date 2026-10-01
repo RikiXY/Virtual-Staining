@@ -3,10 +3,8 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from virtual_staining.metrics import DEFAULT_METRICS, is_higher_better_metric
 from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS
 
-METRIC_SELECTION_ORDER = list(DEFAULT_METRICS)
 SELECTION_SUMMARY_FIELDNAMES = [
     "metric",
     "kind",
@@ -21,15 +19,7 @@ SELECTION_SUMMARY_FIELDNAMES = [
 ]
 
 
-def extract_generated_sample_id(path: str | Path) -> str:
-    stem = Path(path).stem
-    suffix = "_target_generated"
-    if not stem.endswith(suffix):
-        raise ValueError(f"Generated file does not end with '{suffix}': {path}")
-    return stem[: -len(suffix)]
-
-
-def find_existing_image(base_dir: str | Path, sample_id: str, suffix: str) -> Path:
+def _find_existing_image(base_dir: str | Path, sample_id: str, suffix: str) -> Path:
     directory = Path(base_dir)
     for ext in sorted(VALID_IMAGE_EXTENSIONS):
         candidate = directory / f"{sample_id}{suffix}{ext}"
@@ -57,18 +47,19 @@ def infer_source_path_from_row(row: dict[str, str]) -> Path:
         if manifest_inputs:
             # Evaluation rows currently identify the target and generated files.
             # A v3 manifest keeps named input patches beside the target; use the
-            # first configured input as the representative source preview.
+            # first available input as the representative source preview.
             return manifest_inputs[0]
         try:
-            return find_existing_image(target_directory, sample_id, "_source")
+            return _find_existing_image(Path(row["target_path"]).parent, sample_id, "_source")
         except FileNotFoundError:
             pass
 
     if row.get("generated_path"):
         generated_path = Path(row["generated_path"])
         try:
-            return find_existing_image(
-                generated_path.parents[1] / "splits" / "test", sample_id, "_source"
+            # <output_dir>/<output_name>/<sample>_generated: one level deeper per output.
+            return _find_existing_image(
+                generated_path.parents[2] / "splits" / "test", sample_id, "_source"
             )
         except FileNotFoundError:
             pass
@@ -80,21 +71,28 @@ def select_representative_rows(
     metric_name: str,
     metric_summary: dict[str, float],
     per_image_rows: list[dict[str, str]],
+    *,
+    higher_is_better: bool,
 ) -> dict[str, dict[str, str]]:
-    if not per_image_rows:
-        raise ValueError("No per-image rows available for representative selection.")
+    """Best, finite-median-nearest and worst rows among those with a numeric value."""
+    rows = [
+        row
+        for row in per_image_rows
+        if row[f"{metric_name}_status"] in ("finite", "positive_infinity")
+    ]
+    if not rows:
+        raise ValueError(f"No numeric per-image values of {metric_name!r} to select from.")
 
     def metric_value(row: dict[str, str]) -> float:
         return float(row[metric_name])
 
-    higher_is_better = is_higher_better_metric(metric_name)
     return {
-        "best": (max if higher_is_better else min)(per_image_rows, key=metric_value),
+        "best": (max if higher_is_better else min)(rows, key=metric_value),
         "median": min(
-            per_image_rows,
-            key=lambda row: abs(metric_value(row) - metric_summary["median"]),
+            rows,
+            key=lambda row: abs(metric_value(row) - metric_summary["finite_median"]),
         ),
-        "worst": (min if higher_is_better else max)(per_image_rows, key=metric_value),
+        "worst": (min if higher_is_better else max)(rows, key=metric_value),
     }
 
 

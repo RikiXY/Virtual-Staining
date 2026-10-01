@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import csv
+import json
 from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
-from virtual_staining.data.manifest import DatasetManifest, ManifestMetadata, ManifestRecord, Split
+from virtual_staining.data.manifest import (
+    MANIFEST_SCHEMA_VERSION,
+    DatasetManifest,
+    ManifestMetadata,
+    ManifestRecord,
+    Split,
+)
 
 INPUT_MODALITIES = ("label_free",)
 REFERENCE_MODALITY = "label_free"
-TARGET_MODALITY = "stained"
+TARGET_MODALITIES = ("stained",)
 
 
 def make_manifest_record(
@@ -17,15 +25,15 @@ def make_manifest_record(
     *,
     ext: str = ".tif",
     input_paths: dict[str, Path] | None = None,
-    target_path: Path | None = None,
+    target_paths: dict[str, Path] | None = None,
     set_id: str = "P1",
     width: int = 256,
     height: int = 256,
     x: int | None = None,
     y: int | None = None,
-    foreground_mask_path: Path | None = None,
+    foreground_mask_paths: dict[str, Path | None] | None = None,
 ) -> ManifestRecord:
-    """Return one synthetic v3 manifest record."""
+    """Return one synthetic v4 manifest record."""
     if x is None or y is None:
         parts = sample_id.split("_", maxsplit=1)
         x = int(parts[0]) if x is None else x
@@ -34,23 +42,33 @@ def make_manifest_record(
     input_paths = input_paths or {
         "label_free": Path(f"splits/{typed_split}/{sample_id}_input__label_free{ext}")
     }
-    target_path = target_path or Path(f"splits/{typed_split}/{sample_id}__target{ext}")
+    target_paths = target_paths or {
+        "stained": Path(f"splits/{typed_split}/{sample_id}__target__stained{ext}")
+    }
     return ManifestRecord(
         sample_id=sample_id,
         set_id=set_id,
         split=typed_split,
         input_paths=input_paths,
-        target_path=target_path,
+        target_paths=target_paths,
+        foreground_mask_paths=foreground_mask_paths or dict.fromkeys(target_paths),
         x=x,
         y=y,
         width=width,
         height=height,
-        foreground_mask_path=foreground_mask_path,
     )
 
 
-def manifest_metadata(input_modalities: tuple[str, ...] = INPUT_MODALITIES) -> ManifestMetadata:
-    return ManifestMetadata("3.0", input_modalities, input_modalities[0], TARGET_MODALITY)
+def manifest_metadata(
+    input_modalities: tuple[str, ...] = INPUT_MODALITIES,
+    target_modalities: tuple[str, ...] = TARGET_MODALITIES,
+) -> ManifestMetadata:
+    return ManifestMetadata(
+        schema_version=MANIFEST_SCHEMA_VERSION,
+        input_modalities=input_modalities,
+        target_modalities=target_modalities,
+        reference_modality=input_modalities[0],
+    )
 
 
 def make_manifest_records(
@@ -88,3 +106,52 @@ def write_manifest_csv(
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     manifest.to_csv(csv_path)
     return csv_path
+
+
+def write_aligned_test_manifest(dataset_root: Path, sample_ids: list[str]) -> None:
+    """Write an aligned test-split manifest of <id>_source/<id>_target PNGs for set P1."""
+    records = tuple(
+        make_manifest_record(
+            sample_id,
+            "test",
+            input_paths={"label_free": Path(f"splits/test/{sample_id}_source.png")},
+            ext=".png",
+            target_paths={"stained": Path(f"splits/test/{sample_id}_target.png")},
+        )
+        for sample_id in sample_ids
+    )
+    write_manifest_csv(dataset_root, records)
+    with (dataset_root / "manifests" / "slide_sets.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "set_id",
+                "split",
+                "patient_id",
+                "specimen_id",
+                "status",
+                "label_free__alignment_method",
+                "stained__alignment_method",
+                "label_free__alignment_metadata",
+                "stained__alignment_metadata",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "set_id": "P1",
+                "split": "test",
+                "patient_id": "patient-1",
+                "specimen_id": "specimen-1",
+                "status": "processed",
+                "label_free__alignment_method": "identity",
+                "stained__alignment_method": "identity",
+                "label_free__alignment_metadata": "{}",
+                "stained__alignment_metadata": "{}",
+            }
+        )
+    (dataset_root / "manifests" / "manifest_metadata.json").write_text(
+        json.dumps(manifest_metadata().to_dict()), encoding="utf-8"
+    )

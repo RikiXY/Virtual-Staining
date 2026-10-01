@@ -3,13 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 
 from virtual_staining.config.run import RunConfig
-from virtual_staining.experiment.run_paths import RunPaths
-from virtual_staining.inference.runner import load_inference_generator, resolve_inference_device
+from virtual_staining.definitions import Definitions
+from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
+from virtual_staining.inference.runner import (
+    inference_input_names,
+    inference_output_names,
+    load_inference_generator,
+    resolve_inference_device,
+)
 from virtual_staining.inference.single import (
     DEFAULT_TILE_OVERLAP,
     SUPPORTED_OUTPUT_FORMATS,
     DirectoryInferenceResult,
     InferenceRuntime,
+    PredictionContract,
     SingleInferenceMode,
     SingleInferenceResult,
     run_image_path_inference,
@@ -67,18 +74,23 @@ def _resolve_input_specs(
 def _create_runtime(config: RunConfig) -> InferenceRuntime:
     if config.inference is None:
         raise ValueError("RunConfig.inference is required to run image inference.")
-    paths = RunPaths(config.project.run_root)
-    paths.create_directories()
+    layout = RunLayout.from_project(config.project)
+    ensure_run_directories(layout)
     device = resolve_inference_device()
-    generator, checkpoint_path = load_inference_generator(config, paths, device)
+    predictor, checkpoint_path = load_inference_generator(config, layout, device)
     output_dir = config.inference.output_dir
     return InferenceRuntime(
-        generator=generator,
-        checkpoint_path=checkpoint_path,
-        image_size=config.project.image_size,
+        predictor=predictor,
+        contract=PredictionContract(
+            input_names=inference_input_names(config),
+            output_names=inference_output_names(config),
+            image_size=config.project.image_size,
+        ),
         device=device,
-        default_single_output_dir=output_dir or paths.artifacts_dir / "output_single",
-        default_directory_output_dir=output_dir or paths.artifacts_dir / "output_images",
+        checkpoint_path=checkpoint_path,
+        predictor_identity=config.method.name,
+        default_single_output_dir=output_dir or layout.artifacts_dir / "output_single",
+        default_directory_output_dir=output_dir or layout.artifacts_dir / "output_images",
     )
 
 
@@ -91,10 +103,11 @@ def infer_images(
     mode: SingleInferenceMode = "auto",
     tile_overlap: int = DEFAULT_TILE_OVERLAP,
     output_format: str = "same",
+    definitions: Definitions | None = None,
 ) -> SingleInferenceResult | DirectoryInferenceResult:
-    """Application-level image inference entry point for files or directories."""
-    config = RunConfig.from_yaml(config_path.resolve())
-    input_paths = _resolve_input_specs(input_specs, tuple(config.model.inputs))
+    """Translate images with a run's checkpoint; ``definitions`` defaults to the built-ins."""
+    config = RunConfig.from_yaml(config_path.resolve(), definitions)
+    input_paths = _resolve_input_specs(input_specs, inference_input_names(config))
     return run_image_path_inference(
         lambda: _create_runtime(config),
         input_paths,

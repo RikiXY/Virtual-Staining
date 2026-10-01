@@ -39,8 +39,12 @@ def _print_pair_result(result: SingleEvalResult) -> None:
     print_info("Target", str(result.target))
     print_info("Generated", str(result.generated))
     print_info("Shape", f"{width}x{height}x{channels}")
-    for metric in ("mae", "mse", "rmse", "psnr", "ssim", "pcc_gray", "pcc_rgb_mean"):
-        print_info(metric.upper().replace("_", " "), color_metric(metric, result.metrics[metric]))
+    for metric, value in result.metrics.items():
+        label = metric.upper().replace("_", " ")
+        if value.value is None:
+            print_info(label, style(f"{value.status} ({value.reason})", "yellow"))
+        else:
+            print_info(label, color_metric(metric, value.value))
     print_section("Saved files")
     print_info("Single evaluation CSV", style(str(result.single_case_csv), "bold", "magenta"))
 

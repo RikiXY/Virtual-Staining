@@ -2,15 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from virtual_staining.utils.dimensions import parse_wh_size
 
-_PROJECT_KEYS = frozenset(
+PROJECT_KEYS = frozenset(
     {"dataset_root", "results_path", "run_name", "image_size", "manifest_path"}
 )
-
-SplitName = Literal["train", "val", "test"]
 
 
 @dataclass(frozen=True)
@@ -26,7 +24,7 @@ class ProjectConfig:
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any]) -> ProjectConfig:
-        project_data = {key: value for key, value in data.items() if key in _PROJECT_KEYS}
+        project_data = {key: value for key, value in data.items() if key in PROJECT_KEYS}
         manifest_path = project_data.get("manifest_path")
         return cls(
             dataset_root=Path(project_data["dataset_root"]),
@@ -46,23 +44,6 @@ class ProjectConfig:
         if self.manifest_path_override is not None:
             data["manifest_path"] = str(self.manifest_path_override)
         return data
-
-    @property
-    def run_root(self) -> Path:
-        return self.results_path / self.run_name
-
-    @property
-    def splits_dir(self) -> Path:
-        return self.dataset_root / "splits"
-
-    def split_dir(self, split: SplitName) -> Path:
-        return self.splits_dir / split
-
-    @property
-    def manifest_path(self) -> Path:
-        if self.manifest_path_override is not None:
-            return self.manifest_path_override
-        return self.dataset_root / "manifests" / "manifest.csv"
 
     def validate(self) -> None:
         if not self.run_name.strip():

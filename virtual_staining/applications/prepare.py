@@ -7,20 +7,29 @@ from typing import Any
 
 from virtual_staining.config.data import PreprocessingConfig
 from virtual_staining.config.run import RunConfig
+from virtual_staining.data.alignment import RegistrationBackend
 from virtual_staining.data.builder import DatasetBuilder, DatasetBuildResult
-from virtual_staining.data.provenance import (
-    build_dataset_fingerprint_metadata,
-    resolve_prepare_snapshot_paths,
+from virtual_staining.data.consumption import AssetRow, DataSnapshot, build_snapshot, write_snapshot
+from virtual_staining.data.layout import DatasetLayout
+from virtual_staining.data.provenance import build_dataset_fingerprint_metadata
+from virtual_staining.data.slide_sets import (
+    RegistrationEvidence,
+    SlideSet,
+    resolve_registration_evidence,
+    resolve_slide_sets,
 )
-from virtual_staining.data.slide_sets import SlideSet, resolve_slide_sets
 from virtual_staining.experiment.snapshots import (
     save_config_hash,
     save_environment_snapshot,
     save_stage_config_snapshots,
 )
+from virtual_staining.split_contract import DATASET_SPLITS
+from virtual_staining.utils.hashing import sha256_file
 from virtual_staining.utils.image_io import detect_openslide_format
 
 logger = logging.getLogger(__name__)
+
+PREPARE_ADAPTER = "slide_set_inventory/1"
 
 
 def _load_json(path: Path) -> dict[str, Any] | None:
@@ -32,47 +41,114 @@ def _load_json(path: Path) -> dict[str, Any] | None:
         return None
 
 
+def source_snapshot(config: RunConfig, slide_sets: tuple[SlideSet, ...]) -> DataSnapshot:
+    """Snapshot the raw inputs, targets, and supplied masks selected for preparation.
+
+    Splits are assigned by preparation itself, so rows carry no split and no cross-split
+    group claim is made here; the prepared stages validate their own split partitions.
+    """
+    assert config.preprocessing is not None
+    preprocessing = config.preprocessing
+    rows: list[AssetRow] = []
+    for item in slide_sets:
+        groups: dict[str, Any] = {
+            "set_id": item.set_id,
+            "specimen_id": item.specimen_id or "",
+            "patient_id": item.patient_id or "",
+        }
+        for role, asset in (
+            *(("input", asset) for asset in item.inputs),
+            *(("target", asset) for asset in item.targets),
+        ):
+            rows.append(
+                AssetRow(
+                    root="dataset",
+                    locator=asset.path.as_posix(),
+                    role=role,
+                    domain=asset.modality,
+                    **groups,
+                )
+            )
+            if asset.mask_path is not None:
+                rows.append(
+                    AssetRow(
+                        root="dataset",
+                        locator=asset.mask_path.as_posix(),
+                        role="mask",
+                        domain=asset.modality,
+                        **groups,
+                    )
+                )
+    inventory = preprocessing.inputs.inventory
+    inventory_path = (
+        inventory if inventory.is_absolute() else preprocessing.dataset_root / inventory
+    )
+    return build_snapshot(
+        rows,
+        kind="consumed",
+        adapter=PREPARE_ADAPTER,
+        roots={"dataset": preprocessing.dataset_root},
+        hash_policy=config.data.hash_policy,
+        selection={
+            "modalities": list(preprocessing.inputs.modalities),
+            "reference": preprocessing.inputs.reference,
+            "target_modalities": list(preprocessing.inputs.target_modalities),
+            "split_unit": preprocessing.split.unit,
+        },
+        sources={"inventory": str(inventory), "inventory_sha256": sha256_file(inventory_path)},
+    )
+
+
 def _build_current_fingerprint(
-    config: RunConfig, slide_sets: tuple[SlideSet, ...]
+    config: RunConfig,
+    slide_sets: tuple[SlideSet, ...],
+    snapshot: DataSnapshot,
+    registration_backend: RegistrationBackend | None = None,
+    registration_evidence: RegistrationEvidence | None = None,
 ) -> dict[str, Any]:
     assert config.preprocessing is not None
-    root = config.preprocessing.dataset_root
-    return build_dataset_fingerprint_metadata(
-        dataset_root=root,
+    layout = DatasetLayout(config.preprocessing.dataset_root)
+    root = layout.root.resolve()
+    verified = {
+        str((root / row.locator).resolve()): row.sha256
+        for row in snapshot.rows
+        if row.sha256 is not None
+    }
+    fingerprint = build_dataset_fingerprint_metadata(
+        dataset_root=layout.root,
         preprocessing_config=config.preprocessing.to_dict(),
         slide_sets=slide_sets,
-        inventory_path=root / config.preprocessing.inputs.inventory,
-        hash_cache_path=root / "metadata" / "input_hashes.json",
+        inventory_path=layout.root / config.preprocessing.inputs.inventory,
+        hash_cache_path=layout.input_hashes_path,
         force_hash_verification=config.preprocessing.inputs.hash_verification == "always",
+        verified_hashes=verified,
+        registration_backend=registration_backend,
+        registration_evidence=registration_evidence,
     )
+    # Cross-reference only; the fingerprint digest itself stays preparation lineage.
+    fingerprint["source_snapshot_id"] = snapshot.snapshot_id
+    return fingerprint
 
 
 def _dataset_outputs_are_complete(dataset_root: Path) -> bool:
+    layout = DatasetLayout(dataset_root)
     required = (
-        dataset_root / "manifests" / "manifest.csv",
-        dataset_root / "manifests" / "discarded_manifest.csv",
-        dataset_root / "manifests" / "slide_sets.csv",
-        dataset_root / "manifests" / "manifest_metadata.json",
-        dataset_root / "metadata" / "dataset_build.json",
-        dataset_root / "metadata" / "dataset_fingerprint.json",
-        dataset_root / "metadata" / "split_assignment.csv",
+        layout.manifest_path,
+        layout.discarded_manifest_path,
+        layout.slide_sets_path,
+        layout.manifest_metadata_path,
+        layout.dataset_build_path,
+        layout.dataset_fingerprint_path,
+        layout.split_assignment_path,
     )
     return all(path.is_file() for path in required) and all(
-        (dataset_root / "splits" / name).is_dir() for name in ("train", "val", "test")
+        layout.split_dir(name).is_dir() for name in DATASET_SPLITS
     )
 
 
 def _build_reused_result(dataset_root: Path) -> DatasetBuildResult:
-    data = _load_json(dataset_root / "metadata" / "dataset_build.json") or {}
-    patches = data.get("patches", {})
-    return DatasetBuildResult(
-        int(patches.get("train", 0)),
-        int(patches.get("val", 0)),
-        int(patches.get("test", 0)),
-        int(patches.get("discarded", 0)),
-        dataset_root,
-        reused=True,
-    )
+    layout = DatasetLayout(dataset_root)
+    return DatasetBuildResult.load(layout.dataset_build_path, output_root=layout.root, reused=True)
 
 
 def _log_prepare_summary(
@@ -86,10 +162,10 @@ def _log_prepare_summary(
     )
     for item in slide_sets:
         logger.info(
-            "Set %s | inputs=%s | target=%s | reference=%s",
+            "Set %s | inputs=%s | targets=%s | reference=%s",
             item.set_id,
             ",".join(asset.modality for asset in item.inputs),
-            item.target.modality,
+            ",".join(asset.modality for asset in item.targets),
             item.reference_modality,
         )
 
@@ -104,23 +180,14 @@ def _warn_image_backend(config: RunConfig, slide_sets: tuple[SlideSet, ...]) -> 
             {
                 root / asset.path
                 for item in slide_sets
-                for asset in (*item.inputs, item.target)
+                for asset in item.assets
                 if (root / asset.path).is_file()
             }
         )
     )
     if not paths:
         return
-    try:
-        incompatible = tuple(path for path in paths if detect_openslide_format(path) is None)
-    except RuntimeError:
-        message = (
-            "OpenSlide is unavailable, so tiled preparation cannot start."
-            if preprocessing.io.backend == "openslide"
-            else "Tiled preparation is using Pillow because OpenSlide is unavailable."
-        )
-        logger.warning(message)
-        return
+    incompatible = tuple(path for path in paths if detect_openslide_format(path) is None)
     if incompatible and preprocessing.io.backend == "openslide":
         logger.warning(
             "Configured slides are not OpenSlide-compatible; tiled preparation "
@@ -128,37 +195,50 @@ def _warn_image_backend(config: RunConfig, slide_sets: tuple[SlideSet, ...]) -> 
         )
 
 
-def prepare(config: RunConfig, config_path: Path) -> DatasetBuildResult:
+def prepare(
+    config: RunConfig,
+    config_path: Path,
+    *,
+    registration_backend: RegistrationBackend | None = None,
+    registration_evidence: RegistrationEvidence | None = None,
+) -> DatasetBuildResult:
     if config.preprocessing is None:
         raise ValueError("RunConfig.preprocessing must be present for prepare().")
     root = config.preprocessing.dataset_root
-    if not root.exists():
-        raise FileNotFoundError(f"Dataset root not found: {root}")
-    snapshot_paths = resolve_prepare_snapshot_paths(root)
-    metadata_dir = root / "metadata"
+    layout = DatasetLayout(root)
     slide_sets = resolve_slide_sets(config.preprocessing)
+    registration_evidence = resolve_registration_evidence(slide_sets, registration_evidence)
     config_hash = save_stage_config_snapshots(
         config,
         config_path,
-        input_dest=snapshot_paths.input_config,
-        resolved_dest=snapshot_paths.resolved_config,
+        input_dest=layout.input_config_path,
+        resolved_dest=layout.resolved_config_path,
     )
-    save_config_hash(config_hash, metadata_dir / "config_hash.txt")
-    save_environment_snapshot(snapshot_paths.environment)
+    save_config_hash(config_hash, layout.config_hash_path)
+    save_environment_snapshot(layout.environment_path)
 
-    fingerprint = _build_current_fingerprint(config, slide_sets)
-    stored = _load_json(root / "metadata" / "dataset_fingerprint.json")
+    # Freeze and persist the selected raw assets before any reuse decision or build.
+    snapshot = source_snapshot(config, slide_sets)
+    write_snapshot(snapshot, layout.source_snapshot)
+    fingerprint = _build_current_fingerprint(
+        config, slide_sets, snapshot, registration_backend, registration_evidence
+    )
+    stored = _load_json(layout.dataset_fingerprint_path)
     result = None
     if (
         stored
         and stored.get("fingerprint") == fingerprint.get("fingerprint")
-        and _dataset_outputs_are_complete(root)
+        and _dataset_outputs_are_complete(layout.root)
     ):
-        result = _build_reused_result(root)
+        result = _build_reused_result(layout.root)
     _log_prepare_summary(config.preprocessing, slide_sets, reused=result is not None)
     if result is None:
         _warn_image_backend(config, slide_sets)
         result = DatasetBuilder(
-            config.preprocessing, slide_sets=slide_sets, fingerprint_metadata=fingerprint
+            config.preprocessing,
+            slide_sets=slide_sets,
+            fingerprint_metadata=fingerprint,
+            registration_backend=registration_backend,
+            registration_evidence=registration_evidence,
         ).run_all()
     return result

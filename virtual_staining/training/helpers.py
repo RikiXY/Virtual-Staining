@@ -1,31 +1,27 @@
 from __future__ import annotations
 
+import logging
+import math
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import torch
-from torchvision.utils import save_image
+import torch.nn as nn
+import torch.optim as optim
+from torch.amp import GradScaler
 
-from virtual_staining.config.losses import LossConfig
-from virtual_staining.training.results import EpochMetrics
+from virtual_staining.checkpoint_contract import CheckpointCompatibilityError, first_difference
+from virtual_staining.config.scheduler import LearningRateSchedulerConfig
+from virtual_staining.training.runtime import MethodMetrics
+
+logger = logging.getLogger(__name__)
 
 
 def is_amp_enabled(device: torch.device) -> bool:
     return isinstance(device, torch.device) and device.type == "cuda"
-
-
-def save_images(
-    path: Path,
-    source_tensor: torch.Tensor,
-    output: torch.Tensor,
-    target: torch.Tensor,
-    epoch: int,
-    batch_index: int,
-) -> None:
-    # Images are normalised to [-1, 1]; bring back to [0, 1] before saving.
-    save_image((source_tensor * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_input.tif")
-    save_image((output * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_output.tif")
-    save_image((target * 0.5 + 0.5), path / f"epoch{epoch}_batch{batch_index}_target.tif")
 
 
 def dataset_len(loader: torch.utils.data.DataLoader) -> int:
@@ -33,70 +29,74 @@ def dataset_len(loader: torch.utils.data.DataLoader) -> int:
     return len(loader.dataset)  # type: ignore[arg-type]  -- Dataset.__len__ exists at runtime but is absent from torch stubs
 
 
+def _rgb_batch(value: object, role: str, like: torch.Tensor | None) -> torch.Tensor:
+    if not isinstance(value, torch.Tensor) or value.ndim != 4 or value.shape[1] != 3:
+        raise TypeError(f"training batch {role} must be an RGB NCHW tensor")
+    if like is not None and (value.shape[0] != like.shape[0] or value.shape[2:] != like.shape[2:]):
+        raise ValueError(f"training batch {role} must match the batch/spatial shape of the inputs")
+    return value
+
+
 def unpack_batch(
     batch: object,
     device: torch.device,
     input_names: tuple[str, ...],
-) -> tuple[dict[str, torch.Tensor], torch.Tensor, dict[str, torch.Tensor]]:
-    if not isinstance(batch, dict) or set(batch) != {"inputs", "target", "masks"}:
-        raise TypeError("training batches must contain exactly inputs, target, and masks")
-    raw_inputs, raw_target, raw_masks = batch["inputs"], batch["target"], batch["masks"]
+    target_names: tuple[str, ...],
+) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor], dict[str, dict[str, torch.Tensor]]]:
+    """Validate a paired batch and move it to ``device``.
+
+    Returns named ``inputs`` and ``targets`` (exact configured order, RGB NCHW, one shared
+    batch/spatial shape) and ``masks`` as ``{source: {target_name: N1HW}}``; every mask
+    source covers exactly the configured targets.
+    """
+    if not isinstance(batch, dict) or set(batch) != {"inputs", "targets", "masks"}:
+        raise TypeError("training batches must contain exactly inputs, targets, and masks")
+    raw_inputs, raw_targets, raw_masks = batch["inputs"], batch["targets"], batch["masks"]
     if not isinstance(raw_inputs, dict) or tuple(raw_inputs) != input_names:
         raise TypeError(f"training batch inputs must match configured names {input_names}")
-    if not isinstance(raw_target, torch.Tensor) or raw_target.ndim != 4 or raw_target.shape[1] != 3:
-        raise TypeError("training batch target must be an RGB NCHW tensor")
-    inputs: dict[str, torch.Tensor] = {}
-    for name in input_names:
-        value = raw_inputs[name]
-        if not isinstance(value, torch.Tensor) or value.ndim != 4 or value.shape[1] != 3:
-            raise TypeError(f"training batch input {name!r} must be an RGB NCHW tensor")
-        if value.shape[0] != raw_target.shape[0] or value.shape[2:] != raw_target.shape[2:]:
-            raise ValueError(
-                "training batch inputs and target must have matching batch/spatial shapes"
-            )
-        inputs[name] = value.to(device)
+    if not isinstance(raw_targets, dict) or tuple(raw_targets) != target_names:
+        raise TypeError(f"training batch targets must match configured names {target_names}")
+    first = _rgb_batch(raw_inputs[input_names[0]], f"input {input_names[0]!r}", None)
+    inputs = {
+        name: _rgb_batch(raw_inputs[name], f"input {name!r}", first).to(device)
+        for name in input_names
+    }
+    targets = {
+        name: _rgb_batch(raw_targets[name], f"target {name!r}", first).to(device)
+        for name in target_names
+    }
     if not isinstance(raw_masks, dict):
         raise TypeError("training batch masks must be a mapping")
-    masks: dict[str, torch.Tensor] = {}
-    for name, value in raw_masks.items():
-        if not isinstance(value, torch.Tensor):
-            raise TypeError(f"training batch mask {name!r} must be a tensor")
-        masks[str(name)] = value.to(device)
-    return inputs, raw_target.to(device), masks
+    masks: dict[str, dict[str, torch.Tensor]] = {}
+    for source, by_target in raw_masks.items():
+        if not isinstance(by_target, dict) or tuple(by_target) != target_names:
+            raise TypeError(
+                f"training batch masks[{source!r}] must map exactly the targets {target_names}"
+            )
+        masks[str(source)] = {}
+        for name, value in by_target.items():
+            if not isinstance(value, torch.Tensor) or value.ndim != 4 or value.shape[1] != 1:
+                raise TypeError(f"training batch mask {source}.{name} must be an N1HW tensor")
+            if value.shape[0] != first.shape[0] or value.shape[2:] != first.shape[2:]:
+                raise ValueError(f"training batch mask {source}.{name} must match image shapes")
+            masks[str(source)][name] = value.to(device)
+    return inputs, targets, masks
 
 
-def configured_loss_names(losses: LossConfig | None) -> list[str]:
-    if losses is None:
-        return []
-    names = [f"generator_{term.name}" for term in losses.generator]
-    names.extend(f"discriminator_{term.name}" for term in losses.discriminator)
-    return names
-
-
-def metrics_fieldnames(loss_names: list[str], *, stage: str | None = None) -> list[str]:
-    if stage == "train":
-        fields = ["epoch", "loss_G_train", "loss_D_train"]
-        stages = ("train",)
-    elif stage == "val":
-        fields = ["epoch", "loss_G_val", "loss_D_val"]
-        stages = ("val",)
-    else:
-        fields = [
-            "epoch",
-            "loss_G_train",
-            "loss_D_train",
-            "loss_G_val",
-            "loss_D_val",
-        ]
-        stages = ("train", "val")
+def metrics_fieldnames(
+    loss_names: list[str],
+    *,
+    metric_names: tuple[str, ...],
+    component_total_names: tuple[str, ...],
+    stage: str | None = None,
+) -> list[str]:
+    stages = (stage,) if stage in {"train", "val"} else ("train", "val")
+    fields = ["epoch"]
+    for selected_stage in stages:
+        fields.extend(f"{name}_{selected_stage}" for name in metric_names)
     if loss_names:
         for selected_stage in stages:
-            fields.extend(
-                [
-                    f"loss_{selected_stage}_total_generator",
-                    f"loss_{selected_stage}_total_discriminator",
-                ]
-            )
+            fields.extend(f"loss_{selected_stage}_total_{name}" for name in component_total_names)
     for selected_stage in stages:
         for term_name in loss_names:
             fields.extend(
@@ -109,25 +109,7 @@ def metrics_fieldnames(loss_names: list[str], *, stage: str | None = None) -> li
     return fields
 
 
-def component_metric_row(stage: str, metrics: EpochMetrics | None) -> dict[str, str]:
-    if metrics is None:
-        return {}
-    if not metrics.raw and not metrics.weighted and not metrics.current_weight:
-        return {}
-    row = {
-        f"loss_{stage}_total_generator": f"{metrics.loss_G:.6f}",
-        f"loss_{stage}_total_discriminator": f"{metrics.loss_D:.6f}",
-    }
-    for term_name in sorted(metrics.raw):
-        row[f"loss_{stage}_raw_{term_name}"] = f"{metrics.raw[term_name]:.6f}"
-    for term_name in sorted(metrics.weighted):
-        row[f"loss_{stage}_weighted_{term_name}"] = f"{metrics.weighted[term_name]:.6f}"
-    for term_name in sorted(metrics.current_weight):
-        row[f"loss_{stage}_current_weight_{term_name}"] = f"{metrics.current_weight[term_name]:.6f}"
-    return row
-
-
-def average_components(
+def _average_components(
     totals: dict[str, float],
     count: int,
     loss_names: list[str],
@@ -137,7 +119,7 @@ def average_components(
     return {name: totals.get(name, 0.0) / count for name in loss_names}
 
 
-def accumulate_components(totals: dict[str, float], values: dict[str, float] | None) -> None:
+def _accumulate_components(totals: dict[str, float], values: dict[str, float] | None) -> None:
     if values is None:
         return
     for name, value in values.items():
@@ -164,13 +146,392 @@ class LossComponentAccumulator:
         weighted: dict[str, float] | None,
         current_weight: dict[str, float] | None,
     ) -> None:
-        accumulate_components(self.raw, raw)
-        accumulate_components(self.weighted, weighted)
-        accumulate_components(self.current_weight, current_weight)
+        _accumulate_components(self.raw, raw)
+        _accumulate_components(self.weighted, weighted)
+        _accumulate_components(self.current_weight, current_weight)
 
     def average(self, count: int) -> ComponentAverages:
         return ComponentAverages(
-            raw=average_components(self.raw, count, self.loss_names),
-            weighted=average_components(self.weighted, count, self.loss_names),
-            current_weight=average_components(self.current_weight, count, self.loss_names),
+            raw=_average_components(self.raw, count, self.loss_names),
+            weighted=_average_components(self.weighted, count, self.loss_names),
+            current_weight=_average_components(self.current_weight, count, self.loss_names),
         )
+
+
+class TrainingEpochAccumulator:
+    """Reduce per-optimization-step training metrics to epoch metrics with ``step_mean``.
+
+    Every optimization step has equal weight regardless of its batch size, so a smaller final
+    batch counts as much as a full one. ``samples`` is observed context only and never
+    weights the mean.
+    """
+
+    def __init__(
+        self,
+        *,
+        metric_names: Sequence[str],
+        component_total_names: Sequence[str],
+        loss_names: list[str],
+    ) -> None:
+        self._metric_names = tuple(metric_names)
+        self._component_total_names = tuple(component_total_names)
+        self._losses: dict[str, float] = {}
+        self._component_totals: dict[str, float] = {}
+        self._components = LossComponentAccumulator(loss_names)
+        self.steps = 0
+        self.samples = 0
+
+    def add(self, metrics: MethodMetrics, *, samples: int) -> None:
+        _accumulate_components(self._losses, metrics.losses)
+        _accumulate_components(self._component_totals, metrics.component_totals)
+        self._components.add(
+            raw=metrics.raw,
+            weighted=metrics.weighted,
+            current_weight=metrics.current_weight,
+        )
+        self.steps += 1
+        self.samples += samples
+
+    def step_mean(self) -> MethodMetrics:
+        if self.steps == 0:
+            raise RuntimeError("Training loader was empty; cannot compute epoch metrics.")
+        components = self._components.average(self.steps)
+        return MethodMetrics(
+            losses={name: self._losses[name] / self.steps for name in self._metric_names},
+            component_totals={
+                name: self._component_totals[name] / self.steps
+                for name in self._component_total_names
+                if name in self._component_totals
+            },
+            raw=components.raw,
+            weighted=components.weighted,
+            current_weight=components.current_weight,
+        )
+
+
+Scheduler = optim.lr_scheduler.LRScheduler | optim.lr_scheduler.ReduceLROnPlateau
+
+
+def build_lr_scheduler(
+    scheduler_config: LearningRateSchedulerConfig, epochs: int, optimizer: optim.Optimizer
+) -> Scheduler | None:
+    if scheduler_config.name == "none":
+        return None
+    if scheduler_config.name == "linear_decay":
+        assert scheduler_config.decay_start_epoch is not None
+        decay_start_epoch = scheduler_config.decay_start_epoch
+        decay_span = max(1, epochs - decay_start_epoch)
+
+        def lr_lambda(epoch: int) -> float:
+            if epoch <= decay_start_epoch:
+                return 1.0
+            return max(0.0, 1.0 - (epoch - decay_start_epoch) / decay_span)
+
+        return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+    if scheduler_config.name == "reduce_on_plateau":
+        return optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode=scheduler_config.mode,
+            factor=scheduler_config.factor,
+            patience=scheduler_config.patience,
+            min_lr=scheduler_config.min_lr,
+        )
+    raise AssertionError(f"Unsupported scheduler {scheduler_config.name!r}")
+
+
+def step_lr_schedulers(
+    scheduler_config: LearningRateSchedulerConfig,
+    schedulers: Sequence[Scheduler | None],
+    *,
+    epoch: int,
+    monitor_value: Callable[[], float | None] | None,
+) -> bool:
+    """Step method-owned schedulers; ``monitor_value`` is None when validation did not run."""
+    if scheduler_config.name == "none":
+        return False
+
+    if scheduler_config.name == "linear_decay":
+        for scheduler in schedulers:
+            if scheduler is not None and not isinstance(
+                scheduler,
+                optim.lr_scheduler.ReduceLROnPlateau,
+            ):
+                scheduler.step()
+        return True
+
+    if scheduler_config.name == "reduce_on_plateau":
+        if monitor_value is None:
+            return False
+        metric_value = monitor_value()
+        if metric_value is None or not math.isfinite(metric_value):
+            logger.warning(
+                "Skipping learning-rate scheduler step at epoch %s because %s is unavailable",
+                epoch,
+                scheduler_config.monitor,
+            )
+            return False
+        for scheduler in schedulers:
+            if isinstance(scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(metric_value)
+        return True
+
+    raise AssertionError(f"Unsupported scheduler {scheduler_config.name!r}")
+
+
+def loss_validation_metric(metrics: MethodMetrics, name: str) -> float | None:
+    """Resolve the loss-derived validation CSV column ``name`` from method metrics."""
+    if name == "loss_G_val":
+        return metrics.losses.get("loss_G")
+    if name == "loss_D_val":
+        return metrics.losses.get("loss_D")
+    if name == "loss_val_total_generator":
+        return metrics.component_totals.get("generator")
+    if name == "loss_val_total_discriminator":
+        return metrics.component_totals.get("discriminator")
+    prefix_maps = (
+        ("loss_val_raw_", metrics.raw),
+        ("loss_val_weighted_", metrics.weighted),
+        ("loss_val_current_weight_", metrics.current_weight),
+    )
+    for prefix, values in prefix_maps:
+        if name.startswith(prefix):
+            return values.get(name.removeprefix(prefix))
+    return None
+
+
+# Constructor policy persisted per optimizer role; learning rates are the configured initial
+# values from ``optimizer.defaults``, never the scheduler-decayed ``param_groups`` values.
+_OPTIMIZER_POLICY_KEYS = ("lr", "betas", "eps", "weight_decay", "amsgrad", "maximize")
+_SCALER_STATE_KEYS = frozenset(
+    {"scale", "growth_factor", "backoff_factor", "growth_interval", "_growth_tracker"}
+)
+TRAINING_STATE_KEYS = frozenset({"models", "optimization", "optimizers", "scalers", "schedulers"})
+
+
+@dataclass(frozen=True)
+class OptimizationRole:
+    """One method-owned optimizer with its AMP scaler and optional LR scheduler."""
+
+    optimizer: optim.Optimizer
+    scaler: GradScaler
+    scheduler: Scheduler | None
+
+
+def state_error(context: str, detail: str) -> CheckpointCompatibilityError:
+    return CheckpointCompatibilityError(f"method state {context} {detail}")
+
+
+def require_state_keys(value: object, keys: Collection[str], context: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise state_error(context, "must be a mapping")
+    if set(value) != set(keys):
+        missing = sorted(set(keys) - set(value))
+        unexpected = sorted(map(str, set(value) - set(keys)))
+        raise state_error(
+            context, f"has mismatched keys: missing {missing}, unexpected {unexpected}"
+        )
+    return value
+
+
+def check_module_state(stored: object, module: nn.Module, context: str) -> None:
+    """Check ``stored`` has exactly ``module``'s state keys, tensor shapes, and dtypes."""
+    expected = module.state_dict()
+    stored = require_state_keys(stored, expected.keys(), context)
+    for key, tensor in expected.items():
+        value = stored[key]
+        if not isinstance(value, torch.Tensor):
+            raise state_error(f"{context}.{key}", "must be a tensor")
+        if value.shape != tensor.shape:
+            raise state_error(
+                f"{context}.{key}",
+                f"has shape {tuple(value.shape)}; expected {tuple(tensor.shape)}",
+            )
+        if value.dtype != tensor.dtype:
+            raise state_error(
+                f"{context}.{key}", f"has dtype {value.dtype}; expected {tensor.dtype}"
+            )
+
+
+def validated_model_state(
+    state: Mapping[str, Any], name: str, module: nn.Module, checkpoint_path: Path
+) -> Mapping[str, Any]:
+    """Return ``state.models[name]`` after checking it fits ``module`` (inference loading)."""
+    try:
+        models = state.get("models")
+        if not isinstance(models, Mapping) or name not in models:
+            raise state_error("state.models", f"has no {name!r} entry")
+        check_module_state(models[name], module, f"state.models.{name}")
+    except CheckpointCompatibilityError as exc:
+        raise CheckpointCompatibilityError(
+            f"Checkpoint '{checkpoint_path}' is incompatible: {exc}"
+        ) from exc
+    return models[name]
+
+
+def scheduler_policy(scheduler: LearningRateSchedulerConfig, epochs: int) -> dict[str, Any]:
+    """Return the reconstruction-relevant policy of the scheduler ``build_lr_scheduler`` makes."""
+    policy = scheduler.to_dict()
+    if scheduler.name == "linear_decay":
+        # LambdaLR state does not carry its closure; the decay horizon is fixed by this basis.
+        policy["epochs"] = epochs
+    return policy
+
+
+def optimization_identity(
+    scheduler: LearningRateSchedulerConfig, epochs: int, role: OptimizationRole
+) -> dict[str, Any]:
+    defaults = role.optimizer.defaults
+    optimizer: dict[str, Any] = {"class": type(role.optimizer).__name__}
+    for key in _OPTIMIZER_POLICY_KEYS:
+        value = defaults[key]
+        optimizer[key] = list(value) if isinstance(value, tuple) else value
+    return {
+        "optimizer": optimizer,
+        "scheduler": None if role.scheduler is None else scheduler_policy(scheduler, epochs),
+    }
+
+
+def _check_identity(stored: object, current: dict[str, Any], context: str) -> None:
+    if stored == current:
+        return
+    field, stored_value, current_value = first_difference(stored, current, context) or (
+        context,
+        stored,
+        current,
+    )
+    raise CheckpointCompatibilityError(
+        f"method state {field} is {stored_value!r} in the checkpoint but {current_value!r} in "
+        "the current run; resume requires the same optimizer and scheduler policy."
+    )
+
+
+def _check_optimizer_state(stored: object, optimizer: optim.Optimizer, context: str) -> None:
+    stored = require_state_keys(stored, ("state", "param_groups"), context)
+    current_groups = optimizer.state_dict()["param_groups"]
+    groups = stored["param_groups"]
+    if not isinstance(groups, list) or len(groups) != len(current_groups):
+        raise state_error(
+            f"{context}.param_groups", f"must be a list of {len(current_groups)} groups"
+        )
+    for index, (group, current) in enumerate(zip(groups, current_groups, strict=True)):
+        group_context = f"{context}.param_groups[{index}]"
+        group = require_state_keys(group, current.keys(), group_context)
+        if group["params"] != current["params"]:
+            raise state_error(f"{group_context}.params", "does not match the optimizer parameters")
+    params = [param for group in optimizer.param_groups for param in group["params"]]
+    param_state = stored["state"]
+    if not isinstance(param_state, Mapping):
+        raise state_error(f"{context}.state", "must be a mapping")
+    for key, values in param_state.items():
+        if type(key) is not int or not 0 <= key < len(params):
+            raise state_error(f"{context}.state", f"has unknown parameter index {key!r}")
+        if not isinstance(values, Mapping):
+            raise state_error(f"{context}.state[{key}]", "must be a mapping")
+        for name, value in values.items():
+            if not isinstance(value, torch.Tensor):
+                raise state_error(f"{context}.state[{key}].{name}", "must be a tensor")
+            if value.ndim and value.shape != params[key].shape:
+                raise state_error(
+                    f"{context}.state[{key}].{name}",
+                    f"has shape {tuple(value.shape)}; expected {tuple(params[key].shape)}",
+                )
+
+
+def _check_scaler_state(stored: object, scaler: GradScaler, context: str) -> None:
+    if not isinstance(stored, Mapping):
+        raise state_error(context, "must be a mapping")
+    if not stored:
+        if scaler.is_enabled():
+            raise state_error(
+                context, "was saved without AMP scaling; resume on the same device type"
+            )
+        return
+    require_state_keys(stored, _SCALER_STATE_KEYS, context)
+    for key, value in stored.items():
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise state_error(f"{context}.{key}", "must be a number")
+
+
+def _check_scheduler_state(stored: object, scheduler: Scheduler | None, context: str) -> None:
+    if scheduler is None:
+        if stored is not None:
+            raise state_error(context, "is present but the current run has no scheduler")
+        return
+    if stored is None:
+        raise state_error(context, "is absent but the current run configures a scheduler")
+    require_state_keys(stored, scheduler.state_dict().keys(), context)
+
+
+def training_state_dict(
+    scheduler: LearningRateSchedulerConfig,
+    epochs: int,
+    models: Mapping[str, nn.Module],
+    roles: Mapping[str, OptimizationRole],
+) -> dict[str, Any]:
+    """Serialize method-owned models plus per-role optimizer, scaler, and scheduler state."""
+    return {
+        "models": {name: model.state_dict() for name, model in models.items()},
+        "optimization": {
+            name: optimization_identity(scheduler, epochs, role) for name, role in roles.items()
+        },
+        "optimizers": {name: role.optimizer.state_dict() for name, role in roles.items()},
+        "scalers": {name: role.scaler.state_dict() for name, role in roles.items()},
+        "schedulers": {
+            name: None if role.scheduler is None else role.scheduler.state_dict()
+            for name, role in roles.items()
+        },
+    }
+
+
+def check_training_state(
+    state: Mapping[str, Any],
+    scheduler: LearningRateSchedulerConfig,
+    epochs: int,
+    models: Mapping[str, nn.Module],
+    roles: Mapping[str, OptimizationRole],
+) -> None:
+    """Preflight the ``training_state_dict`` groups of ``state`` without mutating anything."""
+    stored_models = require_state_keys(state["models"], models.keys(), "state.models")
+    for name, model in models.items():
+        check_module_state(stored_models[name], model, f"state.models.{name}")
+    identities = require_state_keys(state["optimization"], roles.keys(), "state.optimization")
+    for name, role in roles.items():
+        _check_identity(
+            identities[name],
+            optimization_identity(scheduler, epochs, role),
+            f"state.optimization.{name}",
+        )
+    optimizers = require_state_keys(state["optimizers"], roles.keys(), "state.optimizers")
+    scalers = require_state_keys(state["scalers"], roles.keys(), "state.scalers")
+    schedulers = require_state_keys(state["schedulers"], roles.keys(), "state.schedulers")
+    for name, role in roles.items():
+        _check_optimizer_state(optimizers[name], role.optimizer, f"state.optimizers.{name}")
+        _check_scaler_state(scalers[name], role.scaler, f"state.scalers.{name}")
+        _check_scheduler_state(schedulers[name], role.scheduler, f"state.schedulers.{name}")
+
+
+def load_training_state(
+    state: Mapping[str, Any],
+    models: Mapping[str, nn.Module],
+    roles: Mapping[str, OptimizationRole],
+) -> None:
+    """Restore groups already accepted by ``check_training_state``."""
+    for name, model in models.items():
+        model.load_state_dict(state["models"][name])
+    for name, role in roles.items():
+        role.optimizer.load_state_dict(state["optimizers"][name])
+        role.scaler.load_state_dict(state["scalers"][name])
+        if role.scheduler is not None:
+            role.scheduler.load_state_dict(state["schedulers"][name])
+
+
+@contextmanager
+def restoring_validated_state(method: str) -> Iterator[None]:
+    """Flag a restore that failed after preflight: the runtime is partially mutated."""
+    try:
+        yield
+    except Exception as exc:
+        raise RuntimeError(
+            f"{method} state restoration failed after validation; this runtime is partially "
+            "restored and must be discarded and rebuilt."
+        ) from exc

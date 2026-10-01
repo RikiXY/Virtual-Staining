@@ -5,43 +5,15 @@ from pathlib import Path
 
 import pytest
 import torch
+from nicegui import ui
 from nicegui.client import Client
 from nicegui.page import page
 from PIL import Image
 
 import virtual_staining.ui.app as ui_app
+from tests.checkpoint_helpers import write_ui_checkpoint as _write_checkpoint
 from virtual_staining.applications.api import ApplicationService
 from virtual_staining.applications.ui_inference import UIInferenceError, UIInferenceService
-from virtual_staining.checkpoint_contract import (
-    CHECKPOINT_FORMAT_VERSION,
-    NORMALIZATION_CONTRACT,
-    make_arch_metadata,
-)
-from virtual_staining.models.discriminator import PatchGANDiscriminator
-from virtual_staining.models.generator import ConcatUNetGenerator
-
-
-def _write_checkpoint(
-    path: Path,
-    *,
-    input_names: tuple[str, ...] = ("label_free",),
-    target_modality: str = "H&E",
-    image_size: tuple[int, int] = (32, 32),
-) -> Path:
-    generator = ConcatUNetGenerator(input_names, base_channels=4)
-    discriminator = PatchGANDiscriminator(in_channels=3 * len(input_names) + 3, ndf=4)
-    checkpoint = {
-        "format_version": CHECKPOINT_FORMAT_VERSION,
-        "architecture": make_arch_metadata(
-            generator, discriminator, target_modality=target_modality
-        ),
-        "normalization_contract": NORMALIZATION_CONTRACT,
-        "generator_state_dict": generator.state_dict(),
-        "image_size": image_size,
-    }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(checkpoint, path)
-    return path
 
 
 def _service(tmp_path: Path) -> UIInferenceService:
@@ -58,7 +30,7 @@ def test_model_discovery_uses_configurable_directory_and_checkpoint_metadata(
     checkpoint = _write_checkpoint(
         tmp_path / "portable-checkpoints" / "experiment-a" / "model.pth",
         input_names=("unstained",),
-        target_modality="H&E",
+        target_modality="HE",
     )
     service = _service(tmp_path)
 
@@ -71,11 +43,11 @@ def test_model_discovery_uses_configurable_directory_and_checkpoint_metadata(
     assert descriptor.identifier == "experiment-a/model.pth"
     assert descriptor.checkpoint_filename == checkpoint.name
     assert descriptor.input_domains == ("unstained",)
-    assert descriptor.target_domain == "H&E"
-    assert descriptor.transformation == "unstained → H&E"
+    assert descriptor.target_domain == "HE"
+    assert descriptor.transformation == "unstained → HE"
     assert descriptor.architecture_id == "concat_unet"
     assert descriptor.model_class == "ConcatUNetGenerator"
-    assert descriptor.checkpoint_schema_version == 3
+    assert descriptor.checkpoint_schema_version == 4
     assert descriptor.image_size == (32, 32)
     assert descriptor.channels_per_input == 3
 
@@ -99,7 +71,7 @@ def test_incompatible_checkpoints_are_reported_and_not_selectable(tmp_path: Path
     assert catalog.models == ()
     assert len(catalog.issues) == 1
     assert catalog.issues[0].checkpoint == "legacy.pth"
-    assert "requires the current v3 format" in catalog.issues[0].reason
+    assert "requires the current v4 format" in catalog.issues[0].reason
 
 
 def test_multi_input_checkpoint_is_incompatible_with_single_patch_ui(tmp_path: Path) -> None:
@@ -137,7 +109,7 @@ def test_inference_result_contains_portable_provenance(tmp_path: Path) -> None:
     _write_checkpoint(
         tmp_path / "portable-checkpoints" / "nested" / "model.pth",
         input_names=("label_free",),
-        target_modality="H&E",
+        target_modality="HE",
     )
     service = _service(tmp_path)
     descriptor = service.discover_models().models[0]
@@ -150,9 +122,9 @@ def test_inference_result_contains_portable_provenance(tmp_path: Path) -> None:
     payload = result.provenance.to_dict()
 
     assert result.generated_image.mode == "RGB"
-    assert payload["transformation"] == "label_free → H&E"
+    assert payload["transformation"] == "label_free → HE"
     assert payload["model"]["identifier"] == "nested/model.pth"
-    assert payload["model"]["checkpoint_schema_version"] == 3
+    assert payload["model"]["checkpoint_schema_version"] == 4
     assert payload["model"]["required_image_size"] == [32, 32]
     assert payload["input"] == {
         "filename": "sample_source.tif",
@@ -238,18 +210,21 @@ def test_main_navigation_starts_on_training_config(tmp_path: Path) -> None:
     tutorial_button = next(
         element
         for element in client.elements.values()
-        if element.tag == "q-btn" and "vs-tutorial-button" in element._classes
+        if isinstance(element, ui.button) and "vs-tutorial-button" in element._classes
     )
-    drawer = next(element for element in client.elements.values() if element.tag == "q-drawer")
+    drawer = next(
+        element for element in client.elements.values() if isinstance(element, ui.left_drawer)
+    )
     menu_button = next(
         element
         for element in client.elements.values()
-        if element.tag == "q-btn" and element._props.get("aria-label") == "Open navigation menu"
+        if isinstance(element, ui.button)
+        and element._props.get("aria-label") == "Open navigation menu"
     )
     workspace_buttons = {
         element._props.get("aria-label"): element
         for element in client.elements.values()
-        if element.tag == "q-btn"
+        if isinstance(element, ui.button)
         and element._props.get("aria-label")
         in {
             "Open Training config",
@@ -292,13 +267,16 @@ def test_main_navigation_starts_on_training_config(tmp_path: Path) -> None:
     )
 
     assert drawer.value is False
+    assert menu_button.parent_slot is not None
     assert menu_button.parent_slot.parent is header_bar
     assert set(workspace_buttons) == {
         "Open Training config",
         "Open Inference",
         "Open Experiments",
     }
+    assert tutorial_button.parent_slot is not None
     assert tutorial_button.parent_slot.parent is not header_bar
+    assert isinstance(current_page, ui.label)
     assert current_page.text == "Training config"
     assert training_page.visible is True
     assert inference_page.visible is False
@@ -327,3 +305,24 @@ def test_web_app_uses_packaged_favicon(
     assert ui_app.APP_ICON_PATH.is_file()
     assert captured["title"] == "Virtual Staining"
     assert captured["favicon"] == ui_app.APP_ICON_PATH
+
+
+def test_save_collision_does_not_replace_existing_sidecar(tmp_path: Path, monkeypatch) -> None:
+    import virtual_staining.applications.ui_inference as inference
+
+    _write_checkpoint(tmp_path / "portable-checkpoints" / "model.pth")
+    service = _service(tmp_path)
+    model = service.discover_models().models[0]
+    result = service.run_inference(model.identifier, Image.new("RGB", (32, 32)), "sample.png")
+    directory = tmp_path / "portable-outputs"
+    directory.mkdir()
+    image_path = directory / "sample_generated.png"
+    sidecar = image_path.with_suffix(".json")
+    sidecar.write_text("existing")
+    monkeypatch.setattr(inference, "_available_output_paths", lambda *args: (image_path, sidecar))
+
+    with pytest.raises(UIInferenceError, match="could not be saved"):
+        service.save_result(result)
+
+    assert sidecar.read_text() == "existing"
+    assert not image_path.exists()

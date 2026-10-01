@@ -1,9 +1,19 @@
 # Virtual Staining
 
-Research portfolio project for virtual staining of histopathology images using a Pix2Pix conditional GAN.
+Experimental, reproducible image-translation framework focused on virtual staining of
+histopathology images: generating stained-looking images from label-free microscopy inputs
+(and vice versa).
 
-The pipeline trains a paired image-to-image translation model on aligned histology patch pairs, enabling
-generation of virtually stained images from label-free microscopy inputs (and vice versa).
+Two translation methods are built in:
+
+- **Pix2Pix** (reference method): paired training on aligned patches, with N ordered
+  named RGB inputs and M ordered named RGB outputs.
+- **CycleGAN**: unpaired training between one source domain and one target domain,
+  with `A_to_B` and `B_to_A` inference from the same checkpoint.
+
+The run config selects the method with `method.name`. The stock CLI supports these
+built-ins; Python callers can supply
+[explicit method and component definitions](docs/library_api.md#extending-with-explicit-definitions).
 
 ## CLI Commands
 
@@ -11,16 +21,19 @@ generation of virtually stained images from label-free microscopy inputs (and vi
 |---|---|
 | `vs prepare` | Build the patch dataset from full-size slide sets |
 | `vs run` | Run the complete pipeline or selected stages |
-| `vs train` | Train the Pix2Pix model |
-| `vs infer` | Run inference on the test split |
+| `vs train` | Train the configured built-in method |
+| `vs infer` | Run inference on the test split (CycleGAN: in the configured direction) |
 | `vs infer-images` | Run inference on one image file or a directory of images |
-| `vs evaluate` | Evaluate a configured run or one image pair |
+| `vs evaluate` | Paired image metrics or unpaired collection diagnostics for a run, or metrics for one image pair |
 | `vs compare` | Compare metric distributions across runs |
 | `vs convert` | Convert TIFF images to OpenSlide-compatible pyramidal BigTIFFs |
 | `vs panels` | Build source / generated / target comparison panels |
 | `vs organize` | Organise run outputs |
+| `vs export-model` | Export selected run checkpoints as a portable local model bundle |
 | `vs queue` | Execute full or staged runs sequentially from a queue file |
-| `vs status` | Check dependencies, system memory, OpenSlide, and GPU support |
+| `vs config` | Print the resolved config, or check it (optionally read-only asset preflight) without running a stage |
+| `vs inventory` | Preview or write the raw paired slide-set inventory from explicit asset mappings |
+| `vs status` | Check required Python/native dependencies, system memory, and GPU support |
 
 ## Quick Start
 
@@ -28,91 +41,61 @@ generation of virtually stained images from label-free microscopy inputs (and vi
 # 1. Enter the Nix environment
 nix develop
 
-# 2. Install dependencies
+# 2. Install the mandatory Python dependencies
 uv sync --frozen
 
-# 3. Copy and edit the example run config
-cp config/runs/example.yaml config/runs/local/my_run.yaml
+# 3. Copy and edit a run config (minimal starter; config/runs/example.yaml is the
+#    fully annotated reference of every option)
+cp config/runs/minimal_pix2pix.yaml config/runs/local/my_run.yaml
 
-# 4. Run the full pipeline
-vs run --config config/runs/local/my_run.yaml
+# 4. Check it without running anything (add --assets for read-only input checks)
+uv run vs config check --config config/runs/local/my_run.yaml --stages prepare train infer evaluate
+
+# 5. Run the full pipeline
+uv run vs run --config config/runs/local/my_run.yaml
 ```
 
-### Development commands
+The supported runtime is the Nix development shell. `uv sync --frozen` installs
+all mandatory Python dependencies, including OpenSlide Python and pyvips; no WSI
+extra is needed. The shell supplies native OpenSlide and libvips on Linux and
+macOS, including library search paths for Python FFI loading. Run pipeline and
+development commands inside this shell (or with `nix develop -c ...`).
+The remaining `vs` examples assume `.venv` is activated; otherwise use `uv run vs`.
+
+`uv run vs status` checks required Python imports and native WSI library usability.
+A missing or broken required dependency produces a failing status. NVIDIA drivers,
+CUDA devices, and GPU availability are optional; a CPU-only runtime can be healthy.
+
+### Local web interface
 
 ```bash
-make sync
-make format
-make lint
-make typecheck
-make test
-make qa
-make clean
+uv run vs-ui --checkpoint-dir local_workspace/ui/checkpoints \
+  --output-dir local_workspace/ui/outputs --results-dir local_workspace/results
 ```
 
-Or call the CLI directly:
+Open [http://localhost:8080](http://localhost:8080). The interface binds to loopback
+by default. Paths resolve from the launch directory; `--config-dir` selects where
+training YAML files are saved. The matching environment variables are
+`VIRTUAL_STAINING_CHECKPOINT_DIR`, `VIRTUAL_STAINING_OUTPUT_DIR`,
+`VIRTUAL_STAINING_RESULTS_DIR`, and `VIRTUAL_STAINING_CONFIG_DIR`.
 
-```bash
-vs run --config config/runs/local/my_run.yaml
-vs run --config config/runs/local/my_run.yaml --stages train infer evaluate
-vs status
-```
+- **Training config** creates validated Pix2Pix training YAML for prepared data,
+  using ordered `model.inputs` and `model.outputs`. It does not launch training.
+- **Inference** discovers local v4 Pix2Pix checkpoints with one RGB input and one
+  RGB output. Uploads must match the checkpoint patch dimensions exactly.
+  Other methods, multiple inputs/outputs, tiling, and WSI inference use the CLI
+  or Python APIs. Unsupported checkpoints appear with a reason in the catalog.
+- **Experiments** evaluates a generated patch against its aligned target, loads
+  paired run reports, and compares runs. Named outputs remain separate; specify
+  an output when comparing multi-output runs. Metric statuses and finite-value
+  summaries retain the shared report semantics.
 
-### NiceGUI application
+Saved inference results include a PNG and JSON provenance sidecar without replacing
+existing files. Checkpoints, datasets, and generated artifacts stay outside Git.
 
-The web interface opens on a focused training-YAML editor. It collects only the
-essential experiment, modality, epoch, and loss values, validates them with the same
-schema used by `vs train`, and provides a live preview. The resulting file contains no
-preprocessing, inference, evaluation, or queue sections. It can be downloaded in the
-browser or saved without overwriting an existing file.
+### Other CLI examples
 
-The same application also retains the inference and experiment-analysis workspaces from
-the original UI. Their checkpoint, output, and results directories remain configurable:
-
-```bash
-uv sync --locked
-uv run vs-ui \
-  --config-dir config/runs/local \
-  --checkpoint-dir local_workspace/ui/checkpoints \
-  --output-dir local_workspace/ui/outputs \
-  --results-dir local_workspace/results
-```
-
-Open [http://localhost:8080](http://localhost:8080). The paths may be located outside
-the repository. They can also be configured with `VIRTUAL_STAINING_CONFIG_DIR`,
-`VIRTUAL_STAINING_CHECKPOINT_DIR`, `VIRTUAL_STAINING_OUTPUT_DIR`, and
-`VIRTUAL_STAINING_RESULTS_DIR`; CLI options take precedence. Defaults are
-`./config/runs/local`, `./checkpoints`, `./outputs`, and `./results`, resolved from the
-launch directory. A saved training file can be started directly with
-`uv run vs train --config PATH`. The UI starts with useful empty states when no
-compatible checkpoint or evaluated run is available.
-
-The catalog validates `.pth` files recursively and derives transformation labels,
-input/target domains, architecture, image size, and channel requirements from existing
-format-v3 checkpoint metadata. Legacy or incompatible checkpoints are skipped and
-reported in the interface. Checkpoint files are local artifacts and must not be
-committed.
-
-The Inference workflow accepts exactly one RGB patch whose dimensions match the selected model.
-Inputs with incompatible modes or dimensions are rejected; images are never silently
-converted, resized, or tiled. Large-image and WSI inference remain outside this UI.
-
-**Generate** runs the shared inference core and displays a responsive source/result
-comparison with provenance. **Save result** writes a generated PNG and adjacent JSON
-provenance sidecar, using numbered filenames instead of overwriting either existing
-file. The sidecar records portable identifiers and known runtime/model metadata, not
-machine-specific checkpoint paths.
-
-Experiments provides three research workflows: Test can generate with a source alone,
-then accepts an optional target before or after generation to display canonical metrics
-plus an absolute-difference map, animated opacity overlap, and draggable horizontal reveal
-comparison with configurable playback speed and replay;
-Evaluate executes or loads run-level evaluation, plots, tables, and representative
-samples; Compare runs the existing paired or unpaired statistical comparison pipeline.
-A guided tutorial is always available from the header and never opens automatically.
-All browser callbacks delegate to `virtual_staining.applications.api`.
-
-Convert one or more large TIFFs—or a whole directory recursively—without loading them fully
+Convert one or more large TIFFs-or a whole directory recursively-without loading them fully
 into memory. Directory inputs keep their relative layout under the output directory:
 
 ```bash
@@ -120,141 +103,95 @@ vs convert raw/source.tif raw/target.tif --output-dir converted
 vs convert raw/slides --output-dir converted
 ```
 
+Export selected checkpoints of a finished run, with their exact tracked training
+configs, as a verified local bundle that can be moved and reconstructed without the
+original run or dataset:
+
+```bash
+vs export-model \
+  --run-path local_workspace/results/my_run \
+  --output local_workspace/bundles/my_run \
+  --best val_ssim__HE --top-k val_ssim__HE 2 --latest
+```
+
+Selection options and the portable artifact contract are documented in
+[Model Bundles](docs/run_format.md#model-bundles).
+
 Evaluate one generated image without adding another top-level command:
 
 ```bash
-vs evaluate --pair target.png target_generated.png --output-dir evaluation
+vs evaluate --pair sample_target.png generated/HE/sample_generated.png --output-dir evaluation
 ```
 
-Run inference on one image or a directory. Multi-input models take one named
-path per configured modality; paths must already be spatially registered and
-have identical pixel dimensions.
-
-For one image per modality:
+Run inference on named inputs, or use `--input PATH` for a single-input model:
 
 ```bash
 vs infer-images \
   --config config/runs/local/my_run.yaml \
   --input AF=examples/sample_af.png \
   --input LF=examples/sample_lf.png \
-  --output local_workspace/results/my_run/sample.png
-```
-
-For directory batches, matching files must have exactly the same relative
-paths, including extensions. Recursive subdirectories are preserved:
-
-```bash
-vs infer-images \
-  --config config/runs/local/my_run.yaml \
-  --input AF=examples/af \
-  --input LF=examples/lf \
-  --recursive \
   --output local_workspace/results/my_run/example_outputs
 ```
 
-Single-input models retain the shorthand `--input PATH`.
+Inputs must already be spatially registered and have identical pixel dimensions.
+Directory inputs are also supported, with `--recursive` for subdirectories. The default
+`auto` mode tiles images whose dimensions differ from the configured patch size; `--mode resize` forces
+one resized prediction. See [inference inputs and modes](docs/library_api.md#direct-predictor-inference)
+and [generated artifacts](docs/run_format.md#generated-images) for the complete contracts.
 
-`vs infer-images` accepts `.bmp`, `.jpg`, `.jpeg`, `.png`, `.tif`, and `.tiff`.
-It defaults to `--mode auto`: patch-sized inputs use the standard single-patch
-path, while larger images are processed tile-by-tile and saved at the original
-size. Use `--mode resize` to force the resizing of the whole input to
-`image_size`. Use `--output-format png` to force a common output format
-for directory batches.
-
-Queue multiple full or partial pipeline runs locally:
-
-```yaml
-# config/queues/nightly.yaml
-name: nightly
-continue_on_failure: true
-jobs:
-  - config_path: ../runs/local/run_a.yaml
-    label: baseline
-  - config_path: ../runs/local/run_b.yaml
-    stages: [train, infer, evaluate]
-    notes: retry with lower lr
-```
+Queue full or partial pipeline runs sequentially:
 
 ```bash
-vs queue --queue config/queues/nightly.yaml
+vs queue --queue config/queues/example.yaml
 ```
 
-Omit `stages` to run the full `prepare`, `train`, `infer`, `evaluate`
-sequence. When `stages` is present, allowed values are `prepare`, `train`,
-`infer`, and `evaluate`, executed in the order listed.
-
-Queue definitions live under `config/queues/`. Personal queue YAMLs can live
-under `config/queues/local/`. Queue runtime state is written under
-`local_workspace/queues/`, separate from the committed queue definitions.
-State files are flat in that directory, for example
-`local_workspace/queues/nightly.state.json`.
-
-For controlled ablations, add an optional `ablation` block to the queue. The
-queue preflight compares resolved configs and fails before training if a field
-differs outside the declared `variable_fields`. Summary metadata is written to
-`local_workspace/queues/<queue-name>.ablation.summary.json`.
+[Queue configuration](config/queues/example.yaml) and
+[controlled ablations](config/queues/example_ablation.yaml) document the supported
+options; [queue state](docs/run_format.md#local-queues) lives under `local_workspace/queues/`.
 
 ## Configuration
 
-All experiment parameters live in a single YAML file. Copy
-[`config/runs/example.yaml`](config/runs/example.yaml) and edit it:
+All experiment parameters live in a single YAML file. Start from a short starter,
+[`config/runs/minimal_pix2pix.yaml`](config/runs/minimal_pix2pix.yaml) or
+[`config/runs/minimal_cyclegan.yaml`](config/runs/minimal_cyclegan.yaml). The annotated
+references [`config/runs/example.yaml`](config/runs/example.yaml) (Pix2Pix) and
+[`config/runs/example_cyclegan.yaml`](config/runs/example_cyclegan.yaml) (CycleGAN) are
+the same experiments with every supported option, default, and path base written out.
+Experiment commands accept YAML configuration through `--config`.
 
-```yaml
-dataset_root: local_workspace/datasets/your_sample
-results_path: local_workspace/results
-run_name: your_run_name
-image_size: [256, 256]
+### Inspecting and checking a config
 
-model:
-  inputs: [autofluorescence, label_free]
-  target: H&E
-  generator: {architecture: concat_unet, base_channels: 64, norm: batch, dropout: false, bilinear: false}
-  discriminator: {ndf: 64, norm: instance, use_sigmoid: false}
-
-preprocessing:
-  inputs:
-    inventory: inputs/slide_sets.csv
-    modalities: [autofluorescence, label_free]
-    reference: label_free
-    target_modality: H&E
-  masks: {generation: if_missing, strategy: connected_components, scale: 0.25}
-  alignment: {mode: auto, method: affine_sift}
-  filtering: {foreground: {enabled: true, policy: reference, min_ratio: 0.25}}
-  split: {unit: patient, train: 0.80, val: 0.10, test: 0.10, seed: 42}
-  io: {tiled: true, backend: auto}
-training:
-  batch_size: 8
-  epochs: 100
-  lr_g: 0.0002
-  seed: 42
-  augmentation:
-    enabled: false
-    expansion_factor: 1
-    intensity: light
-  losses:
-    generator:
-      - name: l1
-        weight: 25.0
-    discriminator:
-      - name: adversarial_bce
-        weight: 1.0
-
-inference:
-  checkpoint_policy: latest   # or: checkpoint_path: checkpoints/ep099.pth
-
-evaluation:
-  save_graphs: true
+```bash
+vs config resolve --config my_run.yaml                      # resolved YAML on stdout
+vs config resolve --config my_run.yaml --output resolved.yaml   # never overwrites
+vs config check --config my_run.yaml                        # config only; no assets needed
+vs config check --config my_run.yaml --stages prepare train infer evaluate --assets
 ```
 
-Experiment commands accept YAML configuration directly through `--config`.
+Resolution prints effective configuration values; checking validates the config without
+running a stage. `--assets` adds read-only input checks, not content verification or a
+frozen input snapshot. See [config inspection and preflight](docs/library_api.md#inspecting-and-checking-configs).
 
-See [`docs/architecture.md`](docs/architecture.md) for the full config schema,
-[`docs/run_format.md`](docs/run_format.md) for run output layout, and
-[`docs/reproducibility.md`](docs/reproducibility.md) for canonical config snapshots and hashes.
+### Authoring the paired slide-set inventory
+
+```bash
+vs inventory preview --dataset-root DATASET \
+  --input LF=raw/LF --input 'AF=raw/AF/**/*.svs' \
+  --target HE=raw/HE --target PAS=raw/PAS --reference LF
+vs inventory write ...   # publishes DATASET/inputs/slide_sets.csv; never overwrites
+```
+
+Mappings match files by relative path; alignment and biological IDs are never inferred.
+The complete [inventory authoring contract](docs/dataset_format.md#authoring-the-inventory)
+covers keys, metadata, masks, and safe publication.
+
+See [dataset formats](docs/dataset_format.md), [run artifacts](docs/run_format.md),
+[Python APIs](docs/library_api.md), [architecture](docs/architecture.md), and
+[reproducibility](docs/reproducibility.md) for the deeper contracts.
 
 ## Qualitative Results
 
-Each panel compares source patch, generated target, and real target.
+Pix2Pix results. Each panel compares source patch, generated target, and real target.
 
 From label-free to H&E staining:
 ![Qualitative results](docs/assets/LabelFree-to-Stained_qualitative_result_2.png)
@@ -262,81 +199,22 @@ From label-free to H&E staining:
 From H&E staining to label-free:
 ![Qualitative results](docs/assets/Stained-to-LabelFree_qualitative_result_2.png)
 
-## Package Structure
-
-- `metrics.py` - image metric computations and metric metadata
-- `utils/` - shared primitives: dimensions and image I/O
-- `config/` - YAML loading, validation, typed config sections
-- `experiment/` - run paths, metadata, stage lifecycle, and environment snapshots
-- `models/` - UNetGenerator, PatchGANDiscriminator, model config
-- `data/` - dataset, manifest, builder, preprocessing pipeline
-- `training/` - training mechanics: Trainer, steps, losses, validation, checkpoints
-- `inference/` - reusable model loading, prediction, single-image workflows, output naming
-- `ui/` - NiceGUI Inference and Experiments presentation adapters
-- `evaluation/` - evaluator, plots, summaries, panels, ranking
-- `applications/` - stable Python API, stage lifecycle owners, and other use cases
-- `cli/` - thin argparse entrypoints delegating to `applications/`
-
-See [`docs/architecture.md`](docs/architecture.md) for the full description and layer boundaries.
-
 ## Repository Structure
 
-```text
-Virtual-Staining/
-├── config/
-│   ├── queues/                 # queue YAML files (example.yaml template)
-│   └── runs/                   # run YAML files (example.yaml template)
-├── docs/
-│   ├── assets/                 # qualitative result images
-│   ├── notebooks/
-│   └── reports/
-├── examples/                   # example input images
-├── local_workspace/
-│   ├── datasets/               # input paired samples (gitignored)
-│   ├── queues/                 # queue state files (gitignored except .gitkeep)
-│   ├── results/                # run outputs (gitignored)
-│   └── ui/                     # local UI checkpoints and outputs (gitignored)
-├── tests/                      # pytest suite grouped by subsystem
-│   ├── cli/
-│   ├── config/
-│   ├── data/
-│   ├── evaluation/
-│   ├── experiment/
-│   ├── inference/
-│   ├── models/
-│   ├── smoke/
-│   ├── training/
-│   ├── ui/
-│   └── utils/
-├── virtual_staining/           # installable package
-│   ├── metrics.py              # metric computations and metadata
-│   ├── applications/           # use-case orchestrators
-│   ├── cli/                    # argparse entry points
-│   ├── config/
-│   ├── data/
-│   ├── evaluation/
-│   ├── experiment/
-│   ├── inference/
-│   ├── models/
-│   ├── training/
-│   ├── ui/
-│   └── utils/
-├── Makefile
-├── flake.nix
-├── pyproject.toml
-└── uv.lock
-```
+| Location | Contents |
+|---|---|
+| `config/` | Run and queue YAML references and starters |
+| `virtual_staining/` | Installable package; see [architecture](docs/architecture.md) |
+| `tests/` | Test suite; see [test layout](tests/README.md) |
+| `docs/` | Contracts, notebooks, reports, and qualitative result assets |
+| `examples/` | Example input images |
+| `local_workspace/` | Local datasets, queue state, and run outputs (gitignored) |
 
 ## Development
 
 ```bash
 # Inside nix develop shell:
 make qa
-# Equivalent to:
-uv run ruff check .
-uv run ruff format --check .
-uv run pyright
-uv run --group dev pytest
 ```
 
 The test layout is documented in [`tests/README.md`](tests/README.md).
@@ -374,13 +252,25 @@ from the same slide. For independent generalization evidence, configure `split.u
 
 ## Method
 
-- **Preprocessing** - tissue masking, feature-based affine alignment of target to source,
-  patch extraction with foreground and white-area quality filters.
-- **Model** - Pix2Pix conditional GAN: U-Net generator with skip connections and
-  PatchGAN discriminator, trained with adversarial loss + L1 reconstruction loss.
-- **Evaluation** - per-image MAE, RMSE, PSNR, SSIM; summary statistics; optional
-  comparison panels with difference maps.
+Paired preprocessing masks tissue, aligns targets to a reference, and extracts patches
+on a shared grid with foreground and white-area filters. Pix2Pix learns from these
+aligned samples; CycleGAN learns from independent domain collections.
+
+Evaluation supports paired image metrics against aligned references and unpaired
+collection diagnostics. Results remain separate for every output; unpaired evaluation
+requires a one-output model. See [evaluation outputs](docs/run_format.md#evaluation-outputs)
+for report semantics and [run references](config/runs/example.yaml) for configuration.
+
+### Scientific scope
+
+Paired image metrics are meaningful only against spatially aligned references. CycleGAN's
+unpaired diagnostics compare low-order appearance statistics of two image collections;
+they do not measure sample-level fidelity and do not establish biological correctness or
+clinical validity. A synthetic multi-output run proves only the software contract,
+not biological benefit. Nothing in this repository is validated for clinical use.
 
 ## License
 
-Released under the **MIT License**. See [`LICENSE`](./LICENSE) for details.
+Source code is covered by the **MIT License**; see [`LICENSE`](./LICENSE).
+Repository visual assets covered by [`ASSETS_LICENSE.md`](ASSETS_LICENSE.md) follow
+that separate notice and are not covered by MIT.

@@ -349,4 +349,7 @@ def render_single_result(result: SingleSampleResult, images, overlap, metrics) -
     render_image_comparison(result.inference.generated_image, result.target_image, overlap)
     with metrics:
         for metric in ("ssim", "psnr", "mae", "rmse", "mse", "pcc_rgb_mean", "pcc_gray"):
-            metric_card(metric, result.metrics[metric])
+            value = result.metrics[metric]
+            metric_card(
+                metric, value.value if value.value is not None else value.status, value.reason
+            )
