@@ -717,6 +717,7 @@ def test_prepare_snapshots_selected_sources_and_reverifies_before_reuse(
             slide_sets: Any,
             fingerprint_metadata: Any,
             registration_backend: Any = None,
+            registration_evidence: Any = None,
         ) -> None:
             self.slide_sets, self.fingerprint = slide_sets, fingerprint_metadata
 

@@ -25,6 +25,7 @@ from virtual_staining.data.alignment.registration import (
 )
 from virtual_staining.data.alignment.warping import (
     WarpedPatch,
+    aligned_patch_evidence,
     warp_aligned_mask_patch,
     warp_aligned_patch,
 )
@@ -47,6 +48,7 @@ __all__ = [
     "RegistrationRuntime",
     "SpatialEvidence",
     "WarpedPatch",
+    "aligned_patch_evidence",
     "evaluate_alignment_qc",
     "identity_alignment",
     "resolve_alignment",

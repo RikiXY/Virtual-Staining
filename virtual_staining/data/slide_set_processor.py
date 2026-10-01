@@ -17,6 +17,9 @@ from virtual_staining.data.alignment import (
     ImageGeometry,
     RegistrationBackend,
     RegistrationRequest,
+    SpatialEvidence,
+    WarpedPatch,
+    aligned_patch_evidence,
     identity_alignment,
     resolve_alignment,
     warp_aligned_mask_patch,
@@ -30,7 +33,12 @@ from virtual_staining.data.preprocessing import (
     calculate_mask_by_strategy,
     calculate_mask_with_multiple_parameters,
 )
-from virtual_staining.data.slide_sets import SlideAsset, SlideSet
+from virtual_staining.data.slide_sets import (
+    RegistrationEvidence,
+    SlideAsset,
+    SlideSet,
+    resolve_registration_evidence,
+)
 from virtual_staining.data.splitting import assign_split_by_hash
 from virtual_staining.split_contract import DATASET_SPLITS, DatasetSplit
 from virtual_staining.utils.image_io import (
@@ -50,6 +58,9 @@ class AssetState:
     shape: tuple[int, int] | None = None
     alignment: AlignmentResult | None = None
     mpp: tuple[float | None, float | None] = (None, None)
+    tissue_support: SpatialEvidence | None = None
+    observation_validity: SpatialEvidence | None = None
+    warped_patch: WarpedPatch | None = None
 
     def alignment_image(self) -> AlignmentImage:
         if self.preview is None or self.shape is None:
@@ -69,6 +80,8 @@ class AssetState:
                     self.shape[0] / self.preview.shape[0],
                 ),
             ),
+            tissue_support=self.tissue_support,
+            observation_validity=self.observation_validity,
         )
 
 
@@ -117,6 +130,7 @@ class SlideSetProcessor:
         assigned_split: DatasetSplit | None = None,
         *,
         registration_backend: RegistrationBackend | None = None,
+        registration_evidence: RegistrationEvidence | None = None,
     ) -> None:
         self.config = config
         self.slide_set = slide_set
@@ -125,6 +139,11 @@ class SlideSetProcessor:
         self.inputs = {asset.modality: AssetState(asset) for asset in slide_set.inputs}
         self.targets = {asset.modality: AssetState(asset) for asset in slide_set.targets}
         self.reference = self.inputs[slide_set.reference_modality]
+        evidence = resolve_registration_evidence((slide_set,), registration_evidence)
+        for (_, name), maps in evidence.items():
+            state = (self.inputs | self.targets)[name]
+            for item in maps:
+                setattr(state, item.kind, item)
         self._maskless = False
 
     def process(self) -> SetBuildResult:
@@ -288,18 +307,29 @@ class SlideSetProcessor:
                 state.mask, state.shape, x=x, y=y, width=width, height=height
             )
             mask = cv2.resize(mask_window, size, interpolation=cv2.INTER_NEAREST)
+            state.warped_patch = aligned_patch_evidence(
+                image,
+                state.alignment.candidate,
+                x=x,
+                y=y,
+                tissue_support=state.tissue_support,
+                observation_validity=state.observation_validity,
+            )
         else:
             image_input = state.reader.read_region if state.reader is not None else state.preview
             if image_input is None:
                 raise RuntimeError("Asset preview must be loaded before extraction")
-            image = warp_aligned_patch(
+            state.warped_patch = warp_aligned_patch(
                 image_input,
                 state.alignment.candidate,
                 x=x,
                 y=y,
                 output_size=size,
                 max_source_pixels=source_budget,
-            ).image
+                tissue_support=state.tissue_support,
+                observation_validity=state.observation_validity,
+            )
+            image = state.warped_patch.image
             mask = warp_aligned_mask_patch(
                 state.mask,
                 state.alignment.candidate,

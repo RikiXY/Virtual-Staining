@@ -180,12 +180,6 @@ def warp_aligned_patch(
         raise AlignmentError("Unsupported interpolation policy")
     if not callable(image) and image.shape[:2] != transform.moving.shape:
         raise AlignmentError("Source array does not match moving level-0 geometry")
-    for evidence, kind in (
-        (tissue_support, "tissue_support"),
-        (observation_validity, "observation_validity"),
-    ):
-        if evidence is not None and (evidence.asset != transform.moving or evidence.kind != kind):
-            raise AlignmentError("Evidence kind/asset does not match moving geometry")
     inverse = np.linalg.inv(transform.matrix)
     result = _resample(
         image,
@@ -197,6 +191,41 @@ def warp_aligned_patch(
         interpolation=interpolation,
         max_source_pixels=max_source_pixels,
     )
+    return aligned_patch_evidence(
+        result,
+        transform,
+        x=x,
+        y=y,
+        interpolation=interpolation,
+        tissue_support=tissue_support,
+        observation_validity=observation_validity,
+    )
+
+
+def aligned_patch_evidence(
+    image: np.ndarray,
+    transform: AlignmentTransform,
+    *,
+    x: int,
+    y: int,
+    interpolation: Literal["linear", "nearest"] = "linear",
+    tissue_support: SpatialEvidence | None = None,
+    observation_validity: SpatialEvidence | None = None,
+) -> WarpedPatch:
+    """Attach shared geometric/evidence sampling to an already extracted reference-grid image."""
+    height, width = image.shape[:2]
+    _shape((height, width))
+    if type(x) is not int or type(y) is not int:
+        raise AlignmentError("Patch origins must be integer pixel centres")
+    if interpolation not in {"linear", "nearest"}:
+        raise AlignmentError("Unsupported interpolation policy")
+    for evidence, kind in (
+        (tissue_support, "tissue_support"),
+        (observation_validity, "observation_validity"),
+    ):
+        if evidence is not None and (evidence.asset != transform.moving or evidence.kind != kind):
+            raise AlignmentError("Evidence kind/asset does not match moving geometry")
+    inverse = np.linalg.inv(transform.matrix)
     points = _coordinates(inverse, x, y, width, height)
     geometric = np.ones((height, width), dtype=bool)
     validity = np.ones_like(geometric) if observation_validity is not None else None
@@ -218,7 +247,7 @@ def warp_aligned_patch(
     )
     if support_known is not None:
         support_known &= geometric
-    return WarpedPatch(result, geometric, validity, known, support, support_known)
+    return WarpedPatch(image, geometric, validity, known, support, support_known)
 
 
 def warp_aligned_mask_patch(

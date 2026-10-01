@@ -487,6 +487,10 @@ reference; the reference itself always receives built-in identity. Inventory dec
 and `alignment.mode` still determine the requested transform permission. A callback cannot
 escalate an identity request or substitute another asset's geometry. Its result, including
 reason, runtime, typed failure and nullable QC, is retained in set metadata.
+An identity transform alone does not require equal native extents or MPP. Preparation
+checks declared alignment when `alignment.validate_declared=true`; setting it to false
+works equally with built-in and injected identity. The `same_coordinate_frame`
+relationship always retains its strict geometry checks.
 
 ```python
 from virtual_staining.data.alignment import RegistrationBackend
@@ -503,11 +507,38 @@ result = DatasetBuilder(config, slide_sets, registration_backend=backend).run_al
 ```
 
 The caller owns deterministic execution and must include every relevant backend option,
-QC policy and external evidence revision/digest in its JSON identity. Options are copied
-into a frozen JSON snapshot; callable representations are never used. This record and
+QC policy and any evidence not passed through `registration_evidence` in its JSON identity.
+Options are copied into a frozen JSON snapshot; callable representations are never used. This record and
 QC disposition participate in the existing dataset fingerprint. A supplied
 `fingerprint_metadata` must have the same registration record. Per-asset execution results
 remain separate from that configuration identity.
+The wrapper identifier/version names the configured adapter and policy; the returned
+attempt runtime names the engine that actually executed. These may intentionally differ
+when an adapter wraps an engine: declare that engine/version in the adapter's options,
+and preserve its actual runtime provenance rather than renaming it to the adapter.
+
+`DatasetBuilder`, `SlideSetProcessor`, `prepare()`, and
+`build_dataset_fingerprint_metadata()` also accept `registration_evidence=`:
+a mapping from `(set_id, modality)` to a tuple of `SpatialEvidence` maps, at most one
+per kind. Unknown keys, duplicate kinds and mismatched owning geometry are rejected.
+For example, `registration_evidence={("S1", "LF"): (reference_support,),
+("S1", "HE"): (moving_support, moving_validity)}` supplies existing maps directly.
+The explicit reference and every moving image receive their own maps on `AlignmentImage`;
+missing kinds stay `None`, independently of foreground masks.
+
+`SpatialEvidence(..., source=None)` accepts an optional stable source/provenance identifier
+and snapshots boolean values into a read-only array without modifying the caller's array.
+The existing grid contract handles full-resolution, downsampled and offset evidence.
+Preparation fingerprints the set/asset binding, geometry, kind, source and boolean content
+digest automatically, so supplied evidence need not also appear in backend options.
+A supplied `fingerprint_metadata` must match both registration and evidence identity.
+
+Extraction retains the current `WarpedPatch` as `AssetState.warped_patch`, including
+geometric validity, support, observation validity and their separate known masks. It is
+replaced at the next patch for that asset, not accumulated for the slide or persisted as
+manifest arrays. Transformed images use `warp_aligned_patch()` with the supplied maps;
+direct identity image reads use the same evidence sampler, `aligned_patch_evidence()`,
+without resampling the image. Existing foreground filtering does not consume these maps.
 
 The callback may attach independently evaluated QC using `evaluate_alignment_qc()` and
 an explicit `QCPolicy`, passing support/validity through `SpatialEvidence`. Preparation

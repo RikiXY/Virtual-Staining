@@ -19,10 +19,15 @@ from virtual_staining.data.manifest import (
 )
 from virtual_staining.data.provenance import (
     build_dataset_fingerprint_metadata,
+    registration_evidence_metadata,
     save_dataset_fingerprint,
 )
 from virtual_staining.data.slide_set_processor import SlideSetProcessor
-from virtual_staining.data.slide_sets import SlideSet
+from virtual_staining.data.slide_sets import (
+    RegistrationEvidence,
+    SlideSet,
+    resolve_registration_evidence,
+)
 from virtual_staining.data.splitting import (
     assign_group_splits,
     group_id_for_set,
@@ -122,6 +127,7 @@ class DatasetBuilder:
         fingerprint_metadata: dict[str, Any] | None = None,
         *,
         registration_backend: RegistrationBackend | None = None,
+        registration_evidence: RegistrationEvidence | None = None,
     ) -> None:
         if not slide_sets:
             raise ValueError("DatasetBuilder requires at least one slide set")
@@ -130,6 +136,13 @@ class DatasetBuilder:
         ):
             raise ValueError("Fingerprint registration identity does not match the backend")
         self.registration_backend = registration_backend
+        self.registration_evidence = resolve_registration_evidence(
+            slide_sets, registration_evidence
+        )
+        if fingerprint_metadata is not None and fingerprint_metadata.get(
+            "registration_evidence", []
+        ) != registration_evidence_metadata(self.registration_evidence):
+            raise ValueError("Fingerprint registration evidence does not match supplied evidence")
         self.config, self.slide_sets, self.fingerprint_metadata = (
             config,
             slide_sets,
@@ -216,6 +229,11 @@ class DatasetBuilder:
                 slide_set,
                 assignments.get(slide_set.set_id),
                 registration_backend=self.registration_backend,
+                registration_evidence={
+                    key: maps
+                    for key, maps in self.registration_evidence.items()
+                    if key[0] == slide_set.set_id
+                },
             ).process()
             valid_records.extend(self._records(set_result.set_id, set_result.valid_rows))
             discarded_records.extend(
@@ -337,5 +355,6 @@ class DatasetBuilder:
             preprocessing_config=self.config.to_dict(),
             slide_sets=self.slide_sets,
             registration_backend=self.registration_backend,
+            registration_evidence=self.registration_evidence,
         )
         save_dataset_fingerprint(fingerprint, layout.dataset_fingerprint_path)

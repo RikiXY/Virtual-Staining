@@ -12,7 +12,12 @@ from virtual_staining.data.builder import DatasetBuilder, DatasetBuildResult
 from virtual_staining.data.consumption import AssetRow, DataSnapshot, build_snapshot, write_snapshot
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.provenance import build_dataset_fingerprint_metadata
-from virtual_staining.data.slide_sets import SlideSet, resolve_slide_sets
+from virtual_staining.data.slide_sets import (
+    RegistrationEvidence,
+    SlideSet,
+    resolve_registration_evidence,
+    resolve_slide_sets,
+)
 from virtual_staining.experiment.snapshots import (
     save_config_hash,
     save_environment_snapshot,
@@ -99,6 +104,7 @@ def _build_current_fingerprint(
     slide_sets: tuple[SlideSet, ...],
     snapshot: DataSnapshot,
     registration_backend: RegistrationBackend | None = None,
+    registration_evidence: RegistrationEvidence | None = None,
 ) -> dict[str, Any]:
     assert config.preprocessing is not None
     layout = DatasetLayout(config.preprocessing.dataset_root)
@@ -117,6 +123,7 @@ def _build_current_fingerprint(
         force_hash_verification=config.preprocessing.inputs.hash_verification == "always",
         verified_hashes=verified,
         registration_backend=registration_backend,
+        registration_evidence=registration_evidence,
     )
     # Cross-reference only; the fingerprint digest itself stays preparation lineage.
     fingerprint["source_snapshot_id"] = snapshot.snapshot_id
@@ -189,13 +196,18 @@ def _warn_image_backend(config: RunConfig, slide_sets: tuple[SlideSet, ...]) -> 
 
 
 def prepare(
-    config: RunConfig, config_path: Path, *, registration_backend: RegistrationBackend | None = None
+    config: RunConfig,
+    config_path: Path,
+    *,
+    registration_backend: RegistrationBackend | None = None,
+    registration_evidence: RegistrationEvidence | None = None,
 ) -> DatasetBuildResult:
     if config.preprocessing is None:
         raise ValueError("RunConfig.preprocessing must be present for prepare().")
     root = config.preprocessing.dataset_root
     layout = DatasetLayout(root)
     slide_sets = resolve_slide_sets(config.preprocessing)
+    registration_evidence = resolve_registration_evidence(slide_sets, registration_evidence)
     config_hash = save_stage_config_snapshots(
         config,
         config_path,
@@ -208,7 +220,9 @@ def prepare(
     # Freeze and persist the selected raw assets before any reuse decision or build.
     snapshot = source_snapshot(config, slide_sets)
     write_snapshot(snapshot, layout.source_snapshot)
-    fingerprint = _build_current_fingerprint(config, slide_sets, snapshot, registration_backend)
+    fingerprint = _build_current_fingerprint(
+        config, slide_sets, snapshot, registration_backend, registration_evidence
+    )
     stored = _load_json(layout.dataset_fingerprint_path)
     result = None
     if (
@@ -225,5 +239,6 @@ def prepare(
             slide_sets=slide_sets,
             fingerprint_metadata=fingerprint,
             registration_backend=registration_backend,
+            registration_evidence=registration_evidence,
         ).run_all()
     return result

@@ -26,12 +26,16 @@ from virtual_staining.config.data import (
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.alignment import (
     AlignmentError,
+    AlignmentImage,
     AlignmentResult,
     AlignmentTransform,
+    GridGeometry,
+    ImageGeometry,
     QCPolicy,
     RegistrationAttempt,
     RegistrationBackend,
     RegistrationFailure,
+    RegistrationRequest,
     RegistrationRuntime,
     SpatialEvidence,
     evaluate_alignment_qc,
@@ -100,8 +104,6 @@ def _dataset(root, *, tiled=False, masks=False, targets=("HE", "PAS")):
 
 
 def _known_result(reference, moving, request):
-    assert moving.tissue_support is moving.observation_validity is None
-    assert reference.tissue_support is reference.observation_validity is None
     return AlignmentResult(
         "succeeded",
         "analytic_fixture",
@@ -175,6 +177,8 @@ def test_known_transforms_materialize_on_reference_grid(
     calls, returned = [], {}
 
     def register(reference, moving, request):
+        assert moving.tissue_support is moving.observation_validity is None
+        assert reference.tissue_support is reference.observation_validity is None
         calls.append((moving.geometry.name, reference.geometry.name))
         result = _known_result(reference, moving, request)
         # The transform, not a backend's method label, must choose resampling.
@@ -285,27 +289,41 @@ def test_independent_qc_disposition_is_explicit(tmp_path, status, action):
 def test_supplied_spatial_evidence_uses_existing_qc_contract(tmp_path):
     config, slide_set = _dataset(tmp_path)
 
+    supplied = {}
+    for asset in slide_set.assets:
+        shape = (8, 8) if asset.modality == "LF" else (34, 20)
+        geometry = ImageGeometry(asset.modality, shape)
+        supplied[(slide_set.set_id, asset.modality)] = tuple(
+            SpatialEvidence(
+                geometry, GridGeometry(shape, np.eye(3)), np.ones(shape, dtype=bool), kind
+            )
+            for kind in ("tissue_support", "observation_validity")
+        )
+
     def register(reference, moving, request):
+        for image in (reference, moving):
+            support, validity = supplied[(slide_set.set_id, image.geometry.name)]
+            assert image.tissue_support is support
+            assert image.observation_validity is validity
         result = _known_result(reference, moving, request)
         assert result.candidate is not None
-
-        def evidence(image, kind):
-            return SpatialEvidence(
-                image.geometry, image.grid, np.ones(image.grid.shape, dtype=bool), kind
-            )
-
         qc = evaluate_alignment_qc(
             result.candidate,
             request,
             QCPolicy({"support_iou": (1, 1), "observation_valid_fraction": (1, 1)}),
-            moving_support=evidence(moving, "tissue_support"),
-            reference_support=evidence(reference, "tissue_support"),
-            moving_validity=evidence(moving, "observation_validity"),
-            reference_validity=evidence(reference, "observation_validity"),
+            moving_support=moving.tissue_support,
+            reference_support=reference.tissue_support,
+            moving_validity=moving.observation_validity,
+            reference_validity=reference.observation_validity,
         )
         return replace(result, qc=qc)
 
-    DatasetBuilder(config, (slide_set,), registration_backend=_backend(register)).run_all()
+    DatasetBuilder(
+        config,
+        (slide_set,),
+        registration_backend=_backend(register),
+        registration_evidence=supplied,
+    ).run_all()
     for name, result in _results(tmp_path).items():
         if name != "LF":
             assert result.qc is not None and result.qc.status == "accepted"
@@ -628,8 +646,9 @@ def test_injected_result_boundary_rejects_invalid_contract(tmp_path, invalid):
         DatasetBuilder(config, (slide_set,), registration_backend=_backend(register)).run_all()
 
 
+@pytest.mark.parametrize("validate", [False, True])
 @pytest.mark.parametrize("mismatch", ["shape", "mpp"])
-def test_injected_identity_does_not_bypass_shared_frame_geometry(tmp_path, monkeypatch, mismatch):
+def test_declared_identity_preserves_validation_policy(tmp_path, monkeypatch, mismatch, validate):
     config, slide_set = _dataset(tmp_path)
     if mismatch == "mpp":
         for asset in slide_set.assets:
@@ -644,15 +663,33 @@ def test_injected_identity_does_not_bypass_shared_frame_geometry(tmp_path, monke
             ),
         )
     slide_set = replace(
-        slide_set, inputs=tuple(replace(a, already_aligned=True) for a in slide_set.inputs)
+        slide_set,
+        inputs=tuple(replace(a, already_aligned=True) for a in slide_set.inputs),
+        targets=tuple(replace(a, already_aligned=True) for a in slide_set.targets),
     )
-    config = replace(config, alignment=AlignmentConfig(validate_declared=False))
+    config = replace(config, alignment=AlignmentConfig(mode="never", validate_declared=validate))
 
     def register(reference, moving, request):
         return identity_alignment(reference.geometry, moving.geometry, request)
 
-    with pytest.raises(AlignmentError, match="identity alignment"):
-        DatasetBuilder(config, (slide_set,), registration_backend=_backend(register)).run_all()
+    baseline = None
+    for backend in (None, _backend(register)):
+        builder = DatasetBuilder(config, (slide_set,), registration_backend=backend)
+        if validate:
+            with pytest.raises(AlignmentError, match="identity alignment"):
+                builder.run_all()
+        else:
+            assert builder.run_all().train_count == 4
+            manifest = _manifest(tmp_path)
+            pixels = {
+                str(path): cv2.imread(str(tmp_path / path))
+                for record in manifest.records
+                for path in (*record.input_paths.values(), *record.target_paths.values())
+            }
+            if baseline is not None:
+                for path in pixels:
+                    np.testing.assert_array_equal(pixels[path], baseline[path])
+            baseline = pixels
 
 
 @pytest.mark.parametrize("mode", ["auto", "always", "never"])
@@ -686,3 +723,33 @@ def test_builtin_alignment_modes_keep_identity_and_real_sift(tmp_path, mode, dec
                 np.testing.assert_allclose(result.candidate.matrix, np.eye(3), atol=0.01)
     finally:
         processor.close()
+
+
+@pytest.mark.parametrize("mismatch", ["shape", "mpp"])
+@pytest.mark.parametrize(
+    "relationship", ["same_coordinate_frame", "same_section_restained", "unknown"]
+)
+def test_injected_identity_respects_relationship_semantics(mismatch, relationship):
+    reference = ImageGeometry("reference", (8, 8), (0.25, 0.5))
+    moving = ImageGeometry(
+        "moving",
+        (16, 8) if mismatch == "shape" else (8, 8),
+        (0.5, 0.5) if mismatch == "mpp" else (0.25, 0.5),
+    )
+
+    def image(geometry):
+        return AlignmentImage(
+            np.zeros(geometry.shape, np.uint8), geometry, GridGeometry(geometry.shape, np.eye(3))
+        )
+
+    request = RegistrationRequest(relationship, "identity", diagnostic_region=(0, 0, 8, 8))
+    backend = RegistrationBackend(
+        lambda ref, mov, req: identity_alignment(ref.geometry, mov.geometry, req),
+        "identity_adapter",
+        "1",
+    )
+    if relationship == "same_coordinate_frame":
+        with pytest.raises(AlignmentError, match="identity alignment"):
+            backend(image(reference), image(moving), request)
+    else:
+        assert backend(image(reference), image(moving), request).backend_status == "succeeded"

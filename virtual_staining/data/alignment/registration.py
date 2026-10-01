@@ -100,8 +100,6 @@ class RegistrationBackend:
                 or (request.family == "similarity" and candidate.family == "affine")
             ):
                 raise AlignmentError("Injected candidate exceeds requested transform permissions")
-            if request.family == "identity":
-                reference.geometry.validate_shared_frame(moving.geometry)
         return result
 
 

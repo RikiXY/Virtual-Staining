@@ -141,6 +141,12 @@ Programmatic registration injection adds a `registration` record containing the 
 the fingerprint. Without injection this record is absent. Callable identities and per-asset
 execution results are not fingerprint inputs. See the
 [preparation injection API](library_api.md#injecting-registration-into-preparation).
+Supplied registration evidence adds a sorted `registration_evidence` list to that same
+fingerprint. Each entry records `set_id`, `modality`, owning `asset` geometry, `kind`,
+`grid`, optional `source`, and `values_sha256`: a digest of boolean values packed in
+C order with little-endian bit order. Arrays are not expanded into JSON. Absent evidence
+adds no record; changing content, geometry, binding or source changes preparation identity.
+These input identities are separate from per-asset registration/QC execution results.
 
 `metadata/consumed_data/prepare/` is the consumed-data snapshot of the raw assets the
 last preparation attempt selected: every input slide, every target slide, and supplied mask

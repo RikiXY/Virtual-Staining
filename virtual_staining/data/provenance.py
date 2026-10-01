@@ -2,14 +2,22 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from virtual_staining.data.alignment import RegistrationBackend
 from virtual_staining.data.manifest import MANIFEST_SCHEMA_VERSION
-from virtual_staining.data.slide_sets import SlideAsset, SlideSet
-from virtual_staining.utils.hashing import sha256_file, sha256_json
+from virtual_staining.data.slide_sets import (
+    RegistrationEvidence,
+    SlideAsset,
+    SlideSet,
+    resolve_registration_evidence,
+)
+from virtual_staining.utils.hashing import sha256_bytes, sha256_file, sha256_json
 
 
 def _cached_file_provenance(
@@ -68,6 +76,29 @@ def _canonical_set_payload(slide_sets: tuple[SlideSet, ...]) -> list[dict[str, A
     ]
 
 
+def registration_evidence_metadata(evidence: RegistrationEvidence) -> list[dict[str, Any]]:
+    """Canonical map identities; array content is a digest, never expanded JSON."""
+    return json.loads(
+        json.dumps(
+            [
+                dict(
+                    set_id=set_id,
+                    modality=modality,
+                    asset=asdict(item.asset),
+                    kind=item.kind,
+                    grid=item.grid.to_dict(),
+                    source=item.source,
+                    values_sha256=sha256_bytes(
+                        np.packbits(item.values, bitorder="little").tobytes()
+                    ),
+                )
+                for (set_id, modality), maps in sorted(evidence.items())
+                for item in sorted(maps, key=lambda item: item.kind)
+            ]
+        )
+    )
+
+
 def build_dataset_fingerprint_metadata(
     *,
     dataset_root: Path,
@@ -79,6 +110,7 @@ def build_dataset_fingerprint_metadata(
     prepared_at: str | None = None,
     verified_hashes: Mapping[str, str] | None = None,
     registration_backend: RegistrationBackend | None = None,
+    registration_evidence: RegistrationEvidence | None = None,
 ) -> dict[str, Any]:
     """Build preparation lineage: what dataset this configuration and these sources produce.
 
@@ -125,7 +157,14 @@ def build_dataset_fingerprint_metadata(
         "files": files,
         "schema_version": MANIFEST_SCHEMA_VERSION,
     }
-    registration = {"registration": registration_backend.metadata} if registration_backend else {}
+    registration: dict[str, Any] = (
+        {"registration": registration_backend.metadata} if registration_backend else {}
+    )
+    evidence = registration_evidence_metadata(
+        resolve_registration_evidence(slide_sets, registration_evidence)
+    )
+    if evidence:
+        registration["registration_evidence"] = evidence
     fingerprint_payload.update(registration)
     return {
         **registration,

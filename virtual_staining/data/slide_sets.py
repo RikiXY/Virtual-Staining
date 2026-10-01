@@ -3,11 +3,13 @@ from __future__ import annotations
 import csv
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from virtual_staining.config.validation import MODALITY_NAME_PATTERN, check_modality_names
+from virtual_staining.data.alignment import AlignmentError, SpatialEvidence
 
 if TYPE_CHECKING:
     from virtual_staining.config.data import PreprocessingConfig
@@ -18,9 +20,11 @@ __all__ = [
     "SET_ID_PATTERN",
     "SlideAsset",
     "SlideSet",
+    "RegistrationEvidence",
     "asset_column",
     "load_slide_set_inventory",
     "resolve_slide_sets",
+    "resolve_registration_evidence",
 ]
 
 SET_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
@@ -58,6 +62,30 @@ class SlideSet:
     @property
     def assets(self) -> tuple[SlideAsset, ...]:
         return (*self.inputs, *self.targets)
+
+
+RegistrationEvidence = Mapping[tuple[str, str], tuple[SpatialEvidence, ...]]
+
+
+def resolve_registration_evidence(
+    slide_sets: tuple[SlideSet, ...], evidence: RegistrationEvidence | None
+) -> dict[tuple[str, str], tuple[SpatialEvidence, ...]]:
+    """Bind supplied maps to (set_id, modality); actual geometry is checked by AlignmentImage."""
+    assets = {(item.set_id, asset.modality) for item in slide_sets for asset in item.assets}
+    resolved = {}
+    for key, maps in (evidence or {}).items():
+        if key not in assets:
+            raise AlignmentError("Registration evidence names an unknown set/asset")
+        kinds = set()
+        for item in maps:
+            if not isinstance(item, SpatialEvidence) or item.asset.name != key[1]:
+                raise AlignmentError("Registration evidence asset mismatch")
+            if item.kind in kinds:
+                raise AlignmentError("Duplicate registration evidence kind for an asset")
+            kinds.add(item.kind)
+        if maps:
+            resolved[key] = tuple(sorted(maps, key=lambda item: item.kind))
+    return resolved
 
 
 def _optional_text(value: str | None) -> str | None:

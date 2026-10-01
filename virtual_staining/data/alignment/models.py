@@ -234,12 +234,20 @@ class SpatialEvidence:
     grid: GridGeometry
     values: np.ndarray
     kind: Literal["tissue_support", "observation_validity"]
+    source: str | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in {"tissue_support", "observation_validity"}:
             raise AlignmentError("Unsupported evidence semantics")
         if self.values.dtype != np.bool_ or self.values.shape != self.grid.shape:
             raise AlignmentError("Evidence must be a boolean array matching its grid")
+        _optional_text("Evidence source", self.source)
+        # Snapshot caller-owned values so preparation identity and sampling cannot diverge.
+        object.__setattr__(
+            self,
+            "values",
+            np.frombuffer(self.values.tobytes(), dtype=np.bool_).reshape(self.grid.shape),
+        )
 
 
 @dataclass(frozen=True)
