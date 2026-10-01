@@ -2,13 +2,18 @@
 
 ## Dataset Summary
 
+This card describes the paired dataset/preparation format and its scientific
+limitations, not a frozen publication cohort or a particular biological dataset.
+The repository establishes no patient population, tissue distribution, independent
+patient generalization, or clinical validity.
+
 | Property | Value |
 |---|---|
 | Task | Virtual histological staining / paired image-to-image translation |
 | Modalities | Named label-free inputs + one or more named stained histology targets |
 | Format | Aligned RGB image patches (every input and target of a sample on one grid) written from user-supplied source images |
 | Patch size | Configurable; default `256x256` pixels |
-| Splits | Train / Val / Test (`patch` level) |
+| Splits | Train / Val / Test; `patch` (default), `set`, `specimen`, or `patient` |
 | Index file | `manifests/manifest.csv` (schema `4.0`) |
 
 ## Source Data
@@ -21,7 +26,8 @@ user-provided paired image set placed under `dataset_root`.
   expected to be a corresponding stained image of the same set; all configured targets
   are required for every set.
 - Assets are listed in the wide `inputs/slide_sets.csv` inventory
-  (`input__<name>_path`, `target__<name>_path`, ...); see `docs/dataset_format.md`.
+  (`input__<name>_path`, `target__<name>_path`, ...); see
+  [dataset format](docs/dataset_format.md).
 - The preprocessing code accepts `.tif`, `.tiff`, and `.png` inputs.
 
 Dataset creators and users are responsible for ensuring that their source data
@@ -29,40 +35,45 @@ are legally shareable and appropriately governed for their institution and use c
 
 ## Acquisition Process
 
-The intended workflow assumes that the source and target images depict the same
-tissue section under two imaging conditions: a label-free source modality and a
-stained target modality.
+Paired supervision assumes that the named inputs and targets depict corresponding
+tissue. Dataset creators must establish whether acquisition supports that assumption.
 
 The repository does not enforce any acquisition hardware, stain protocol, or
 institution-specific procedure. Instead, it assumes the user provides the named input
 images and every named target image of a set, then performs computational alignment of
-each non-reference image to the reference input's frame.
+each non-reference image to the reference input's frame. Filenames, matching
+dimensions, identity alignment, successful SIFT or an injected registration backend,
+transform fit, and foreground masks do not prove biological correspondence.
+
+Registration execution success, transform geometry, independent QC, and biological
+qualification are separate. Missing QC is not acceptance, and preparation foreground
+masks are not independent registration-QC evidence.
 
 ## Preprocessing Pipeline
 
-`vs prepare` performs the following steps:
+Preparation covers:
 
-1. **Input validation and loading**: reads the paired source and target images
-   from `dataset_root` and validates the configured filenames and sizes.
-2. **Tissue mask computation**: computes foreground masks for both images using
-   thresholding, connected-component analysis, and repeated grid-based mask
-   passes across multiple scales.
-3. **Affine registration**: aligns the target image to the source image using
-   mask-constrained SIFT feature matching and `cv2.estimateAffinePartial2D`.
-   The repository writes `alignment_metadata.json` and warps target patches on
-   demand during extraction.
-4. **Patch extraction**: crops by the configured `margin`, extracts patches at
-   `image_size`, and steps the extraction grid using `grid_movement`.
-5. **Quality filtering**: rejects patch pairs when foreground coverage is too
+1. **Source validation**: validates the inventory and required named source assets.
+2. **Reference-frame alignment**: maps every moving input and target directly to
+   one explicit reference frame using shared registration geometry. Without an
+   alternate backend, preparation retains built-in identity/SIFT behavior.
+   Programmatic callers can supply another registration implementation through the
+   [public preparation boundary](docs/library_api.md#injecting-registration-into-preparation).
+3. **Bounded patch extraction**: extracts all named images on the reference grid
+   using the configured patch size, margin, and grid step. Transformed reads are
+   bounded; no full aligned whole-slide image is materialized.
+4. **Foreground/white-area filtering**: rejects samples when configured foreground coverage is too
    low, white/background coverage is too high, or the largest white connected
    component exceeds the configured threshold.
-6. **Split assignment**: randomly assigns accepted patches to `train`, `val`,
-   and `test` using the configured ratios and random seed.
-7. **Manifest writing**: writes accepted-patch records to `manifests/manifest.csv`
-   and discarded-patch records to `manifests/discarded_manifest.csv`, with
-   per-patch filter diagnostics in `discarded_patches/discarded_log.csv`.
+5. **Split assignment**: assigns accepted samples to `train`, `val`, and `test`
+   using the selected split unit, ratios and seed, or supplied grouped assignments.
+6. **Manifest publication**: writes accepted-patch records to `manifests/manifest.csv`
+   and discarded-patch records to `manifests/discarded_manifest.csv`.
    Discarded patch images are saved only when `save_discarded_patches` is
    enabled in preprocessing config.
+7. **Preparation provenance**: records configuration, source identity, split
+   assignments, and per-asset registration results. Persisted details belong to the
+   [dataset format](docs/dataset_format.md).
 
 ## Splits
 
@@ -76,22 +87,26 @@ The dataset builder writes accepted patches into:
 split assignments. Downstream training, inference, and evaluation stages rely on
 this manifest rather than discovering files ad hoc.
 
+Supported split units are `patch` (default), `set`, `specimen`, and `patient`.
+`set` keeps all patches of a supplied set together; `specimen` and `patient`
+require real `specimen_id` and `patient_id` metadata, respectively. A set is not
+automatically a patient, specimen, or independent biological unit. Group labels
+must reflect the actual dataset; software support does not validate their truth.
+Missing or unknown metadata must narrow the generalization claim, not be guessed.
+`slide` is not a supported split-unit value; spatial-block splitting is not implemented.
+
 ## Known Leakage Risk
 
-The default split is **patch-level**, not slide-level or patient-level.
-
-Patches extracted from the **same full-size image pair / slide** can be assigned
-to different splits. As a result, `splits/test/` is suitable for same-slide
-internal validation, but it is **not** a fully independent estimate of
-generalization to unseen slides, patients, institutions, or acquisition settings.
-
-Reported metrics from this default split may therefore overestimate real-world
-generalization. The current pipeline does **not** implement slide-level,
-patient-level, or spatial-block split strategies.
+With the default **patch-level** split, patches from the same source image, set,
+specimen, or patient can enter different partitions. Such test metrics do not
+establish unseen-patient or unseen-specimen performance and may overestimate
+generalization. Grouped splitting is available as described above; actual
+independence depends on the chosen experiment and the available metadata. Neither
+split choice alone establishes transfer to new institutions or acquisition settings.
 
 ## Metrics
 
-The repository evaluates generated images on the test split using:
+Built-in paired evaluation metrics available to request include:
 
 - MAE
 - MSE
@@ -101,8 +116,10 @@ The repository evaluates generated images on the test split using:
 - PCC (grayscale)
 - PCC per RGB channel and RGB mean
 
-See [`docs/run_format.md`](/home/andrea/projects/Virtual-Staining/docs/run_format.md)
-for the exact evaluation output columns.
+Only requested metrics are evaluated, against appropriate corresponding references.
+Results remain separate for each named output. See
+[`docs/run_format.md`](docs/run_format.md) for validity, coverage, aggregation, and
+persisted result semantics.
 
 ## Known Biases
 
@@ -123,10 +140,10 @@ for the exact evaluation output columns.
 
 - **Raw images**: not included in this repository.
 - **Code license**: the preprocessing pipeline is released under the MIT License.
-  See [LICENSE](/home/andrea/projects/Virtual-Staining/LICENSE).
+  See [LICENSE](LICENSE).
 - **Privacy**: if source images originate from patient tissue, users are
   responsible for de-identification, ethics review, consent handling, and any
   required IRB or institutional approval.
-- **Redistribution**: this repository does not grant rights to redistribute any
-  user-supplied microscopy data. Dataset creators are responsible for their own
-  licensing and sharing constraints.
+- **Data and weights rights**: the software license grants no rights to
+  user-provided microscopy data, trained weights, or third-party data. Dataset
+  creators are responsible for their own licensing and sharing constraints.

@@ -2,6 +2,11 @@
 
 ## Model Summary
 
+This card describes the Pix2Pix reference implementation and its intended use and
+limitations. It does not describe a released trained-model artifact, a particular
+checkpoint, a frozen publication study, or measured performance. Datasets, weights,
+configurations, and measured results belong to each concrete experiment.
+
 | Property | Value |
 |---|---|
 | Task | Image-to-image translation for virtual staining |
@@ -67,19 +72,22 @@ repository's second built-in method, CycleGAN, is not described by this card.
 
 ## Training Data
 
-The model is trained on paired label-free / stained microscopy images after
-preprocessing and patch extraction.
+Training uses experiment-specific paired label-free / stained microscopy images
+after preprocessing and patch extraction.
 
-- Patches are extracted from aligned full-size slide sets: every named input and every
-  named target on one reference grid.
+- Patches are extracted from source slide sets onto one reference grid for every
+  named input and target.
 - Patch size is configurable; the standard example configuration uses `256x256`.
-- Default data split is patch-level train/validation/test.
+- Default preparation split is patch-level train/validation/test; `set`, `specimen`,
+  and `patient` grouped splits are also supported when the corresponding real
+  metadata are supplied.
 - Quality filters remove patches using foreground ratio, white ratio, and largest
   white component ratio thresholds.
 
 ## Evaluation Metrics
 
-The evaluation pipeline computes the following metrics on the test split:
+Built-in paired evaluation metrics available to request against corresponding
+test references include:
 
 | Metric | Description |
 |---|---|
@@ -91,15 +99,22 @@ The evaluation pipeline computes the following metrics on the test split:
 | PCC (gray) | Pearson Correlation Coefficient on grayscale images |
 | PCC (RGB) | Mean Pearson Correlation Coefficient across RGB channels |
 
-This repository does not publish fixed benchmark values in the codebase. Metric
+Only requested metrics are evaluated, and results remain separate for each named
+output. See [the run-output contract](docs/run_format.md) for validity, coverage,
+aggregation, and persisted result semantics.
+
+This card reports no fixed benchmark values. Metric
 values should be taken from the run-specific evaluation outputs generated for a
 particular dataset and experiment.
 
 ## Limitations
 
-- **Patch-level split**: the default split draws train, validation, and test
-  patches from the same slide. Reported test metrics therefore reflect same-slide
-  internal validation, not independent slide-level or patient-level generalization.
+- **Split independence**: default patch-level splitting can place patches from the
+  same specimen or patient in different partitions and does not establish
+  unseen-specimen or unseen-patient performance. Grouped splits exist, but their
+  labels must be real rather than inferred; a set is not automatically a patient
+  or specimen. Actual independence depends on the experiment's split choice and
+  available metadata; unknown metadata must narrow the claim.
 - **Registration sensitivity**: supervision quality depends on alignment between
   label-free and stained images. Registration errors directly degrade training quality.
 - **Dataset specificity**: performance depends on the tissue type, staining process,

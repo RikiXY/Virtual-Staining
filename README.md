@@ -244,4 +244,6 @@ not biological benefit. Nothing in this repository is validated for clinical use
 
 ## License
 
-Released under the **MIT License**. See [`LICENSE`](./LICENSE) for details.
+Source code is covered by the **MIT License**; see [`LICENSE`](./LICENSE).
+Repository visual assets covered by [`ASSETS_LICENSE.md`](ASSETS_LICENSE.md) follow
+that separate notice and are not covered by MIT.
