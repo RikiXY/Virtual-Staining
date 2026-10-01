@@ -24,6 +24,7 @@ from virtual_staining.data.alignment import (
     AlignmentTransform,
     ImageGeometry,
     RegistrationAttempt,
+    RegistrationBackend,
     RegistrationRequest,
     RegistrationRuntime,
     identity_alignment,
@@ -129,7 +130,7 @@ def test_process_closes_readers_on_failure(tmp_path, monkeypatch, on_failure, st
         processor.inputs["LF"].asset = replace(slide_set.inputs[0], mask_path=None)
         monkeypatch.setattr(processor, "_calculate_mask", Mock(side_effect=failure))
     elif stage == "alignment":
-        monkeypatch.setattr(processor_module, "resolve_alignment", Mock(side_effect=failure))
+        processor.registration_backend = RegistrationBackend(Mock(side_effect=failure), "test", "1")
     elif stage == "patch":
         extract = processor.extract_asset_patch
 
@@ -159,17 +160,15 @@ def test_process_closes_readers_on_failure(tmp_path, monkeypatch, on_failure, st
         reader.close.assert_called_once()
 
 
-def test_align_delegates_all_moving_assets_with_explicit_data(tmp_path, monkeypatch) -> None:
+def test_align_delegates_all_moving_assets_with_explicit_data(tmp_path) -> None:
     processor = SlideSetProcessor(_config(tmp_path), _slide_set(tmp_path))
     processor.compute_masks()
-    result = identity_alignment(
-        ImageGeometry("LF", (8, 16)),
-        ImageGeometry("HE", (8, 16)),
-        RegistrationRequest("same_section_restained", "identity"),
-        "delegated",
+    resolve = Mock(
+        side_effect=lambda reference, moving, request: identity_alignment(
+            reference.geometry, moving.geometry, request, "delegated"
+        )
     )
-    resolve = Mock(return_value=result)
-    monkeypatch.setattr(processor_module, "resolve_alignment", resolve)
+    processor.registration_backend = RegistrationBackend(resolve, "test", "1")
     try:
         processor.align()
         assert processor.reference.alignment is not None
@@ -188,7 +187,9 @@ def test_align_delegates_all_moving_assets_with_explicit_data(tmp_path, monkeypa
             assert request.relationship == "unknown" and request.existing_alignment == "identity"
             assert call.kwargs == {}
             assert state.alignment is not None
-            assert state.alignment.candidate is result.candidate
+            assert state.alignment.candidate is not None
+            assert state.alignment.candidate.moving == moving.geometry
+            assert state.alignment.reason == "delegated"
     finally:
         processor.close()
 
@@ -233,25 +234,20 @@ def test_affine_extraction_handles_downsampled_masks_in_both_io_paths(tmp_path, 
         processor.close()
 
 
-def test_every_target_is_aligned_extracted_and_committed_on_one_grid(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_every_target_is_aligned_extracted_and_committed_on_one_grid(tmp_path: Path) -> None:
     config = replace(
         _config(tmp_path, ("PAS", "HE")),
         masks=MaskConfig(save_patch_masks=True),
     )
     slide_set = _slide_set(tmp_path, targets=("PAS", "HE"))
     resolve = Mock(
-        return_value=identity_alignment(
-            ImageGeometry("LF", (8, 16)),
-            ImageGeometry("HE", (8, 16)),
-            RegistrationRequest("same_section_restained", "identity"),
-            "declared_aligned",
+        side_effect=lambda reference, moving, request: identity_alignment(
+            reference.geometry, moving.geometry, request, "declared_aligned"
         )
     )
-    monkeypatch.setattr(processor_module, "resolve_alignment", resolve)
-
-    result = SlideSetProcessor(config, slide_set, "train").process()
+    result = SlideSetProcessor(
+        config, slide_set, "train", registration_backend=RegistrationBackend(resolve, "test", "1")
+    ).process()
 
     # AF, PAS and HE are aligned to the reference frame; the reference is identity.
     assert [call.args[1].geometry.name for call in resolve.call_args_list] == ["AF", "PAS", "HE"]
@@ -446,7 +442,7 @@ def test_alignment_retains_known_mpp_after_reader_cleanup(tmp_path, monkeypatch,
         processor.close()
 
 
-def test_preparation_retains_typed_backend_failure(tmp_path, monkeypatch):
+def test_preparation_retains_typed_backend_failure(tmp_path):
     from virtual_staining.data.alignment import RegistrationFailure
 
     config = replace(_config(tmp_path), alignment=AlignmentConfig(on_failure="skip_set"))
@@ -457,15 +453,13 @@ def test_preparation_retains_typed_backend_failure(tmp_path, monkeypatch):
         runtime=RegistrationRuntime(backend="test"),
         failure=failure,
     )
-    failed = AlignmentResult(
-        "failed",
-        "affine_sift",
-        RegistrationRequest("same_section_restained", "affine"),
-        None,
-        attempt=attempt,
-    )
-    monkeypatch.setattr(processor_module, "resolve_alignment", Mock(return_value=failed))
-    result = SlideSetProcessor(config, _slide_set(tmp_path)).process()
+
+    def fail(reference, moving, request):
+        return AlignmentResult("failed", "test", request, None, attempt=attempt)
+
+    result = SlideSetProcessor(
+        config, _slide_set(tmp_path), registration_backend=RegistrationBackend(fail, "test", "1")
+    ).process()
     assert result.error == failure.message
     saved = AlignmentResult.from_dict(json.loads(result.metadata["AF__alignment_metadata"]))
     assert saved.attempt.failure == failure and saved.qc is None and saved.candidate is None

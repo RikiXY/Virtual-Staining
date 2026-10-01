@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from virtual_staining.data.alignment import RegistrationBackend
 from virtual_staining.data.manifest import MANIFEST_SCHEMA_VERSION
 from virtual_staining.data.slide_sets import SlideAsset, SlideSet
 from virtual_staining.utils.hashing import sha256_file, sha256_json
@@ -77,6 +78,7 @@ def build_dataset_fingerprint_metadata(
     force_hash_verification: bool = False,
     prepared_at: str | None = None,
     verified_hashes: Mapping[str, str] | None = None,
+    registration_backend: RegistrationBackend | None = None,
 ) -> dict[str, Any]:
     """Build preparation lineage: what dataset this configuration and these sources produce.
 
@@ -123,7 +125,10 @@ def build_dataset_fingerprint_metadata(
         "files": files,
         "schema_version": MANIFEST_SCHEMA_VERSION,
     }
+    registration = {"registration": registration_backend.metadata} if registration_backend else {}
+    fingerprint_payload.update(registration)
     return {
+        **registration,
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "fingerprint": sha256_json(fingerprint_payload),
         "prepared_at": prepared_at or datetime.now(UTC).isoformat(),

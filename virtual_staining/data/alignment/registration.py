@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import replace
+import json
+from collections.abc import Callable, Sequence
+from dataclasses import InitVar, dataclass, field, replace
 from time import perf_counter, time
+from typing import Any, Literal
 
 import cv2
 import numpy as np
@@ -24,6 +26,83 @@ from virtual_staining.data.alignment.models import (
     SpatialEvidence,
 )
 from virtual_staining.data.alignment.warping import _coordinates, _sample_evidence
+
+
+@dataclass(frozen=True)
+class RegistrationBackend:
+    """Explicit preparation callable and frozen JSON semantic identity.
+
+    The caller owns deterministic execution and must identify all relevant options,
+    including independent QC policy/evidence versions. Results preserve the supplied
+    request and use the real moving/reference geometry. No callable is serialized.
+    """
+
+    register: Callable[[AlignmentImage, AlignmentImage, RegistrationRequest], AlignmentResult]
+    identifier: str
+    version: str
+    options: InitVar[dict[str, Any] | None] = None
+    qc_disposition: InitVar[dict[str, Literal["continue", "skip_set", "error"]] | None] = None
+    _metadata_json: str = field(init=False, repr=False)
+
+    def __post_init__(self, options: dict[str, Any] | None, qc_disposition: dict | None) -> None:
+        if not callable(self.register):
+            raise ValueError("Registration backend must be callable")
+        if any(not isinstance(v, str) or not v.strip() for v in (self.identifier, self.version)):
+            raise ValueError("Registration backend requires a stable identifier and version")
+        disposition = qc_disposition if qc_disposition is not None else {}
+        if not isinstance(disposition, dict) or any(
+            key not in {"unassessed", "accepted", "rejected", "insufficient_evidence"}
+            or not isinstance(value, str)
+            or value not in {"continue", "skip_set", "error"}
+            for key, value in disposition.items()
+        ):
+            raise ValueError("Invalid registration QC disposition")
+        options = options if options is not None else {}
+        if not isinstance(options, dict):
+            raise ValueError("Registration options must be a JSON object")
+        metadata = dict(
+            identifier=self.identifier,
+            version=self.version,
+            options=options,
+            qc_disposition=disposition,
+        )
+        try:
+            encoded = json.dumps(metadata, sort_keys=True, allow_nan=False)
+            if json.loads(encoded) != metadata:
+                raise ValueError("Options must use JSON values and string keys")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Registration options must contain finite JSON values") from exc
+        object.__setattr__(self, "_metadata_json", encoded)
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """Detached semantic configuration, never per-asset execution results."""
+        return json.loads(self._metadata_json)
+
+    def __call__(
+        self, reference: AlignmentImage, moving: AlignmentImage, request: RegistrationRequest
+    ) -> AlignmentResult:
+        result = self.register(reference, moving, request)
+        if not isinstance(result, AlignmentResult) or result.request != request:
+            raise AlignmentError(
+                "Injected registration must return AlignmentResult for its request"
+            )
+        candidate = result.candidate
+        if candidate is not None:
+            if candidate.reference != reference.geometry or candidate.moving != moving.geometry:
+                raise AlignmentError(
+                    "Injected candidate must map the actual moving/reference frames"
+                )
+            if (
+                candidate.family
+                not in (request.allowed_families or ("identity", "similarity", "affine"))
+                or (request.family == "identity" and candidate.family != "identity")
+                or (request.family == "similarity" and candidate.family == "affine")
+            ):
+                raise AlignmentError("Injected candidate exceeds requested transform permissions")
+            if request.family == "identity":
+                reference.geometry.validate_shared_frame(moving.geometry)
+        return result
 
 
 class _BackendFailure(AlignmentError):

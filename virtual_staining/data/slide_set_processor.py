@@ -15,6 +15,7 @@ from virtual_staining.data.alignment import (
     AlignmentResult,
     GridGeometry,
     ImageGeometry,
+    RegistrationBackend,
     RegistrationRequest,
     identity_alignment,
     resolve_alignment,
@@ -97,6 +98,15 @@ class SetBuildResult:
     error: str | None = None
 
 
+class AlignmentQCError(AlignmentError):
+    """Explicit preparation QC disposition; backend execution may have succeeded."""
+
+    def __init__(self, result: AlignmentResult, action: str) -> None:
+        self.result, self.action = result, action
+        status = result.qc.status if result.qc is not None else "unassessed"
+        super().__init__(f"Registration QC {status}: {action}")
+
+
 class SlideSetProcessor:
     """Mask, align and write patches for exactly one slide set."""
 
@@ -105,10 +115,13 @@ class SlideSetProcessor:
         config: PreprocessingConfig,
         slide_set: SlideSet,
         assigned_split: DatasetSplit | None = None,
+        *,
+        registration_backend: RegistrationBackend | None = None,
     ) -> None:
         self.config = config
         self.slide_set = slide_set
         self.assigned_split: DatasetSplit | None = assigned_split
+        self.registration_backend = registration_backend
         self.inputs = {asset.modality: AssetState(asset) for asset in slide_set.inputs}
         self.targets = {asset.modality: AssetState(asset) for asset in slide_set.targets}
         self.reference = self.inputs[slide_set.reference_modality]
@@ -122,6 +135,10 @@ class SlideSetProcessor:
             self.compute_masks()
             self.align()
             valid_rows, discarded_rows = self.stream_patches()
+        except AlignmentQCError as exc:
+            if exc.action == "error":
+                raise
+            error = str(exc)
         except Exception as exc:
             if self.config.alignment.on_failure != "skip_set":
                 raise
@@ -227,15 +244,26 @@ class SlideSetProcessor:
                 else "unknown",
                 diagnostic_region=(0, 0, reference.geometry.shape[1], reference.geometry.shape[0]),
             )
-            result = resolve_alignment(reference, moving, request)
+            backend = self.registration_backend or resolve_alignment
+            result = backend(reference, moving, request)
+            state.alignment = result
             if result.backend_status == "failed":
-                state.alignment = result
                 assert result.attempt.failure is not None
                 raise AlignmentError(result.attempt.failure.message)
-            state.alignment = replace(
-                result,
-                reason=(None if estimate else "declared_aligned" if declared else "policy_never"),
-            )
+            if self.registration_backend is None:
+                state.alignment = replace(
+                    result,
+                    reason=(
+                        None if estimate else "declared_aligned" if declared else "policy_never"
+                    ),
+                )
+            else:
+                status = result.qc.status if result.qc is not None else "unassessed"
+                action = self.registration_backend.metadata["qc_disposition"].get(
+                    status, "continue"
+                )
+                if action != "continue":
+                    raise AlignmentQCError(result, action)
 
     def extract_asset_patch(
         self, state: AssetState, *, x: int, y: int, width: int, height: int
@@ -246,7 +274,10 @@ class SlideSetProcessor:
             raise AlignmentError("Patch extraction requires a transform candidate")
         size = (width, height)
         source_budget = max(4, width * height)
-        if state.alignment.method == "identity":
+        if (
+            state.alignment.candidate.family == "identity"
+            and state.alignment.candidate.moving.shape == state.alignment.candidate.reference.shape
+        ):
             if state.reader is not None:
                 image = state.reader.read_region(x, y, width, height)
             elif state.preview is not None:
@@ -333,13 +364,15 @@ class SlideSetProcessor:
         try:
             for path, image in images.items():
                 existed = path.exists()
+                if not existed:
+                    owned.append(path)
                 written = cv2.imwrite(str(path), image)
-                if written or not existed:
+                if written and existed:
                     owned.append(path)
                 if not written:
                     raise OSError(f"Could not write patch {path}")
                 _verify_written_patch(path, image)
-        except Exception:
+        except BaseException:
             for path in owned:
                 path.unlink(missing_ok=True)
             raise

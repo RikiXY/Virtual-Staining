@@ -136,6 +136,11 @@ dataset_root/
 canonical inventory, source-file hashes, and a `sha256:` fingerprint. It is
 preparation lineage: it answers what dataset this configuration and these sources
 build, and it decides whether an existing complete dataset can be reused.
+Programmatic registration injection adds a `registration` record containing the caller's
+`identifier`, `version`, frozen JSON `options`, and `qc_disposition`; all participate in
+the fingerprint. Without injection this record is absent. Callable identities and per-asset
+execution results are not fingerprint inputs. See the
+[preparation injection API](library_api.md#injecting-registration-into-preparation).
 
 `metadata/consumed_data/prepare/` is the consumed-data snapshot of the raw assets the
 last preparation attempt selected: every input slide, every target slide, and supplied mask
@@ -157,6 +162,10 @@ incomplete rebuild does not leave a consumable manifest or successful build reco
 Alignment metadata uses the versioned result format below. Preparation's existing
 alignment flags declare coordinates only; its foreground masks are not tissue-support
 or observation-validity evidence. Candidate estimation does not certify correspondence.
+Each `<modality>__alignment_metadata` cell in `metadata/slide_sets.csv` retains the complete
+result below, including injected results and QC outcomes when an explicit disposition
+continues or excludes a set. A skipped backend failure retains its typed attempt/failure;
+an unattempted asset has an empty cell. QC absence is serialized as null, never acceptance.
 
 ### Persisted alignment geometry and results
 

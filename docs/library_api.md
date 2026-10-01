@@ -469,3 +469,56 @@ samples are geometrically invalid. Boolean `SpatialEvidence` maps carry their ow
 asset and grid: true means specimen content for tissue support, or usable observation
 for validity. Outside their grid evidence is unknown. Foreground/loss masks remain
 separate and use `warp_aligned_mask_patch()` with their explicit grid.
+
+### Injecting registration into preparation
+
+Standalone preparation accepts
+`DatasetBuilder(config, slide_sets, *, registration_backend=backend).run_all()`.
+`SlideSetProcessor(config, slide_set, assigned_split=None, *, registration_backend=backend)`
+and `applications.prepare.prepare(config, config_path, *, registration_backend=backend)`
+accept the same dependency; the latter retains dataset reuse.
+
+Construct the public `virtual_staining.data.alignment.RegistrationBackend` with
+`RegistrationBackend(register, identifier, version, options=None, qc_disposition=None)`.
+`register(reference: AlignmentImage, moving: AlignmentImage, request: RegistrationRequest)`
+returns an `AlignmentResult` with the supplied request and canonical geometry matching
+those actual images. Each moving input and target is called directly against the explicit
+reference; the reference itself always receives built-in identity. Inventory declarations
+and `alignment.mode` still determine the requested transform permission. A callback cannot
+escalate an identity request or substitute another asset's geometry. Its result, including
+reason, runtime, typed failure and nullable QC, is retained in set metadata.
+
+```python
+from virtual_staining.data.alignment import RegistrationBackend
+from virtual_staining.data.builder import DatasetBuilder
+
+backend = RegistrationBackend(
+    register=my_registration_callable,
+    identifier="laboratory_registration",
+    version="1",
+    options={"calibration_revision": "2026-09", "independent_qc_revision": "3"},
+    qc_disposition={"rejected": "skip_set", "insufficient_evidence": "error"},
+)
+result = DatasetBuilder(config, slide_sets, registration_backend=backend).run_all()
+```
+
+The caller owns deterministic execution and must include every relevant backend option,
+QC policy and external evidence revision/digest in its JSON identity. Options are copied
+into a frozen JSON snapshot; callable representations are never used. This record and
+QC disposition participate in the existing dataset fingerprint. A supplied
+`fingerprint_metadata` must have the same registration record. Per-asset execution results
+remain separate from that configuration identity.
+
+The callback may attach independently evaluated QC using `evaluate_alignment_qc()` and
+an explicit `QCPolicy`, passing support/validity through `SpatialEvidence`. Preparation
+never derives that evidence from foreground masks. `qc_disposition` maps `accepted`,
+`rejected`, `insufficient_evidence`, or `unassessed` (`qc is None`) to `continue`, `skip_set`,
+or `error`. Unspecified outcomes continue without changing their QC status. An explicit
+QC action takes precedence over `alignment.on_failure`; a hard QC error raises
+`data.slide_set_processor.AlignmentQCError` with its `result`. Returned typed failures,
+including `interrupted`, follow `alignment.on_failure` without losing their category.
+A raised `KeyboardInterrupt` propagates, and owned partial sample writes are removed.
+No manifest is published when an exception interrupts the build.
+
+With no injection, preparation retains its identity/SIFT selection and absent QC.
+No scientific thresholds, biological relationships, or acceptance claims are added.

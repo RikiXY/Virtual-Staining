@@ -18,6 +18,7 @@ from virtual_staining.data.alignment.models import (
     SpatialEvidence,
 )
 from virtual_staining.data.alignment.registration import (
+    RegistrationBackend,
     evaluate_alignment_qc,
     identity_alignment,
     resolve_alignment,
@@ -39,6 +40,7 @@ __all__ = [
     "QCDecision",
     "QCPolicy",
     "RegistrationAttempt",
+    "RegistrationBackend",
     "RegistrationFailure",
     "RegistrationRequest",
     "RegistrationResources",

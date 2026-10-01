@@ -71,7 +71,7 @@ def test_builder_emits_dynamic_manifest_and_set_metadata(tmp_path, monkeypatch) 
         # Only the result boundary exists; private writes and state reads must fail.
         __slots__ = ("result",)
 
-        def __init__(self, config, slide_set, assigned_split=None):
+        def __init__(self, config, slide_set, assigned_split=None, *, registration_backend=None):
             self.result = SetBuildResult(
                 set_id=slide_set.set_id,
                 split=assigned_split,

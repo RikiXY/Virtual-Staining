@@ -710,7 +710,14 @@ def test_prepare_snapshots_selected_sources_and_reverifies_before_reuse(
     real_resolve = prepare_app.resolve_slide_sets
 
     class RecordingBuilder:
-        def __init__(self, _config: Any, *, slide_sets: Any, fingerprint_metadata: Any) -> None:
+        def __init__(
+            self,
+            _config: Any,
+            *,
+            slide_sets: Any,
+            fingerprint_metadata: Any,
+            registration_backend: Any = None,
+        ) -> None:
             self.slide_sets, self.fingerprint = slide_sets, fingerprint_metadata
 
         def run_all(self) -> DatasetBuildResult:

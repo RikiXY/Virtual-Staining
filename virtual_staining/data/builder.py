@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from virtual_staining.config.data import PreprocessingConfig
+from virtual_staining.data.alignment import RegistrationBackend
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.manifest import (
     MANIFEST_SCHEMA_VERSION,
@@ -119,13 +120,22 @@ class DatasetBuilder:
         config: PreprocessingConfig,
         slide_sets: tuple[SlideSet, ...],
         fingerprint_metadata: dict[str, Any] | None = None,
+        *,
+        registration_backend: RegistrationBackend | None = None,
     ) -> None:
         if not slide_sets:
             raise ValueError("DatasetBuilder requires at least one slide set")
+        if fingerprint_metadata is not None and fingerprint_metadata.get("registration") != (
+            registration_backend.metadata if registration_backend else None
+        ):
+            raise ValueError("Fingerprint registration identity does not match the backend")
+        self.registration_backend = registration_backend
         self.config, self.slide_sets, self.fingerprint_metadata = (
             config,
             slide_sets,
-            fingerprint_metadata,
+            json.loads(json.dumps(fingerprint_metadata))
+            if fingerprint_metadata is not None
+            else None,
         )
 
     def _records(
@@ -202,7 +212,10 @@ class DatasetBuilder:
         excluded: list[dict[str, str]] = []
         for slide_set in sorted(self.slide_sets, key=lambda item: item.set_id):
             set_result = SlideSetProcessor(
-                self.config, slide_set, assignments.get(slide_set.set_id)
+                self.config,
+                slide_set,
+                assignments.get(slide_set.set_id),
+                registration_backend=self.registration_backend,
             ).process()
             valid_records.extend(self._records(set_result.set_id, set_result.valid_rows))
             discarded_records.extend(
@@ -323,5 +336,6 @@ class DatasetBuilder:
             dataset_root=layout.root,
             preprocessing_config=self.config.to_dict(),
             slide_sets=self.slide_sets,
+            registration_backend=self.registration_backend,
         )
         save_dataset_fingerprint(fingerprint, layout.dataset_fingerprint_path)
