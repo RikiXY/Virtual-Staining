@@ -207,6 +207,9 @@ optional. `objective_metadata()` may return JSON-compatible objective provenance
 `best.json`. [`tests/external_method/`](../tests/external_method/) contains a complete
 non-GAN extension example.
 
+For a self-contained consumer that also exercises registration, metrics and relocated
+execution, see [`examples/external_consumer`](../examples/external_consumer/README.md).
+
 ## Inspecting and checking configs
 
 `virtual_staining.applications.config_authoring` exposes config inspection and
