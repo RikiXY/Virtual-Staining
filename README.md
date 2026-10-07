@@ -26,7 +26,7 @@ built-ins; Python callers can supply
 | `vs infer-images` | Run inference on one image file or a directory of images |
 | `vs evaluate` | Paired image metrics or unpaired collection diagnostics for a run, or metrics for one image pair |
 | `vs compare` | Compare metric distributions across runs |
-| `vs convert` | Convert TIFF images to OpenSlide-compatible pyramidal BigTIFFs |
+| `vs convert` | Convert TIFF/JPEG images to OpenSlide-compatible pyramidal BigTIFFs |
 | `vs panels` | Build source / generated / target comparison panels |
 | `vs organize` | Organise run outputs |
 | `vs export-model` | Export selected run checkpoints as a portable local model bundle |

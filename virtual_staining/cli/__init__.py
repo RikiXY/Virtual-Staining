@@ -33,7 +33,7 @@ _COMMAND_HELP = {
     "infer-images": "Run inference on an image or directory.",
     "evaluate": "Evaluate a run or one target/generated pair.",
     "compare": "Compare metric distributions across runs.",
-    "convert": "Convert TIFF images to OpenSlide-compatible pyramidal BigTIFFs.",
+    "convert": "Convert TIFF/JPEG images to OpenSlide-compatible pyramidal BigTIFFs.",
     "panels": "Build source/generated/target comparison panels.",
     "organize": "Organize run outputs by metric ranking.",
     "export-model": "Export selected run checkpoints as a portable local model bundle.",

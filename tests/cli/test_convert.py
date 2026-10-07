@@ -17,12 +17,14 @@ class _Reader:
         pass
 
 
+@pytest.mark.parametrize("suffix", [".tif", ".jpg", ".jpeg"])
 def test_convert_images_delegates_pyramidal_writing_to_image_io(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    suffix: str,
 ) -> None:
-    source = tmp_path / "source.tif"
+    source = tmp_path / f"source{suffix}"
     source.write_bytes(b"input")
     output_dir = tmp_path / "converted"
     calls: list[tuple[Path, Path]] = []
@@ -36,7 +38,7 @@ def test_convert_images_delegates_pyramidal_writing_to_image_io(
     with caplog.at_level(logging.INFO, logger="virtual_staining.applications.convert"):
         result = convert_app.convert_images((source,), output_dir)
 
-    destination = output_dir / source.name
+    destination = output_dir / ("source.tif" if suffix in {".jpg", ".jpeg"} else source.name)
     assert result == (destination,)
     assert destination.read_bytes() == b"converted"
     assert len(calls) == 1
@@ -69,6 +71,16 @@ def test_convert_images_refuses_unsafe_destinations(tmp_path: Path, failure: str
 
     with pytest.raises(error):
         convert_app.convert_images(inputs, output)
+
+
+def test_convert_images_rejects_jpeg_extension_collisions(tmp_path: Path) -> None:
+    source = tmp_path / "slides"
+    source.mkdir()
+    (source / "sample.jpg").write_bytes(b"jpg")
+    (source / "sample.jpeg").write_bytes(b"jpeg")
+
+    with pytest.raises(ValueError, match="duplicate destinations"):
+        convert_app.convert_images((source,), tmp_path / "output")
 
 
 def test_convert_images_removes_temporary_output_on_validation_failure(
@@ -147,6 +159,7 @@ def test_directory_inputs_are_recursive_and_preserve_relative_paths(tmp_path: Pa
     (source / "nested").mkdir(parents=True)
     (source / "top.tif").write_bytes(b"top")
     (source / "nested" / "deep.TIFF").write_bytes(b"deep")
+    (source / "nested" / "photo.JPEG").write_bytes(b"photo")
     (source / "nested" / "notes.txt").write_text("ignore", encoding="utf-8")
     output = source / "converted"
     output.mkdir()
@@ -156,6 +169,7 @@ def test_directory_inputs_are_recursive_and_preserve_relative_paths(tmp_path: Pa
 
     assert conversions == (
         ((source / "nested" / "deep.TIFF").resolve(), output / "nested" / "deep.TIFF"),
+        ((source / "nested" / "photo.JPEG").resolve(), output / "nested" / "photo.tif"),
         ((source / "top.tif").resolve(), output / "top.tif"),
     )
 
@@ -165,7 +179,7 @@ def test_directory_inputs_reject_empty_selection_and_cross_root_collisions(
 ) -> None:
     empty = tmp_path / "empty"
     empty.mkdir()
-    with pytest.raises(ValueError, match="no TIFF"):
+    with pytest.raises(ValueError, match="no TIFF or JPEG"):
         convert_app.convert_images((empty,), tmp_path / "output")
 
     roots = (tmp_path / "one", tmp_path / "two")

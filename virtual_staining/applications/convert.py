@@ -14,24 +14,33 @@ def _conversion_paths(inputs: tuple[Path, ...], output_dir: Path) -> tuple[tuple
     for input_path in inputs:
         source = input_path.resolve()
         if source.is_file():
-            if source.suffix.lower() not in {".tif", ".tiff"}:
-                raise ValueError(f"Input must be a TIFF file: {source}")
-            conversions.append((source, output_dir / source.name))
+            if source.suffix.lower() not in {".tif", ".tiff", ".jpg", ".jpeg"}:
+                raise ValueError(f"Input must be a TIFF or JPEG file: {source}")
+            destination = output_dir / source.name
+            if source.suffix.lower() in {".jpg", ".jpeg"}:
+                destination = destination.with_suffix(".tif")
+            conversions.append((source, destination))
             continue
         if not source.is_dir():
-            raise FileNotFoundError(f"Input TIFF or directory not found: {source}")
+            raise FileNotFoundError(f"Input TIFF, JPEG, or directory not found: {source}")
 
         matches = [
             path
             for path in source.rglob("*")
             if path.is_file()
-            and path.suffix.lower() in {".tif", ".tiff"}
+            and path.suffix.lower() in {".tif", ".tiff", ".jpg", ".jpeg"}
             and not path.resolve().is_relative_to(output_dir)
         ]
         if not matches:
-            raise ValueError(f"Directory contains no TIFF files: {source}")
+            raise ValueError(f"Directory contains no TIFF or JPEG files: {source}")
         conversions.extend(
-            (path.resolve(), output_dir / path.relative_to(source)) for path in sorted(matches)
+            (
+                path.resolve(),
+                (output_dir / path.relative_to(source)).with_suffix(".tif")
+                if path.suffix.lower() in {".jpg", ".jpeg"}
+                else output_dir / path.relative_to(source),
+            )
+            for path in sorted(matches)
         )
     return tuple(conversions)
 
@@ -39,7 +48,7 @@ def _conversion_paths(inputs: tuple[Path, ...], output_dir: Path) -> tuple[tuple
 def convert_images(inputs: tuple[Path, ...], output_dir: Path) -> tuple[Path, ...]:
     output_dir = output_dir.resolve()
     if not inputs:
-        raise ValueError("At least one input TIFF is required")
+        raise ValueError("At least one input TIFF or JPEG is required")
     conversions = _conversion_paths(inputs, output_dir)
     destinations = tuple(destination for _, destination in conversions)
     if len(set(destinations)) != len(destinations):
