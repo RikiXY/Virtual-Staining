@@ -109,6 +109,7 @@ class ResolutionContext:
     inputs: tuple[str, ...]
     outputs: tuple[str, ...]
     training: TrainingConfig | None
+    stages: tuple[str, ...] = ()
 
     def component(self, name: object, field: str) -> ComponentDefinition:
         if not isinstance(name, str):
@@ -165,6 +166,10 @@ class MethodDefinition(ABC):
         """Check method rules that span several sections of a resolved config."""
         del config
 
+    def validate_stage(self, config: RunConfig, stage: str) -> None:
+        """Check method-owned execution requirements, including on direct application calls."""
+        del config, stage
+
     def checkpoint_metric_mode(self, metric: str, field: str) -> CheckpointMode:
         """Return the ranking mode of checkpoint metric ``metric`` or reject it."""
         if metric not in self.checkpoint_metrics:
@@ -185,11 +190,13 @@ class MethodDefinition(ABC):
 
     def prediction_inputs(self, config: RunConfig, direction: str | None) -> tuple[str, ...]:
         """Named inputs consumed when predicting in ``direction``."""
+        assert config.model is not None
         del direction
         return tuple(config.model.inputs)
 
     def prediction_outputs(self, config: RunConfig, direction: str | None) -> tuple[str, ...]:
         """Ordered named outputs produced when predicting in ``direction``."""
+        assert config.model is not None
         del direction
         return tuple(config.model.outputs)
 
@@ -210,6 +217,8 @@ class MethodDefinition(ABC):
         """Identity of every persisted component by role, usually ``Component.identity()``."""
 
     def checkpoint_identity(self, config: RunConfig) -> CheckpointIdentity:
+        assert config.method is not None
+        assert config.model is not None
         from virtual_staining.checkpoint_contract import CheckpointIdentity
 
         options = config.method.options
@@ -224,6 +233,16 @@ class MethodDefinition(ABC):
             components=self.component_identities(options),
             image_size=config.project.image_size,
         )
+
+    def inference_checkpoint_identity(
+        self, config: RunConfig, payload: object, path: Path
+    ) -> CheckpointIdentity:
+        """Expected inference identity; methods may resolve omitted unused components.
+
+        The complete stored identity is still checked by the shared checkpoint validator.
+        Supplied component configuration must never be replaced by checkpoint values.
+        """
+        return self.checkpoint_identity(config)
 
     # --- runtime construction ------------------------------------------------------
 

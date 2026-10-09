@@ -63,6 +63,7 @@ def _manager(config: RunConfig, method: CycleGANMethod) -> MethodCheckpointManag
 def test_definition_builds_cyclegan_with_method_contract(tmp_path: Path) -> None:
     config = _config(tmp_path)
 
+    assert config.method is not None
     method = config.method.definition.build_training_runtime(config, _CPU, seed=7)
 
     assert isinstance(method, CycleGANMethod)

@@ -74,6 +74,7 @@ def test_run_config_composes_domains_and_round_trips(tmp_path: Path) -> None:
     write_yaml(resolved_path, yaml.safe_dump(resolved, sort_keys=False))
 
     assert config.training is not None
+    assert config.method is not None
     assert config.method.options.training.losses.generator[0].weight == 25.0
     assert config.training.augmentation.enabled is False
     assert config.preprocessing is not None

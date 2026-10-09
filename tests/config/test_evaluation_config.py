@@ -155,8 +155,9 @@ def test_pix2pix_accepts_unpaired_protocol_with_reference_collection(tmp_path: P
 
 
 def test_pix2pix_unpaired_protocol_requires_reference_collection(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="set evaluation.reference_collection"):
-        _pix2pix_config(tmp_path, "evaluation:\n  protocol: unpaired")
+    config = _pix2pix_config(tmp_path, "evaluation:\n  protocol: unpaired")
+    with pytest.raises(ValueError, match="evaluation.reference_collection"):
+        config.validate_stages(("evaluate",))
 
 
 @pytest.mark.parametrize("protocol", ["", "\n  protocol: paired"])

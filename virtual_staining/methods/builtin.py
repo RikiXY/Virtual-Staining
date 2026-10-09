@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
@@ -23,6 +23,7 @@ from virtual_staining.config.scheduler import (
 )
 from virtual_staining.definitions import (
     Component,
+    ComponentContext,
     Definitions,
     MethodDefinition,
     ResolutionContext,
@@ -32,9 +33,11 @@ from virtual_staining.metrics import BUILTIN_METRIC_DEFINITIONS, BUILTIN_METRICS
 from virtual_staining.models.components import BUILTIN_COMPONENTS, BUILTIN_SOURCE
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import torch
 
-    from virtual_staining.checkpoint_contract import ValidatedCheckpoint
+    from virtual_staining.checkpoint_contract import CheckpointIdentity, ValidatedCheckpoint
     from virtual_staining.config.run import RunConfig
     from virtual_staining.training.benchmarking import TrainingBenchmarkRecorder
     from virtual_staining.training.runtime import TrainingMethodRuntime
@@ -120,8 +123,8 @@ class GanTrainingOptions:
 class GanOptions:
     """Resolved options of a built-in GAN; ``training`` is None without a training section."""
 
-    generator: Component
-    discriminator: Component
+    generator: Component | None
+    discriminator: Component | None
     training: GanTrainingOptions | None
     replay_buffer_size: int | None = None
 
@@ -144,16 +147,37 @@ class _GanDefinition(MethodDefinition):
     ) -> GanOptions:
         model = sections.get("model", {})
         return GanOptions(
-            generator=self._generator(model.get("generator", {}), context),
+            generator=(
+                self._generator(model.get("generator", {}), context)
+                if not context.stages
+                or context.training is not None
+                or "infer" in context.stages
+                or "generator" in model
+                else None
+            ),
             discriminator=context.component("patchgan", "model.discriminator").resolve(
                 model.get("discriminator", {}), context.component_context("model.discriminator")
-            ),
+            )
+            if not context.stages or context.training is not None or "discriminator" in model
+            else None,
             training=(
                 None
                 if context.training is None
                 else self._training(sections.get("training", {}), context.training.epochs)
             ),
         )
+
+    def validate_stage(self, config: RunConfig, stage: str) -> None:
+        assert config.method is not None
+        options: GanOptions = config.method.options
+        if stage in {"train", "infer"} and options.generator is None:
+            raise ValueError(
+                f"model.generator is required for {stage}; resolve with stages including {stage!r}"
+            )
+        if stage == "train" and options.discriminator is None:
+            raise ValueError(
+                "model.discriminator is required for train; resolve with stages including 'train'"
+            )
 
     def _generator(self, raw: object, context: ResolutionContext) -> Component:
         if not isinstance(raw, Mapping):
@@ -196,15 +220,52 @@ class _GanDefinition(MethodDefinition):
         )
 
     def options_to_sections(self, options: GanOptions) -> dict[str, dict[str, Any]]:
-        sections: dict[str, dict[str, Any]] = {
-            "model": {
-                "generator": {"architecture": options.generator.name, **options.generator.options},
-                "discriminator": dict(options.discriminator.options),
+        sections: dict[str, dict[str, Any]] = {"model": {}}
+        if options.generator is not None:
+            sections["model"]["generator"] = {
+                "architecture": options.generator.name,
+                **options.generator.options,
             }
-        }
+        if options.discriminator is not None:
+            sections["model"]["discriminator"] = dict(options.discriminator.options)
         if options.training is not None:
             sections["training"] = options.training.to_dict()
         return sections
+
+    def inference_checkpoint_identity(
+        self, config: RunConfig, payload: object, path: Path
+    ) -> CheckpointIdentity:
+        from virtual_staining.checkpoint_contract import CheckpointCompatibilityError
+
+        assert config.method is not None
+        options: GanOptions = config.method.options
+        if options.discriminator is None:
+            role = "discriminator" if self.pairing == "paired" else "D_A"
+            method = payload.get("method") if isinstance(payload, Mapping) else None
+            components = method.get("components") if isinstance(method, Mapping) else None
+            stored = components.get(role) if isinstance(components, Mapping) else None
+            if not isinstance(stored, Mapping) or not isinstance(stored.get("options"), Mapping):
+                raise CheckpointCompatibilityError(
+                    f"Checkpoint '{path}' has malformed method.components.{role}"
+                )
+            try:
+                discriminator = config.definitions.component(
+                    "patchgan", field="model.discriminator"
+                ).resolve(
+                    stored["options"],
+                    ComponentContext("model.discriminator", config.project.image_size),
+                )
+            except (ValueError, TypeError) as exc:
+                raise CheckpointCompatibilityError(
+                    f"Checkpoint '{path}' has invalid method.components.{role}: {exc}"
+                ) from exc
+            config = replace(
+                config,
+                method=replace(
+                    config.method, options=replace(options, discriminator=discriminator)
+                ),
+            )
+        return self.checkpoint_identity(config)
 
     def monitor_mode(self, monitor: str, field: str) -> CheckpointMode:
         if monitor in {"loss_G_val", "loss_D_val"} or _LOSS_MONITOR_PATTERN.fullmatch(monitor):
@@ -212,6 +273,7 @@ class _GanDefinition(MethodDefinition):
         return self.checkpoint_metric_mode(monitor, field)
 
     def requires_foreground_mask(self, config: RunConfig) -> bool:
+        assert config.method is not None
         training = config.method.options.training
         return training is not None and any(
             term.requires_mask for term in training.losses.generator
@@ -260,6 +322,8 @@ class Pix2PixDefinition(_GanDefinition):
         return f"val_ssim__{outputs[0]}" if len(outputs) == 1 else None
 
     def validate(self, config: RunConfig) -> None:
+        assert config.method is not None
+        assert config.model is not None
         training = config.training
         options = config.method.options.training
         named = {
@@ -284,6 +348,7 @@ class Pix2PixDefinition(_GanDefinition):
                 )
 
     def component_identities(self, options: GanOptions) -> Mapping[str, Mapping[str, Any]]:
+        assert options.generator is not None and options.discriminator is not None
         return {
             "generator": options.generator.identity(),
             "discriminator": options.discriminator.identity(),
@@ -374,6 +439,8 @@ class CycleGANDefinition(_GanDefinition):
             )
 
     def validate(self, config: RunConfig) -> None:
+        assert config.model is not None
+        assert config.method is not None
         if len(config.model.inputs) != 1:
             raise ValueError(
                 "method.name='cyclegan' requires exactly one model.inputs entry (domain A); "
@@ -388,7 +455,7 @@ class CycleGANDefinition(_GanDefinition):
         domain_a, domain_b = config.model.inputs[0], config.model.outputs[0]
         missing = sorted({domain_a, domain_b} - set(config.data.domains))
         extra = sorted(set(config.data.domains) - {domain_a, domain_b})
-        if missing or extra:
+        if extra:
             raise ValueError(
                 f"data.domains keys must be exactly [{domain_a!r}, {domain_b!r}] "
                 f"(model.inputs[0], model.outputs[0]); missing={missing}, extra={extra}"
@@ -412,12 +479,15 @@ class CycleGANDefinition(_GanDefinition):
                 )
 
     def prediction_inputs(self, config: RunConfig, direction: str | None) -> tuple[str, ...]:
+        assert config.model is not None
         return (config.model.inputs[0],) if direction == "A_to_B" else (config.model.outputs[0],)
 
     def prediction_outputs(self, config: RunConfig, direction: str | None) -> tuple[str, ...]:
+        assert config.model is not None
         return (config.model.outputs[0],) if direction == "A_to_B" else (config.model.inputs[0],)
 
     def component_identities(self, options: GanOptions) -> Mapping[str, Mapping[str, Any]]:
+        assert options.generator is not None and options.discriminator is not None
         generator = options.generator.identity()
         discriminator = options.discriminator.identity()
         return {

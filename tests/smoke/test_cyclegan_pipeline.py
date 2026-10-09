@@ -165,3 +165,29 @@ def test_cyclegan_train_resume_infer_evaluate_smoke(
         assert record["config"]["sha256"]
         assert (run_root / "config" / stage / "resolved.yaml").is_file()
         assert (run_root / "metadata" / "environments" / f"{stage}.json").is_file()
+
+
+def test_cyclegan_minimal_inference_and_evaluation_without_training_domains(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    _write_dataset(tmp_path / "dataset")
+    train_path = _config(tmp_path, "train")
+    run_stage(train_path, "train")
+    raw = cyclegan_config_data(tmp_path)
+    raw.pop("training")
+    raw["data"].pop("domains")
+    raw["model"].pop("discriminator")
+    raw["inference"]["direction"] = "B_to_A"
+    path = write_config_data(tmp_path / "infer_only.yaml", raw)
+    run_stage(path, "infer")
+    raw["model"].pop("generator")
+    raw["inference"] = {"direction": "B_to_A"}
+    raw["evaluation"] = {"reference_collection": "domains/label_free"}
+    path = write_config_data(tmp_path / "evaluate_only.yaml", raw)
+    run_stage(path, "evaluate")
+    root = tmp_path / "results" / "cyclegan_run"
+    result = _json(root / "evaluation" / "evaluation_metadata.json")
+    assert result["inference_direction"] == "B_to_A"
+    assert result["reference_domains"] == ["label_free"]
+    assert result["generated_producer"]["status"] == "linked"

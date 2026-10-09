@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from virtual_staining.config.project import ProjectConfig
+from virtual_staining.config.stages import RunStageName
 from virtual_staining.data.consumption import SnapshotPaths
-from virtual_staining.experiment.stages import RunStageName
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,8 @@ class RunLayout:
 
     @classmethod
     def from_project(cls, project: ProjectConfig) -> RunLayout:
+        if project.results_path is None or project.run_name is None:
+            raise ValueError("results_path and run_name are required for a tracked run")
         return cls(project.results_path / project.run_name)
 
     @classmethod

@@ -148,7 +148,9 @@ def build_cyclegan_inference_generator(
     device: torch.device,
 ) -> CycleGANInferenceAdapter:
     """Build and restore only the generator for ``direction``; no discriminator or pool."""
+    assert config.method is not None
     options: GanOptions = config.method.options
+    assert options.generator is not None
     generator = options.generator.build().to(device)
     generator.load_state_dict(
         validated_model_state(checkpoint.state, f"G_{direction}", generator, checkpoint.path)
@@ -200,6 +202,7 @@ class CycleGANMethod:
     validation_metric_names: tuple[str, ...] = ()
 
     def __init__(self, config: RunConfig, device: torch.device, *, seed: int) -> None:
+        assert config.method is not None
         options: GanOptions = config.method.options
         if config.training is None or options.training is None:
             raise ValueError("training config is required to construct CycleGAN")
@@ -218,9 +221,11 @@ class CycleGANMethod:
         self.loss_config = self._optimization.losses
         self.loss_names = tuple(configured_loss_names(self.loss_config))
 
+        assert options.generator is not None
         self.G_A_to_B = options.generator.build()
         self.G_B_to_A = options.generator.build()
         # Unconditional PatchGANs score one RGB image of their own domain.
+        assert options.discriminator is not None
         self.D_A = options.discriminator.build(in_channels=3)
         self.D_B = options.discriminator.build(in_channels=3)
         for model in self._models().values():

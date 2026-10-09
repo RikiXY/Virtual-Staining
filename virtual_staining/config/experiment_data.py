@@ -29,8 +29,6 @@ class DataConfig:
     def __post_init__(self) -> None:
         if self.pairing == "paired" and self.domains:
             raise ValueError("data.domains is supported only with data.pairing='unpaired'")
-        if self.pairing == "unpaired" and not self.domains:
-            raise ValueError("data.pairing='unpaired' requires data.domains")
         if self.pairing == "paired" and self.group_metadata is not None:
             raise ValueError(
                 "data.group_metadata is supported only with data.pairing='unpaired'; paired "

@@ -442,6 +442,7 @@ def test_decayed_learning_rate_is_not_mistaken_for_a_policy_change(tmp_path: Pat
     for epoch in range(3):
         source.step(_batch(), epoch=epoch, global_step=epoch)
         source.step_schedulers(epoch=epoch, validation_metrics=None)
+    assert config.method is not None
     assert source.learning_rates()["lr_g"] < config.method.options.training.lr_g
     path = _manager(config, source).save(2)
 

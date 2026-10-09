@@ -31,8 +31,6 @@ _SUPERSEDED_INPUT_KEYS = {
 
 
 def _mapping(value: object, name: str) -> dict[str, Any]:
-    if value is None:
-        return {}
     if not isinstance(value, dict):
         raise TypeError(f"preprocessing.{name} must be a YAML mapping")
     return value
@@ -228,13 +226,13 @@ class PreprocessingConfig:
         for required in ("inventory", "modalities", "reference", "target_modalities"):
             if required not in inputs_data:
                 raise ValueError(f"preprocessing.inputs requires {required}")
-        patching = _mapping(data.get("patching"), "patching")
+        patching = _mapping(data.get("patching", {}), "patching")
         reject_unknown_keys(
             patching,
             frozenset({"patch_size", "grid_movement", "margin", "save_discarded_patches"}),
             "preprocessing.patching",
         )
-        masks_data = _mapping(data.get("masks"), "masks")
+        masks_data = _mapping(data.get("masks", {}), "masks")
         reject_unknown_keys(
             masks_data,
             frozenset(
@@ -249,13 +247,13 @@ class PreprocessingConfig:
             ),
             "preprocessing.masks",
         )
-        alignment_data = _mapping(data.get("alignment"), "alignment")
+        alignment_data = _mapping(data.get("alignment", {}), "alignment")
         reject_unknown_keys(
             alignment_data,
             frozenset({"mode", "method", "validate_declared", "on_failure"}),
             "preprocessing.alignment",
         )
-        filtering = _mapping(data.get("filtering"), "filtering")
+        filtering = _mapping(data.get("filtering", {}), "filtering")
         reject_unknown_keys(
             filtering,
             frozenset(
@@ -268,7 +266,7 @@ class PreprocessingConfig:
             ),
             "preprocessing.filtering",
         )
-        foreground = _mapping(filtering.get("foreground"), "filtering.foreground")
+        foreground = _mapping(filtering.get("foreground", {}), "filtering.foreground")
         reject_unknown_keys(
             foreground,
             frozenset({"enabled", "policy", "min_ratio"}),
@@ -283,7 +281,7 @@ class PreprocessingConfig:
         for required in ("unit", *DATASET_SPLITS):
             if required not in split_data:
                 raise ValueError(f"preprocessing.split requires {required}")
-        io_data = _mapping(data.get("io"), "io")
+        io_data = _mapping(data.get("io", {}), "io")
         reject_unknown_keys(
             io_data, frozenset({"tiled", "backend", "max_memory_gb"}), "preprocessing.io"
         )

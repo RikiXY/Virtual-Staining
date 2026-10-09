@@ -131,6 +131,7 @@ def paired_samples(
 
 
 def load_paired_evaluation_manifest(config: RunConfig) -> DatasetManifest:
+    assert config.model is not None
     try:
         manifest = load_manifest_or_raise(config.project)
         require_model_modalities(manifest, config.model.inputs, config.model.outputs)
@@ -205,6 +206,7 @@ def unpaired_reference_spec(config: RunConfig) -> str:
 
 
 def _evaluation_context(config: RunConfig, protocol: EvaluationProtocol) -> dict[str, object]:
+    assert config.method is not None
     return {
         "protocol": protocol,
         "method": config.method.name,
@@ -381,6 +383,7 @@ def _write_metadata(
     artifacts: dict[str, object],
     session: ExperimentSession,
 ) -> Path:
+    assert config.method is not None
     metadata: dict[str, object] = {
         "schema_version": EVALUATION_METADATA_SCHEMA_VERSION,
         "method": config.method.name,
@@ -510,6 +513,8 @@ def _evaluate_unpaired(
 
 
 def evaluate(config: RunConfig, config_path: Path) -> None:
+    config.validate_stages(("evaluate",))
+    assert config.method is not None
     with ExperimentSession.open(
         config=config, config_path=config_path, stage="evaluate"
     ) as session:

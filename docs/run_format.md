@@ -38,6 +38,12 @@ Run configuration options belong to the exhaustive
 [CycleGAN](../config/runs/example_cyclegan.yaml) YAML references. Python extensions are
 covered in [Library Stage API](library_api.md#extending-with-explicit-definitions).
 
+Selected-operation requirements and snapshot reconstruction are documented in the
+[configuration API](library_api.md#selected-operation-configuration). Resolved YAML
+snapshots record explicit resolution stages in a deterministic comment; that comment
+participates in the config hash. Authored `input.yaml` is preserved byte for byte.
+Preparation has no tracked run identity and keeps these artifacts under the dataset.
+
 ## Directory Layout
 
 All outputs for an experiment run are written under:

@@ -40,7 +40,9 @@ def _training(**overrides: object) -> TrainingConfig:
 
 
 def _optimization(**overrides: object) -> GanTrainingOptions:
-    optimization = _resolve(**overrides).method.options.training
+    config = _resolve(**overrides)
+    assert config.method is not None
+    optimization = config.method.options.training
     assert optimization is not None
     return optimization
 
@@ -52,6 +54,7 @@ def test_training_sections_round_trip() -> None:
         augmentation={"enabled": True, "expansion_factor": 3, "intensity": "medium"},
     )
     training = config.training
+    assert config.method is not None
     optimization = config.method.options.training
 
     assert optimization.scheduler.name == "linear_decay"
@@ -104,6 +107,7 @@ def test_training_accepts_checkpoint_modes(mode: str) -> None:
     config = _resolve(
         scheduler={"name": "reduce_on_plateau", "mode": mode}, early_stopping={"mode": mode}
     )
+    assert config.method is not None
     assert config.method.options.training.scheduler.mode == mode
     assert config.training is not None and config.training.early_stopping is not None
     assert config.training.early_stopping.mode == mode
@@ -328,6 +332,7 @@ def test_loss_term_schedule_and_mask_are_preserved() -> None:
         }
     )
 
+    assert config.method is not None
     term = config.method.options.training.losses.generator[0]
     assert term.requires_mask is True
     assert config.method.definition.requires_foreground_mask(config) is True

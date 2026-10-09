@@ -109,6 +109,7 @@ def test_explicit_registration_resolves_yaml_deterministically(tmp_path: Path) -
     config = RunConfig.from_yaml(path, definitions)
     resolved = config.to_dict()
 
+    assert config.method is not None
     assert config.method.definition is tiny
     assert config.method.options.network.definition is TINY_CONV
     assert resolved["method"] == {
@@ -246,6 +247,7 @@ def test_method_owned_validation_metric_needs_no_evaluation_definition(
 
     assert dict(definitions.metrics) == {}
     assert config.inference is not None and config.inference.checkpoint_metric == "val_abs_bias"
+    assert config.method is not None
     assert config.method.definition.checkpoint_metric_mode("val_abs_bias", "monitor") == "min"
 
 
@@ -270,6 +272,7 @@ def _trainer(config: RunConfig, runtime: TinyRuntime) -> Trainer:
 
 
 def _train(config: RunConfig) -> tuple[TinyRuntime, RunLayout]:
+    assert config.method is not None
     torch.manual_seed(0)
     runtime = config.method.definition.build_training_runtime(config, _CPU, seed=0)
     assert isinstance(runtime, TinyRuntime)
@@ -333,6 +336,7 @@ def test_resume_restores_state_after_identity_validation(tmp_path: Path) -> None
     config = RunConfig.from_mapping(_mapping(tmp_path), definitions)
     source, _ = _train(config)
 
+    assert config.method is not None
     resumed = config.method.definition.build_training_runtime(config, _CPU, seed=0)
     assert isinstance(resumed, TinyRuntime)
     assert _trainer(config, resumed).resume("latest") == 2
@@ -354,6 +358,7 @@ def test_resume_rejects_changed_component_before_touching_state(
     _train(RunConfig.from_mapping(_mapping(tmp_path), definitions))
     changed = _resolve(tmp_path, definitions, **options)
     torch.manual_seed(1)
+    assert changed.method is not None
     target = changed.method.definition.build_training_runtime(changed, _CPU, seed=0)
     assert isinstance(target, TinyRuntime)
     before = {key: value.clone() for key, value in target.network.state_dict().items()}

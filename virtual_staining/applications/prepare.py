@@ -202,8 +202,8 @@ def prepare(
     registration_backend: RegistrationBackend | None = None,
     registration_evidence: RegistrationEvidence | None = None,
 ) -> DatasetBuildResult:
-    if config.preprocessing is None:
-        raise ValueError("RunConfig.preprocessing must be present for prepare().")
+    config.validate_stages(("prepare",))
+    assert config.preprocessing is not None
     root = config.preprocessing.dataset_root
     layout = DatasetLayout(root)
     slide_sets = resolve_slide_sets(config.preprocessing)

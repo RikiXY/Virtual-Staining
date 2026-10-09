@@ -4,7 +4,7 @@ Every stage can be called directly as a library primitive from the inputs it
 actually consumes. The YAML/application workflow (`vs prepare`, `vs train`,
 `vs infer`, `vs evaluate`, `vs run`) is the convenience path that wires them
 together and adds tracked-run provenance; it is not required to use any single
-stage. This page only covers the standalone boundaries; see
+stage. This page covers standalone and configured operation boundaries; see
 [`architecture.md`](architecture.md) for package layers and
 [`run_format.md`](run_format.md) for persisted output formats.
 
@@ -19,6 +19,135 @@ The matching `applications.prepare`, `applications.train`, `applications.infer`,
 `applications.evaluate` entry points add tracked provenance and resolve stage inputs.
 Grouped evaluation summaries and producer linking belong to the tracked application.
 `applications.infer_images` supplies a checkpoint-backed runtime for image-path inference.
+
+## Selected-operation configuration
+
+One YAML schema serves all four applications. `RunConfig.from_yaml(path, definitions,
+stages=("prepare",))` and `RunConfig.from_mapping(raw, definitions, stages=("prepare",))`
+resolve exactly the same contract as `vs prepare --config path`. The resolver validates
+all supplied sections, then the union of selected requirements, before the pipeline
+executes anything. `vs run --stages prepare train` preserves that order; `vs run` without
+`--stages` selects all four operations. Artifact existence is checked by each application,
+so preparation can produce a manifest needed by subsequent training.
+
+| Selected operation | Required configuration | Optional, defaulted, or intentionally absent |
+|---|---|---|
+| `prepare` | `dataset_root`, `preprocessing.inputs`, `preprocessing.split`; paired preparation only | No method, model, training, inference, evaluation, `results_path`, or `run_name` required. `image_size` defaults to `[256, 256]` and supplies preprocessing geometry defaults; explicit patch geometry can override it. Dataset/provenance settings under `data` remain available. |
+| `train` | `dataset_root`, `results_path`, `run_name`, named `model.inputs`/`outputs`, `training` and method-owned training options (built-in GANs require `training.losses`) | Method defaults to Pix2Pix; component defaults remain method-owned. No preprocessing, inference, or evaluation section required. CycleGAN requires unpaired `data.pairing` and both training `data.domains`. |
+| `infer` | Dataset and tracked-run fields, named model contract, generator reconstruction settings matching the checkpoint, `inference.checkpoint_path` or `checkpoint_policy` (including that policy's metric/rank requirements) | No training, preprocessing, evaluation, or unpaired training domains required. An omitted built-in discriminator is reconstructed from registered checkpoint metadata and the complete checkpoint identity is still validated. Explicit component options still constrain compatibility. |
+| `evaluate` | Dataset and tracked-run fields, named model contract and method/direction semantics; unpaired protocol needs an explicit `evaluation.reference_collection` or the predicted domain's `data.domains` entry | No networks, checkpoint, training, preprocessing, or inference section required. Omitted `evaluation` retains default protocol, metrics, and output paths. `inference.direction` alone can select a CycleGAN direction without selecting a checkpoint. |
+
+Every supplied section remains subject to type, unknown-key, method-option, and
+cross-section validation, even if its operation is not selected. Supplying method-owned
+configuration requires its named model contract. YAML never imports providers; external
+`Definitions` are still supplied explicitly in Python. Built-ins default to Pix2Pix and
+paired data; CycleGAN explicitly selects `method.name: cyclegan` and `data.pairing: unpaired`.
+Independent unpaired raw preparation is unsupported and fails before dataset writes,
+without requiring dummy domain paths. Paired evaluation still consumes an aligned test
+manifest; unpaired evaluation consumes independent collections.
+
+Save this as `prepare.yaml`, pointing `dataset_root` at an existing dataset with the
+[current inventory format](dataset_format.md):
+
+```yaml
+dataset_root: local_workspace/dataset
+preprocessing:
+  inputs:
+    inventory: inputs/slide_sets.csv
+    modalities: [source]
+    reference: source
+    target_modalities: [target]
+  split:
+    unit: set
+    train: 0.8
+    val: 0.1
+    test: 0.1
+```
+
+Both commands prepare the same dataset, including source snapshots and fingerprints:
+
+```bash
+vs prepare --config prepare.yaml
+vs run --config prepare.yaml --stages prepare
+```
+
+After preparing compatible data, save this as `train.yaml`:
+
+```yaml
+dataset_root: local_workspace/dataset
+results_path: local_workspace/results
+run_name: minimal
+model:
+  inputs: [source]
+  outputs: [target]
+training:
+  epochs: 1
+  losses:
+    generator:
+      - {name: l1, weight: 100.0}
+    discriminator:
+      - {name: adversarial_bce, weight: 1.0}
+```
+
+The matching independent `infer.yaml` needs no training settings:
+
+```yaml
+dataset_root: local_workspace/dataset
+results_path: local_workspace/results
+run_name: minimal
+model:
+  inputs: [source]
+  outputs: [target]
+inference:
+  checkpoint_policy: latest
+```
+
+The matching `evaluate.yaml` needs only:
+
+```yaml
+dataset_root: local_workspace/dataset
+results_path: local_workspace/results
+run_name: minimal
+model:
+  inputs: [source]
+  outputs: [target]
+```
+
+```bash
+vs train --config train.yaml
+vs infer --config infer.yaml
+vs evaluate --config evaluate.yaml
+```
+
+For Python applications, pass the intended stages during resolution:
+
+```python
+from pathlib import Path
+from virtual_staining.config.run import RunConfig
+from virtual_staining.applications.prepare import prepare
+
+path = Path("prepare.yaml")
+config = RunConfig.from_yaml(path, stages=("prepare",))
+prepare(config, path)
+assert config.method is None and config.model is None
+assert config.project.run_name is None and config.project.results_path is None
+```
+
+Without `stages`, resolution validates supplied configuration for inspection and retains
+the existing complete-configuration defaults; it selects no execution. Applications
+check their own operation requirements again before side effects. `config.stages` records
+the explicit resolution context. `to_dict()` contains only schema values; to reconstruct
+it use the same `stages` and `Definitions`. `resolved_yaml()` adds a deterministic comment
+recording the selected stages, which is included in the snapshot hash. This is metadata,
+not a YAML `stages` key or an instruction to execute operations. Authored YAML is copied
+unchanged. Preparation snapshots remain under the dataset; tracked stages keep their
+existing run identity and consumed-data records.
+
+Complete current-schema configurations and the exhaustive annotated
+[Pix2Pix](../config/runs/example.yaml) and
+[CycleGAN](../config/runs/example_cyclegan.yaml) references remain valid. Inspection,
+preflight and queue tools use the shared contract; a comprehensive stage-specific
+authoring and batch UX is outside this change.
 
 ## Notes
 
@@ -134,7 +263,7 @@ definitions = builtin_definitions().extend(
     methods=[TinyReconstruction()],
     components=[TINY_CONV, TINY_RESIDUAL],
 )
-config = RunConfig.from_yaml("my_run.yaml", definitions)  # or RunConfig.from_mapping(raw, definitions)
+config = RunConfig.from_yaml("my_run.yaml", definitions, stages=("train",))
 train(config, Path("my_run.yaml"))
 ```
 
@@ -160,7 +289,10 @@ model:
   and component definition. Persisted identities and compatibility rules are in the
   [checkpoint contract](run_format.md#checkpointsepnnnpth).
 - **Options.** A method validates the config keys it declares in `owned_keys`
-  (`method.options` by default). Unknown keys fail. Resolved configs preserve method
+  (`method.options` by default). `ResolutionContext.stages` exposes selected operations
+  so providers can require only consumed components. `validate_stage(config, stage)` checks
+  method-owned execution requirements, including direct application calls. Unknown keys
+  fail. Resolved configs preserve method
   options; the live `MethodConfig.definition` reference is not serialized.
 - **Prediction and batches.** `build_inference_model` returns a module satisfying the
   [named RGB prediction contract](#direct-predictor-inference), with names from

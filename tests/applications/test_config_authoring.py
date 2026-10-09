@@ -538,7 +538,7 @@ def test_paired_evaluation_expects_output_named_artifacts(tmp_path: Path) -> Non
     absent = inspect_run_mapping(_paired_config(tmp_path / "absent")).config
     assert _statuses(preflight(absent, ["evaluate"], depth="assets")) == {
         "config.resolve": "valid",
-        "evaluate.config": "not_applicable",
+        "evaluate.config": "valid",
         "evaluate.manifest": "invalid",
         "evaluate.generated": "unverified",
     }
@@ -584,7 +584,7 @@ def test_artifacts_from_earlier_selected_stages_are_planned(tmp_path: Path) -> N
         "infer.config": "valid",
         "infer.manifest": "planned",
         "infer.checkpoint": "planned",
-        "evaluate.config": "not_applicable",
+        "evaluate.config": "valid",
         "evaluate.manifest": "planned",
         "evaluate.generated": "planned",
     }

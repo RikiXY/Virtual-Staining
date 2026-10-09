@@ -67,10 +67,6 @@ class InferenceConfig:
         }
 
     def validate(self) -> None:
-        if self.checkpoint_policy is None and self.checkpoint_path is None:
-            raise ValueError(
-                "Either inference.checkpoint_path or inference.checkpoint_policy must be set."
-            )
         if (
             self.checkpoint_policy is not None
             and self.checkpoint_policy not in SUPPORTED_CHECKPOINT_POLICIES

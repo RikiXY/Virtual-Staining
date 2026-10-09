@@ -54,7 +54,7 @@ def _config(tmp_path: Path) -> tuple[Any, Path]:
         run_name="run",
         image_size=(256, 256),
     )
-    config = SimpleNamespace(project=project, to_dict=lambda: {"project": "test"})
+    config = SimpleNamespace(project=project, resolved_yaml=lambda: "project: test\n")
     return config, config_path
 
 

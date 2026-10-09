@@ -51,7 +51,10 @@ def build_pix2pix_inference_generator(
     device: torch.device,
 ) -> torch.nn.Module:
     """Build only the forward generator and restore it from a validated checkpoint."""
+    assert config.method is not None
+    assert config.model is not None
     options: GanOptions = config.method.options
+    assert options.generator is not None
     generator = options.generator.build(
         input_names=tuple(config.model.inputs), output_names=tuple(config.model.outputs)
     ).to(device)
@@ -75,6 +78,8 @@ class Pix2PixMethod:
         *,
         benchmark_recorder: TrainingBenchmarkRecorder | None = None,
     ) -> None:
+        assert config.method is not None
+        assert config.model is not None
         options: GanOptions = config.method.options
         if config.training is None or options.training is None:
             raise ValueError("training config is required to construct Pix2Pix")
@@ -99,8 +104,10 @@ class Pix2PixMethod:
         self.loss_names = tuple(configured_loss_names(self.loss_config, self.output_names))
 
         names = {"input_names": self.input_names, "output_names": self.output_names}
+        assert options.generator is not None
         self.generator = options.generator.build(**names).to(device)
         # One joint conditional PatchGAN: all inputs plus all real or generated outputs.
+        assert options.discriminator is not None
         self.discriminator = options.discriminator.build(**names).to(device)
         optimization = self._optimization
         self._opt_G = optim.Adam(

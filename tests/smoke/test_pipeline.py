@@ -309,3 +309,79 @@ def test_run_queue_smoke_executes_multiple_full_runs(tmp_path: Path) -> None:
     assert [job["status"] for job in state_data["jobs"]] == ["completed", "completed"]
     assert (tmp_path / "runs" / "queue_run_a" / "evaluation" / "per_image_metrics.csv").exists()
     assert (tmp_path / "runs" / "queue_run_b" / "evaluation" / "per_image_metrics.csv").exists()
+
+
+@pytest.mark.parametrize("command", ["prepare", "run"])
+def test_prepare_only_cli_without_run_placeholders(tmp_path: Path, command: str) -> None:
+    from virtual_staining import cli
+    from virtual_staining.data.layout import DatasetLayout
+    from virtual_staining.utils.hashing import sha256_file
+
+    root = _make_synthetic_dataset(tmp_path / "dataset")
+    full = _write_smoke_config(tmp_path, root)
+    raw = yaml.safe_load(full.read_text())
+    raw = {key: raw[key] for key in ("dataset_root", "image_size", "data", "preprocessing")}
+    path = write_config_data(tmp_path / "prepare.yaml", raw)
+    authored = path.read_bytes()
+    arguments = [command, "--config", str(path)]
+    if command == "run":
+        arguments += ["--stages", "prepare"]
+    with _patched_prepare_dependencies():
+        cli.main(arguments)
+    layout = DatasetLayout(root)
+    resolved = yaml.safe_load(layout.resolved_config_path.read_text())
+    assert set(resolved) == set(raw)
+    assert layout.input_config_path.read_bytes() == authored
+    assert layout.config_hash_path.read_text() == sha256_file(layout.resolved_config_path)
+    assert layout.manifest_path.is_file()
+    assert layout.dataset_fingerprint_path.is_file()
+    assert layout.source_snapshot.metadata.is_file()
+    assert not (tmp_path / "runs").exists()
+    assert not (root / "metadata" / "run.json").exists()
+    # The ordinary application uses the same minimal resolved value and can reuse its output.
+    config = RunConfig.from_yaml(path, stages=("prepare",))
+    assert prepare(config, path).reused
+
+
+@pytest.mark.slow
+def test_independent_minimal_stage_configs_preserve_tracked_provenance(tmp_path: Path) -> None:
+    root = _make_synthetic_dataset(tmp_path / "dataset")
+    full = _write_smoke_config(tmp_path, root)
+    raw = yaml.safe_load(full.read_text())
+    prepare_raw = {key: raw[key] for key in ("dataset_root", "image_size", "data", "preprocessing")}
+    with _patched_prepare_dependencies():
+        run_stage(write_config_data(tmp_path / "prepare.yaml", prepare_raw), "prepare")
+    common = {
+        key: raw[key] for key in ("dataset_root", "results_path", "run_name", "image_size", "data")
+    }
+    train_raw = {**common, "model": raw["model"], "training": raw["training"]}
+    run_stage(write_config_data(tmp_path / "train.yaml", train_raw), "train")
+    infer_raw = {
+        **common,
+        "model": {key: value for key, value in raw["model"].items() if key != "discriminator"},
+        "inference": raw["inference"],
+    }
+    run_stage(write_config_data(tmp_path / "infer.yaml", infer_raw), "infer")
+    evaluate_raw = {**common, "model": {key: raw["model"][key] for key in ("inputs", "outputs")}}
+    run_stage(write_config_data(tmp_path / "evaluate.yaml", evaluate_raw), "evaluate")
+    run_root = tmp_path / "runs" / "smoke_run"
+    run = _read_json(run_root / "metadata" / "run.json")
+    assert run["stages_present"] == ["train", "infer", "evaluate"]
+    events = [
+        json.loads(line)
+        for line in (run_root / "metadata" / "events.jsonl").read_text().splitlines()
+    ]
+    assert {event["run_id"] for event in events} == {run["run_id"]}
+    for stage in run["stages_present"]:
+        record = _read_json(run_root / "metadata" / "stages" / f"{stage}.json")
+        assert record["status"] == "completed"
+        snapshot = _read_json(Path(record["consumed_data"]["metadata_path"]))
+        assert snapshot["snapshot_id"] == record["consumed_data"]["snapshot_id"]
+    train = _read_json(run_root / "metadata" / "stages" / "train.json")
+    assert run["training_data"]["snapshot_id"] == train["consumed_data"]["snapshot_id"]
+    evaluation = _read_json(run_root / "evaluation" / "evaluation_metadata.json")
+    assert evaluation["generated_producer"]["status"] == "linked"
+    assert evaluation["counts"]["evaluated_count"] > 0
+    resolved = yaml.safe_load((run_root / "config" / "evaluate" / "resolved.yaml").read_text())
+    assert "training" not in resolved and "inference" not in resolved
+    assert set(resolved["model"]) == {"inputs", "outputs"}

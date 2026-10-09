@@ -53,6 +53,7 @@ def _set_seed(seed: int) -> None:
 
 
 def _requires_foreground_masks(config: RunConfig) -> bool:
+    assert config.method is not None
     return config.training is not None and config.method.definition.requires_foreground_mask(config)
 
 
@@ -65,6 +66,7 @@ def _paired_datasets(
     transform: Callable[[Any], Any],
     seed: int,
 ) -> tuple[PairedManifestDataset, PairedManifestDataset, dict[str, object], DataSnapshot]:
+    assert config.model is not None
     assert config.training is not None
     training = config.training
     manifest = load_manifest_or_raise(config.project)
@@ -154,6 +156,7 @@ def _unpaired_datasets(
     transform: Callable[[Any], Any],
     seed: int,
 ) -> tuple[UnpairedImageDataset, UnpairedImageDataset, DataSnapshot]:
+    assert config.model is not None
     domain_a, domain_b = config.model.inputs[0], config.model.outputs[0]
     splits: tuple[tuple[DatasetSplit, int | None], ...] = ((TRAIN_SPLIT, seed), (VAL_SPLIT, None))
     # The held-out test collections of both domains are resolved only as leakage context.
@@ -210,8 +213,9 @@ def train(
     progress_reporter: ProgressReporter | None = None,
     benchmark_recorder: TrainingBenchmarkRecorder | None = None,
 ) -> TrainingResult:
-    if config.training is None:
-        raise ValueError("RunConfig.training must be present for train().")
+    config.validate_stages(("train",))
+    assert config.method is not None
+    assert config.training is not None
     training = config.training
 
     with ExperimentSession.open(config=config, config_path=config_path, stage="train") as session:

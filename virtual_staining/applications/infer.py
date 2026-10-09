@@ -47,8 +47,9 @@ def _prediction_sources(record: ManifestRecord, source_names: tuple[str, ...]) -
 
 
 def infer(config: RunConfig, config_path: Path) -> InferenceResult:
-    if config.inference is None:
-        raise ValueError("RunConfig.inference is required to run inference.")
+    config.validate_stages(("infer",))
+    assert config.model is not None
+    assert config.method is not None
 
     with ExperimentSession.open(config=config, config_path=config_path, stage="infer") as session:
         output_dir = inference_output_dir(config, session.paths)

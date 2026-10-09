@@ -72,6 +72,7 @@ def _resolve_input_specs(
 
 
 def _create_runtime(config: RunConfig) -> InferenceRuntime:
+    assert config.method is not None
     if config.inference is None:
         raise ValueError("RunConfig.inference is required to run image inference.")
     layout = RunLayout.from_project(config.project)
@@ -106,7 +107,7 @@ def infer_images(
     definitions: Definitions | None = None,
 ) -> SingleInferenceResult | DirectoryInferenceResult:
     """Translate images with a run's checkpoint; ``definitions`` defaults to the built-ins."""
-    config = RunConfig.from_yaml(config_path.resolve(), definitions)
+    config = RunConfig.from_yaml(config_path.resolve(), definitions, stages=("infer",))
     input_paths = _resolve_input_specs(input_specs, inference_input_names(config))
     return run_image_path_inference(
         lambda: _create_runtime(config),

@@ -9,8 +9,8 @@ from virtual_staining.applications.infer import infer
 from virtual_staining.applications.prepare import prepare
 from virtual_staining.applications.train import ProgressReporter, train
 from virtual_staining.config.run import RunConfig
+from virtual_staining.config.stages import VALID_STAGES, StageName
 from virtual_staining.definitions import Definitions
-from virtual_staining.experiment.stages import VALID_STAGES, StageName
 
 DEFAULT_FULL_RUN_STAGES = VALID_STAGES
 
@@ -35,14 +35,10 @@ def run_stages(
     definitions: Definitions | None = None,
 ) -> dict[StageName, object]:
     """Run stages of one YAML run; ``definitions`` defaults to the built-in set."""
-    unknown = [stage for stage in stages if stage not in VALID_STAGES]
-    if unknown:
-        raise ValueError(
-            f"Unknown stage(s): {', '.join(unknown)}. Allowed stages: {', '.join(VALID_STAGES)}"
-        )
+    RunConfig.check_stages(stages)
 
     path = config_path.resolve()
-    config = RunConfig.from_yaml(path, definitions)
+    config = RunConfig.from_yaml(path, definitions, stages=stages)
     results: dict[StageName, object] = {}
     for stage in stages:
         stage_name = cast(StageName, stage)

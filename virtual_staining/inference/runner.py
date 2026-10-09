@@ -137,6 +137,7 @@ def inference_direction(config: RunConfig) -> str | None:
 
     Methods with several directions default to their first declared direction.
     """
+    assert config.method is not None
     directions = config.method.definition.prediction_directions
     if len(directions) < 2:
         return None
@@ -146,11 +147,13 @@ def inference_direction(config: RunConfig) -> str | None:
 
 def inference_input_names(config: RunConfig) -> tuple[str, ...]:
     """Return the named inputs the configured inference direction consumes."""
+    assert config.method is not None
     return config.method.definition.prediction_inputs(config, inference_direction(config))
 
 
 def inference_output_names(config: RunConfig) -> tuple[str, ...]:
     """Return the ordered named outputs the configured inference direction produces."""
+    assert config.method is not None
     return config.method.definition.prediction_outputs(config, inference_direction(config))
 
 
@@ -166,13 +169,16 @@ def load_inference_generator(
     identity before the definition builds anything; only the prediction network is
     constructed (no optimizer, scheduler, objective or unused network).
     """
+    assert config.method is not None
     if checkpoint_path is None:
         checkpoint_path = resolve_inference_checkpoint(config, paths)
     definition = config.method.definition
     payload = read_checkpoint(checkpoint_path)
     config.definitions.require_checkpoint(payload, checkpoint_path)
     checkpoint = validate_checkpoint(
-        payload, definition.checkpoint_identity(config), checkpoint_path
+        payload,
+        definition.inference_checkpoint_identity(config, payload, checkpoint_path),
+        checkpoint_path,
     )
     generator = definition.build_inference_model(
         config, checkpoint, direction=inference_direction(config), device=device

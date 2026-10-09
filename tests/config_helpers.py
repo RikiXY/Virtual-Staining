@@ -145,3 +145,18 @@ def write_config_data(path: Path, data: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     return path
+
+
+def prepare_config_data(tmp_path: Path) -> dict[str, Any]:
+    return {
+        "dataset_root": str(tmp_path / "dataset"),
+        "preprocessing": {
+            "inputs": {
+                "inventory": "inputs/slides.csv",
+                "modalities": ["LF", "AF"],
+                "reference": "LF",
+                "target_modalities": ["HE", "IHC"],
+            },
+            "split": {"unit": "set", "train": 0.8, "val": 0.1, "test": 0.1},
+        },
+    }

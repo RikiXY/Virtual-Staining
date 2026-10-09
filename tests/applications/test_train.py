@@ -85,6 +85,7 @@ training:
 
 def test_training_config_uses_named_model_contract(tmp_path: Path) -> None:
     config = RunConfig.from_yaml(_yaml(tmp_path))
+    assert config.model is not None
     assert config.model.inputs == ("LF", "AF")
     assert config.model.outputs == ("HE",)
     assert config.training is not None
@@ -95,6 +96,7 @@ def test_run_config_rejects_outputs_outside_prepared_targets(tmp_path: Path) -> 
     with pytest.raises(ValueError, match="not in preprocessing.inputs.target_modalities"):
         RunConfig.from_yaml(_yaml(tmp_path, output="other"))
     config = RunConfig.from_yaml(_yaml(tmp_path, output="PAS", targets="[HE, PAS]"))
+    assert config.model is not None
     assert config.model.outputs == ("PAS",)
 
 

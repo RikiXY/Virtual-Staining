@@ -10,13 +10,13 @@ from types import TracebackType
 from typing import Protocol, cast
 
 from virtual_staining.config.run import RunConfig
+from virtual_staining.config.stages import RunStageName
 from virtual_staining.data.consumption import DataSnapshot, write_snapshot
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
 from virtual_staining.experiment.snapshots import (
     save_environment_snapshot,
     save_stage_config_snapshots,
 )
-from virtual_staining.experiment.stages import RunStageName
 
 logger = logging.getLogger(__name__)
 _PACKAGE_LOGGER = logging.getLogger("virtual_staining")
@@ -203,6 +203,7 @@ class ExperimentSession:
         try:
             ensure_run_directories(self.paths)
             stage_layout = self.paths.stage(self.stage)
+            assert self.config.project.run_name is not None
             self._store = LocalRunStore(self.paths, run_name=self.config.project.run_name)
             self._run = self._store.ensure_run()
             self._attach_file_handler()

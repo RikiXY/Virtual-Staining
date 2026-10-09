@@ -44,6 +44,7 @@ training:
 
 def test_method_defaults_to_pix2pix_and_is_persisted_in_resolved_config(tmp_path: Path) -> None:
     config = RunConfig.from_yaml(_yaml(tmp_path))
+    assert config.method is not None
     assert config.method.name == "pix2pix"
     assert config.to_dict()["method"] == {"name": "pix2pix"}
 
@@ -69,6 +70,7 @@ def test_definition_builds_pix2pix_runtime_without_exposing_optimizer_count(
 ) -> None:
     config = RunConfig.from_yaml(_yaml(tmp_path))
 
+    assert config.method is not None
     method = config.method.definition.build_training_runtime(config, torch.device("cpu"), seed=0)
 
     assert isinstance(method, Pix2PixMethod)

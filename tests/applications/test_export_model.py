@@ -577,6 +577,7 @@ def test_two_output_pix2pix_bundle_reconstructs_every_named_output_after_a_move(
 
     assert verify_model_bundle(moved, builtin_definitions()).root == moved.resolve()
     config = RunConfig.from_yaml(moved / "config" / "resolved.yaml")
+    assert config.model is not None
     assert config.model.outputs == ("PAS", "HE")
     payload = torch.load(moved / checkpoint, map_location="cpu", weights_only=True)
     assert (payload["format_version"], payload["method"]["outputs"]) == (4, ["PAS", "HE"])

@@ -88,7 +88,9 @@ def test_resnet_generator_defaults_to_nine_instance_norm_blocks(tmp_path: Path) 
     def mutate(data: dict[str, Any]) -> None:
         data["model"]["generator"] = {"architecture": "resnet"}
 
-    generator = _load(tmp_path, mutate).method.options.generator
+    config = _load(tmp_path, mutate)
+    assert config.method is not None
+    generator = config.method.options.generator
     assert generator.name == "resnet"
     assert generator.options == {"base_channels": 64, "norm": "instance", "blocks": 9}
 
@@ -104,7 +106,9 @@ def test_replay_buffer_size_zero_is_allowed(tmp_path: Path) -> None:
     def mutate(data: dict[str, Any]) -> None:
         data["method"]["replay_buffer_size"] = 0
 
-    assert _load(tmp_path, mutate).method.options.replay_buffer_size == 0
+    config = _load(tmp_path, mutate)
+    assert config.method is not None
+    assert config.method.options.replay_buffer_size == 0
 
 
 def _set(path: tuple[str | int, ...], value: object) -> Mutation:
@@ -113,16 +117,6 @@ def _set(path: tuple[str | int, ...], value: object) -> Mutation:
         for key in path[:-1]:
             target = target[key]
         target[path[-1]] = value
-
-    return mutate
-
-
-def _delete(path: tuple[str | int, ...]) -> Mutation:
-    def mutate(data: dict[str, Any]) -> None:
-        target: Any = data
-        for key in path[:-1]:
-            target = target[key]
-        del target[path[-1]]
 
     return mutate
 
@@ -150,7 +144,6 @@ def _drop_loss(role: str, name: str) -> Mutation:
         ),
         (_set(("model", "outputs"), ["label_free"]), "must be disjoint"),
         (_set(("model", "target"), "stained"), "model.target is not part of the current schema"),
-        (_delete(("data", "domains", "stained")), r"missing=\['stained'\]"),
         (_set(("data", "domains", "extra"), "domains/extra"), r"extra=\['extra'\]"),
         (
             _set(("model", "generator"), {"architecture": "concat_unet"}),
@@ -297,6 +290,7 @@ def test_method_compatibility_uses_canonical_definitions(
         tmp_path,
         lambda data: data["training"]["losses"]["generator"].append({"name": "l1", "weight": 1.0}),
     )
+    assert config.method is not None
     assert "l1" in {term.name for term in config.method.options.training.losses.generator}
 
 
@@ -315,6 +309,7 @@ def test_cyclegan_identity_term_is_optional(
         data["training"]["losses"]["generator"][2:] = [] if identity is None else [identity]
 
     config = _load(tmp_path, mutate)
+    assert config.method is not None
     losses = config.method.options.training.losses
     assert "identity_l1" not in {t.name for t in losses.active_generator}
 

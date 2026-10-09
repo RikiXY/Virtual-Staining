@@ -147,7 +147,10 @@ All experiment parameters live in a single YAML file. Start from a short starter
 references [`config/runs/example.yaml`](config/runs/example.yaml) (Pix2Pix) and
 [`config/runs/example_cyclegan.yaml`](config/runs/example_cyclegan.yaml) (CycleGAN) are
 the same experiments with every supported option, default, and path base written out.
-Experiment commands accept YAML configuration through `--config`.
+Experiment commands accept YAML configuration through `--config`. Each selected operation
+requires only the settings it consumes; see the [requirement matrix and minimal operation
+examples](docs/library_api.md#selected-operation-configuration). Prepare-only YAML needs no
+method, model, training, results directory, or run name.
 
 ### Inspecting and checking a config
 

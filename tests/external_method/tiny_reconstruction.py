@@ -142,6 +142,7 @@ class TinyReconstruction(MethodDefinition):
         return {"method": {"options": resolved}}
 
     def validate(self, config: RunConfig) -> None:
+        assert config.model is not None
         if len(config.model.outputs) != 1:
             raise ValueError("tiny_reconstruction predicts exactly one model.outputs entry")
 
@@ -149,6 +150,8 @@ class TinyReconstruction(MethodDefinition):
         return {"network": options.network.identity()}
 
     def build_network(self, config: RunConfig, device: torch.device) -> nn.Module:
+        assert config.method is not None
+        assert config.model is not None
         self.built["network"] += 1
         options: TinyOptions = config.method.options
         return options.network.build(
@@ -205,6 +208,8 @@ class TinyRuntime:
     validation_metric_names = ("val_abs_bias",)
 
     def __init__(self, definition: TinyReconstruction, config: RunConfig, device: torch.device):
+        assert config.method is not None
+        assert config.model is not None
         options: TinyOptions = config.method.options
         self.name = definition.name
         self.default_checkpoint_metric = next(iter(definition.checkpoint_metrics))

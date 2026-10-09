@@ -79,6 +79,7 @@ def test_tracked_publication_failure_preserves_destinations_and_bookkeeping(
 ) -> None:
     config, config_path = tracked_run
     layout = RunLayout.from_project(config.project)
+    assert config.model is not None
     destinations = [
         layout.output_test_dir / name / f"{i:05}_00000_generated.png"
         for i in (1, 2)

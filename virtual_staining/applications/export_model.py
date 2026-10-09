@@ -325,6 +325,7 @@ def _run_checkpoint(checkpoints_dir: Path, path: Path) -> Path:
 
 def _validated_metadata(path: Path, config: RunConfig, config_hash: str) -> dict[str, Any]:
     """Validate one checkpoint through the current owners and return its index entry."""
+    assert config.method is not None
     payload = read_checkpoint(path)
     config.definitions.require_checkpoint(payload, path)
     checkpoint = validate_checkpoint(

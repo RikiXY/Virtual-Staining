@@ -38,7 +38,6 @@ from virtual_staining.data.slide_sets import resolve_slide_sets
 from virtual_staining.data.unpaired import resolve_domain_collections
 from virtual_staining.definitions import Definitions
 from virtual_staining.experiment.run_layout import RunLayout
-from virtual_staining.experiment.stages import VALID_STAGES
 from virtual_staining.inference.runner import (
     inference_direction,
     inference_input_names,
@@ -145,7 +144,7 @@ def inspect_run_mapping(
     authored = _plain(raw) if isinstance(raw, Mapping) else raw
     config = RunConfig.from_mapping(authored, definitions)
     resolved = config.to_dict()
-    resolved_yaml = dump_yaml_mapping(resolved, sort_keys=True)
+    resolved_yaml = config.resolved_yaml()
     return RunConfigInspection(
         authored=authored,
         config=config,
@@ -191,9 +190,6 @@ class PreflightReport:
         return not any(check.status == "invalid" for check in self.checks)
 
 
-_REQUIRED_SECTION = {"prepare": "preprocessing", "train": "training", "infer": "inference"}
-
-
 def preflight(
     config: RunConfig, stages: Sequence[str] = (), *, depth: PreflightDepth = "config"
 ) -> PreflightReport:
@@ -203,25 +199,17 @@ def preflight(
     checks through the stage owners. An artifact that an earlier *selected* stage produces
     is reported ``planned`` rather than inspected.
     """
-    unknown = [stage for stage in stages if stage not in VALID_STAGES]
-    if unknown:
-        raise ValueError(
-            f"Unknown stage(s): {', '.join(unknown)}. Allowed stages: {', '.join(VALID_STAGES)}"
-        )
+    RunConfig.check_stages(stages)
     if depth not in ("config", "assets"):
         raise ValueError(f"Unsupported preflight depth {depth!r}")
     checks = [PreflightCheck("config.resolve", None, "valid", "configuration resolved")]
     for index, stage in enumerate(stages):
-        section = _REQUIRED_SECTION.get(stage)
-        present = section is None or getattr(config, section) is not None
-        if section is None:
-            status, message = "not_applicable", "no config section is required"
-        else:
-            status = "valid" if present else "invalid"
-            message = f"{section} section " + ("present" if present else "required")
-        checks.append(PreflightCheck(f"{stage}.config", stage, status, message))
-        if not present:
+        try:
+            config.validate_stages((stage,))
+        except (ValueError, TypeError) as exc:
+            checks.append(PreflightCheck(f"{stage}.config", stage, "invalid", str(exc)))
             continue
+        checks.append(PreflightCheck(f"{stage}.config", stage, "valid", "configuration valid"))
         if depth == "config":
             checks.append(
                 PreflightCheck(f"{stage}.assets", stage, "unverified", "asset checks not requested")
@@ -277,6 +265,8 @@ _PAIRED_SPLITS = (TRAIN_SPLIT, VAL_SPLIT, TEST_SPLIT)
 
 
 def _paired_train(config: RunConfig) -> str:
+    assert config.model is not None
+    assert config.method is not None
     manifest = load_manifest_or_raise(config.project)
     require_model_modalities(manifest, config.model.inputs, config.model.outputs)
     manifest.validate(check_files_exist=True, require_splits={TRAIN_SPLIT, VAL_SPLIT})
@@ -301,6 +291,7 @@ def _paired_train(config: RunConfig) -> str:
 
 
 def _unpaired_train(config: RunConfig) -> str:
+    assert config.model is not None
     domain_a, domain_b = config.model.inputs[0], config.model.outputs[0]
     paths, rows = resolve_domain_collections(
         config.data.domains,
@@ -324,6 +315,7 @@ def _infer_checks(config: RunConfig, preceding: frozenset[str]) -> list[Prefligh
 
     def manifest() -> str:
         loaded = load_manifest_or_raise(config.project)
+        assert config.model is not None
         require_model_modalities(loaded, config.model.inputs, config.model.outputs)
         loaded.validate(check_files_exist=True, require_splits={TEST_SPLIT})
         return (

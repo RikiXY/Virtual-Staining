@@ -30,9 +30,9 @@ from virtual_staining.config import run as run_module
 from virtual_staining.config import scheduler as scheduler_module
 from virtual_staining.config import training as training_module
 from virtual_staining.config.run import RunConfig
+from virtual_staining.config.stages import VALID_STAGES
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.definitions import ComponentContext
-from virtual_staining.experiment.stages import VALID_STAGES
 from virtual_staining.loss_definitions import (
     _LOSS_MASK_KEYS,
     _REDUCTIONS,
@@ -136,6 +136,7 @@ def test_full_references_select_their_method(
 ) -> None:
     config = RunConfig.from_yaml(_FULL[method_name])
 
+    assert config.method is not None
     assert config.method.name == method_name
     assert config.data.pairing == pairing
     assert config.method.options.generator.name == architecture
@@ -797,6 +798,7 @@ def test_optional_sections_resolve_documented_defaults(tmp_path: Path) -> None:
     assert config.training is not None
     assert config.training.early_stopping is not None
     assert config.training.early_stopping.mode == "min"
+    assert config.method is not None
     assert config.method.options.training.scheduler.mode == "max"
 
     cyclegan = _load(_FULL["cyclegan"])
@@ -804,6 +806,7 @@ def test_optional_sections_resolve_documented_defaults(tmp_path: Path) -> None:
     del cyclegan["inference"]["direction"]
     del cyclegan["evaluation"]["protocol"]
     resolved = _parse(tmp_path, cyclegan)
+    assert resolved.method is not None
     assert resolved.method.options.replay_buffer_size == 50
     assert resolved.method.options.generator.options["blocks"] == 9
     assert resolved.inference is not None and resolved.inference.direction is None
@@ -911,7 +914,6 @@ _INVALID_VARIANTS: list[tuple[str, dict[str, Any], str]] = [
     ("cyclegan", {"training.augmentation.enabled": True}, "augmentation.enabled=false"),
     ("pix2pix", {"inference.direction": "A_to_B"}, "not supported by method.name='pix2pix'"),
     ("cyclegan", {"inference.direction": "sideways"}, r"direction must be one of \['A_to_B'"),
-    ("pix2pix", {"evaluation.protocol": "unpaired"}, "set evaluation.reference_collection"),
     ("pix2pix", {"evaluation.reference_collection": "real"}, "unpaired protocol only"),
     (
         "pix2pix",
@@ -994,7 +996,6 @@ _INVALID_VARIANTS: list[tuple[str, dict[str, Any], str]] = [
     ("pix2pix", {"inference": {"checkpoint_policy": "best"}}, "checkpoint_metric is required"),
     ("pix2pix", {"inference.checkpoint_rank": 0}, "greater than 0"),
     ("pix2pix", {"inference.checkpoint_policy": "median"}, "Unknown checkpoint_policy"),
-    ("pix2pix", {"inference": {"output_dir": "out"}}, "checkpoint_path or"),
     ("pix2pix", {"training.losses.generator.2": {"name": "l1", "weight": 1.0}}, "Duplicate"),
     (
         "pix2pix",
