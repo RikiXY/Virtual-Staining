@@ -479,3 +479,17 @@ def write_pyramidal_tiff_from_raw_rgb(
 
 def to_float01(image: np.ndarray | Image.Image) -> np.ndarray:
     return np.asarray(image, dtype=np.float32) / 255.0
+
+
+def verify_written_image(path: Path, image: np.ndarray) -> None:
+    """Require ``path`` to be a readable image with ``image``'s width and height."""
+    try:
+        metadata = read_image_metadata(path, backend="pillow")
+    except (OSError, ValueError) as exc:
+        raise OSError(f"Written patch {path} is not a readable image: {exc}") from exc
+    expected = (image.shape[1], image.shape[0])
+    if (metadata.width, metadata.height) != expected:
+        raise OSError(
+            f"Written patch {path} is {metadata.width}x{metadata.height}, expected "
+            f"{expected[0]}x{expected[1]}"
+        )

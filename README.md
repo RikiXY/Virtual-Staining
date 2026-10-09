@@ -19,7 +19,7 @@ built-ins; Python callers can supply
 
 | Command | Purpose |
 |---|---|
-| `vs prepare` | Build the patch dataset from full-size slide sets |
+| `vs prepare` | Build patches from paired slide sets or two independent raw-image domains |
 | `vs run` | Run the complete pipeline or selected stages |
 | `vs train` | Train the configured built-in method |
 | `vs infer` | Run inference on the test split (CycleGAN: in the configured direction) |
@@ -176,6 +176,11 @@ success does not certify any execution. Stages are never inferred from present s
 Resolve writes canonical YAML to stdout (scope to stderr); check reports scope and the
 same resolved SHA-256. Use the same stages and order as execution for matching snapshots.
 Omitted prepare-only method, model and run fields stay absent.
+For independent domains, use [minimal_unpaired_prepare.yaml](config/runs/minimal_unpaired_prepare.yaml)
+and a hand-authored `domain,path` inventory. The [unpaired preparation contract](docs/dataset_format.md#independent-unpaired-preparation)
+explains real group IDs, conditional mask policies, immutable output builds and consumer setup.
+A runnable software example is [examples/unpaired/prepare.yaml](examples/unpaired/prepare.yaml);
+its patch split makes no biological-independence claim.
 
 `--assets` adds read-only checks for explicitly selected stages; it selects no stages,
 does not verify content, freeze inputs, or certify scientific validity. Earlier selected

@@ -256,7 +256,14 @@ _PUBLIC_OPTIONS: dict[str, tuple[frozenset[str], set[str]]] = {
     ),
     "preprocessing.inputs keys": (
         _dataclass_keys(preprocessing_module.InputConfig),
-        {"inventory", "modalities", "reference", "target_modalities", "hash_verification"},
+        {
+            "inventory",
+            "modalities",
+            "reference",
+            "target_modalities",
+            "hash_verification",
+            "domains",
+        },
     ),
     "preprocessing.patching keys": (
         _dataclass_keys(preprocessing_module.PatchingConfig),
@@ -1138,15 +1145,17 @@ def test_ablation_preflight_rejects_undeclared_differences(
         _build_ablation_summary(queue, _preflight_run_configs(queue))
 
 
-@pytest.mark.parametrize("name", ["prepare", "train", "infer", "evaluate", "train_infer"])
+@pytest.mark.parametrize(
+    "name", ["prepare", "unpaired_prepare", "train", "infer", "evaluate", "train_infer"]
+)
 def test_minimal_operation_examples_inspect_with_declared_stages(name: str) -> None:
     from virtual_staining.applications.config_authoring import inspect_run_yaml
 
-    stages = tuple(name.split("_"))
+    stages = ("prepare",) if name == "unpaired_prepare" else tuple(name.split("_"))
     inspection = inspect_run_yaml(_RUNS / f"minimal_{name}.yaml", stages=stages)
     assert inspection.config.stages == stages
     assert inspection.resolved_yaml == inspection.config.resolved_yaml()
-    if name == "prepare":
+    if name in {"prepare", "unpaired_prepare"}:
         assert not {"method", "model", "run_name", "results_path"} & inspection.resolved.keys()
     if name == "evaluate":
         assert set(inspection.resolved["model"]) == {"inputs", "outputs"}

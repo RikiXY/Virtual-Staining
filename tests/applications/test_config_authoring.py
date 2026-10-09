@@ -804,13 +804,12 @@ def test_scoped_inspection_rejects_invalid_inactive_sections(
 
 
 @pytest.mark.parametrize("stages", [("prepare",), ("prepare", "train")])
-def test_inspection_rejects_unpaired_prepare_without_side_effects(
+def test_inspection_rejects_unpaired_paired_fields_without_side_effects(
     tmp_path: Path, stages: tuple[str, ...], forbid_execution: None
 ) -> None:
     raw = prepare_config_data(tmp_path)
     raw["data"] = {"pairing": "unpaired"}
-    assert inspect_run_mapping(raw).config.data.pairing == "unpaired"
-    with pytest.raises(ValueError, match="prepare.*unpaired.*unsupported"):
+    with pytest.raises(ValueError, match="uses domains|model requires inputs"):
         inspect_run_mapping(raw, stages=stages)
     assert list(tmp_path.iterdir()) == []
 

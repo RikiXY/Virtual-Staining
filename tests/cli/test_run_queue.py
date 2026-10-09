@@ -651,7 +651,7 @@ def test_third_job_configuration_failure_prevents_all_execution(
     assert {
         "default_full": "model requires inputs",
         "train_infer": "inference",
-        "unpaired": "unsupported",
+        "unpaired": "uses domains",
     }[failure] in error
     assert not (tmp_path / "dataset").exists() and not (tmp_path / "results").exists()
 

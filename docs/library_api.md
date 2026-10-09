@@ -32,7 +32,7 @@ so preparation can produce a manifest needed by subsequent training.
 
 | Selected operation | Required configuration | Optional, defaulted, or intentionally absent |
 |---|---|---|
-| `prepare` | `dataset_root`, `preprocessing.inputs`, `preprocessing.split`; paired preparation only | No method, model, training, inference, evaluation, `results_path`, or `run_name` required. `image_size` defaults to `[256, 256]` and supplies preprocessing geometry defaults; explicit patch geometry can override it. Dataset/provenance settings under `data` remain available. |
+| `prepare` | `dataset_root`, `preprocessing.inputs`, `preprocessing.split`; paired slide sets or two independent raw domains | No method, model, training, inference, evaluation, `results_path`, or `run_name` required. `image_size` defaults to `[256, 256]` and supplies preprocessing geometry defaults; explicit patch geometry can override it. Dataset/provenance settings under `data` remain available. |
 | `train` | `dataset_root`, `results_path`, `run_name`, named `model.inputs`/`outputs`, `training` and method-owned training options (built-in GANs require `training.losses`) | Method defaults to Pix2Pix; component defaults remain method-owned. No preprocessing, inference, or evaluation section required. CycleGAN requires unpaired `data.pairing` and both training `data.domains`. |
 | `infer` | Dataset and tracked-run fields, named model contract, generator reconstruction settings matching the checkpoint, `inference.checkpoint_path` or `checkpoint_policy` (including that policy's metric/rank requirements) | No training, preprocessing, evaluation, or unpaired training domains required. An omitted built-in discriminator is reconstructed from registered checkpoint metadata and the complete checkpoint identity is still validated. Explicit component options still constrain compatibility. |
 | `evaluate` | Dataset and tracked-run fields, named model contract and method/direction semantics; unpaired protocol needs an explicit `evaluation.reference_collection` or the predicted domain's `data.domains` entry | No networks, checkpoint, training, preprocessing, or inference section required. Omitted `evaluation` retains default protocol, metrics, and output paths. `inference.direction` alone can select a CycleGAN direction without selecting a checkpoint. |
@@ -42,9 +42,10 @@ cross-section validation, even if its operation is not selected. Supplying metho
 configuration requires its named model contract. YAML never imports providers; external
 `Definitions` are still supplied explicitly in Python. Built-ins default to Pix2Pix and
 paired data; CycleGAN explicitly selects `method.name: cyclegan` and `data.pairing: unpaired`.
-Independent unpaired raw preparation is unsupported and fails before dataset writes,
-without requiring dummy domain paths. Paired evaluation still consumes an aligned test
-manifest; unpaired evaluation consumes independent collections.
+Independent unpaired raw preparation uses `preprocessing.inputs.domains` and a
+[long-form inventory](dataset_format.md#independent-unpaired-preparation). It needs no
+method, model, reference, or registration. Manifest-based inference and paired
+evaluation still consume an aligned prepared manifest; unpaired evaluation consumes independent collections.
 
 Save this as `prepare.yaml`, pointing `dataset_root` at an existing dataset with the
 [current inventory format](dataset_format.md):
@@ -704,3 +705,23 @@ No manifest is published when an exception interrupts the build.
 
 With no injection, preparation retains its identity/SIFT selection and absent QC.
 No scientific thresholds, biological relationships, or acceptance claims are added.
+
+
+For independent raw domains, the same application API dispatches on `data.pairing`:
+
+```python
+from pathlib import Path
+from virtual_staining.config.run import RunConfig
+from virtual_staining.applications.prepare import prepare
+
+path = Path("config/runs/minimal_unpaired_prepare.yaml")
+result = prepare(RunConfig.from_yaml(path, stages=("prepare",)), path)
+print(result.output_root)          # use as the consumer's dataset_root
+print(result.domain_collections)   # use as data.domains; no direction selected
+# data.group_metadata: metadata/groups.csv
+```
+
+`DatasetBuilder` remains the lower-level paired slide-set builder. Unpaired preparation
+uses the builder module's independent-image path and the existing collection resolver;
+it never constructs `SlideSet` instances or a paired manifest. Prepared collection
+counts are independent images, so the two domains need not have the same size.

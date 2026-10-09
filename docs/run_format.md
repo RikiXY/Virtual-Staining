@@ -289,7 +289,9 @@ ignored. Without group IDs, training requires an explicit `group_validation:
 unavailable`, which is persisted with a limitation and makes no patient, specimen, or
 set independence claim. `unavailable` is not a validation-off switch: any supplied ID
 that appears in more than one split still fails. The one exception is a prepared
-patch-level split (`split.unit: patch`, read from `metadata/split_assignment.csv`)
+patch-level split (`split.unit: patch`, read from `metadata/split_assignment.csv`;
+unpaired preparation also verifies the selected canonical group sidecar and assignment
+against its build record)
 trained under explicit `unavailable`: its groups span splits by construction, so the
 shared group counts are recorded under `group_validation` with a limitation instead of
 failing. `auto` or an explicit unit still fails on the same data. IDs are never

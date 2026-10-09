@@ -17,6 +17,13 @@ class DatasetLayout:
     def from_project(cls, project: ProjectConfig) -> DatasetLayout:
         return cls(project.dataset_root, project.manifest_path_override)
 
+    def unpaired_build(self, fingerprint: str) -> DatasetLayout:
+        return DatasetLayout(self.root / "prepared_unpaired" / fingerprint.removeprefix("sha256:"))
+
+    @property
+    def group_metadata_path(self) -> Path:
+        return self.metadata_dir / "groups.csv"
+
     @property
     def config_dir(self) -> Path:
         return self.root / "config"

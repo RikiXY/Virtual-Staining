@@ -163,7 +163,7 @@ def test_scoped_errors_precede_assets_and_export(
     stages = ["prepare"]
     if later == "unpaired":
         raw["data"] = {"pairing": "unpaired"}
-        message = "unsupported"
+        message = "uses domains"
     else:
         raw.update(
             results_path=str(tmp_path / "results"),

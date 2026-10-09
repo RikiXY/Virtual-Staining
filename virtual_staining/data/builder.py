@@ -4,12 +4,18 @@ import csv
 import datetime
 import json
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
 from virtual_staining.config.data import PreprocessingConfig
 from virtual_staining.data.alignment import RegistrationBackend
+from virtual_staining.data.consumption import (
+    GROUP_METADATA_FIELDS,
+    SnapshotPaths,
+    build_snapshot,
+    write_snapshot,
+)
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.manifest import (
     MANIFEST_SCHEMA_VERSION,
@@ -33,6 +39,8 @@ from virtual_staining.data.splitting import (
     group_id_for_set,
     write_split_assignment,
 )
+from virtual_staining.data.unpaired_inventory import RawDomainImage
+from virtual_staining.data.unpaired_processor import process_domain_image
 from virtual_staining.split_contract import (
     DATASET_SPLITS,
     DISCARDED_SPLIT,
@@ -45,7 +53,7 @@ from virtual_staining.split_contract import (
 
 @dataclass(frozen=True)
 class DatasetBuildResult:
-    """Committed sample counts per split; every committed sample has every named target."""
+    """Committed sample counts per split (independent images for unpaired builds)."""
 
     train_count: int
     val_count: int
@@ -55,13 +63,22 @@ class DatasetBuildResult:
     reused: bool = False
     input_modalities: tuple[str, ...] = ()
     target_modalities: tuple[str, ...] = ()
+    domain_collections: dict[str, str] = field(default_factory=dict)
 
     def save(self, path: Path, *, num_sets: int, num_sets_excluded: int) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(
                 {
-                    "schema_version": MANIFEST_SCHEMA_VERSION,
+                    **(
+                        {
+                            "format": "unpaired/1",
+                            "domain_collections": self.domain_collections,
+                            "group_metadata": "metadata/groups.csv",
+                        }
+                        if self.domain_collections
+                        else {"schema_version": MANIFEST_SCHEMA_VERSION}
+                    ),
                     "input_modalities": list(self.input_modalities),
                     "target_modalities": list(self.target_modalities),
                     "num_sets": num_sets,
@@ -84,7 +101,10 @@ class DatasetBuildResult:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError(f"Invalid dataset build metadata at {path}") from exc
-        if not isinstance(data, dict) or data.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+        if not isinstance(data, dict) or (
+            data.get("schema_version") != MANIFEST_SCHEMA_VERSION
+            and data.get("format") != "unpaired/1"
+        ):
             raise ValueError(f"Invalid dataset build metadata at {path}")
         patches = data.get("patches")
         names: list[tuple[str, ...]] = []
@@ -108,6 +128,7 @@ class DatasetBuildResult:
             reused,
             names[0],
             names[1],
+            data.get("domain_collections", {}),
         )
 
 
@@ -358,3 +379,100 @@ class DatasetBuilder:
             registration_evidence=self.registration_evidence,
         )
         save_dataset_fingerprint(fingerprint, layout.dataset_fingerprint_path)
+
+
+def build_unpaired_dataset(
+    config: PreprocessingConfig,
+    items: tuple[RawDomainImage, ...],
+    assignments: dict[str, DatasetSplit],
+    output: Path,
+    *,
+    group_validation: str,
+    published_root: Path,
+) -> DatasetBuildResult:
+    """Build independent collections inside an application-owned staging directory."""
+    layout = DatasetLayout(output)
+    for split in DATASET_SPLITS:
+        for domain in config.inputs.domains:
+            (layout.split_dir(split) / domain).mkdir(parents=True)
+    records = []
+    evidence = []
+    patch_assignments = {}
+    excluded_count = 0
+    for item in items:
+        assigned = assignments.get(getattr(item, f"{config.split.unit}_id", ""))
+        try:
+            result = process_domain_image(config, item, output, assigned)
+        except Exception as exc:
+            layout.metadata_dir.mkdir(parents=True, exist_ok=True)
+            (layout.metadata_dir / "images.json").write_text(
+                json.dumps(
+                    [*evidence, {"source": item.path, "domain": item.domain, "error": str(exc)}],
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            raise ValueError(
+                f"Unpaired preparation failed for domain {item.domain}, source {item.path}: {exc}"
+            ) from exc
+        evidence.append(result)
+        excluded_count += len(result["excluded"])
+        for row in result["accepted"]:
+            records.append(item.row(split=row["split"], locator=row["path"]))
+            patch_assignments[row["sample_id"]] = row["split"]
+    layout.metadata_dir.mkdir(parents=True, exist_ok=True)
+    (layout.metadata_dir / "images.json").write_text(
+        json.dumps(evidence, indent=2), encoding="utf-8"
+    )
+    for split, fraction in zip(
+        DATASET_SPLITS, (config.split.train, config.split.val, config.split.test), strict=True
+    ):
+        if fraction:
+            for domain in config.inputs.domains:
+                if not any(row.split == split and row.domain == domain for row in records):
+                    raise ValueError(
+                        f"No accepted images for {domain}/{split}; revise explicit groups, "
+                        "split fractions, patching or filtering"
+                    )
+    snapshot = build_snapshot(
+        records,
+        kind="produced",
+        adapter="unpaired_prepare/1",
+        roots={"dataset": output},
+        hash_policy="content",
+        group_validation=group_validation,
+        patch_split=config.split.unit == "patch",
+    )
+    snapshot = replace(snapshot, roots={"dataset": str(published_root.resolve())})
+    write_snapshot(snapshot, SnapshotPaths.in_dir(layout.metadata_dir / "prepared_data"))
+    layout.metadata_dir.mkdir(parents=True, exist_ok=True)
+    with layout.group_metadata_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=GROUP_METADATA_FIELDS)
+        writer.writeheader()
+        writer.writerows(
+            {
+                "path": row.locator,
+                "domain": row.domain,
+                "split": row.split,
+                "set_id": row.set_id,
+                "specimen_id": row.specimen_id,
+                "patient_id": row.patient_id,
+            }
+            for row in records
+        )
+    write_split_assignment(
+        layout.split_assignment_path,
+        unit=config.split.unit,
+        assignments=patch_assignments if config.split.unit == "patch" else assignments,
+    )
+    counts = {split: sum(row.split == split for row in records) for split in DATASET_SPLITS}
+    return DatasetBuildResult(
+        counts[TRAIN_SPLIT],
+        counts[VAL_SPLIT],
+        counts[TEST_SPLIT],
+        excluded_count,
+        output,
+        domain_collections={
+            name: f"splits/{{split}}/{name}/*.png" for name in config.inputs.domains
+        },
+    )

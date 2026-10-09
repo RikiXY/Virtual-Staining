@@ -2,28 +2,36 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from virtual_staining.config.data import PreprocessingConfig
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.alignment import RegistrationBackend
-from virtual_staining.data.builder import DatasetBuilder, DatasetBuildResult
+from virtual_staining.data.builder import DatasetBuilder, DatasetBuildResult, build_unpaired_dataset
 from virtual_staining.data.consumption import AssetRow, DataSnapshot, build_snapshot, write_snapshot
 from virtual_staining.data.layout import DatasetLayout
-from virtual_staining.data.provenance import build_dataset_fingerprint_metadata
+from virtual_staining.data.provenance import (
+    build_dataset_fingerprint_metadata,
+    save_dataset_fingerprint,
+    unpaired_fingerprint,
+)
 from virtual_staining.data.slide_sets import (
     RegistrationEvidence,
     SlideSet,
     resolve_registration_evidence,
     resolve_slide_sets,
 )
+from virtual_staining.data.unpaired_inventory import load_unpaired_inventory, unpaired_assignments
 from virtual_staining.experiment.snapshots import (
     save_config_hash,
     save_environment_snapshot,
     save_stage_config_snapshots,
 )
 from virtual_staining.split_contract import DATASET_SPLITS
+from virtual_staining.utils.files import publish_directory_no_replace
 from virtual_staining.utils.hashing import sha256_file
 from virtual_staining.utils.image_io import detect_openslide_format
 
@@ -204,6 +212,10 @@ def prepare(
 ) -> DatasetBuildResult:
     config.validate_stages(("prepare",))
     assert config.preprocessing is not None
+    if config.data.pairing == "unpaired":
+        if registration_backend is not None or registration_evidence is not None:
+            raise ValueError("Registration is unsupported for independent unpaired preparation")
+        return _prepare_unpaired(config, config_path)
     root = config.preprocessing.dataset_root
     layout = DatasetLayout(root)
     slide_sets = resolve_slide_sets(config.preprocessing)
@@ -242,3 +254,173 @@ def prepare(
             registration_evidence=registration_evidence,
         ).run_all()
     return result
+
+
+def _prepare_unpaired(config: RunConfig, config_path: Path) -> DatasetBuildResult:
+    assert config.preprocessing is not None
+    preprocessing = config.preprocessing
+    root = preprocessing.dataset_root
+    items = load_unpaired_inventory(preprocessing)
+    assignments = unpaired_assignments(preprocessing, items, config.data.group_validation)
+    inventory = root / preprocessing.inputs.inventory
+
+    def observe() -> tuple[DataSnapshot, dict[str, Any]]:
+        if (
+            load_unpaired_inventory(preprocessing) != items
+            or unpaired_assignments(preprocessing, items, config.data.group_validation)
+            != assignments
+        ):
+            raise ValueError("Raw inventory or frozen assignment changed during preparation")
+        assignment_file = preprocessing.split.assignment_file
+        rows = []
+        for item in items:
+            split = assignments.get(getattr(item, f"{preprocessing.split.unit}_id", ""), "")
+            rows.append(item.row(split=split))
+            if item.mask_path:
+                rows.append(replace(item.row(split=split, locator=item.mask_path), role="mask"))
+        snapshot = build_snapshot(
+            rows,
+            kind="consumed",
+            adapter="unpaired_inventory/1",
+            roots={"dataset": root},
+            hash_policy=config.data.hash_policy,
+            group_validation=config.data.group_validation,
+            selection={
+                "domains": list(preprocessing.inputs.domains),
+                "split_unit": preprocessing.split.unit,
+            },
+            sources={
+                "inventory": str(preprocessing.inputs.inventory),
+                "inventory_sha256": sha256_file(inventory),
+                "assignment_sha256": sha256_file(root / assignment_file)
+                if assignment_file
+                else None,
+            },
+        )
+        fingerprint = unpaired_fingerprint(
+            dataset_root=root,
+            resolved_config=config.resolved_yaml(),
+            snapshot=snapshot,
+            assignments=dict(assignments),
+            inventory_path=inventory,
+        )
+        return snapshot, fingerprint
+
+    snapshot, fingerprint = observe()
+    layout = DatasetLayout(root).unpaired_build(fingerprint["fingerprint"])
+    if not layout.root.parent.resolve().is_relative_to(root.resolve()):
+        raise ValueError("Unpaired output directory escapes dataset_root")
+    if layout.root.exists() or layout.root.is_symlink():
+        stored = _load_json(layout.dataset_build_path)
+        artifacts = stored.get("artifacts", {}) if stored else {}
+        required = {
+            path.relative_to(layout.root).as_posix()
+            for path in (
+                layout.group_metadata_path,
+                layout.dataset_fingerprint_path,
+                layout.split_assignment_path,
+                layout.resolved_config_path,
+                layout.source_snapshot.rows,
+                layout.source_snapshot.metadata,
+            )
+        }
+        if (
+            not any(p.is_symlink() for p in (layout.root, *layout.root.rglob("*")))
+            and stored
+            and stored.get("fingerprint") == fingerprint["fingerprint"]
+            and isinstance(artifacts, dict)
+            and required <= artifacts.keys()
+            and stored.get("domain_collections")
+            == {
+                domain: f"splits/{{split}}/{domain}/*.png"
+                for domain in preprocessing.inputs.domains
+            }
+            and all(
+                (layout.split_dir(split) / domain).is_dir()
+                for split in DATASET_SPLITS
+                for domain in preprocessing.inputs.domains
+            )
+            and all(
+                not Path(name).is_absolute()
+                and ".." not in Path(name).parts
+                and (layout.root / name).is_file()
+                and not (layout.root / name).is_symlink()
+                and sha256_file(layout.root / name) == digest
+                for name, digest in artifacts.items()
+            )
+            and {
+                p.relative_to(layout.root).as_posix() for p in layout.root.rglob("*") if p.is_file()
+            }
+            == set(artifacts) | {layout.dataset_build_path.relative_to(layout.root).as_posix()}
+        ):
+            logger.info("Unpaired prepare reuse: %s", layout.root)
+            return DatasetBuildResult.load(
+                layout.dataset_build_path, output_root=layout.root, reused=True
+            )
+        raise FileExistsError(
+            f"Incomplete, changed, or caller-owned build at {layout.root}; "
+            "preserved without overwrite"
+        )
+    layout.root.parent.mkdir(parents=True, exist_ok=True)
+    if not layout.root.parent.resolve().is_relative_to(root.resolve()):
+        raise ValueError("Unpaired output directory escapes dataset_root")
+    with tempfile.TemporaryDirectory(prefix=".prepare-", dir=layout.root.parent) as temporary:
+        staging = DatasetLayout(Path(temporary))
+        try:
+            result = build_unpaired_dataset(
+                preprocessing,
+                items,
+                assignments,
+                staging.root,
+                group_validation=config.data.group_validation,
+                published_root=layout.root,
+            )
+            if observe()[1] != fingerprint:
+                raise ValueError("Raw source/inventory changed during unpaired preparation")
+            config_hash = save_stage_config_snapshots(
+                config,
+                config_path,
+                input_dest=staging.input_config_path,
+                resolved_dest=staging.resolved_config_path,
+            )
+            save_config_hash(config_hash, staging.config_hash_path)
+            save_environment_snapshot(staging.environment_path)
+            write_snapshot(snapshot, staging.source_snapshot)
+            save_dataset_fingerprint(fingerprint, staging.dataset_fingerprint_path)
+            result.save(staging.dataset_build_path, num_sets=0, num_sets_excluded=0)
+            metadata = json.loads(staging.dataset_build_path.read_text(encoding="utf-8"))
+            metadata.update(
+                fingerprint=fingerprint["fingerprint"],
+                artifacts={
+                    path.relative_to(staging.root).as_posix(): sha256_file(path)
+                    for path in sorted(staging.root.rglob("*"))
+                    if path.is_file() and path != staging.dataset_build_path
+                },
+            )
+            staging.dataset_build_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+            if layout.root.exists() or layout.root.is_symlink():
+                raise FileExistsError(f"Unpaired publication collision: {layout.root}")
+            publish_directory_no_replace(staging.root, layout.root)
+        except Exception as exc:
+            # Only the owned temporary directory is cleaned; preserve failure evidence.
+            failure = layout.root.parent / f"failure-{Path(temporary).name}.json"
+            failure.write_text(
+                json.dumps(
+                    {
+                        "fingerprint": fingerprint,
+                        "error": str(exc),
+                        "images": json.loads((staging.metadata_dir / "images.json").read_text())
+                        if (staging.metadata_dir / "images.json").is_file()
+                        else [],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            raise
+    logger.info(
+        "Unpaired prepare output: %s | data.domains=%s | data.group_metadata=metadata/groups.csv",
+        layout.root,
+        result.domain_collections,
+    )
+    return replace(result, output_root=layout.root)

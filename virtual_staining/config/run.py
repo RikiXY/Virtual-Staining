@@ -36,11 +36,6 @@ def _section(raw: Mapping[str, Any], name: str) -> dict[str, Any]:
     return value
 
 
-def _validate_preparation_support(data: DataConfig, stages: Sequence[str]) -> None:
-    if "prepare" in stages and data.pairing == "unpaired":
-        raise ValueError("prepare with data.pairing='unpaired' is unsupported")
-
-
 def _default_definitions() -> Definitions:
     from virtual_staining.methods.builtin import builtin_definitions
 
@@ -93,6 +88,20 @@ class RunConfig:
 
     def __post_init__(self) -> None:
         self.validate_stages(self.stages)
+        if self.preprocessing is not None:
+            unpaired = self.data.pairing == "unpaired"
+            if bool(self.preprocessing.inputs.domains) != unpaired:
+                raise ValueError(
+                    "unpaired preprocessing.inputs requires domains; paired requires modalities"
+                )
+            if (
+                unpaired
+                and self.preprocessing.split.unit == "patch"
+                and self.data.group_validation != "unavailable"
+            ):
+                raise ValueError(
+                    "unpaired split.unit='patch' requires data.group_validation='unavailable'"
+                )
         definition = self.method.definition if self.method is not None else None
         if definition is not None and self.data.pairing != definition.pairing:
             raise ValueError(
@@ -129,6 +138,13 @@ class RunConfig:
         if self.preprocessing is None:
             return
         inputs = self.preprocessing.inputs
+        if self.data.pairing == "unpaired":
+            unknown = (set(self.model.inputs) | set(self.model.outputs)) - set(inputs.domains)
+            if unknown:
+                raise ValueError(
+                    f"model domains {sorted(unknown)} are not in preprocessing.inputs.domains"
+                )
+            return
         # Subsets in any order: model order is authoritative and datasets select by name.
         unknown = sorted(set(self.model.inputs) - set(inputs.modalities))
         if unknown:
@@ -204,7 +220,6 @@ class RunConfig:
         project = ProjectConfig.from_mapping(dict(raw))
         selected = cls.check_stages(stages)
         data = DataConfig.from_mapping(_section(raw, "data"))
-        _validate_preparation_support(data, selected)
         inference = (
             InferenceConfig.from_mapping(_section(raw, "inference")) if "inference" in raw else None
         )
@@ -242,6 +257,10 @@ class RunConfig:
                 ),
             )
             method = MethodConfig(definition=definition, options=options)
+            if data.pairing != definition.pairing:
+                raise ValueError(
+                    f"method.name={definition.name!r} requires data.pairing={definition.pairing!r}"
+                )
         return cls(
             project=project,
             method=method,
@@ -252,6 +271,7 @@ class RunConfig:
                     _section(raw, "preprocessing"),
                     dataset_root=project.dataset_root,
                     default_image_size=project.image_size,
+                    pairing=data.pairing,
                 )
                 if "preprocessing" in raw
                 else None
@@ -289,7 +309,6 @@ class RunConfig:
     def validate_stages(self, stages: Sequence[str]) -> None:
         """Check operation requirements without reading artifacts or creating directories."""
         selected = self.check_stages(stages)
-        _validate_preparation_support(self.data, selected)
         for stage in selected:
             if stage == "prepare":
                 if self.preprocessing is None:

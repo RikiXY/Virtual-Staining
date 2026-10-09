@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 
 from virtual_staining.data.alignment import RegistrationBackend
+from virtual_staining.data.consumption import DataSnapshot
 from virtual_staining.data.manifest import MANIFEST_SCHEMA_VERSION
 from virtual_staining.data.slide_sets import (
     RegistrationEvidence,
@@ -17,7 +18,12 @@ from virtual_staining.data.slide_sets import (
     SlideSet,
     resolve_registration_evidence,
 )
-from virtual_staining.utils.hashing import sha256_bytes, sha256_file, sha256_json
+from virtual_staining.utils.hashing import (
+    sha256_bytes,
+    sha256_file,
+    sha256_file_verified,
+    sha256_json,
+)
 
 
 def _cached_file_provenance(
@@ -184,3 +190,36 @@ def save_dataset_fingerprint(metadata: dict[str, Any], dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     with dest.open("w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2)
+
+
+def unpaired_fingerprint(
+    *,
+    dataset_root: Path,
+    resolved_config: str,
+    snapshot: DataSnapshot,
+    assignments: dict[str, str],
+    inventory_path: Path,
+) -> dict[str, Any]:
+    """Content-verified preparation identity even when consumption requests membership only."""
+    files = [
+        _cached_file_provenance(
+            dataset_root / row.locator,
+            cache={},
+            force=True,
+            verified={
+                str((dataset_root / row.locator).resolve()): row.sha256
+                or sha256_file_verified(dataset_root / row.locator)[0]
+            },
+        )
+        for row in snapshot.rows
+    ]
+    payload = {
+        "adapter": "unpaired_prepare/1",
+        "resolved_config": resolved_config,
+        "source_snapshot_id": snapshot.snapshot_id,
+        "sources": snapshot.sources,
+        "files": files,
+        "assignments": assignments,
+        "inventory_sha256": sha256_file(inventory_path),
+    }
+    return {**payload, "fingerprint": sha256_json(payload)}

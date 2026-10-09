@@ -110,6 +110,27 @@ def assign_group_splits(
         return {}
     groups_by_set = {item.set_id: group_id_for_set(item, unit) for item in slide_sets}
     groups = set(groups_by_set.values())
+    group_assignments = assign_identity_splits(
+        groups,
+        unit=unit,
+        ratios=ratios,
+        seed=seed,
+        assignment_file=assignment_file,
+        dataset_root=dataset_root,
+    )
+    return {set_id: group_assignments[group] for set_id, group in groups_by_set.items()}
+
+
+def assign_identity_splits(
+    groups: set[str],
+    *,
+    unit: str,
+    ratios: tuple[float, float, float],
+    seed: int,
+    assignment_file: Path | None = None,
+    dataset_root: Path | None = None,
+) -> dict[str, DatasetSplit]:
+    """Assign explicit identities independently of the image inventory's shape."""
     if assignment_file is not None:
         path = (
             assignment_file
@@ -127,7 +148,7 @@ def assign_group_splits(
         for split, count in zip(DATASET_SPLITS, counts, strict=True):
             group_assignments.update({group: split for group in ordered[offset : offset + count]})
             offset += count
-    return {set_id: group_assignments[group] for set_id, group in groups_by_set.items()}
+    return group_assignments
 
 
 def write_split_assignment(path: Path, *, unit: str, assignments: dict[str, DatasetSplit]) -> None:

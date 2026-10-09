@@ -1,0 +1,20 @@
+# Prepare-only; values illustrate the contract and are not study recommendations.
+# Real patient IDs are required in the hand-authored inventory for this split.
+# vs config check --config config/runs/minimal_unpaired_prepare.yaml --stages prepare
+# vs config resolve --config config/runs/minimal_unpaired_prepare.yaml --stages prepare
+# vs prepare --config config/runs/minimal_unpaired_prepare.yaml
+dataset_root: local_workspace/datasets/unpaired_example
+data:
+  pairing: unpaired
+  hash_policy: content
+  group_validation: patient
+preprocessing:
+  inputs:
+    inventory: inputs/paths.csv
+    domains: [LF, HE]
+  split:
+    unit: patient
+    train: 0.8
+    val: 0.1
+    test: 0.1
+    seed: 42

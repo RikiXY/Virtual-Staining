@@ -6,7 +6,7 @@
 # effective value; options that cannot be active together are shown as commented
 # alternatives next to the field that owns them. This file is self-contained: every
 # public field that applies to a CycleGAN run is explained here. (Pix2Pix-only
-# sections - `preprocessing`, loss params/masks - are not repeated.) After defaults are
+# loss params/masks are not repeated; raw preparation has its own minimal example.) After defaults are
 # resolved this file is the same experiment as config/runs/minimal_cyclegan.yaml (a
 # test asserts RunConfig.to_dict() equality).
 #
@@ -34,7 +34,9 @@
 # Prepare needs preprocessing, not method/model/results_path/run_name. Train needs
 # training; infer needs inference with checkpoint selection. Evaluate needs neither
 # training nor network definitions. data.pairing remains the only pairing declaration;
-# raw unpaired prepare is unsupported. --assets adds read-only checks, not execution.
+# raw unpaired prepare uses preprocessing.inputs.domains and a long-form paths.csv.
+# See minimal_unpaired_prepare.yaml and docs/dataset_format.md; it selects no direction.
+# --assets adds read-only checks, not execution.
 #
 # Unknown keys are rejected at every level. Relative project paths (dataset_root,
 # results_path, manifest_path, inference.output_dir, evaluation.generated_dir,

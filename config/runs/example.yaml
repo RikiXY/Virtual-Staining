@@ -22,7 +22,8 @@
 # Prepare needs preprocessing, not method/model/results_path/run_name. Train needs
 # training; infer needs inference with checkpoint selection. Evaluate needs neither
 # training nor network definitions. data.pairing remains the only pairing declaration;
-# raw unpaired prepare is unsupported. --assets adds read-only checks, not execution.
+# raw unpaired prepare uses inputs.domains; see minimal_unpaired_prepare.yaml.
+# --assets adds read-only checks, not execution.
 #
 # Unknown keys are rejected at every level. Relative project paths
 # (dataset_root, results_path, manifest_path, inference.output_dir,
@@ -191,6 +192,9 @@ model:
 # Builds patches, the manifest and the split under dataset_root from full-size slide
 # sets. The whole section is optional for the run, but `prepare` fails without it.
 # inputs and split are required when the section is present.
+# Unpaired preparation uses data.pairing: unpaired and inputs.domains: [LF, HE]
+# instead of modalities/reference/target_modalities. See minimal_unpaired_prepare.yaml
+# and docs/dataset_format.md for its conditional policies and output collections.
 
 preprocessing:
   inputs:

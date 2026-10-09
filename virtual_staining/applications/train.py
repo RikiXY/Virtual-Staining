@@ -24,7 +24,11 @@ from virtual_staining.data.manifest import (
     prepared_split_unit,
     require_model_modalities,
 )
-from virtual_staining.data.unpaired import UnpairedImageDataset, resolve_domain_collections
+from virtual_staining.data.unpaired import (
+    UnpairedImageDataset,
+    prepared_unpaired_patch_split,
+    resolve_domain_collections,
+)
 from virtual_staining.experiment.session import ExperimentSession
 from virtual_staining.models.io_contract import build_model_input_transform
 from virtual_staining.split_contract import TEST_SPLIT, TRAIN_SPLIT, VAL_SPLIT, DatasetSplit
@@ -179,6 +183,9 @@ def _unpaired_datasets(
         hash_policy=config.data.hash_policy,
         group_validation=config.data.group_validation,
         validation_context=test_context,
+        patch_split=prepared_unpaired_patch_split(
+            config.project.dataset_root, config.data.group_metadata
+        ),
         selection={
             "pairing": "unpaired",
             "splits": [split for split, _ in splits],

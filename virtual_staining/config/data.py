@@ -61,12 +61,22 @@ def _optional_strategy(value: object, field_name: str) -> str | None:
 @dataclass(frozen=True)
 class InputConfig:
     inventory: Path
-    modalities: tuple[str, ...]
-    reference: str
-    target_modalities: tuple[str, ...]
+    modalities: tuple[str, ...] = ()
+    reference: str = ""
+    target_modalities: tuple[str, ...] = ()
     hash_verification: str = "cached"
+    domains: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if self.hash_verification not in {"cached", "always"}:
+            raise ValueError("inputs.hash_verification must be 'cached' or 'always'")
+        if self.domains:
+            check_modality_names(self.domains, "inputs.domains")
+            if len(self.domains) != 2:
+                raise ValueError("inputs.domains requires exactly two independent domains")
+            if self.modalities or self.reference or self.target_modalities:
+                raise ValueError("inputs.domains cannot be combined with paired input fields")
+            return
         modalities = check_modality_names(tuple(self.modalities), "inputs.modalities")
         targets = check_modality_names(tuple(self.target_modalities), "inputs.target_modalities")
         object.__setattr__(self, "modalities", modalities)
@@ -79,8 +89,6 @@ class InputConfig:
                 "inputs.target_modalities must differ from every input modality; "
                 f"both name {shared}"
             )
-        if self.hash_verification not in {"cached", "always"}:
-            raise ValueError("inputs.hash_verification must be 'cached' or 'always'")
 
 
 @dataclass(frozen=True)
@@ -156,6 +164,12 @@ class PreprocessingConfig:
         self.validate()
 
     def validate(self) -> None:
+        if self.inputs.domains and self.filtering.foreground.policy != "all":
+            raise ValueError("unpaired foreground.policy must be 'all' (domain-local)")
+        if self.inputs.domains and self.alignment != AlignmentConfig():
+            raise ValueError(
+                "preprocessing.alignment is unsupported for independent unpaired images"
+            )
         for field_name, value in (
             ("patching.patch_size", self.patching.patch_size),
             ("patching.grid_movement", self.patching.grid_movement),
@@ -207,7 +221,12 @@ class PreprocessingConfig:
 
     @classmethod
     def from_mapping(
-        cls, data: dict[str, Any], *, dataset_root: Path, default_image_size: tuple[int, int]
+        cls,
+        data: dict[str, Any],
+        *,
+        dataset_root: Path,
+        default_image_size: tuple[int, int],
+        pairing: str = "paired",
     ) -> PreprocessingConfig:
         reject_unknown_keys(data, _SECTION_KEYS, "preprocessing")
         if "inputs" not in data:
@@ -219,11 +238,30 @@ class PreprocessingConfig:
         reject_unknown_keys(
             inputs_data,
             frozenset(
-                {"inventory", "modalities", "reference", "target_modalities", "hash_verification"}
+                {
+                    "inventory",
+                    "modalities",
+                    "reference",
+                    "target_modalities",
+                    "hash_verification",
+                    "domains",
+                }
             ),
             "preprocessing.inputs",
         )
-        for required in ("inventory", "modalities", "reference", "target_modalities"):
+        unpaired = pairing == "unpaired"
+        if unpaired and any(
+            key in inputs_data for key in ("modalities", "reference", "target_modalities")
+        ):
+            raise ValueError("unpaired preprocessing.inputs uses domains, not paired input fields")
+        if not unpaired and "domains" in inputs_data:
+            raise ValueError("preprocessing.inputs.domains requires data.pairing='unpaired'")
+        required_inputs = (
+            ("inventory", "domains")
+            if unpaired
+            else ("inventory", "modalities", "reference", "target_modalities")
+        )
+        for required in required_inputs:
             if required not in inputs_data:
                 raise ValueError(f"preprocessing.inputs requires {required}")
         patching = _mapping(data.get("patching", {}), "patching")
@@ -286,17 +324,33 @@ class PreprocessingConfig:
             io_data, frozenset({"tiled", "backend", "max_memory_gb"}), "preprocessing.io"
         )
         max_memory = io_data.get("max_memory_gb")
+        if unpaired and alignment_data:
+            raise ValueError(
+                "preprocessing.alignment is unsupported for independent unpaired images"
+            )
+        if unpaired and foreground.get("policy", "all") != "all":
+            raise ValueError(
+                "unpaired foreground.policy must be 'all' (domain-local); "
+                "paired reference/target/intersection/union policies are unsupported"
+            )
         return cls(
             dataset_root=dataset_root,
             inputs=InputConfig(
                 inventory=Path(inputs_data["inventory"]),
                 modalities=parse_modality_names(
                     inputs_data["modalities"], "preprocessing.inputs.modalities"
-                ),
-                reference=str(inputs_data["reference"]),
+                )
+                if not unpaired
+                else (),
+                reference=str(inputs_data["reference"]) if not unpaired else "",
                 target_modalities=parse_modality_names(
                     inputs_data["target_modalities"], "preprocessing.inputs.target_modalities"
-                ),
+                )
+                if not unpaired
+                else (),
+                domains=parse_modality_names(inputs_data["domains"], "preprocessing.inputs.domains")
+                if unpaired
+                else (),
                 hash_verification=str(inputs_data.get("hash_verification", "cached")),
             ),
             patching=PatchingConfig(
@@ -338,7 +392,7 @@ class PreprocessingConfig:
                     enabled=parse_bool_strict(
                         foreground.get("enabled", True), "filtering.foreground.enabled"
                     ),
-                    policy=str(foreground.get("policy", "reference")),
+                    policy=str(foreground.get("policy", "all" if unpaired else "reference")),
                     min_ratio=float(foreground.get("min_ratio", 0.25)),
                 ),
                 max_white_ratio=float(filtering.get("max_white_ratio", 0.7)),
@@ -370,6 +424,13 @@ class PreprocessingConfig:
         result["inputs"]["inventory"] = str(self.inputs.inventory)
         result["inputs"]["modalities"] = list(self.inputs.modalities)
         result["inputs"]["target_modalities"] = list(self.inputs.target_modalities)
+        if self.inputs.domains:
+            for key in ("modalities", "reference", "target_modalities"):
+                result["inputs"].pop(key)
+            result["inputs"]["domains"] = list(self.inputs.domains)
+            result.pop("alignment")
+        else:
+            result["inputs"].pop("domains")
         result["patching"]["patch_size"] = list(self.patching.patch_size)
         result["patching"]["grid_movement"] = list(self.patching.grid_movement)
         if self.split.assignment_file is not None:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ctypes
 import os
+import sys
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -28,3 +30,30 @@ def publish_file_no_replace(
     finally:
         temporary.unlink(missing_ok=True)
     return destination
+
+
+def publish_directory_no_replace(source: Path, destination: Path) -> None:
+    """Atomically rename a staged directory without replacing even an empty destination."""
+    # os.rename can overwrite empty directories on POSIX; use the exclusive native flags.
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin":
+        rename = libc.renamex_np
+        rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        rename.restype = ctypes.c_int
+        result = rename(os.fsencode(source), os.fsencode(destination), 4)  # RENAME_EXCL
+    elif sys.platform.startswith("linux"):
+        rename = libc.renameat2
+        rename.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        rename.restype = ctypes.c_int
+        result = rename(-100, os.fsencode(source), -100, os.fsencode(destination), 1)
+    else:
+        raise OSError("Exclusive directory publication requires Linux or macOS")
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), str(destination))

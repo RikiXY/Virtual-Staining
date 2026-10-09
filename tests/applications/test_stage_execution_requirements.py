@@ -42,19 +42,11 @@ def test_later_section_error_precedes_prepare(tmp_path: Path, later: str) -> Non
     assert list(tmp_path.iterdir()) == [path]
 
 
-@pytest.mark.parametrize("supplied_method", [False, True])
-def test_unpaired_prepare_is_explicitly_unsupported_without_dummy_domains(
-    tmp_path: Path, supplied_method: bool
-) -> None:
+def test_unpaired_prepare_needs_its_own_input_contract(tmp_path: Path) -> None:
     raw = prepare_config_data(tmp_path)
     raw["data"] = {"pairing": "unpaired"}
-    # Inspection accepts the declaration; selected preparation owns the support boundary.
-    config = RunConfig.from_mapping(raw)
-    assert config.data.domains == {}
-    if supplied_method:
-        raw["method"] = {"name": "cyclegan"}
     path = write_config_data(tmp_path / "run.yaml", raw)
-    with pytest.raises(ValueError, match="prepare.*unpaired.*unsupported"):
+    with pytest.raises(ValueError, match="uses domains"):
         run_stages(path, ("prepare",))
     assert list(tmp_path.iterdir()) == [path]
 
@@ -66,9 +58,12 @@ def test_direct_application_checks_its_own_requirements_before_writes(tmp_path: 
     raw = prepare_config_data(tmp_path)
     raw["data"] = {"pairing": "unpaired"}
     path = write_config_data(tmp_path / "run.yaml", raw)
+    raw["preprocessing"]["inputs"] = {"inventory": "paths.csv", "domains": ["LF", "HE"]}
+    raw["data"]["group_validation"] = "unavailable"
     config = RunConfig.from_mapping(raw)
-    with pytest.raises(ValueError, match="prepare.*unpaired.*unsupported"):
+    with pytest.raises(FileNotFoundError):
         prepare(config, path)
+    raw["preprocessing"] = prepare_config_data(tmp_path)["preprocessing"]
     raw.pop("data")
     raw.update(results_path=str(tmp_path / "results"), run_name="test")
     raw["model"] = {"inputs": ["LF"], "outputs": ["HE"]}

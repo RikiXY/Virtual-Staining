@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import glob
+import json
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -15,7 +17,9 @@ from virtual_staining.data.consumption import (
     load_group_metadata,
     relative_locator,
 )
+from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.split_contract import DatasetSplit
+from virtual_staining.utils.hashing import sha256_file
 from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS
 
 SPLIT_PLACEHOLDER = "{split}"
@@ -141,3 +145,25 @@ class UnpairedImageDataset(Dataset):
             "path_a": str(path_a),
             "path_b": str(path_b),
         }
+
+
+def prepared_unpaired_patch_split(dataset_root: Path, group_metadata: Path | None) -> bool:
+    """Recognize the explicit patch-split exception only for its prepared group sidecar."""
+    layout = DatasetLayout(dataset_root)
+    if (
+        group_metadata is None
+        or (dataset_root / group_metadata).resolve() != layout.group_metadata_path.resolve()
+    ):
+        return False
+    if not layout.dataset_build_path.is_file():
+        return False
+    build = json.loads(layout.dataset_build_path.read_text(encoding="utf-8"))
+    if build.get("format") != "unpaired/1":
+        return False
+    for path in (layout.group_metadata_path, layout.split_assignment_path):
+        if build.get("artifacts", {}).get(path.relative_to(dataset_root).as_posix()) != sha256_file(
+            path
+        ):
+            raise ValueError("Prepared unpaired group/split evidence has changed")
+    with layout.split_assignment_path.open(newline="", encoding="utf-8") as handle:
+        return {row["unit"] for row in csv.DictReader(handle)} == {"patch"}

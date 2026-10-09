@@ -1,0 +1,32 @@
+# Software example using the repository's existing images as separate collections.
+# This makes no independence or correspondence claim. Run from the repository root.
+# vs prepare --config examples/unpaired/prepare.yaml
+# For study splits, use real inventory IDs and the minimal_unpaired_prepare example.
+dataset_root: examples
+data:
+  pairing: unpaired
+  hash_policy: content
+  group_validation: unavailable
+preprocessing:
+  inputs:
+    inventory: unpaired/paths.csv
+    domains: [LF, HE]
+  patching:
+    patch_size: [256, 256]
+    grid_movement: [256, 256]
+    margin: 0
+  # These ordinary PNG examples fit in memory; WSI users should select tiled I/O.
+  io:
+    tiled: false
+    backend: pillow
+  masks:
+    generation: never
+  filtering:
+    foreground:
+      enabled: false
+  split:
+    unit: patch
+    train: 0.8
+    val: 0.1
+    test: 0.1
+    seed: 42

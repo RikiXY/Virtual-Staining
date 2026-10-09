@@ -45,7 +45,7 @@ from virtual_staining.utils.image_io import (
     RegionImageReader,
     load_grayscale_image,
     open_image_reader,
-    read_image_metadata,
+    verify_written_image,
 )
 
 
@@ -82,20 +82,6 @@ class AssetState:
             ),
             tissue_support=self.tissue_support,
             observation_validity=self.observation_validity,
-        )
-
-
-def _verify_written_patch(path: Path, image: np.ndarray) -> None:
-    """Require ``path`` to be a readable image with ``image``'s width and height."""
-    try:
-        metadata = read_image_metadata(path, backend="pillow")
-    except (OSError, ValueError) as exc:
-        raise OSError(f"Written patch {path} is not a readable image: {exc}") from exc
-    expected = (image.shape[1], image.shape[0])
-    if (metadata.width, metadata.height) != expected:
-        raise OSError(
-            f"Written patch {path} is {metadata.width}x{metadata.height}, expected "
-            f"{expected[0]}x{expected[1]}"
         )
 
 
@@ -401,7 +387,7 @@ class SlideSetProcessor:
                     owned.append(path)
                 if not written:
                     raise OSError(f"Could not write patch {path}")
-                _verify_written_patch(path, image)
+                verify_written_image(path, image)
         except BaseException:
             for path in owned:
                 path.unlink(missing_ok=True)

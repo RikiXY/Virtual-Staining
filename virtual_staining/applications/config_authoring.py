@@ -35,7 +35,8 @@ from virtual_staining.data.manifest import (
     require_model_modalities,
 )
 from virtual_staining.data.slide_sets import resolve_slide_sets
-from virtual_staining.data.unpaired import resolve_domain_collections
+from virtual_staining.data.unpaired import prepared_unpaired_patch_split, resolve_domain_collections
+from virtual_staining.data.unpaired_inventory import load_unpaired_inventory, unpaired_assignments
 from virtual_staining.definitions import Definitions
 from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.inference.runner import (
@@ -269,6 +270,10 @@ def _prepare_checks(config: RunConfig, preceding: frozenset[str]) -> list[Prefli
     preprocessing = config.preprocessing
 
     def inventory() -> str:
+        if config.data.pairing == "unpaired":
+            items = load_unpaired_inventory(preprocessing)
+            unpaired_assignments(preprocessing, items, config.data.group_validation)
+            return f"{len(items)} independent images; pixels/content unverified"
         return f"{len(resolve_slide_sets(preprocessing))} slide set(s) resolved from inventory"
 
     return [_check("prepare.inventory", "prepare", inventory)]
@@ -326,7 +331,13 @@ def _unpaired_train(config: RunConfig) -> str:
         roles={domain_a: "input", domain_b: "target"},
         group_metadata=config.data.group_metadata,
     )
-    result = validate_groups(rows, config.data.group_validation)
+    result = validate_groups(
+        rows,
+        config.data.group_validation,
+        patch_split=prepared_unpaired_patch_split(
+            config.project.dataset_root, config.data.group_metadata
+        ),
+    )
     counts = {f"{split}/{domain}": len(items) for (split, domain), items in paths.items()}
     return f"domain collections {counts}; supplied groups: {_groups(result)}"
 

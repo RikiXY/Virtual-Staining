@@ -260,3 +260,143 @@ referenced files must exist when file validation is requested.
 
 Runtime tensor shapes and model-order selection are documented in
 [Named runtime samples](library_api.md#named-runtime-samples).
+
+## Independent unpaired preparation
+
+`vs prepare` also accepts exactly two ordered, independent raw-image domains through
+`data.pairing: unpaired`. The [minimal prepare-only YAML](../config/runs/minimal_unpaired_prepare.yaml)
+uses `preprocessing.inputs.inventory: inputs/paths.csv` and
+`preprocessing.inputs.domains: [LF, HE]`. There is no reference, target, alignment,
+model, method, results directory, run name, or training direction. The domain order
+is preserved as inventory/output metadata; it does not assign model inputs/outputs.
+`data.domains` retains its experiment-time collection meaning.
+
+Hand-author one long-form CSV under `dataset_root`. Only `domain,path` are required:
+
+```csv
+domain,path,set_id,specimen_id,patient_id
+LF,raw/LF/image_a.tif,set_a,specimen_a,patient_1
+HE,raw/HE/image_b.png,set_b,specimen_b,patient_2
+HE,raw/HE/image_c.jpg,set_c,specimen_c,patient_3
+```
+
+The IDs above are illustrative placeholders, not claims about real images. Patient,
+specimen and set IDs must be supplied by the dataset owner when their split or group
+policy requires them. Rows have no positional correspondence. Different counts,
+dimensions, resolutions, tissue support and retained-patch counts are expected.
+The runnable [software inventory](../examples/unpaired/paths.csv) intentionally supplies
+no biological IDs and uses the explicit patch-split engineering exception.
+Automated unpaired directory/glob inventory authoring is not provided by `vs inventory`.
+
+Headers must be unique; unknown columns, short/long rows, surrounding whitespace,
+empty or unknown domains, duplicate paths/physical files (including aliases and hard
+links), missing files and unsupported image formats fail. The ordinary image extensions
+are PNG, JPEG, BMP and TIFF; other extensions require OpenSlide recognition. Domain names match
+`[A-Za-z][A-Za-z0-9_-]*` exactly; optional IDs match
+`[A-Za-z0-9][A-Za-z0-9._-]*`. Paths are normalized, relative to `dataset_root`, and must
+stay inside it after symlink resolution. The inventory itself must also be contained
+there. An internal symlink is allowed only when it does not reuse another selected
+physical file. Repeated set/specimen IDs must declare consistent parent IDs, including
+consistent missingness. No identifier is derived from a filename.
+
+The only additional optional asset column is `mask_path`, a root-relative image-local
+binary mask with the same native dimensions as its source. Masks use known values
+0/255; unknown/nonbinary values fail. Image decoding is deferred to preparation:
+config-only commands read no assets, and `--assets` checks inventory membership,
+groups and split feasibility without decoding or content hashing.
+
+```bash
+vs config check --config unpaired_prepare.yaml --stages prepare
+vs config check --config unpaired_prepare.yaml --stages prepare --assets
+vs config resolve --config unpaired_prepare.yaml --stages prepare
+vs prepare --config unpaired_prepare.yaml
+```
+
+Conditional preparation options reuse the existing catalogue:
+
+| Option | Independent-image meaning |
+| --- | --- |
+| `inputs.domains` | Exactly two unique names; replaces `modalities`, `reference`, `target_modalities`. |
+| `patching` | Existing size, movement and margin in each source's native pixels. Outputs are RGB PNG patches; no shared origins or geometry. |
+| `masks.generation` | `never` uses supplied masks or remains maskless; maskless processing requires `foreground.enabled: false`. `if_missing` generates only absent masks; `always` regenerates them. |
+| `masks.strategy`, `scale` | Existing connected-component/HSV algorithms. At scale 1, generate masks on native patch windows to keep tiled reads bounded. An explicitly smaller scale generates an image-local overview mask; patch pixels remain native resolution. |
+| `masks.lowres_filtering` | Evaluate foreground fraction on the overview-mask window before nearest-neighbor expansion when enabled. |
+| `masks.save_resolved_masks`, `save_patch_masks` | Save resolved overviews (or resolved native windows at scale 1) and accepted patch masks outside image collections. Maskless processing writes no invented masks. |
+| `filtering.foreground.policy` | Defaults to `all`: the single image's foreground. Explicit `reference`, `target`, `intersection`, and `union` policies are rejected, even when filtering is disabled. |
+| White/background filters | Apply the existing thresholds separately to each image patch. No cross-domain rejection. |
+| `alignment` | Unsupported for unpaired images, including programmatic registration injection. |
+| `io` | Existing backend and tiled selection. Tiled native extraction requests only patch windows; no implicit downsampling, rescaling or reorientation. Explicit memory budgets reject excessive estimated working arrays. Pillow may decode a whole ordinary image internally; use native OpenSlide-compatible tiled TIFFs for bounded WSI access. |
+| `split` | Assign all supplied groups across both domains before decoding. Requested IDs are mandatory. Shared explicit set/specimen/patient identities connect the chosen split units; contradictory frozen assignments fail. |
+| `split.assignment_file` | Existing exact `group_id,unit,split` CSV; must cover all actual selected-unit IDs. Unsupported for patch splitting. |
+| `data.group_validation` | Existing group checks. Patch splitting requires `unavailable`; shared groups and the limited independence claim are recorded. It is never described as patient-independent. |
+| `inputs.hash_verification` | Accepted existing option; unpaired reuse always verifies source content, including under the weaker `data.hash_policy: membership` snapshot policy. |
+
+Group fractions allocate independent connected groups, not equal patch counts.
+Every nonzero split must retain at least one image from each domain or preparation
+fails; it does not move groups or invent patches to fill a missing collection. A split
+with fraction zero remains empty and must not be selected by a consumer requiring
+nonempty collections. Duplicate content across disjoint splits fails, including
+supplied raw masks; patch splitting does not exempt content leakage.
+
+### Unpaired output and consumption
+
+The command logs a deterministic build root:
+`<dataset_root>/prepared_unpaired/<fingerprint>/`. It contains:
+
+```text
+config/{input.yaml,resolved.yaml}
+splits/{train,val,test}/{LF,HE}/<source_digest>__x00000000_y00000000.png
+metadata/groups.csv
+metadata/split_assignment.csv
+metadata/images.json
+metadata/dataset_fingerprint.json
+metadata/dataset_build.json
+metadata/config_hash.txt
+metadata/environment.json
+metadata/consumed_data/prepare/{snapshot.json,rows.csv}
+metadata/prepared_data/{snapshot.json,rows.csv}
+masks/                         # only if requested
+discarded_patches/              # only if requested
+```
+
+`source_digest` hashes the explicit domain and root-relative source path; it is a file
+identity, not a biological ID. `images.json` associates accepted/excluded origins with
+actual raw source paths, domains, supplied group metadata, geometry and rejection
+reasons. The canonical group sidecar columns are exactly
+`path,domain,split,set_id,specimen_id,patient_id`. No paired manifest is created.
+
+Use the logged build root as the later experiment's `dataset_root` and select collections
+explicitly (the model and direction remain the experiment owner's choices):
+
+```yaml
+dataset_root: local_workspace/datasets/unpaired_example/prepared_unpaired/<fingerprint>
+data:
+  pairing: unpaired
+  domains:
+    LF: 'splits/{split}/LF/*.png'
+    HE: 'splits/{split}/HE/*.png'
+  group_metadata: metadata/groups.csv
+  hash_policy: content
+  group_validation: patient
+```
+
+These are directly consumed by `resolve_domain_collections()` and
+`UnpairedImageDataset`. For a prepared patch split, use `group_validation: unavailable`;
+the training adapter recognizes the verified preparation sidecar/assignment evidence
+and records the engineering exception. Preparation snapshots remain dataset-local;
+training writes its own consumed-data evidence later. No train/infer/evaluate run
+metadata is created by preparation.
+
+Publication builds in an owned temporary sibling directory, verifies source stability,
+accepted output membership and output hashes, then publishes the complete directory using an exclusive native rename on Linux/macOS
+(no overwrite, even for an empty destination). Filesystems lacking this operation fail
+explicitly.
+The fingerprint covers resolved configuration/stage identity, selected inventory bytes,
+explicit source/group metadata, verified source content/stat information and frozen
+assignments. Changed input/configuration creates a different build root; older builds
+and paired outputs are retained. Reuse requires the matching fingerprint and every
+recorded artifact with its original hash, without extra files or symlinks. An incomplete
+or edited destination causes an explicit collision error and is preserved. Failed
+attempts leave `failure-*.json` evidence beside builds and remove only their owned
+temporary directory. Users manage retention of older builds; preparation never deletes
+raw images, caller files or earlier builds.
