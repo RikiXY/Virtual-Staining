@@ -440,3 +440,84 @@ def test_conversion_rejects_malformed_exif(tmp_path: Path, suffix: str) -> None:
     Image.new("RGB", (32, 16)).save(source, exif=b"Exif\0\0invalid")
     with pytest.raises(ValueError, match="Invalid conversion source"):
         convert_to_pyramidal_tiff(source, tmp_path / "output.tif")
+
+
+@pytest.mark.parametrize("suffix", [".tif", ".png", ".jpg"])
+@pytest.mark.parametrize(
+    "size", [(80, 48), (640, 288), (512, 512), (640, 512), (512, 288), (513, 257)]
+)
+def test_native_tiff_partial_tiles_and_repeated_reads(
+    tmp_path: Path, suffix: str, size: tuple[int, int]
+) -> None:
+    import openslide
+    import pyvips
+
+    width, height = size
+    y, x = np.indices((height, width))
+    pixels = np.stack((x % 256, y % 256, (x + y) % 256), axis=-1).astype(np.uint8)
+    source = tmp_path / f"source{suffix}"
+    Image.fromarray(pixels).save(source)
+    with Image.open(source) as image:
+        expected = np.array(image.convert("RGB"))
+
+    def vips_pixels(image) -> np.ndarray:
+        return np.frombuffer(image.write_to_memory(), dtype=np.uint8).reshape(
+            image.height, image.width, image.bands
+        )
+
+    np.testing.assert_array_equal(vips_pixels(pyvips.Image.new_from_file(str(source))), expected)
+    output = tmp_path / "converted.tif"
+    convert_to_pyramidal_tiff(source, output)
+    # Fresh handles exercise native decoding; reused handles also exercise tile caches.
+    for _ in range(2):
+        reader = open_image_reader(output, backend="openslide")
+        try:
+            with Image.open(output) as tiff, openslide.OpenSlide(str(output)) as slide:
+                for level, (level_width, level_height) in enumerate(slide.level_dimensions):
+                    tiff.seek(level)
+                    level_pixels = np.array(tiff.convert("RGB"))
+                    np.testing.assert_array_equal(
+                        vips_pixels(pyvips.Image.tiffload(str(output), page=level)), level_pixels
+                    )
+                    vips_slide = vips_pixels(pyvips.Image.openslideload(str(output), level=level))
+                    np.testing.assert_array_equal(vips_slide[:, :, :3], level_pixels)
+                    assert np.all(vips_slide[:, :, 3] == 255)
+                    if level == 0:
+                        np.testing.assert_array_equal(level_pixels, expected)
+                    for _ in range(2):
+                        full = slide.read_region((0, 0), level, (level_width, level_height))
+                        np.testing.assert_array_equal(np.array(full.convert("RGB")), level_pixels)
+                        assert np.all(np.array(full)[:, :, 3] == 255)
+                        if level == 0:
+                            np.testing.assert_array_equal(reader.read_full()[:, :, ::-1], expected)
+                    downsample = slide.level_downsamples[level]
+                    # Integer level-0 coordinates avoid legitimate subpixel resampling.
+                    points = {(0, 0)}
+                    if downsample.is_integer():
+                        points |= {
+                            (px, py)
+                            for px in (255, 256, 257, level_width - 1)
+                            for py in (255, 256, 257, level_height - 1)
+                            if px < level_width and py < level_height
+                        }
+                        np.testing.assert_array_equal(
+                            reader.read_preview(1 / downsample)[:, :, ::-1], level_pixels
+                        )
+                    for px, py in points:
+                        region_size = (min(3, level_width - px), min(3, level_height - py))
+                        region = slide.read_region(
+                            (int(px * downsample), int(py * downsample)), level, region_size
+                        )
+                        expected_region = level_pixels[
+                            py : py + region_size[1], px : px + region_size[0]
+                        ]
+                        np.testing.assert_array_equal(
+                            np.array(region.convert("RGB")), expected_region
+                        )
+                        if level == 0:
+                            np.testing.assert_array_equal(
+                                reader.read_region(px, py, *region_size)[:, :, ::-1],
+                                expected_region,
+                            )
+        finally:
+            reader.close()
