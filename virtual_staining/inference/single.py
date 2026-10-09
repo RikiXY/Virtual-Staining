@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 import shutil
 import tempfile
 from collections.abc import Callable, Mapping
@@ -15,8 +14,8 @@ import numpy as np
 import torch
 from PIL import Image
 from torchvision import transforms
-from torchvision.utils import save_image
 
+from virtual_staining.inference.outputs import save_rgb
 from virtual_staining.inference.runner import (
     Predictor,
     build_inference_transform,
@@ -453,19 +452,6 @@ def _run_wsi_prediction(
             write_pyramidal_tiff_from_raw_rgb(raw_paths[name], path, metadata)
 
 
-def _save_rgb(output: torch.Tensor, output_path: Path) -> None:
-    """Write next to the destination, then atomically replace it; failures leave no output."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    partial = output_path.with_name(
-        f".{output_path.stem}.{os.getpid()}.partial{output_path.suffix}"
-    )
-    try:
-        save_image(output, partial)
-        os.replace(partial, output_path)
-    finally:
-        partial.unlink(missing_ok=True)
-
-
 def _default_output_dir(directory: Path | None, kind: str) -> Path:
     if directory is None:
         raise ValueError(
@@ -586,7 +572,7 @@ def _run_one_image(
 
     if outputs is not None:
         for name, output in outputs.items():
-            _save_rgb(output, output_paths[name])
+            save_rgb(output, output_paths[name])
 
     logger.info(
         "Single-image inference complete: %s -> %s (mode=%s)",

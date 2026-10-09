@@ -4,7 +4,6 @@ import logging
 from pathlib import Path
 
 from PIL import Image
-from torchvision.utils import save_image
 
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.consumption import AssetRow, build_snapshot, relative_locator
@@ -17,7 +16,7 @@ from virtual_staining.data.manifest import (
     require_model_modalities,
 )
 from virtual_staining.experiment.session import ExperimentSession
-from virtual_staining.inference.outputs import generated_path_for_record
+from virtual_staining.inference.outputs import generated_path_for_record, save_rgb
 from virtual_staining.inference.runner import (
     InferenceResult,
     build_inference_transform,
@@ -147,8 +146,7 @@ def infer(config: RunConfig, config_path: Path) -> InferenceResult:
             # One published artifact and one produced row per (sample_id, output_name).
             for output_name, output in outputs.items():
                 out_path = generated_path_for_record(record, output_dir, output_name)
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-                save_image(output[0], out_path)
+                save_rgb(output[0], out_path)
                 produced.append(
                     AssetRow(
                         root="output",
