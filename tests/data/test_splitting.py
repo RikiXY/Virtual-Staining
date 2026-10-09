@@ -61,3 +61,13 @@ def test_group_id_for_set_uses_requested_grouping_key() -> None:
 def test_assign_group_splits_rejects_pair_unit() -> None:
     with pytest.raises(ValueError, match="unit"):
         assign_group_splits(_sets(), unit="pair", ratios=(0.8, 0.1, 0.1), seed=0)
+
+
+@pytest.mark.parametrize("first_row", ["P0,patient,train,unexpected", "P0,patient"])
+def test_paired_frozen_assignments_reject_malformed_rows(tmp_path: Path, first_row: str) -> None:
+    path = tmp_path / "assignment.csv"
+    path.write_text(f"group_id,unit,split\n{first_row}\nP1,patient,val\nP2,patient,test\n")
+    with pytest.raises(ValueError, match="Frozen split assignment row 2 has malformed columns"):
+        assign_group_splits(
+            _sets(), unit="patient", ratios=(0.6, 0.2, 0.2), seed=42, assignment_file=path
+        )

@@ -1,0 +1,35 @@
+# Template for YOUR data, not a bundled dataset. Run from the repository root.
+# Copy paths_grouped.csv to <dataset_root>/inputs/paths.csv and replace all
+# example paths and IDs with your actual image paths and recorded identifiers.
+# Choose patch geometry and split fractions for your data; these are illustrative.
+# vs config check --config examples/unpaired/prepare_grouped.yaml --stages prepare
+# After supplying your inventory and images, add --assets or run vs prepare.
+dataset_root: local_workspace/datasets/unpaired_grouped
+data:
+  pairing: unpaired
+  hash_policy: content
+  # Requires a real patient_id on every row, including specimen/set splits.
+  group_validation: patient
+preprocessing:
+  inputs:
+    inventory: inputs/paths.csv
+    domains: [LF, HE]
+  patching:
+    patch_size: [256, 256]
+    grid_movement: [256, 256]
+    margin: 0
+  # Maskless example; enable domain-local masks/filtering when appropriate.
+  masks:
+    generation: never
+  filtering:
+    foreground:
+      enabled: false
+  split:
+    # Also accepts specimen or set. Shared patients/specimens remain together.
+    # patch requires data.group_validation: unavailable and makes no biological
+    # independence claim; patches from the same source can cross splits.
+    unit: patient
+    train: 0.6
+    val: 0.2
+    test: 0.2
+    seed: 42

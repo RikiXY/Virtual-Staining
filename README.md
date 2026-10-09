@@ -181,6 +181,8 @@ and a hand-authored `domain,path` inventory. The [unpaired preparation contract]
 explains real group IDs, conditional mask policies, immutable output builds and consumer setup.
 A runnable software example is [examples/unpaired/prepare.yaml](examples/unpaired/prepare.yaml);
 its patch split makes no biological-independence claim.
+The [grouped CSV/YAML template](docs/dataset_format.md#grouped-preparation-template-for-your-data)
+shows patient, specimen and set identifiers and explains all four split options for your data.
 
 `--assets` adds read-only checks for explicitly selected stages; it selects no stages,
 does not verify content, freeze inputs, or certify scientific validity. Earlier selected

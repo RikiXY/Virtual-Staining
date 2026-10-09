@@ -338,6 +338,83 @@ with fraction zero remains empty and must not be selected by a consumer requirin
 nonempty collections. Duplicate content across disjoint splits fails, including
 supplied raw masks; patch splitting does not exempt content leakage.
 
+### Grouped preparation template for your data
+
+The [two-column example](../examples/unpaired/prepare.yaml) remains valid without
+biological metadata. The richer [CSV template](../examples/unpaired/paths_grouped.csv)
+and [prepare-only YAML](../examples/unpaired/prepare_grouped.yaml) illustrate nested
+patient/specimen/set identities. **They are templates for your data:** the image paths
+and `EXAMPLE_` identifiers are placeholders, not bundled images or biological ground
+truth. Replace them with actual paths and recorded identifiers; do not assign these
+example identities to real images.
+
+The CSV illustrates six patients, twelve specimens and twenty-four sets, with unequal
+LF/HE image counts. Its first rows show multiple images in one set, multiple sets in
+one specimen, different specimens from one patient, and shared groups across domains:
+
+```csv
+domain,path,set_id,specimen_id,patient_id
+LF,raw/LF/image_000.png,EXAMPLE_S001_A1,EXAMPLE_SP001_A,EXAMPLE_P001
+LF,raw/LF/image_001.png,EXAMPLE_S001_A1,EXAMPLE_SP001_A,EXAMPLE_P001
+LF,raw/LF/image_002.png,EXAMPLE_S001_A2,EXAMPLE_SP001_A,EXAMPLE_P001
+HE,raw/HE/image_003.tif,EXAMPLE_S001_A2,EXAMPLE_SP001_A,EXAMPLE_P001
+HE,raw/HE/image_004.tif,EXAMPLE_S001_B1,EXAMPLE_SP001_B,EXAMPLE_P001
+LF,raw/LF/image_005.png,EXAMPLE_S001_B2,EXAMPLE_SP001_B,EXAMPLE_P001
+```
+
+`patient_id` identifies the declared patient, `specimen_id` a specimen from that
+patient, and `set_id` a collection within that specimen. Multiple images can share
+these IDs, including across domains. Shared IDs express group membership; they do
+not establish image pairing, alignment or anatomical correspondence.
+
+`split.unit` selects the IDs whose assignments are recorded. `data.group_validation`
+selects the required independence evidence. Edit these fields in the same YAML:
+
+| `preprocessing.split.unit` | `data.group_validation` | Behavior |
+| --- | --- | --- |
+| `patient` | `patient` | Keep all images of each supplied patient together. |
+| `specimen` | `patient` | Assign specimens, keeping specimens sharing a patient together. |
+| `set` | `patient` | Assign sets, keeping shared specimens and patients together transitively. |
+| `patch` | `unavailable` | Explicit engineering exception; source images and patients can span splits. |
+
+Identifiers are optional **CSV columns**, but conditionally mandatory values:
+patient/specimen/set splitting requires that ID on every row; explicit group
+validation also requires its selected ID. Specimen splitting without patient IDs
+may use specimen validation, but cannot establish patient independence. Patient
+splitting can work without specimen IDs. Missing values are never inferred from
+filenames. Reusing a child ID with conflicting or inconsistently missing parents
+fails. Known higher-level IDs connect finer split units even under weaker validation;
+`unavailable` does not waive leakage checks for grouped splits. Patch splitting
+records its limitation in preparation and consumed-data snapshots and is unsuitable
+for independent biological performance claims.
+
+Copy the CSV to `<dataset_root>/inputs/paths.csv`, replace its rows with your data,
+and edit `dataset_root`, patch geometry and fractions in the YAML. The example values
+are illustrative, not study recommendations. Config-only checking requires no images;
+after supplying the inventory and images, preflight and prepare from the repository root:
+
+```bash
+vs config check --config examples/unpaired/prepare_grouped.yaml --stages prepare
+vs config check --config examples/unpaired/prepare_grouped.yaml --stages prepare --assets
+vs prepare --config examples/unpaired/prepare_grouped.yaml
+```
+
+For frozen grouped partitions, set `preprocessing.split.assignment_file` to a
+dataset-relative CSV with exactly `group_id,unit,split`. Include **every actual ID
+of the selected unit**, assigning all connected IDs to the same split. Seed changes
+do not override it. Missing/unexpected/duplicate groups, malformed rows, wrong units,
+invalid split names and shared identities crossing splits fail before publication.
+
+Inspect each logged build root: `metadata/split_assignment.csv` records assignments,
+`metadata/groups.csv` records every accepted patch's supplied identities, and
+`metadata/images.json` joins patches to raw sources and coordinates.
+`metadata/prepared_data/` records output membership and validation limitations. Use
+`splits/{train,val,test}/{LF,HE}/` with the consumer configuration below.
+The regression tests load this template with temporary synthetic images and verify
+all four split units against published patches and metadata, including the unpaired
+resolver and CycleGAN data adapter. This verifies software behavior, not real-data
+biological independence.
+
 ### Unpaired output and consumption
 
 The command logs a deterministic build root:

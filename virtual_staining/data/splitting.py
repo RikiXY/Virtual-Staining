@@ -74,6 +74,8 @@ def _load_frozen_assignment(path: Path, *, unit: str, groups: set[str]) -> dict[
             raise ValueError(f"Frozen split assignment must have exact columns: {expected}")
         assignments: dict[str, DatasetSplit] = {}
         for row_number, row in enumerate(reader, start=2):
+            if None in row or any(value is None for value in row.values()):
+                raise ValueError(f"Frozen split assignment row {row_number} has malformed columns")
             group_id = row["group_id"].strip()
             if group_id in assignments:
                 raise ValueError(f"Frozen split assignment duplicates group {group_id!r}")
