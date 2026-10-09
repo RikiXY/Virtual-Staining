@@ -4,6 +4,7 @@ import json
 import math
 from collections.abc import Mapping
 from typing import Any
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -65,6 +66,118 @@ def test_builtin_finite_values_are_unchanged() -> None:
         assert results[name].value == pytest.approx(expected, rel=1e-12, abs=1e-15)
 
 
+_ERROR_REQUESTS = [
+    ("mae",),
+    ("mse",),
+    ("rmse",),
+    ("psnr",),
+    ("mse", "rmse"),
+    ("rmse", "psnr"),
+    ("mse", "rmse", "psnr"),
+    ("mae", "psnr"),
+    ("psnr", "mae"),
+    ("mae", "mse", "rmse", "psnr"),
+    ("psnr", "rmse", "mse", "mae"),
+]
+_MASKED_REFERENCE_VALUES = {
+    "mae": 0.3366340100765228,
+    "mse": 0.1731058657169342,
+    "rmse": 0.4160599304390345,
+    "psnr": 7.6168821574484795,
+}
+
+
+@pytest.mark.parametrize("names", _ERROR_REQUESTS)
+@pytest.mark.parametrize("masked", [False, True])
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+def test_error_requests_compute_only_needed_values(
+    monkeypatch: pytest.MonkeyPatch, names: tuple[str, ...], masked: bool, dtype: Any
+) -> None:
+    target, generated = (image.astype(dtype) for image in _random_pair())
+    support = np.indices(target.shape[:2]).sum(axis=0) % 3 == 0 if masked else None
+    selected = (target[support], generated[support]) if masked else (target, generated)
+    expected = {name: getattr(metrics_module, f"compute_{name}")(*selected) for name in names}
+    spies = {}
+    for name in ("compute_mae", "compute_mse", "compute_rmse", "compute_psnr"):
+        spies[name] = Mock(wraps=getattr(metrics_module, name))
+        monkeypatch.setattr(metrics_module, name, spies[name])
+    sqrt = Mock(wraps=np.sqrt)
+    monkeypatch.setattr(np, "sqrt", sqrt)
+    classify = Mock(wraps=MetricResult.of)
+    monkeypatch.setattr(MetricResult, "of", classify)
+
+    results = compute_metrics(_request(*names), target, generated, support)
+
+    assert spies["compute_mae"].call_count == int("mae" in names)
+    assert spies["compute_mse"].call_count == int(bool(set(names) & {"mse", "rmse", "psnr"}))
+    assert spies["compute_rmse"].call_count == 0
+    assert spies["compute_psnr"].call_count == 0
+    assert sqrt.call_count == int("rmse" in names) + int("psnr" in names)
+    assert classify.call_count == len(names)
+    assert list(results) == list(names)
+    for name, result in results.items():
+        assert result.status == "finite"
+        assert type(result.value) is float
+        assert result.value == expected[name]
+        assert result.support_count == (40 if masked else None)
+        assert result.support_fraction == (1 / 3 if masked else None)
+        if dtype == np.float32:
+            reference = _MASKED_REFERENCE_VALUES if masked else _REFERENCE_VALUES
+            assert result.value == pytest.approx(reference[name], rel=1e-12, abs=1e-15)
+    for name in ("compute_mae", "compute_mse"):
+        if spies[name].called:
+            for actual, expected_input in zip(spies[name].call_args.args, selected, strict=True):
+                assert actual.dtype == dtype
+                np.testing.assert_array_equal(actual, expected_input)
+
+
+def test_default_results_retain_order_and_numerical_contract() -> None:
+    results = compute_metrics(default_metrics(), *_random_pair())
+
+    assert list(results) == list(DEFAULT_METRIC_NAMES)
+    for name, result in results.items():
+        assert result.status == "finite"
+        assert result.value == pytest.approx(_REFERENCE_VALUES[name], rel=1e-12, abs=1e-15)
+        assert result.reason is result.support_count is result.support_fraction is None
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+def test_constant_error_values(dtype: Any) -> None:
+    results = compute_metrics(
+        _request("mae", "mse", "rmse", "psnr"),
+        _rgb(0.25).astype(dtype),
+        _rgb(0.75).astype(dtype),
+    )
+
+    for name, value in {"mae": 0.5, "mse": 0.25, "rmse": 0.5, "psnr": 6.020599913279624}.items():
+        assert results[name] == MetricResult("finite", value)
+
+
+def test_empty_support_bypasses_error_evaluator(monkeypatch: pytest.MonkeyPatch) -> None:
+    forbidden = Mock(side_effect=AssertionError("empty support must bypass computation"))
+    monkeypatch.setattr(metrics_module, "compute_mae", forbidden)
+    monkeypatch.setattr(metrics_module, "compute_mse", forbidden)
+    names = ("psnr", "mae", "mse", "rmse")
+
+    results = compute_metrics(_request(*names), *_random_pair(), support=np.zeros((12, 10), bool))
+
+    forbidden.assert_not_called()
+    assert list(results) == list(names)
+    assert all(
+        result
+        == MetricResult(
+            "undefined", reason="empty valid-region support", support_count=0, support_fraction=0.0
+        )
+        for result in results.values()
+    )
+
+
+@pytest.mark.parametrize("support", [np.ones((12, 10), dtype=np.uint8), np.ones((10, 12), bool)])
+def test_invalid_support_arrays_are_rejected(support: np.ndarray) -> None:
+    with pytest.raises(ValueError, match="boolean H x W mask"):
+        compute_metrics(_request("mae"), *_random_pair(), support=support)
+
+
 def test_ssim_call_pins_every_parameter(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, Any]] = []
 
@@ -89,10 +202,12 @@ def test_ssim_call_pins_every_parameter(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_identical_images_have_positive_infinite_psnr() -> None:
-    result = compute_metrics(_request("psnr", "mae"), _rgb(0.5), _rgb(0.5))
+    result = compute_metrics(_request("psnr", "mae", "mse", "rmse"), _rgb(0.5), _rgb(0.5))
 
     assert result["psnr"] == MetricResult("positive_infinity", math.inf)
-    assert result["mae"] == MetricResult("finite", 0.0)
+    assert metrics_module.compute_psnr(_rgb(0.5), _rgb(0.5)) == math.inf
+    for name in ("mae", "mse", "rmse"):
+        assert result[name] == MetricResult("finite", 0.0)
 
 
 def test_constant_data_pcc_is_undefined() -> None:
@@ -128,6 +243,14 @@ def test_inputs_are_never_rescaled_or_reshaped() -> None:
         compute_metrics(_request("mae"), _rgb(0.5, 8, 8), _rgb(0.5, 8, 9))
     with pytest.raises(ValueError, match="H x W x 3"):
         compute_metrics(_request("mae"), np.zeros((8, 8), np.float32), np.zeros((8, 8), np.float32))
+
+
+@pytest.mark.parametrize(
+    "image", [_rgb(-0.1), _rgb(math.nan), _rgb(math.inf), _rgb(0).astype(np.uint8)]
+)
+def test_invalid_input_values_and_dtypes_are_rejected(image: np.ndarray) -> None:
+    with pytest.raises(ValueError, match=r"floating-point RGB in \[0, 1\]"):
+        compute_metrics(_request("mae"), image, _rgb(0.5))
 
 
 # --- request resolution -----------------------------------------------------------------
@@ -223,7 +346,12 @@ def test_only_requested_evaluator_groups_run(monkeypatch: pytest.MonkeyPatch) ->
     assert list(results) == ["rmse", "mae"]
 
 
-def test_shared_group_runs_once_and_returns_only_requested_outputs() -> None:
+def test_shared_group_runs_once_and_returns_only_requested_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    forbidden = Mock(side_effect=AssertionError("unrequested error reduction executed"))
+    monkeypatch.setattr(metrics_module, "compute_mae", forbidden)
+    monkeypatch.setattr(metrics_module, "compute_mse", forbidden)
     calls: list[set[str]] = []
 
     def group(
@@ -244,15 +372,29 @@ def test_shared_group_runs_once_and_returns_only_requested_outputs() -> None:
     assert list(results) == ["b", "a"]
 
 
+def test_ssim_and_pcc_do_not_compute_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    forbidden = Mock(side_effect=AssertionError("unrequested error reduction executed"))
+    monkeypatch.setattr(metrics_module, "compute_mae", forbidden)
+    monkeypatch.setattr(metrics_module, "compute_mse", forbidden)
+    names = ("pcc_gray", "ssim", "pcc_rgb_mean")
+
+    results = compute_metrics(_request(*names), *_random_pair())
+
+    assert list(results) == list(names)
+    for name, result in results.items():
+        assert result.value == pytest.approx(_REFERENCE_VALUES[name], rel=1e-12, abs=1e-15)
+
+
 @pytest.mark.parametrize(
     "evaluator",
     [
         lambda *_: {"custom": MetricResult.of(-math.inf)},
+        lambda *_: {"custom": MetricResult.of(math.nan)},
         lambda *_: {"custom": 1.0},
         lambda *_: {},
         lambda *_: None,
     ],
-    ids=["negative_infinity", "bare_float", "missing_output", "not_a_mapping"],
+    ids=["negative_infinity", "nan", "bare_float", "missing_output", "not_a_mapping"],
 )
 def test_malformed_evaluator_output_is_an_error(evaluator: Any) -> None:
     request = resolve_metrics([{"name": "custom"}], {"custom": _custom(evaluator=evaluator)})

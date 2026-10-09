@@ -282,7 +282,10 @@ def compute_rmse(target: np.ndarray, generated: np.ndarray) -> float:
 
 
 def compute_psnr(target: np.ndarray, generated: np.ndarray) -> float:
-    mse = compute_mse(target, generated)
+    return _psnr_from_mse(compute_mse(target, generated))
+
+
+def _psnr_from_mse(mse: float) -> float:
     if mse == 0.0:
         return float("inf")
     return float(20.0 * np.log10(1.0 / np.sqrt(mse)))
@@ -365,17 +368,21 @@ def _evaluate_error(
     support: np.ndarray | None,
     requested: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, MetricResult]:
-    del requested
     if support is not None:
         # Valid pixels, all RGB channels: (N, 3).
         target, generated = target[support], generated[support]
-    mse = compute_mse(target, generated)
-    return {
-        "mae": MetricResult.of(compute_mae(target, generated)),
-        "mse": MetricResult.of(mse),
-        "rmse": MetricResult.of(float(np.sqrt(mse))),
-        "psnr": MetricResult.of(compute_psnr(target, generated)),
-    }
+    results: dict[str, MetricResult] = {}
+    if "mae" in requested:
+        results["mae"] = MetricResult.of(compute_mae(target, generated))
+    if requested.keys() & {"mse", "rmse", "psnr"}:
+        mse = compute_mse(target, generated)
+        if "mse" in requested:
+            results["mse"] = MetricResult.of(mse)
+        if "rmse" in requested:
+            results["rmse"] = MetricResult.of(float(np.sqrt(mse)))
+        if "psnr" in requested:
+            results["psnr"] = MetricResult.of(_psnr_from_mse(mse))
+    return results
 
 
 def _evaluate_pcc(
