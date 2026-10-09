@@ -119,28 +119,29 @@ def save_comparison_panel(
 
     fig_width = 4 * len(images)
     fig, axes = plt.subplots(1, len(images), figsize=(fig_width, 4))
+    try:
+        if len(images) == 1:
+            axes = [axes]
 
-    if len(images) == 1:
-        axes = [axes]
+        for ax, image, title in zip(axes, images, titles, strict=True):
+            if isinstance(image, np.ndarray):
+                im = ax.imshow(image, cmap="inferno", vmin=0.0, vmax=1.0)
+                fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            else:
+                ax.imshow(image)
 
-    for ax, image, title in zip(axes, images, titles, strict=True):
-        if isinstance(image, np.ndarray):
-            im = ax.imshow(image, cmap="inferno", vmin=0.0, vmax=1.0)
-            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        else:
-            ax.imshow(image)
+            ax.set_title(title)
+            ax.axis("off")
 
-        ax.set_title(title)
-        ax.axis("off")
+        if suptitle:
+            fig.suptitle(suptitle)
 
-    if suptitle:
-        fig.suptitle(suptitle)
-
-    save_path = Path(save_path)
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=200, bbox_inches="tight")
-    plt.close(fig)
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.tight_layout()
+        fig.savefig(save_path, dpi=200, bbox_inches="tight")
+    finally:
+        plt.close(fig)
     return save_path
 
 
@@ -167,23 +168,24 @@ def _save_stacked_image_panel(
     extra_title_space = 0.8 if suptitle else 0.2
     fig_height = total_height / dpi + extra_title_space + 0.4 * len(images)
     fig, axes = plt.subplots(len(images), 1, figsize=(fig_width, fig_height))
+    try:
+        if len(images) == 1:
+            axes = [axes]
 
-    if len(images) == 1:
-        axes = [axes]
+        for index, (ax, image, path) in enumerate(zip(axes, images, resolved_paths, strict=True)):
+            ax.imshow(image)
+            ax.set_title(row_titles[index] if row_titles is not None else path.stem)
+            ax.axis("off")
 
-    for index, (ax, image, path) in enumerate(zip(axes, images, resolved_paths, strict=True)):
-        ax.imshow(image)
-        ax.set_title(row_titles[index] if row_titles is not None else path.stem)
-        ax.axis("off")
+        if suptitle:
+            fig.suptitle(suptitle)
 
-    if suptitle:
-        fig.suptitle(suptitle)
-
-    save_path = Path(save_path)
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
-    plt.close(fig)
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.tight_layout()
+        fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
+    finally:
+        plt.close(fig)
     return save_path
 
 

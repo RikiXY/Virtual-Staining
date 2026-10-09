@@ -35,14 +35,16 @@ def _make_error_histogram(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     absolute_error = np.mean(np.abs(target - generated), axis=2)
 
-    plt.figure(figsize=(6, 4))
-    plt.hist(absolute_error.ravel(), bins=50)
-    plt.title("Absolute Error Histogram")
-    plt.xlabel("Absolute error")
-    plt.ylabel("Pixel count")
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=200, bbox_inches="tight")
-    plt.close()
+    fig = plt.figure(figsize=(6, 4))
+    try:
+        plt.hist(absolute_error.ravel(), bins=50)
+        plt.title("Absolute Error Histogram")
+        plt.xlabel("Absolute error")
+        plt.ylabel("Pixel count")
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=200, bbox_inches="tight")
+    finally:
+        plt.close(fig)
     return output_path
 
 
@@ -55,21 +57,22 @@ def _make_intensity_overlay_histogram(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     channel_labels = ["R", "G", "B"]
     fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharey=True)
+    try:
+        for channel_index, (ax, label) in enumerate(zip(axes, channel_labels, strict=True)):
+            ax.hist(target[:, :, channel_index].ravel(), bins=50, alpha=0.5, label="Target")
+            ax.hist(generated[:, :, channel_index].ravel(), bins=50, alpha=0.5, label="Generated")
+            ax.set_title(f"{label} channel")
+            ax.set_xlabel("Intensity")
+            ax.set_xlim(0, 1)
+            if channel_index == 0:
+                ax.set_ylabel("Pixel count")
+            ax.legend()
 
-    for channel_index, (ax, label) in enumerate(zip(axes, channel_labels, strict=True)):
-        ax.hist(target[:, :, channel_index].ravel(), bins=50, alpha=0.5, label="Target")
-        ax.hist(generated[:, :, channel_index].ravel(), bins=50, alpha=0.5, label="Generated")
-        ax.set_title(f"{label} channel")
-        ax.set_xlabel("Intensity")
-        ax.set_xlim(0, 1)
-        if channel_index == 0:
-            ax.set_ylabel("Pixel count")
-        ax.legend()
-
-    fig.suptitle("Target vs Generated Intensity Histograms")
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=200, bbox_inches="tight")
-    plt.close(fig)
+        fig.suptitle("Target vs Generated Intensity Histograms")
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    finally:
+        plt.close(fig)
     return output_path
 
 
@@ -83,30 +86,31 @@ def _make_scatter_by_channel(
     rng = np.random.default_rng(42)
     channel_labels = ["R", "G", "B"]
     fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharex=True, sharey=True)
+    try:
+        for channel_index, (ax, label) in enumerate(zip(axes, channel_labels, strict=True)):
+            target_channel = target[:, :, channel_index].ravel()
+            generated_channel = generated[:, :, channel_index].ravel()
+            n_points = min(20000, target_channel.size)
+            sample_indices = rng.choice(target_channel.size, size=n_points, replace=False)
+            ax.scatter(
+                target_channel[sample_indices],
+                generated_channel[sample_indices],
+                s=4,
+                alpha=0.25,
+            )
+            ax.plot([0, 1], [0, 1], linestyle="--", linewidth=1)
+            ax.set_title(f"{label} channel")
+            ax.set_xlabel("Target intensity")
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+            if channel_index == 0:
+                ax.set_ylabel("Generated intensity")
 
-    for channel_index, (ax, label) in enumerate(zip(axes, channel_labels, strict=True)):
-        target_channel = target[:, :, channel_index].ravel()
-        generated_channel = generated[:, :, channel_index].ravel()
-        n_points = min(20000, target_channel.size)
-        sample_indices = rng.choice(target_channel.size, size=n_points, replace=False)
-        ax.scatter(
-            target_channel[sample_indices],
-            generated_channel[sample_indices],
-            s=4,
-            alpha=0.25,
-        )
-        ax.plot([0, 1], [0, 1], linestyle="--", linewidth=1)
-        ax.set_title(f"{label} channel")
-        ax.set_xlabel("Target intensity")
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        if channel_index == 0:
-            ax.set_ylabel("Generated intensity")
-
-    fig.suptitle("Target vs Generated Intensity by Channel")
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=200, bbox_inches="tight")
-    plt.close(fig)
+        fig.suptitle("Target vs Generated Intensity by Channel")
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    finally:
+        plt.close(fig)
     return output_path
 
 

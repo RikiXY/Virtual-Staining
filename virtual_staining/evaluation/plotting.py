@@ -40,34 +40,38 @@ def save_dataset_plots(
         histogram_path = output_directory / f"{output}__{metric.name}_histogram.png"
         bin_edges = histogram_edges(values, metric.definition.plot_range)
 
-        plt.figure(figsize=(6, 4))
-        if values:
-            weights = np.ones(len(values), dtype=float) / len(values)
-            plt.hist(values, bins=bin_edges.tolist(), weights=weights)
-        plt.title(f"{output}: {metric.name.upper()} Histogram (finite values)")
-        plt.xlabel(metric.name.upper())
-        plt.ylabel("Share of finite samples")
-        plt.xlim(float(bin_edges[0]), float(bin_edges[-1]))
-        plt.tight_layout()
-        plt.savefig(histogram_path, dpi=200, bbox_inches="tight")
-        plt.close()
+        fig = plt.figure(figsize=(6, 4))
+        try:
+            if values:
+                weights = np.ones(len(values), dtype=float) / len(values)
+                plt.hist(values, bins=bin_edges.tolist(), weights=weights)
+            plt.title(f"{output}: {metric.name.upper()} Histogram (finite values)")
+            plt.xlabel(metric.name.upper())
+            plt.ylabel("Share of finite samples")
+            plt.xlim(float(bin_edges[0]), float(bin_edges[-1]))
+            plt.tight_layout()
+            plt.savefig(histogram_path, dpi=200, bbox_inches="tight")
+        finally:
+            plt.close(fig)
 
         saved_paths.append(histogram_path)
 
     boxplot_path = output_directory / "metrics_boxplot.png"
-    plt.figure(figsize=(8, 5))
-    boxes = [(output, metric.name) for output in grouped for metric in metrics]
-    bp_data = [finite_values(grouped[output], name) for output, name in boxes]
-    bp_labels = [f"{output}\n{name.upper()}" for output, name in boxes]
-    non_empty = [(d, lbl) for d, lbl in zip(bp_data, bp_labels, strict=True) if d]
-    if non_empty:
-        plot_data, plot_labels = zip(*non_empty, strict=True)
-        plt.boxplot(list(plot_data), tick_labels=list(plot_labels))
-    plt.title("Metrics Boxplot (finite values)")
-    plt.ylabel("Value")
-    plt.tight_layout()
-    plt.savefig(boxplot_path, dpi=200, bbox_inches="tight")
-    plt.close()
+    fig = plt.figure(figsize=(8, 5))
+    try:
+        boxes = [(output, metric.name) for output in grouped for metric in metrics]
+        bp_data = [finite_values(grouped[output], name) for output, name in boxes]
+        bp_labels = [f"{output}\n{name.upper()}" for output, name in boxes]
+        non_empty = [(d, lbl) for d, lbl in zip(bp_data, bp_labels, strict=True) if d]
+        if non_empty:
+            plot_data, plot_labels = zip(*non_empty, strict=True)
+            plt.boxplot(list(plot_data), tick_labels=list(plot_labels))
+        plt.title("Metrics Boxplot (finite values)")
+        plt.ylabel("Value")
+        plt.tight_layout()
+        plt.savefig(boxplot_path, dpi=200, bbox_inches="tight")
+    finally:
+        plt.close(fig)
 
     saved_paths.append(boxplot_path)
     return saved_paths
@@ -83,18 +87,23 @@ def save_unpaired_feature_plot(
     columns = 4
     rows = math.ceil(len(features) / columns)
     fig, axes = plt.subplots(rows, columns, figsize=(4 * columns, 3 * rows), squeeze=False)
-    for ax, feature in zip(axes.flat, features, strict=False):
-        bins = np.histogram_bin_edges([*generated[feature], *reference[feature]], bins=30)
-        for label, values in (("generated", generated[feature]), ("reference", reference[feature])):
-            weights = np.ones(len(values), dtype=float) / len(values)
-            ax.hist(values, bins=bins.tolist(), weights=weights, alpha=0.5, label=label)
-        ax.set_title(feature)
-        ax.set_ylabel("Share of images")
-    for ax in axes.flat[len(features) :]:
-        ax.axis("off")
-    axes.flat[0].legend()
-    fig.suptitle("Per-image feature distributions: generated vs reference (not paired)")
-    fig.tight_layout()
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    try:
+        for ax, feature in zip(axes.flat, features, strict=False):
+            bins = np.histogram_bin_edges([*generated[feature], *reference[feature]], bins=30)
+            for label, values in (
+                ("generated", generated[feature]),
+                ("reference", reference[feature]),
+            ):
+                weights = np.ones(len(values), dtype=float) / len(values)
+                ax.hist(values, bins=bins.tolist(), weights=weights, alpha=0.5, label=label)
+            ax.set_title(feature)
+            ax.set_ylabel("Share of images")
+        for ax in axes.flat[len(features) :]:
+            ax.axis("off")
+        axes.flat[0].legend()
+        fig.suptitle("Per-image feature distributions: generated vs reference (not paired)")
+        fig.tight_layout()
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+    finally:
+        plt.close(fig)
     return path

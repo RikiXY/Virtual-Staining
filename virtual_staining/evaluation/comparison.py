@@ -209,17 +209,19 @@ def plot_distribution_histogram(
     column: str,
     output_dir: Path,
 ) -> None:
-    plt.figure(figsize=(9, 5))
-    bins = edges.tolist()
-    plt.hist(a, bins=bins, density=True, alpha=0.45, label=label_a)
-    plt.hist(b, bins=bins, density=True, alpha=0.45, label=label_b)
-    plt.xlabel(column)
-    plt.ylabel("Density")
-    plt.title(f"Histogram comparison - {column}")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(output_dir / "histogram_comparison.png", dpi=180)
-    plt.close()
+    fig = plt.figure(figsize=(9, 5))
+    try:
+        bins = edges.tolist()
+        plt.hist(a, bins=bins, density=True, alpha=0.45, label=label_a)
+        plt.hist(b, bins=bins, density=True, alpha=0.45, label=label_b)
+        plt.xlabel(column)
+        plt.ylabel("Density")
+        plt.title(f"Histogram comparison - {column}")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(output_dir / "histogram_comparison.png", dpi=180)
+    finally:
+        plt.close(fig)
 
 
 def plot_distribution_ecdf(
@@ -233,28 +235,32 @@ def plot_distribution_ecdf(
     xa, ya = _ecdf(a)
     xb, yb = _ecdf(b)
 
-    plt.figure(figsize=(9, 5))
-    plt.step(xa, ya, where="post", label=label_a)
-    plt.step(xb, yb, where="post", label=label_b)
-    plt.xlabel(column)
-    plt.ylabel("ECDF")
-    plt.title(f"ECDF comparison - {column}")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(output_dir / "ecdf_comparison.png", dpi=180)
-    plt.close()
+    fig = plt.figure(figsize=(9, 5))
+    try:
+        plt.step(xa, ya, where="post", label=label_a)
+        plt.step(xb, yb, where="post", label=label_b)
+        plt.xlabel(column)
+        plt.ylabel("ECDF")
+        plt.title(f"ECDF comparison - {column}")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(output_dir / "ecdf_comparison.png", dpi=180)
+    finally:
+        plt.close(fig)
 
 
 def plot_paired_delta_histogram(signed_delta: np.ndarray, column: str, output_dir: Path) -> None:
-    plt.figure(figsize=(9, 5))
-    plt.hist(signed_delta, bins=30)
-    plt.axvline(0.0, linestyle="--", linewidth=1)
-    plt.xlabel(f"Signed delta of {column}")
-    plt.ylabel("Count")
-    plt.title(f"Paired signed delta histogram - {column}")
-    plt.tight_layout()
-    plt.savefig(output_dir / "paired_delta_histogram.png", dpi=180)
-    plt.close()
+    fig = plt.figure(figsize=(9, 5))
+    try:
+        plt.hist(signed_delta, bins=30)
+        plt.axvline(0.0, linestyle="--", linewidth=1)
+        plt.xlabel(f"Signed delta of {column}")
+        plt.ylabel("Count")
+        plt.title(f"Paired signed delta histogram - {column}")
+        plt.tight_layout()
+        plt.savefig(output_dir / "paired_delta_histogram.png", dpi=180)
+    finally:
+        plt.close(fig)
 
 
 def plot_paired_scatter(
@@ -269,12 +275,14 @@ def plot_paired_scatter(
     min_value = min(float(values_a.min()), float(values_b.min()))
     max_value = max(float(values_a.max()), float(values_b.max()))
 
-    plt.figure(figsize=(6, 6))
-    plt.scatter(values_a, values_b, s=12, alpha=0.45)
-    plt.plot([min_value, max_value], [min_value, max_value], linestyle="--", linewidth=1)
-    plt.xlabel(f"{label_a} {column}")
-    plt.ylabel(f"{label_b} {column}")
-    plt.title(f"Paired scatter - {column}")
-    plt.tight_layout()
-    plt.savefig(output_dir / "paired_scatter.png", dpi=180)
-    plt.close()
+    fig = plt.figure(figsize=(6, 6))
+    try:
+        plt.scatter(values_a, values_b, s=12, alpha=0.45)
+        plt.plot([min_value, max_value], [min_value, max_value], linestyle="--", linewidth=1)
+        plt.xlabel(f"{label_a} {column}")
+        plt.ylabel(f"{label_b} {column}")
+        plt.title(f"Paired scatter - {column}")
+        plt.tight_layout()
+        plt.savefig(output_dir / "paired_scatter.png", dpi=180)
+    finally:
+        plt.close(fig)
