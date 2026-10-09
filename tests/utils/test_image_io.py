@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from PIL import Image
+from PIL import Image, TiffImagePlugin
 
 from tests.image_helpers import make_rgb_image, write_rgb_image
 from virtual_staining.utils.image_io import (
@@ -251,3 +251,192 @@ def test_explicit_openslide_rejects_unsupported_image(tmp_path: Path) -> None:
     write_rgb_image(image_path)
     with pytest.raises(ValueError, match="OpenSlide does not support"):
         open_image_reader(image_path, backend="openslide")
+
+
+@pytest.mark.parametrize(
+    ("suffix", "mode"),
+    [
+        (".png", "RGB"),
+        (".png", "L"),
+        (".png", "1"),
+        (".png", "P"),
+        (".jpg", "RGB"),
+        (".jpeg", "L"),
+        (".tif", "RGB"),
+        (".tiff", "RGB"),
+    ],
+)
+def test_native_conversion_pixels_and_tiff_contract(tmp_path: Path, suffix: str, mode: str) -> None:
+    from virtual_staining.applications.convert import convert_images
+
+    source = tmp_path / f"source{suffix}"
+    y, x = np.indices((288, 640))
+    pixels = np.stack((x % 256, y % 256, (x + y) % 256), axis=-1).astype(np.uint8)
+    image = Image.fromarray(pixels).convert(mode)
+    image.save(source, dpi=(300, 150))
+    with Image.open(source) as decoded:
+        expected = np.array(decoded.convert("RGB"))
+    (output,) = convert_images((source,), tmp_path / "output")
+    with Image.open(output) as tiff:
+        assert isinstance(tiff, TiffImagePlugin.TiffImageFile)
+        np.testing.assert_array_equal(np.array(tiff), expected)
+        assert tiff.tag_v2[259] == 5  # LZW
+        assert tiff.tag_v2[322] == tiff.tag_v2[323] == 256
+        assert tiff.tag_v2[277] == 3
+        assert tiff.tag_v2[258] == (8, 8, 8)
+    with output.open("rb") as handle:
+        assert handle.read(4) in (b"II+\x00", b"MM\x00+")
+    reader = open_image_reader(output, backend="openslide")
+    try:
+        assert reader.size == (640, 288)
+        assert reader.metadata.level_dimensions == ((640, 288), (320, 144), (160, 72))
+        assert reader.metadata.mpp_x is None
+        assert reader.metadata.mpp_y is None
+        np.testing.assert_array_equal(reader.read_full()[:, :, ::-1], expected)
+        assert reader.read_preview(0.25).shape == (72, 160, 3)
+    finally:
+        reader.close()
+
+
+@pytest.mark.parametrize("suffix", [".jpg", ".png"])
+@pytest.mark.parametrize("orientation", range(1, 9))
+def test_native_conversion_applies_exif_orientation(
+    tmp_path: Path, suffix: str, orientation: int
+) -> None:
+    from PIL import ImageOps
+
+    source = tmp_path / f"source{suffix}"
+    pixels = np.zeros((48, 80, 3), dtype=np.uint8)
+    pixels[:24, :40] = (230, 10, 20)
+    pixels[24:, :40] = (10, 220, 30)
+    pixels[:24, 40:] = (20, 30, 210)
+    image = Image.fromarray(pixels)
+    exif = Image.Exif()
+    exif[274] = orientation
+    exif[40962] = 9999  # Stale EXIF geometry must not override the decoded dimensions.
+    image.save(source, exif=exif)
+    with Image.open(source) as decoded:
+        expected = np.array(ImageOps.exif_transpose(decoded).convert("RGB"))
+    output = tmp_path / "output.tif"
+    convert_to_pyramidal_tiff(source, output)
+    actual = read_full_image(output, backend="openslide")[:, :, ::-1]
+    np.testing.assert_array_equal(actual, expected)
+    with Image.open(output) as tiff:
+        assert tiff.getexif().get(274, 1) == 1
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "RGBA",
+        "LA",
+        "palette_alpha",
+        "rgb_key",
+        "gray_key",
+        "16bit",
+        "CMYK",
+        "animated",
+        "orientation",
+    ],
+)
+def test_conversion_rejects_unsupported_source_semantics(tmp_path: Path, variant: str) -> None:
+    from virtual_staining.applications.convert import convert_images
+
+    source = tmp_path / ("source.jpg" if variant in {"CMYK", "orientation"} else "source.png")
+    options = {}
+    if variant in {"RGBA", "LA", "CMYK"}:
+        image = Image.new(variant, (40, 30))
+    elif variant == "16bit":
+        image = Image.fromarray(np.full((30, 40), 40000, dtype=np.uint16))
+    elif variant in {"palette_alpha", "rgb_key", "gray_key"}:
+        mode = {"palette_alpha": "P", "rgb_key": "RGB", "gray_key": "L"}[variant]
+        image = Image.new(mode, (40, 30))
+        options["transparency"] = (0, 0, 0) if mode == "RGB" else 0
+    else:
+        image = Image.new("RGB", (40, 30))
+        if variant == "animated":
+            options.update(save_all=True, append_images=[Image.new("RGB", (40, 30), "red")])
+        else:
+            exif = Image.Exif()
+            exif[274] = 9
+            options["exif"] = exif
+    image.save(source, **options)
+    output = tmp_path / "output"
+    with pytest.raises(ValueError, match="[Uu]nsupported|orientation") as error:
+        convert_images((source,), output)
+    assert str(source) in str(error.value)
+    assert list(output.iterdir()) == []
+
+
+@pytest.mark.parametrize("suffix", [".png", ".jpg"])
+@pytest.mark.parametrize("damage", ["invalid", "truncated"])
+def test_native_conversion_rejects_broken_images(tmp_path: Path, suffix: str, damage: str) -> None:
+    from virtual_staining.applications.convert import convert_images
+
+    source = tmp_path / f"source{suffix}"
+    image = Image.new("RGB", (640, 288), (10, 100, 200))
+    image.save(source)
+    data = source.read_bytes()
+    source.write_bytes(b"not an image" if damage == "invalid" else data[: len(data) // 2])
+    output = tmp_path / "output"
+    with pytest.raises((ValueError, RuntimeError, OSError)):
+        convert_images((source,), output)
+    assert list(output.iterdir()) == []
+
+
+@pytest.mark.parametrize("suffix", [".png", ".jpg"])
+def test_conversion_rejects_mislabeled_sources(tmp_path: Path, suffix: str) -> None:
+    source = tmp_path / f"source{suffix}"
+    Image.new("RGB", (20, 10)).save(source, format="BMP")
+    with pytest.raises(ValueError, match="decoded BMP"):
+        convert_to_pyramidal_tiff(source, tmp_path / "output.tif")
+
+
+def test_conversion_rejects_16bit_rgb_png_without_truncating(tmp_path: Path) -> None:
+    import pyvips
+
+    source = tmp_path / "source.png"
+    image = pyvips.Image.black(40, 30, bands=3).cast("ushort") + 40000
+    image.cast("ushort").pngsave(str(source), bitdepth=16)
+    with pytest.raises(ValueError, match="Unsupported bit depth"):
+        convert_to_pyramidal_tiff(source, tmp_path / "output.tif")
+
+
+def test_conversion_rejects_even_opaque_alpha(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    Image.new("RGBA", (20, 10), (10, 20, 30, 255)).save(source)
+    with pytest.raises(ValueError, match="Transparency/alpha"):
+        convert_to_pyramidal_tiff(source, tmp_path / "output.tif")
+
+
+@pytest.mark.parametrize("suffix", [".png", ".jpg"])
+def test_conversion_rejects_truncated_end_marker(tmp_path: Path, suffix: str) -> None:
+    source = tmp_path / f"source{suffix}"
+    Image.new("RGB", (32, 16)).save(source)
+    source.write_bytes(source.read_bytes()[:-12])
+    with pytest.raises((ValueError, RuntimeError)):
+        convert_to_pyramidal_tiff(source, tmp_path / "output.tif")
+
+
+def test_png_color_metadata_does_not_change_encoded_pixels(tmp_path: Path) -> None:
+    import struct
+
+    from PIL.PngImagePlugin import PngInfo
+
+    source = tmp_path / "source.png"
+    metadata = PngInfo()
+    metadata.add(b"gAMA", struct.pack(">I", 100000))
+    Image.new("RGB", (32, 16), (23, 124, 241)).save(source, pnginfo=metadata)
+    output = tmp_path / "output.tif"
+    convert_to_pyramidal_tiff(source, output)
+    with Image.open(output) as decoded:
+        assert decoded.getpixel((0, 0)) == (23, 124, 241)
+        assert "gamma" not in decoded.info
+
+
+@pytest.mark.parametrize("suffix", [".png", ".jpg"])
+def test_conversion_rejects_malformed_exif(tmp_path: Path, suffix: str) -> None:
+    source = tmp_path / f"source{suffix}"
+    Image.new("RGB", (32, 16)).save(source, exif=b"Exif\0\0invalid")
+    with pytest.raises(ValueError, match="Invalid conversion source"):
+        convert_to_pyramidal_tiff(source, tmp_path / "output.tif")

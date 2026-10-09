@@ -11,12 +11,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vs convert",
         description=(
-            "Recursively convert TIFF and JPEG files or directories to lossless "
+            "Recursively convert TIFF, PNG and JPEG files or directories to lossless "
             "OpenSlide-compatible pyramidal BigTIFFs."
         ),
     )
     parser.add_argument(
-        "inputs", nargs="+", type=Path, metavar="INPUT", help="TIFF/JPEG file or directory."
+        "inputs", nargs="+", type=Path, metavar="INPUT", help="TIFF/PNG/JPEG file or directory."
     )
     parser.add_argument("--output-dir", required=True, type=Path)
     add_log_level_argument(parser)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import struct
+import warnings
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
@@ -316,25 +317,81 @@ def _clear_bigtiff_resolution_unit(path: Path) -> None:
             (offset,) = struct.unpack(order + "Q", handle.read(8))
 
 
+def _conversion_source_info(source: Path) -> tuple[tuple[int, int], int]:
+    """Validate ordinary image semantics before libvips conversion."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with Image.open(source) as image:
+                image.verify()
+            with Image.open(source) as image:
+                expected_format = "PNG" if source.suffix.lower() == ".png" else "JPEG"
+                if image.format != expected_format:
+                    raise ValueError(f"Expected {expected_format}, decoded {image.format}")
+                if "A" in image.getbands() or "transparency" in image.info:
+                    raise ValueError(
+                        "Transparency/alpha is unsupported; provide an opaque RGB image"
+                    )
+                if image.mode not in {"1", "L", "P", "RGB"}:
+                    raise ValueError(
+                        f"Unsupported mode {image.mode}; expected 8-bit RGB or grayscale"
+                    )
+                if getattr(image, "n_frames", 1) != 1:
+                    raise ValueError("Animated/multiframe images are unsupported")
+                exif = image.getexif()
+                if "exif" in image.info:
+                    # JPEG's DPI reader may have suppressed an EXIF parse failure.
+                    exif = Image.Exif()
+                    exif.load(image.info["exif"])
+                orientation = exif.get(274, 1)
+                if not isinstance(orientation, int) or orientation not in range(1, 9):
+                    raise ValueError(f"Invalid EXIF orientation: {orientation}")
+                size = image.size
+    except (OSError, ValueError, SyntaxError, Warning) as exc:
+        raise ValueError(f"Invalid conversion source {source}: {exc}") from exc
+    return ((size[1], size[0]) if orientation >= 5 else size), orientation
+
+
 def convert_to_pyramidal_tiff(source_path: str | Path, output_path: str | Path) -> None:
     source = Path(source_path)
     output = Path(output_path)
-    expected = read_image_metadata(source, backend="pillow")
+    ordinary = source.suffix.lower() in {".png", ".jpg", ".jpeg"}
+    if ordinary:
+        expected_size, orientation = _conversion_source_info(source)
+    else:
+        expected = read_image_metadata(source, backend="pillow")
+        expected_size = (expected.width, expected.height)
     pyvips = _load_pyvips()
     try:
-        image = pyvips.Image.new_from_file(str(source), access="sequential")
-        image.tiffsave(str(output), **_pyramid_options())
+        options = {"fail_on": "warning"} if ordinary else {}
+        image = pyvips.Image.new_from_file(str(source), access="sequential", **options)
+        if ordinary:
+            if image.format != "uchar":
+                raise ValueError(f"Unsupported bit depth in {source}: expected 8-bit samples")
+            if image.bands == 1:
+                image = image.bandjoin([image, image])
+            if image.bands != 3:
+                raise ValueError(f"Unsupported channels in {source}: expected opaque RGB")
+            # Use the validated orientation, ignoring unrelated EXIF/ICC/DPI metadata.
+            image = image.copy(interpretation="srgb")
+            image.set_type(pyvips.GValue.gint_type, "orientation", orientation)
+            image = image.autorot()
+        image.tiffsave(str(output), **_pyramid_options(), **({"strip": True} if ordinary else {}))
     except pyvips.Error as exc:
         raise RuntimeError(f"Could not convert {source}: {exc}") from exc
     _clear_bigtiff_resolution_unit(output)
 
     actual = read_image_metadata(output, backend="openslide")
-    expected_size = (expected.width, expected.height)
     actual_size = (actual.width, actual.height)
     if actual_size != expected_size:
         raise RuntimeError(
             f"Converted dimensions differ for {source}: expected {expected_size}, got {actual_size}"
         )
+    if ordinary:
+        if max(expected_size) > 256 and actual.level_count <= 1:
+            raise RuntimeError(f"Converted TIFF has no pyramid levels: {source}")
+        if actual.mpp_x is not None or actual.mpp_y is not None:
+            raise RuntimeError(f"Converted TIFF has unexpected physical scale: {source}")
 
 
 def write_pyramidal_tiff_from_raw_rgb(

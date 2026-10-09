@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import errno
 import logging
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from virtual_staining.applications import convert as convert_app
 from virtual_staining.cli import convert as convert_cli
@@ -17,7 +19,9 @@ class _Reader:
         pass
 
 
-@pytest.mark.parametrize("suffix", [".tif", ".jpg", ".jpeg"])
+@pytest.mark.parametrize(
+    "suffix", [".tif", ".tiff", ".png", ".jpg", ".jpeg", ".PNG", ".JpEg", ".TiF"]
+)
 def test_convert_images_delegates_pyramidal_writing_to_image_io(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -30,6 +34,8 @@ def test_convert_images_delegates_pyramidal_writing_to_image_io(
     calls: list[tuple[Path, Path]] = []
 
     def convert(source_path: Path, output_path: Path) -> None:
+        assert output_path.is_file()
+        assert output_path.stat().st_size == 0
         calls.append((source_path, output_path))
         output_path.write_bytes(b"converted")
 
@@ -38,9 +44,12 @@ def test_convert_images_delegates_pyramidal_writing_to_image_io(
     with caplog.at_level(logging.INFO, logger="virtual_staining.applications.convert"):
         result = convert_app.convert_images((source,), output_dir)
 
-    destination = output_dir / ("source.tif" if suffix in {".jpg", ".jpeg"} else source.name)
+    destination = output_dir / (
+        "source.tif" if suffix.lower() in {".png", ".jpg", ".jpeg"} else source.name
+    )
     assert result == (destination,)
     assert destination.read_bytes() == b"converted"
+    assert list(output_dir.iterdir()) == [destination]
     assert len(calls) == 1
     assert calls[0][0] == source.resolve()
     assert calls[0][1].parent == output_dir
@@ -145,7 +154,7 @@ def test_convert_images_propagates_writer_failures(
 
 @pytest.mark.parametrize("kind", ["missing", "non_tiff", "empty"])
 def test_convert_images_rejects_invalid_inputs(tmp_path: Path, kind: str) -> None:
-    source = tmp_path / ("image.png" if kind == "non_tiff" else "image.tif")
+    source = tmp_path / ("image.bmp" if kind == "non_tiff" else "image.tif")
     inputs = () if kind == "empty" else (source,)
     if kind == "non_tiff":
         source.write_bytes(b"image")
@@ -160,6 +169,7 @@ def test_directory_inputs_are_recursive_and_preserve_relative_paths(tmp_path: Pa
     (source / "top.tif").write_bytes(b"top")
     (source / "nested" / "deep.TIFF").write_bytes(b"deep")
     (source / "nested" / "photo.JPEG").write_bytes(b"photo")
+    (source / "nested" / "picture.PnG").write_bytes(b"png")
     (source / "nested" / "notes.txt").write_text("ignore", encoding="utf-8")
     output = source / "converted"
     output.mkdir()
@@ -170,6 +180,7 @@ def test_directory_inputs_are_recursive_and_preserve_relative_paths(tmp_path: Pa
     assert conversions == (
         ((source / "nested" / "deep.TIFF").resolve(), output / "nested" / "deep.TIFF"),
         ((source / "nested" / "photo.JPEG").resolve(), output / "nested" / "photo.tif"),
+        ((source / "nested" / "picture.PnG").resolve(), output / "nested" / "picture.tif"),
         ((source / "top.tif").resolve(), output / "top.tif"),
     )
 
@@ -179,7 +190,7 @@ def test_directory_inputs_reject_empty_selection_and_cross_root_collisions(
 ) -> None:
     empty = tmp_path / "empty"
     empty.mkdir()
-    with pytest.raises(ValueError, match="no TIFF or JPEG"):
+    with pytest.raises(ValueError, match="no TIFF, PNG or JPEG"):
         convert_app.convert_images((empty,), tmp_path / "output")
 
     roots = (tmp_path / "one", tmp_path / "two")
@@ -188,3 +199,227 @@ def test_directory_inputs_reject_empty_selection_and_cross_root_collisions(
         (root / "same.tif").write_bytes(b"image")
     with pytest.raises(ValueError, match="duplicate destinations"):
         convert_app.convert_images(roots, tmp_path / "output")
+
+
+@pytest.mark.parametrize("suffixes", [(".png", ".jpg"), (".png", ".tif"), (".jpg", ".jpeg")])
+def test_mapped_collisions_are_preflighted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffixes: tuple[str, str]
+) -> None:
+    first = tmp_path / "first.tif"
+    first.write_bytes(b"first")
+    sources = tuple(tmp_path / f"same{suffix}" for suffix in suffixes)
+    for source in sources:
+        source.write_bytes(b"source")
+    calls = []
+    monkeypatch.setattr(convert_app, "convert_to_pyramidal_tiff", lambda *args: calls.append(args))
+    with pytest.raises(ValueError, match="duplicate destinations") as error:
+        convert_app.convert_images((first, *sources), tmp_path / "output")
+    assert all(str(source) in str(error.value) for source in sources)
+    assert str(tmp_path / "output" / "same.tif") in str(error.value)
+    assert not calls
+    assert not (tmp_path / "output").exists()
+
+
+@pytest.mark.parametrize("selection", ["repeated", "file_directory", "directories", "hardlink"])
+def test_overlapping_sources_are_preflighted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selection: str
+) -> None:
+    root = tmp_path / "input"
+    nested = root / "nested"
+    nested.mkdir(parents=True)
+    source = nested / "image.png"
+    source.write_bytes(b"source")
+    inputs = (source, source)
+    if selection == "file_directory":
+        inputs = (source, root)
+    elif selection == "directories":
+        inputs = (root, nested)
+    elif selection == "hardlink":
+        alias = root / "alias.png"
+        alias.hardlink_to(source)
+        inputs = (source, alias)
+    calls = []
+    monkeypatch.setattr(convert_app, "convert_to_pyramidal_tiff", lambda *args: calls.append(args))
+    with pytest.raises(ValueError, match="[Dd]uplicate"):
+        convert_app.convert_images(inputs, tmp_path / "output")
+    assert not calls
+
+
+@pytest.mark.parametrize(
+    "kind", ["file", "directory", "dangling_symlink", "source", "parent_alias"]
+)
+def test_destination_aliases_and_overlap_are_preflighted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    source = tmp_path / "input"
+    source.mkdir()
+    (source / "first.png").write_bytes(b"source")
+    nested = source / "nested"
+    nested.mkdir()
+    last = nested / "last.png"
+    last.write_bytes(b"last")
+    output = tmp_path / "output"
+    (output / "nested").mkdir(parents=True)
+    destination = output / "nested" / "last.tif"
+    if kind == "file":
+        destination.write_bytes(b"existing")
+    elif kind == "directory":
+        destination.mkdir()
+    elif kind == "dangling_symlink":
+        destination.symlink_to(tmp_path / "absent")
+    elif kind == "source":
+        output = source
+    else:
+        (source / "alias").mkdir()
+        (source / "alias" / "last.jpg").write_bytes(b"other")
+        (output / "alias").symlink_to(output / "nested", target_is_directory=True)
+    calls = []
+    monkeypatch.setattr(convert_app, "convert_to_pyramidal_tiff", lambda *args: calls.append(args))
+    with pytest.raises((ValueError, FileExistsError)):
+        convert_app.convert_images((source,), output)
+    assert not calls
+    assert last.read_bytes() == b"last"
+
+
+@pytest.mark.parametrize("suffix", [".tif", ".png", ".jpg", ".jpeg"])
+def test_concurrent_destination_is_never_replaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, suffix: str
+) -> None:
+    source = tmp_path / f"image{suffix}"
+    Image.new("RGB", (32, 16), (10, 20, 30)).save(source)
+    output = tmp_path / "output"
+    output.mkdir()
+    unrelated = output / "unrelated"
+    unrelated.write_bytes(b"keep")
+    destination = output / "image.tif"
+
+    real_link = convert_app.os.link
+
+    def compete(temporary: Path, target: Path) -> None:
+        target.write_bytes(b"competing writer")
+        real_link(temporary, target)
+
+    monkeypatch.setattr(convert_app.os, "link", compete)
+    results = []
+    with (
+        caplog.at_level(logging.INFO, logger=convert_app.__name__),
+        pytest.raises(FileExistsError, match="Destination already exists"),
+    ):
+        results.append(convert_app.convert_images((source,), output))
+    assert not results
+    assert destination.read_bytes() == b"competing writer"
+    assert unrelated.read_bytes() == b"keep"
+    assert set(output.iterdir()) == {destination, unrelated}
+    assert not any("Converted" in message for message in caplog.messages)
+
+
+@pytest.mark.parametrize("error_number", [errno.EXDEV, errno.EOPNOTSUPP, errno.EACCES])
+def test_publication_errors_do_not_fall_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_number: int
+) -> None:
+    source = tmp_path / "image.png"
+    source.write_bytes(b"source")
+    output = tmp_path / "output"
+    monkeypatch.setattr(
+        convert_app,
+        "convert_to_pyramidal_tiff",
+        lambda source, temp: temp.write_bytes(b"converted"),
+    )
+
+    def fail(*args: object) -> None:
+        raise OSError(error_number, "publication failed")
+
+    monkeypatch.setattr(convert_app.os, "link", fail)
+    with pytest.raises(OSError, match="requires hard links on the same filesystem") as error:
+        convert_app.convert_images((source,), output)
+    assert error.value.errno == error_number
+    assert list(output.iterdir()) == []
+
+
+def test_batch_retains_previous_success_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sources = tuple(tmp_path / name for name in ("first.png", "second.jpg"))
+    for source in sources:
+        source.write_bytes(b"source")
+
+    def convert(source: Path, temporary: Path) -> None:
+        temporary.write_bytes(b"converted")
+        if source == sources[1]:
+            raise RuntimeError("bad source")
+
+    monkeypatch.setattr(convert_app, "convert_to_pyramidal_tiff", convert)
+    output = tmp_path / "output"
+    with pytest.raises(RuntimeError, match="bad source"):
+        convert_app.convert_images(sources, output)
+    assert list(output.iterdir()) == [output / "first.tif"]
+    assert (output / "first.tif").read_bytes() == b"converted"
+
+
+def test_native_mixed_directory_and_multiple_explicit_sources(tmp_path: Path) -> None:
+    root = tmp_path / "input"
+    (root / "nested").mkdir(parents=True)
+    sources = (root / "one.PnG", root / "nested" / "two.JpEg", root / "three.TIFF")
+    for source in sources:
+        Image.new("RGB", (32, 16), (20, 40, 60)).save(source)
+    output = root / "output"
+    output.mkdir()
+    (output / "previous.png").write_bytes(b"excluded")
+    results = convert_app.convert_images((root,), output)
+    assert set(results) == {output / "one.tif", output / "nested/two.tif", output / "three.TIFF"}
+    second_output = tmp_path / "explicit"
+    assert convert_app.convert_images(sources, second_output) == (
+        second_output / "one.tif",
+        second_output / "two.tif",
+        second_output / "three.TIFF",
+    )
+    assert (output / "previous.png").read_bytes() == b"excluded"
+
+
+def test_temporary_creation_failure_preserves_caller_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "image.png"
+    source.write_bytes(b"source")
+    output = tmp_path / "output"
+    output.mkdir()
+    caller_file = output / ".image.caller.tmp.tif"
+    caller_file.write_bytes(b"caller owned")
+
+    def fail(**kwargs: object) -> None:
+        raise FileExistsError(str(caller_file))
+
+    monkeypatch.setattr(convert_app.tempfile, "mkstemp", fail)
+    with pytest.raises(FileExistsError):
+        convert_app.convert_images((source,), output)
+    assert list(output.iterdir()) == [caller_file]
+    assert caller_file.read_bytes() == b"caller owned"
+
+
+@pytest.mark.parametrize("existing_parent", [False, True])
+def test_destination_file_directory_conflicts_are_preflighted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing_parent: bool
+) -> None:
+    root = tmp_path / "input"
+    (root / "image.tif").mkdir(parents=True)
+    (root / "image.png").write_bytes(b"source")
+    (root / "image.tif" / "nested.jpg").write_bytes(b"source")
+    output = tmp_path / "output"
+    if existing_parent:
+        output.mkdir()
+        (output / "image.tif").write_bytes(b"existing")
+        (root / "image.png").rename(root / "first.png")
+    calls = []
+    monkeypatch.setattr(convert_app, "convert_to_pyramidal_tiff", lambda *args: calls.append(args))
+    with pytest.raises((ValueError, NotADirectoryError)):
+        convert_app.convert_images((root,), output)
+    assert not calls
+
+
+def test_explicit_tiff_can_publish_safely_in_ancestor_directory(tmp_path: Path) -> None:
+    source = tmp_path / "nested" / "source.tif"
+    source.parent.mkdir()
+    Image.new("RGB", (32, 16)).save(source)
+    before = source.read_bytes()
+    assert convert_app.convert_images((source,), tmp_path) == (tmp_path / "source.tif",)
+    assert source.read_bytes() == before

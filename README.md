@@ -26,7 +26,7 @@ built-ins; Python callers can supply
 | `vs infer-images` | Run inference on one image file or a directory of images |
 | `vs evaluate` | Paired image metrics or unpaired collection diagnostics for a run, or metrics for one image pair |
 | `vs compare` | Compare metric distributions across runs |
-| `vs convert` | Convert TIFF/JPEG images to OpenSlide-compatible pyramidal BigTIFFs |
+| `vs convert` | Convert TIFF/PNG/JPEG images to OpenSlide-compatible pyramidal BigTIFFs |
 | `vs panels` | Build source / generated / target comparison panels |
 | `vs organize` | Organise run outputs |
 | `vs export-model` | Export selected run checkpoints as a portable local model bundle |
@@ -68,13 +68,30 @@ CUDA devices, and GPU availability are optional; a CPU-only runtime can be healt
 
 ### Other CLI examples
 
-Convert one or more large TIFFs-or a whole directory recursively-without loading them fully
-into memory. Directory inputs keep their relative layout under the output directory:
+Convert TIFF, PNG or JPEG files, or mixed directories recursively, to lossless pyramidal
+BigTIFFs. Extensions are case-insensitive. Directory inputs keep their relative layout;
+an output subtree inside an input directory is excluded:
 
 ```bash
-vs convert raw/source.tif raw/target.tif --output-dir converted
+vs convert raw/source.tif raw/stain.png raw/photo.jpg --output-dir converted
 vs convert raw/slides --output-dir converted
 ```
+
+PNG/JPEG names become `.tif`; TIFF names keep their suffix. Multiple inputs mapping to
+the same destination (for example, `sample.png` and `sample.jpg`), repeated source
+selections and existing destinations are rejected before conversion. A destination
+created concurrently is never overwritten. Publication requires same-filesystem hard
+links; unsupported filesystems fail without a replacement fallback.
+
+PNG/JPEG conversion accepts 8-bit RGB and grayscale, plus binary/grayscale and palette
+PNGs expanded to RGB. Alpha/transparency (even opaque alpha), higher bit depths such as
+16-bit PNG, CMYK JPEG and animated PNG are rejected. Valid EXIF orientation is applied;
+invalid orientation, malformed/truncated images and decoder metadata warnings are
+rejected. Encoded color values are preserved without ICC/gamma color correction;
+unrelated metadata, including stale EXIF dimensions, is discarded. Ordinary DPI is
+not calibrated microscopy spacing: output MPP remains unknown. Lossless TIFF encoding
+does not recover detail already lost in JPEG compression. Existing TIFF conversion
+behavior is unchanged.
 
 Export selected checkpoints of a finished run, with their exact tracked training
 configs, as a verified local bundle that can be moved and reconstructed without the
