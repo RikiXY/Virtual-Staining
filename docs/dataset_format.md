@@ -30,9 +30,11 @@ and hard links.
 ## Authoring the inventory
 
 `vs inventory preview|write` builds the raw inventory from explicit asset mappings;
-it does not prepare a dataset. Unpaired `data.domains` collections do not use this
-inventory. The [Python API](library_api.md#authoring-the-slide-set-inventory) exposes
-the same authoring operation.
+it does not prepare a dataset. Paired mode is the default and authors wide
+`slide_sets.csv`; explicit `--pairing unpaired` authors long-form raw `paths.csv`.
+Experiment-time `data.domains` collections remain separate. The
+[Python API](library_api.md#authoring-the-slide-set-inventory) exposes the same
+authoring operation.
 
 ```bash
 vs inventory preview --dataset-root DATASET \
@@ -286,7 +288,76 @@ policy requires them. Rows have no positional correspondence. Different counts,
 dimensions, resolutions, tissue support and retained-patch counts are expected.
 The runnable [software inventory](../examples/unpaired/paths.csv) intentionally supplies
 no biological IDs and uses the explicit patch-split engineering exception.
-Automated unpaired directory/glob inventory authoring is not provided by `vs inventory`.
+
+### Authoring independent raw domains
+
+```bash
+vs inventory preview --pairing unpaired --dataset-root DATASET \
+  --domain LF=raw/LF --domain 'HE=raw/HE/**/*.tif' --metadata metadata.csv
+vs inventory write --pairing unpaired --dataset-root DATASET \
+  --domain LF=raw/LF --domain 'HE=raw/HE/**/*.tif' --metadata metadata.csv \
+  --output inputs/paths.csv
+```
+
+Exactly two distinct domain names are required, in the requested order. Each mapping
+selects one recursive directory or glob using the paired command's traversal conventions.
+Selections must stay within `dataset_root`; traversal, symlinked sources or directories,
+nonregular files, missing/empty selections and unsupported matches fail. Overlapping
+selections and hard-link aliases fail even within one domain. Distinct files with the
+same basename are allowed. Use a glob to exclude unrelated files from a source directory.
+No names, positions, dimensions or counts are matched between domains.
+`--input`, `--target`, `--reference`, mask-mapping flags and `--key` are paired-only.
+
+`--metadata` is optional. Its CSV joins by the **exact discovered root-relative path**:
+
+```csv
+path,set_id,specimen_id,patient_id
+raw/LF/image_a.png,S01,SP01,P01
+raw/HE/sample_1.tif,S02,SP02,P02
+```
+
+Supply real dataset-owner identities in place of these illustrative values. Partial
+metadata is allowed; absent IDs remain unknown, never inferred from paths. Duplicate
+keys, undiscovered paths, malformed/unknown columns, invalid IDs and contradictory or
+incomplete parent identities fail. Optional `mask_path` uses the canonical root-relative
+locator and file validation; authoring rejects symlinked masks. Mask dimensions and
+pixels are checked during preparation. Missing patient IDs do not invalidate a raw
+inventory, but do not satisfy a patient split.
+
+Output columns are `domain,path`, then only optional columns carrying a value in the
+order `set_id,specimen_id,patient_id,mask_path`. Rows follow domain request order, then
+sorted exact root-relative POSIX paths. The canonical `load_unpaired_inventory()` reader
+validates both the in-memory preview CSV and staged CSV, including metadata readback.
+The result is a normal editable raw inventory with no authoring cache or sidecar dependency.
+
+Preview lists domain specifications, counts, membership, issues and missing-ID limitations;
+it creates no files or directories and performs no image decoding or content hashing.
+Ordinary formats are recognized by extension; other formats require OpenSlide format
+detection. This does not establish image integrity, biological identity, independence
+or correspondence. Write repeats discovery and metadata reading, compares membership
+and source/mask device, inode, size and modification/change timestamps, then publishes
+without replacing an existing destination, including a competing writer's file.
+Only owned temporary files are cleaned after failure; an output parent directory may
+remain. These checks do not freeze sources against subsequent changes or verify pixels.
+The default output is `inputs/paths.csv`; output containment rules match paired mode.
+
+To prepare, set `dataset_root` in the existing
+[minimal unpaired prepare config](../config/runs/minimal_unpaired_prepare.yaml) to
+`DATASET`, retain `preprocessing.inputs.inventory: inputs/paths.csv` and the ordered
+`preprocessing.inputs.domains: [LF, HE]`, and supply explicit patient IDs for its patient
+split. Then run:
+
+```bash
+vs config check --config config/runs/minimal_unpaired_prepare.yaml --stages prepare
+vs config check --config config/runs/minimal_unpaired_prepare.yaml --stages prepare --assets
+vs prepare --config config/runs/minimal_unpaired_prepare.yaml
+```
+
+Raw `preprocessing.inputs.domains` names the two inventory domains without model roles.
+Experiment-time `data.domains` maps those names to prepared split directories or globs;
+use the collections reported by preparation. Authoring assigns no training direction.
+
+### Raw inventory validation
 
 Headers must be unique; unknown columns, short/long rows, surrounding whitespace,
 empty or unknown domains, duplicate paths/physical files (including aliases and hard

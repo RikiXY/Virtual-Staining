@@ -106,8 +106,41 @@ def test_invalid_domains(tmp_path: Path, domains: list[Any]) -> None:
 
 
 def test_cli_end_to_end_and_reuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    inventory(tmp_path)
-    path = write_config_data(tmp_path / "prepare.yaml", raw_config(tmp_path))
+    rows = inventory(tmp_path)
+    # Author raw collections, then consume only the plain CSV through normal prepare.
+    for row in rows:
+        old = tmp_path / row["path"]
+        row["path"] = f"raw/{row['domain']}/{old.name}"
+        destination = tmp_path / row["path"]
+        destination.parent.mkdir(exist_ok=True)
+        old.rename(destination)
+    (tmp_path / "paths.csv").unlink()
+    with (tmp_path / "meta.csv").open("w", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["path", "set_id", "specimen_id", "patient_id"],
+            extrasaction="ignore",
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+    args = [
+        "--dataset-root",
+        str(tmp_path),
+        "--pairing",
+        "unpaired",
+        "--domain",
+        "LF=raw/LF",
+        "--domain",
+        "HE=raw/HE",
+        "--metadata",
+        "meta.csv",
+    ]
+    cli.main(["inventory", "preview", *args])
+    assert not (tmp_path / "inputs").exists()
+    cli.main(["inventory", "write", *args])
+    raw = raw_config(tmp_path)
+    raw["preprocessing"]["inputs"]["inventory"] = "inputs/paths.csv"
+    path = write_config_data(tmp_path / "prepare.yaml", raw)
     monkeypatch.setattr(
         "virtual_staining.data.slide_set_processor.SlideSetProcessor.process",
         lambda self: pytest.fail("paired processor called"),
@@ -116,7 +149,7 @@ def test_cli_end_to_end_and_reuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     cli.main(["config", "resolve", "--config", str(path), "--stages", "prepare"])
     assert not (tmp_path / "prepared_unpaired").exists()
     cli.main(["prepare", "--config", str(path)])
-    result = run_prepare(tmp_path)
+    result = run_prepare(tmp_path, raw)
     assert result.reused
     layout = DatasetLayout(result.output_root)
     assert not layout.manifest_path.exists()

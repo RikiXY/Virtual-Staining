@@ -39,7 +39,7 @@ _COMMAND_HELP = {
     "export-model": "Export selected run checkpoints as a portable local model bundle.",
     "queue": "Execute pipeline runs from a queue file.",
     "config": "Inspect configuration or validate selected stage requirements without execution.",
-    "inventory": "Preview or write the raw paired slide-set inventory from explicit mappings.",
+    "inventory": "Preview or write raw paired slide sets or unpaired domain inventories.",
     "status": "Check the runtime environment and optional hardware support.",
 }
 

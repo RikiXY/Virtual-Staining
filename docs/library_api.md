@@ -437,6 +437,28 @@ The CSV loader is
 modalities, reference_modality, target_modalities)`; `resolve_slide_sets(config)`
 resolves the inventory configured for preparation.
 
+The same API authors unpaired inventories with exactly two ordered domain mappings:
+
+```python
+request = InventoryRequest(
+    dataset_root=Path("DATASET"), pairing="unpaired",
+    domains=(("LF", "raw/LF"), ("HE", "raw/HE/**/*.tif")),
+    metadata=Path("metadata.csv"),  # optional, joined on exact root-relative `path`
+)
+preview = preview_inventory(request)  # read-only, no decoding or content hashing
+preview.valid, preview.images        # ordered canonical RawDomainImage values
+preview.sources, preview.issues, preview.limitations
+render_inventory_csv(preview)         # canonical long-form CSV text
+write_inventory(preview)              # -> DATASET/inputs/paths.csv; never replaces
+```
+
+The authoring request does not need a run, method, model or split configuration.
+`load_unpaired_inventory(preprocessing_config)` remains the authoritative raw reader;
+its optional keyword-only `source` accepts a caller-owned text stream for in-memory
+CSV validation. Normal preparation reads the configured CSV from disk. See the
+[unpaired authoring contract](dataset_format.md#authoring-independent-raw-domains)
+for partial metadata, file identity checks and validation limits.
+
 ## Exporting model bundles
 
 `virtual_staining.applications.export_model` packages selected checkpoints of one

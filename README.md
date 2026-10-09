@@ -32,7 +32,7 @@ built-ins; Python callers can supply
 | `vs export-model` | Export selected run checkpoints as a portable local model bundle |
 | `vs queue` | Execute full or staged runs sequentially from a queue file |
 | `vs config` | Print the resolved config, or check it (optionally read-only asset preflight) without running a stage |
-| `vs inventory` | Preview or write the raw paired slide-set inventory from explicit asset mappings |
+| `vs inventory` | Preview or write raw paired slide sets or unpaired domain inventories |
 | `vs status` | Check required Python/native dependencies, system memory, and GPU support |
 
 ## Quick Start
@@ -190,7 +190,7 @@ producers yield `planned` checks, not verified artifacts. Configuration-only ins
 needs no image, dataset or checkpoint access. See
 [config inspection and preflight](docs/library_api.md#inspecting-and-checking-configs).
 
-### Authoring the paired slide-set inventory
+### Authoring raw inventories
 
 ```bash
 vs inventory preview --dataset-root DATASET \
@@ -200,6 +200,19 @@ vs inventory write ...   # publishes DATASET/inputs/slide_sets.csv; never overwr
 ```
 
 Mappings match files by relative path; alignment and biological IDs are never inferred.
+For two independent raw domains, use explicit unpaired mode (unequal counts are allowed):
+
+```bash
+vs inventory preview --pairing unpaired --dataset-root DATASET \
+  --domain LF=raw/LF --domain 'HE=raw/HE/**/*.tif'
+vs inventory write --pairing unpaired --dataset-root DATASET \
+  --domain LF=raw/LF --domain 'HE=raw/HE/**/*.tif' --output inputs/paths.csv
+```
+
+Optional `--metadata metadata.csv` supplies IDs and masks by exact root-relative `path`;
+IDs are never inferred. The resulting `paths.csv` feeds normal unpaired `vs prepare`.
+See [raw domain authoring and preparation](docs/dataset_format.md#authoring-independent-raw-domains).
+
 The complete [inventory authoring contract](docs/dataset_format.md#authoring-the-inventory)
 covers keys, metadata, masks, and safe publication.
 

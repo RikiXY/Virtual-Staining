@@ -26,24 +26,34 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vs inventory",
         description=(
-            "Preview or write the raw paired slide-set inventory (inputs/slide_sets.csv) "
-            "from explicit asset mappings. Assets are matched by key only; no image is "
-            "opened and no alignment, grouping, or correspondence is inferred."
+            "Preview or write paired slide sets (inputs/slide_sets.csv) or independent "
+            "unpaired domains (inputs/paths.csv). No images are decoded and no biological "
+            "identity, alignment, or correspondence is inferred."
         ),
     )
     commands = parser.add_subparsers(dest="action", metavar="ACTION", required=True)
     for action, help_text in (
-        ("preview", "Show the matched sets and every issue; writes nothing."),
+        ("preview", "Show source membership and authoring issues; writes nothing."),
         ("write", "Publish the inventory if the preview is valid; never overwrites."),
     ):
         command = commands.add_parser(action, help=help_text, description=help_text)
         command.add_argument("--dataset-root", type=Path, required=True)
+        command.add_argument("--pairing", choices=("paired", "unpaired"), default="paired")
+        command.add_argument(
+            "--domain",
+            dest="domains",
+            type=_named_spec,
+            action="append",
+            default=[],
+            metavar="NAME=SPEC",
+            help=f"Unpaired only: exactly two ordered domain mappings; SPEC is {_SPEC_HELP}.",
+        )
         command.add_argument(
             "--input",
             dest="inputs",
             type=_named_spec,
             action="append",
-            required=True,
+            default=[],
             metavar="NAME=SPEC",
             help=f"Input modality mapping, repeatable and order preserving; SPEC is {_SPEC_HELP}.",
         )
@@ -52,12 +62,12 @@ def _build_parser() -> argparse.ArgumentParser:
             dest="targets",
             type=_named_spec,
             action="append",
-            required=True,
+            default=[],
             metavar="NAME=SPEC",
             help="Target modality mapping, repeatable and order preserving; every target is "
             "required for every set.",
         )
-        command.add_argument("--reference", required=True, help="Reference input name.")
+        command.add_argument("--reference", help="Paired reference input name (required).")
         command.add_argument(
             "--input-mask",
             dest="input_masks",
@@ -79,14 +89,15 @@ def _build_parser() -> argparse.ArgumentParser:
         command.add_argument(
             "--key",
             choices=KEY_RULES,
-            default="relative-path",
+            default=None,
             help="relative-path matches full relative paths; relative-stem ignores the "
             "final extension (default: relative-path).",
         )
         command.add_argument(
             "--metadata",
             type=Path,
-            help="Optional CSV joined by its 'key' column; relative to --dataset-root.",
+            help="Optional CSV joined by 'key' (paired) or exact root-relative 'path' "
+            "(unpaired); relative to --dataset-root.",
         )
         if action == "write":
             command.add_argument(
@@ -94,7 +105,8 @@ def _build_parser() -> argparse.ArgumentParser:
                 type=Path,
                 default=None,
                 help="Output inside --dataset-root, relative to it "
-                "(default: inputs/slide_sets.csv); never overwrites.",
+                "(default: inputs/slide_sets.csv paired, inputs/paths.csv unpaired); "
+                "never overwrites.",
             )
     return parser
 
@@ -102,16 +114,43 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.pairing == "unpaired" and any(
+        (
+            args.inputs,
+            args.targets,
+            args.reference is not None,
+            args.input_masks,
+            args.target_masks,
+            args.key is not None,
+        )
+    ):
+        parser.error(
+            "--input, --target, --reference, --input-mask, --target-mask and --key are paired-only"
+        )
+    if args.pairing == "paired":
+        missing = [
+            flag
+            for flag, value in (
+                ("--input", args.inputs),
+                ("--target", args.targets),
+                ("--reference", args.reference),
+            )
+            if not value
+        ]
+        if missing:
+            parser.error(f"the following arguments are required: {', '.join(missing)}")
     try:
         request = InventoryRequest(
             dataset_root=args.dataset_root,
             inputs=tuple(args.inputs),
             targets=tuple(args.targets),
-            reference=args.reference,
+            reference=args.reference or "",
             input_masks=tuple(args.input_masks),
             target_masks=tuple(args.target_masks),
             metadata=args.metadata,
-            key_rule=args.key,
+            key_rule=args.key or "relative-path",
+            pairing=args.pairing,
+            domains=tuple(args.domains),
         )
     except ValueError as exc:
         parser.error(str(exc))
@@ -122,12 +161,22 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(1) from exc
 
     print(f"dataset_root: {preview.dataset_root}")
-    print(f"key_rule: {request.key_rule}")
-    print(f"inputs: {' '.join(request.modalities)}")
-    print(f"reference: {request.reference}")
-    print(f"targets: {' '.join(request.target_modalities)}")
+    print(f"pairing: {request.pairing}")
+    if request.pairing == "unpaired":
+        print(f"domains: {' '.join(request.domain_names)}")
+        for name, spec in request.domains:
+            members = [item.path for item in preview.images if item.domain == name]
+            print(f"domain: {name} spec={preview.dataset_root / spec} images={len(members)}")
+            for path in members:
+                print(f"source: {name} {path}")
+    else:
+        print(f"key_rule: {request.key_rule}")
+        print(f"inputs: {' '.join(request.modalities)}")
+        print(f"reference: {request.reference}")
+        print(f"targets: {' '.join(request.target_modalities)}")
     print(f"metadata: {request.metadata or 'none'}")
-    print(f"matched_sets: {preview.matched_count}")
+    if request.pairing == "paired":
+        print(f"matched_sets: {preview.matched_count}")
     for match in preview.matches:
         print(f"set: {match.slide_set.set_id} key={match.key}")
     for issue in preview.issues:

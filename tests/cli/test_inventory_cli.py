@@ -141,3 +141,104 @@ def test_repeatable_targets_and_target_masks_match_the_api(
     written = (tmp_path / "inputs/slide_sets.csv").read_text(encoding="utf-8")
     assert written == expected
     assert "target__PAS_mask" in written.splitlines()[0]
+
+
+def _unpaired_argv(root: Path, action: str, *extra: str) -> list[str]:
+    return [
+        "inventory",
+        action,
+        "--dataset-root",
+        str(root),
+        "--pairing",
+        "unpaired",
+        "--domain",
+        "HE=raw/HE",
+        "--domain",
+        "LF=raw/LF/**/*.png",
+        *extra,
+    ]
+
+
+def test_unpaired_cli_preview_write_and_python_parity(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _dataset(tmp_path, "a.png")
+    (tmp_path / "raw/LF/b.png").write_bytes(b"placeholder")
+    request = InventoryRequest(
+        dataset_root=tmp_path,
+        pairing="unpaired",
+        domains=(("HE", "raw/HE"), ("LF", "raw/LF/**/*.png")),
+    )
+    expected = render_inventory_csv(preview_inventory(request))
+    cli.main(_unpaired_argv(tmp_path, "preview"))
+    out = capsys.readouterr().out
+    assert "pairing: unpaired\ndomains: HE LF" in out
+    assert f"domain: HE spec={tmp_path}/raw/HE images=1" in out
+    assert f"domain: LF spec={tmp_path}/raw/LF/**/*.png images=2" in out
+    assert "source: LF raw/LF/b.png" in out
+    assert out.endswith("valid: true\n")
+    assert "independence" in out and "image-content integrity" in out
+    assert "matched_sets" not in out
+    assert not (tmp_path / "inputs").exists()
+    cli.main(_unpaired_argv(tmp_path, "write"))
+    output = tmp_path / "inputs/paths.csv"
+    assert output.read_text() == expected
+    with pytest.raises(SystemExit) as exc:
+        cli.main(_unpaired_argv(tmp_path, "write"))
+    assert exc.value.code == 1
+    assert output.read_text() == expected
+    cli.main(_unpaired_argv(tmp_path, "write", "--output", "inputs/custom.csv"))
+    assert (tmp_path / "inputs/custom.csv").read_text() == expected
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--input", "LF=raw/LF"],
+        ["--target", "HE=raw/HE"],
+        ["--reference", "LF"],
+        ["--input-mask", "LF=masks"],
+        ["--target-mask", "HE=masks"],
+        ["--key", "relative-path"],
+        ["--key", "relative-stem"],
+        ["--unknown"],
+        ["--domain", "third=raw/third"],
+        ["--domain", "broken"],
+        ["--pairing", "other"],
+    ],
+)
+def test_unpaired_cli_rejects_inapplicable_or_malformed_options(tmp_path: Path, extra) -> None:
+    with pytest.raises(SystemExit) as exc:
+        cli.main(_unpaired_argv(tmp_path / "never-scanned", "preview", *extra))
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize(
+    "domains",
+    [
+        [],
+        ["--domain", "LF=raw/LF"],
+        ["--domain", "LF=raw/LF", "--domain", "LF=raw/HE"],
+        ["--domain", "LF=raw/LF", "--domain", "bad name=raw/HE"],
+    ],
+)
+def test_unpaired_cli_requires_exactly_two_named_domains(tmp_path: Path, domains) -> None:
+    with pytest.raises(SystemExit) as exc:
+        cli.main(
+            [
+                "inventory",
+                "preview",
+                "--dataset-root",
+                str(tmp_path),
+                "--pairing",
+                "unpaired",
+                *domains,
+            ]
+        )
+    assert exc.value.code == 2
+
+
+def test_paired_cli_rejects_domains(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit) as exc:
+        cli.main(_argv(tmp_path, "preview", "--domain", "LF=raw/LF"))
+    assert exc.value.code == 2

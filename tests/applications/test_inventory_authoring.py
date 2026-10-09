@@ -449,3 +449,264 @@ def test_a_key_needs_exactly_one_asset_for_every_target(tmp_path: Path) -> None:
     assert [m.key for m in preview.matches] == ["S001.svs"]
     assert _kinds(preview) == ["incomplete"]
     assert "no PAS asset" in preview.issues[0].message
+
+
+def _unpaired_request(root: Path, **overrides: Any) -> InventoryRequest:
+    return InventoryRequest(
+        **{
+            "dataset_root": root,
+            "pairing": "unpaired",
+            "domains": (("HE", "raw/HE"), ("LF", "raw/LF/**/*.*")),
+            **overrides,
+        }
+    )
+
+
+def _independent(root: Path) -> None:
+    _touch(
+        root,
+        "raw/HE/same.png",
+        "raw/LF/a/same.png",
+        "raw/LF/b/same.png",
+        "raw/LF/z.TIF",
+        "raw/LF/j.jpg",
+        "raw/LF/k.jpeg",
+        "raw/LF/l.bmp",
+    )
+
+
+def test_unpaired_roundtrip_order_partial_metadata_and_masks(tmp_path: Path) -> None:
+    from virtual_staining.data.unpaired_inventory import load_unpaired_inventory
+
+    _independent(tmp_path)
+    _touch(tmp_path, "masks/a.png")
+    (tmp_path / "meta.csv").write_text(
+        "path,patient_id,mask_path,specimen_id,set_id\n"
+        "raw/LF/a/same.png,P01,masks/a.png,SP01,S01\n"
+        "raw/HE/same.png,P02,,SP02,S02\n"
+    )
+    request = _unpaired_request(tmp_path, metadata=Path("meta.csv"))
+    preview = preview_inventory(request)
+    assert preview.valid, preview.issues
+    assert [item.domain for item in preview.images] == ["HE", *["LF"] * 6]
+    assert not preview.matches
+    expected = (
+        "domain,path,set_id,specimen_id,patient_id,mask_path\n"
+        "HE,raw/HE/same.png,S02,SP02,P02,\n"
+        "LF,raw/LF/a/same.png,S01,SP01,P01,masks/a.png\n"
+        "LF,raw/LF/b/same.png,,,,\n"
+        "LF,raw/LF/j.jpg,,,,\n"
+        "LF,raw/LF/k.jpeg,,,,\n"
+        "LF,raw/LF/l.bmp,,,,\n"
+        "LF,raw/LF/z.TIF,,,,\n"
+    )
+    assert render_inventory_csv(preview) == expected
+    assert preview == preview_inventory(request)
+    assert any("5 image(s) have no patient_id" in item for item in preview.limitations)
+    output = write_inventory(preview)
+    assert output == tmp_path / "inputs/paths.csv"
+    assert output.read_text() == expected
+    config = inventory_authoring._unpaired_config(request, tmp_path, output)
+    assert load_unpaired_inventory(config) == preview.images
+
+
+def test_unpaired_preview_is_read_only_and_never_decodes_or_hashes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _independent(tmp_path)
+    before = _files(tmp_path)
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        pytest.fail("preview attempted to write, decode or hash")
+
+    with monkeypatch.context() as patch:
+        patch.setattr("PIL.Image.open", forbidden)
+        patch.setattr("virtual_staining.utils.hashing.sha256_file", forbidden)
+        patch.setattr(Path, "open", forbidden)
+        patch.setattr(Path, "mkdir", forbidden)
+        preview = preview_inventory(_unpaired_request(tmp_path))
+    assert preview.valid, preview.issues
+    assert _files(tmp_path) == before
+    assert render_inventory_csv(preview).splitlines()[0] == "domain,path"
+    assert all(
+        not item.set_id and not item.patient_id and not item.specimen_id for item in preview.images
+    )
+
+
+@pytest.mark.parametrize(
+    "domains",
+    [
+        (),
+        (("LF", "a"),),
+        (("LF", "a"), ("HE", "b"), ("AF", "c")),
+        (("LF", "a"), ("LF", "b")),
+        (("LF", "a"), ("H&E", "b")),
+    ],
+)
+def test_unpaired_requires_two_valid_distinct_domains(tmp_path: Path, domains) -> None:
+    with pytest.raises(ValueError):
+        _unpaired_request(tmp_path, domains=domains)
+
+
+@pytest.mark.parametrize("spec", ["", "missing", "empty", "../outside", "/absolute", "raw/LF/*"])
+def test_unpaired_invalid_specs(tmp_path: Path, spec: str) -> None:
+    _independent(tmp_path)
+    (tmp_path / "empty").mkdir()
+    preview = preview_inventory(
+        _unpaired_request(tmp_path, domains=(("LF", spec), ("HE", "raw/HE")))
+    )
+    assert not preview.valid and "spec" in _kinds(preview)
+    with pytest.raises(ValueError, match="invalid"):
+        write_inventory(preview)
+    assert not (tmp_path / "inputs").exists()
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "unsupported",
+        "overlap",
+        "hardlink",
+        "same-domain-hardlink",
+        "symlink",
+        "directory-symlink",
+        "anchor-symlink",
+        "fifo",
+    ],
+)
+def test_unpaired_unsafe_and_duplicate_sources(tmp_path: Path, problem: str) -> None:
+    _independent(tmp_path)
+    request = _unpaired_request(tmp_path)
+    if problem == "unsupported":
+        _touch(tmp_path, "raw/HE/notes.txt")
+    elif problem == "overlap":
+        request = _unpaired_request(tmp_path, domains=(("LF", "raw/LF"), ("HE", "raw/LF")))
+    elif "hardlink" in problem:
+        target = "raw/LF/alias.png" if problem == "hardlink" else "raw/HE/alias.png"
+        os.link(tmp_path / "raw/HE/same.png", tmp_path / target)
+    elif problem == "symlink":
+        (tmp_path / "raw/HE/link.png").symlink_to(tmp_path.parent / "outside.png")
+    elif problem == "directory-symlink":
+        (tmp_path / "raw/HE/link").symlink_to(tmp_path.parent, target_is_directory=True)
+    elif problem == "anchor-symlink":
+        (tmp_path / "linked").symlink_to(tmp_path / "raw/HE", target_is_directory=True)
+        request = _unpaired_request(tmp_path, domains=(("LF", "raw/LF"), ("HE", "linked")))
+    else:
+        os.mkfifo(tmp_path / "raw/HE/pipe.png")
+    preview = preview_inventory(request)
+    assert not preview.valid
+    assert preview.issues
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("path,patient_id\nraw/HE/same.png,P1\nraw/HE/same.png,P2\n", "duplicate path"),
+        ("path,patient_id\nsame.png,P1\n", "matches no discovered"),
+        ("path,patient_id\nraw/no.png,P1\n", "matches no discovered"),
+        ("path,unknown\n", "only optional"),
+        ("key,patient_id\n", "requires path"),
+        ("path,path\n", "requires path"),
+        ("path,domain\n", "only optional"),
+        ("path,patient_id\nraw/HE/same.png\n", "malformed"),
+        ("path\nraw/HE/same.png,extra\n", "malformed"),
+        ('path,patient_id\nraw/HE/same.png,"unclosed', "unexpected end"),
+        ("path,patient_id\nraw/HE/same.png,../bad\n", "invalid patient_id"),
+        ("path,patient_id\nraw/HE/same.png, P1\n", "whitespace"),
+        ("path,set_id,patient_id\nraw/HE/same.png,S,P1\nraw/LF/a/same.png,S,P2\n", "conflicting"),
+        ("path,specimen_id,patient_id\nraw/HE/same.png,S,P1\nraw/LF/a/same.png,S,\n", "incomplete"),
+        ("path,mask_path\nraw/HE/same.png,../mask.png\n", "root-relative"),
+        ("path,mask_path\nraw/HE/same.png,raw/LF/a/same.png\n", "physical file"),
+        ("path,mask_path\nraw/HE/same.png,missing.png\n", "No such file"),
+    ],
+)
+def test_unpaired_metadata_rejections(tmp_path: Path, text: str, expected: str) -> None:
+    _independent(tmp_path)
+    (tmp_path / "meta.csv").write_text(text)
+    preview = preview_inventory(_unpaired_request(tmp_path, metadata=Path("meta.csv")))
+    assert not preview.valid
+    assert expected in " ".join(issue.message for issue in preview.issues)
+
+
+@pytest.mark.parametrize("change", ["add", "delete", "replace", "modify", "metadata", "mask"])
+def test_unpaired_changes_after_preview(tmp_path: Path, change: str) -> None:
+    _independent(tmp_path)
+    _touch(tmp_path, "masks/m.png")
+    (tmp_path / "meta.csv").write_text("path,mask_path\nraw/HE/same.png,masks/m.png\n")
+    preview = preview_inventory(_unpaired_request(tmp_path, metadata=Path("meta.csv")))
+    assert preview.valid
+    source = tmp_path / "raw/HE/same.png"
+    if change == "add":
+        _touch(tmp_path, "raw/LF/new.png")
+    elif change == "delete":
+        source.unlink()
+    elif change == "replace":
+        replacement = tmp_path / "replacement.png"
+        replacement.write_bytes(source.read_bytes())
+        replacement.replace(source)
+    elif change == "modify":
+        source.write_bytes(b"different bytes")
+    elif change == "mask":
+        (tmp_path / "masks/m.png").write_bytes(b"changed")
+    else:
+        (tmp_path / "meta.csv").write_text("path,patient_id\nraw/HE/same.png,P1\n")
+    with pytest.raises(ValueError, match="changed since the preview"):
+        write_inventory(preview)
+    assert not (tmp_path / "inputs").exists()
+
+
+@pytest.mark.parametrize("failure", ["readback", "race", "existing", "link", "source-change"])
+def test_unpaired_publication_preserves_files_and_cleans_temporary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    _independent(tmp_path)
+    preview = preview_inventory(_unpaired_request(tmp_path))
+    before = _files(tmp_path)
+    output = tmp_path / "inputs/paths.csv"
+    real_load = inventory_authoring.load_unpaired_inventory
+    real_link = os.link
+
+    def load(config, **kwargs):
+        loaded = real_load(config, **kwargs)
+        if not kwargs:  # Staged-file validation, after the refreshed preview.
+            if failure == "readback":
+                return ()
+            if failure == "race":
+                output.write_bytes(b"competing writer")
+            if failure == "source-change":
+                (tmp_path / "raw/HE/same.png").touch()
+        return loaded
+
+    def link(source, destination):
+        if failure == "link":
+            raise OSError("injected publication failure")
+        return real_link(source, destination)
+
+    monkeypatch.setattr(inventory_authoring, "load_unpaired_inventory", load)
+    monkeypatch.setattr(os, "link", link)
+    if failure == "existing":
+        output.parent.mkdir()
+        output.write_bytes(b"competing writer")
+    with pytest.raises((ValueError, OSError)):
+        write_inventory(preview)
+    assert sorted(output.parent.iterdir()) == ([output] if failure in {"race", "existing"} else [])
+    if output.exists():
+        assert output.read_bytes() == b"competing writer"
+    assert {
+        p: data for p, data in _files(tmp_path).items() if not p.startswith("inputs/")
+    } == before
+
+
+def test_unpaired_mask_symlink_and_output_escape(tmp_path: Path) -> None:
+    _independent(tmp_path)
+    preview = preview_inventory(_unpaired_request(tmp_path))
+    for output in ("../elsewhere.csv", tmp_path.parent / "elsewhere.csv"):
+        with pytest.raises(ValueError, match="inside dataset_root"):
+            write_inventory(preview, output)
+    (tmp_path / "inputs").symlink_to(tmp_path.parent, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        write_inventory(preview)
+    (tmp_path / "mask.png").symlink_to(tmp_path / "raw/LF/a/same.png")
+    (tmp_path / "meta.csv").write_text("path,mask_path\nraw/HE/same.png,mask.png\n")
+    bad = preview_inventory(_unpaired_request(tmp_path, metadata=Path("meta.csv")))
+    assert not bad.valid and any("symlink" in issue.message for issue in bad.issues)

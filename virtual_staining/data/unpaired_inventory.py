@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import csv
+from contextlib import nullcontext
 from dataclasses import dataclass
+from typing import TextIO
 
 from virtual_staining.config.data import PreprocessingConfig
 from virtual_staining.data.consumption import AssetRow, validate_groups, validate_locator
@@ -11,6 +13,8 @@ from virtual_staining.data.slide_sets import SET_ID_PATTERN
 from virtual_staining.data.splitting import assign_identity_splits
 from virtual_staining.split_contract import DatasetSplit
 from virtual_staining.utils.image_io import VALID_IMAGE_EXTENSIONS, detect_openslide_format
+
+UNPAIRED_COLUMNS = ("domain", "path", "set_id", "specimen_id", "patient_id", "mask_path")
 
 
 @dataclass(frozen=True)
@@ -35,18 +39,28 @@ class RawDomainImage:
         )
 
 
-def load_unpaired_inventory(config: PreprocessingConfig) -> tuple[RawDomainImage, ...]:
-    """Validate CSV and file membership without decoding images or hashing their bytes."""
+def load_unpaired_inventory(
+    config: PreprocessingConfig, *, source: TextIO | None = None
+) -> tuple[RawDomainImage, ...]:
+    """Validate CSV and membership without decoding or hashing images.
+
+    ``source`` permits read-only validation of an in-memory authoring candidate;
+    otherwise read the configured inventory. The caller owns the supplied stream.
+    """
     root = config.dataset_root.resolve()
     inventory = config.inputs.inventory
     path = inventory if inventory.is_absolute() else root / inventory
-    if not path.resolve().is_relative_to(root):
+    if source is None and not path.resolve().is_relative_to(root):
         raise ValueError("Unpaired inventory must be contained in dataset_root")
-    fields = {"domain", "path", "set_id", "specimen_id", "patient_id", "mask_path"}
+    fields = set(UNPAIRED_COLUMNS)
     items = []
     physical: set[tuple[int, int]] = set()
     parents: dict[tuple[str, str, str], str] = {}
-    with path.open(newline="", encoding="utf-8") as handle:
+    with (
+        nullcontext(source)
+        if source is not None
+        else path.open(newline="", encoding="utf-8") as handle
+    ):
         reader = csv.DictReader(handle)
         columns = reader.fieldnames or []
         if (

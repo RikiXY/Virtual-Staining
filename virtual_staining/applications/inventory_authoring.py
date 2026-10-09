@@ -1,10 +1,9 @@
-"""Author the raw paired slide-set inventory from explicit asset mappings.
+"""Author paired slide sets or independent raw domains from explicit asset mappings.
 
 Every input, target, and mask mapping is named by the caller; nothing is inferred from
-folder names, positions, dimensions, or image content, and no asset is ever opened. A
-key matches a set only when every input and every target has exactly one asset. The
-inventory schema stays owned by ``virtual_staining.data.slide_sets``: a written
-inventory is published only after that canonical loader has read it back.
+folder names, positions, dimensions, or image content. Paired keys require exactly
+one asset per input and target; unpaired domains have no matching keys. CSV schemas
+stay owned by the canonical data readers, which validate before publication.
 """
 
 from __future__ import annotations
@@ -14,10 +13,17 @@ import fnmatch
 import io
 import os
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
+from virtual_staining.config.data import (
+    FilteringConfig,
+    ForegroundFilterConfig,
+    InputConfig,
+    PreprocessingConfig,
+)
+from virtual_staining.data.consumption import validate_locator
 from virtual_staining.data.slide_sets import (
     MODALITY_NAME_PATTERN,
     SET_ID_PATTERN,
@@ -26,12 +32,18 @@ from virtual_staining.data.slide_sets import (
     asset_column,
     load_slide_set_inventory,
 )
+from virtual_staining.data.unpaired_inventory import (
+    UNPAIRED_COLUMNS,
+    RawDomainImage,
+    load_unpaired_inventory,
+)
 from virtual_staining.utils.files import publish_file_no_replace
 
 KeyRule = Literal["relative-path", "relative-stem"]
 KEY_RULES: tuple[KeyRule, ...] = ("relative-path", "relative-stem")
 IssueKind = Literal["spec", "duplicate", "incomplete", "conflict", "set_id", "metadata", "mask"]
 DEFAULT_OUTPUT = Path("inputs/slide_sets.csv")
+UNPAIRED_OUTPUT = Path("inputs/paths.csv")
 
 NAME_LIMITATION = (
     "Sets were matched by file membership and names only; no image or slide was opened. "
@@ -47,23 +59,44 @@ _GLOB_CHARS = frozenset("*?[")
 
 @dataclass(frozen=True)
 class InventoryRequest:
-    """Explicit asset mappings for one paired inventory.
+    """Explicit asset mappings for one paired or unpaired inventory.
 
     ``inputs``, ``targets`` and their masks are ordered ``(modality, spec)`` pairs. A
     spec is a ``dataset_root``-relative directory or glob; a relative ``metadata`` path is
-    relative to ``dataset_root`` too.
+    relative to ``dataset_root`` too. Unpaired requests use exactly two ordered
+    ``domains`` mappings instead; metadata joins by exact root-relative ``path``.
     """
 
     dataset_root: Path
-    inputs: tuple[tuple[str, str], ...]
-    targets: tuple[tuple[str, str], ...]
-    reference: str
+    inputs: tuple[tuple[str, str], ...] = ()
+    targets: tuple[tuple[str, str], ...] = ()
+    reference: str = ""
     input_masks: tuple[tuple[str, str], ...] = ()
     target_masks: tuple[tuple[str, str], ...] = ()
     metadata: Path | None = None
     key_rule: KeyRule = "relative-path"
+    pairing: Literal["paired", "unpaired"] = "paired"
+    domains: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
+        if self.pairing not in {"paired", "unpaired"}:
+            raise ValueError("pairing must be paired or unpaired")
+        if self.pairing == "unpaired":
+            if (
+                self.inputs
+                or self.targets
+                or self.reference
+                or self.input_masks
+                or self.target_masks
+                or self.key_rule != "relative-path"
+            ):
+                raise ValueError("unpaired inventory does not accept paired mappings or key rules")
+            if len(self.domains) != 2:
+                raise ValueError("unpaired inventory requires exactly two domain mappings")
+            InputConfig(inventory=UNPAIRED_OUTPUT, domains=self.domain_names)
+            return
+        if self.domains:
+            raise ValueError("domain mappings require pairing='unpaired'")
         for role, names in (("input", self.modalities), ("target", self.target_modalities)):
             if not names:
                 raise ValueError(f"at least one {role} mapping is required")
@@ -99,6 +132,10 @@ class InventoryRequest:
     def target_modalities(self) -> tuple[str, ...]:
         return tuple(name for name, _ in self.targets)
 
+    @property
+    def domain_names(self) -> tuple[str, ...]:
+        return tuple(name for name, _ in self.domains)
+
 
 @dataclass(frozen=True)
 class InventoryIssue:
@@ -123,10 +160,13 @@ class InventoryPreview:
     issues: tuple[InventoryIssue, ...]
     sources: tuple[str, ...]
     limitations: tuple[str, ...]
+    images: tuple[RawDomainImage, ...] = ()
+    source_stats: tuple[tuple[str, int, int, int, int, int], ...] = ()
+    metadata_text: str | None = None
 
     @property
     def valid(self) -> bool:
-        return not self.issues and bool(self.matches)
+        return not self.issues and bool(self.images or self.matches)
 
     @property
     def matched_count(self) -> int:
@@ -298,13 +338,15 @@ def _aligned(value: str | None) -> bool | None:
 
 
 def preview_inventory(request: InventoryRequest) -> InventoryPreview:
-    """Discover and match every mapping without writing or opening any file content.
+    """Discover mappings without writing, decoding images, or hashing image content.
 
     Every discrepancy is collected; the preview is ``valid`` only when there are none.
     """
     root = request.dataset_root.resolve()
     if not root.is_dir():
         raise FileNotFoundError(f"dataset_root is not a directory: {root}")
+    if request.pairing == "unpaired":
+        return _preview_unpaired(request, root)
     rule = request.key_rule
     issues: list[InventoryIssue] = []
     sources: set[str] = set()
@@ -406,6 +448,116 @@ def preview_inventory(request: InventoryRequest) -> InventoryPreview:
     )
 
 
+def _unpaired_config(request: InventoryRequest, root: Path, inventory: Path) -> PreprocessingConfig:
+    return PreprocessingConfig(
+        dataset_root=root,
+        inputs=InputConfig(inventory=inventory, domains=request.domain_names),
+        filtering=FilteringConfig(foreground=ForegroundFilterConfig(policy="all")),
+    )
+
+
+def _source_stats(
+    root: Path, images: tuple[RawDomainImage, ...]
+) -> tuple[tuple[str, int, int, int, int, int], ...]:
+    observations = []
+    for locator in sorted({p for item in images for p in (item.path, item.mask_path) if p}):
+        validate_locator(locator)
+        path = root / locator
+        if any(part.is_symlink() for part in (path, *path.parents) if part != root):
+            raise ValueError(f"source must not traverse a symlink: {locator}")
+        if not path.resolve(strict=True).is_relative_to(root):
+            raise ValueError(f"source escapes dataset_root: {locator}")
+        stat = path.stat()
+        observations.append(
+            (locator, stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        )
+    return tuple(observations)
+
+
+def _unpaired_metadata(
+    request: InventoryRequest, root: Path, sources: set[str]
+) -> tuple[dict[str, dict[str, str]], str | None]:
+    if request.metadata is None:
+        return {}, None
+    text = (root / request.metadata).read_text(encoding="utf-8")
+    reader = csv.DictReader(io.StringIO(text), strict=True)
+    fields = reader.fieldnames or []
+    if (
+        "path" not in fields
+        or len(fields) != len(set(fields))
+        or set(fields) - (set(UNPAIRED_COLUMNS) - {"domain"})
+    ):
+        raise ValueError(
+            "metadata requires path and only optional "
+            "set_id,specimen_id,patient_id,mask_path columns"
+        )
+    rows: dict[str, dict[str, str]] = {}
+    for number, row in enumerate(reader, 2):
+        if None in row or any(value is None for value in row.values()):
+            raise ValueError(f"metadata row {number}: malformed CSV row")
+        path = row.pop("path")
+        if path in rows:
+            raise ValueError(f"metadata row {number}: duplicate path {path!r}")
+        if path not in sources:
+            raise ValueError(f"metadata row {number}: path {path!r} matches no discovered asset")
+        rows[path] = row
+    return rows, text
+
+
+def _preview_unpaired(request: InventoryRequest, root: Path) -> InventoryPreview:
+    issues: list[InventoryIssue] = []
+    images: list[RawDomainImage] = []
+    for name, spec in request.domains:
+        found, found_issues = _discover(
+            root, f"domain {name}", spec, "relative-path", required=True
+        )
+        issues.extend(found_issues)
+        images.extend(
+            RawDomainImage(domain=name, path=path)
+            for path in sorted(path for paths in found.values() for path in paths)
+        )
+    sources = tuple(sorted({item.path for item in images}))
+    metadata_text = None
+    try:
+        metadata, metadata_text = _unpaired_metadata(request, root, set(sources))
+        images = [replace(item, **metadata.get(item.path, {})) for item in images]
+    except (OSError, ValueError, csv.Error) as exc:
+        issues.append(InventoryIssue("metadata", str(exc)))
+    limitations = [
+        "Source discovery establishes no biological identity, independence, correspondence, "
+        "or image-content integrity. No images were decoded or content-hashed; "
+        "nonstandard extensions may require OpenSlide format detection."
+    ]
+    for field in ("set_id", "specimen_id", "patient_id"):
+        missing = sum(not getattr(item, field) for item in images)
+        if missing:
+            limitations.append(
+                f"{missing} image(s) have no {field}; identities were not inferred. "
+                "Requested split eligibility is checked by preparation."
+            )
+    preview = InventoryPreview(
+        request=request,
+        dataset_root=root,
+        matches=(),
+        issues=tuple(issues),
+        sources=sources,
+        limitations=tuple(limitations),
+        images=tuple(images),
+        metadata_text=metadata_text,
+    )
+    try:
+        preview = replace(preview, source_stats=_source_stats(root, preview.images))
+        loaded = load_unpaired_inventory(
+            _unpaired_config(request, root, UNPAIRED_OUTPUT),
+            source=io.StringIO(render_inventory_csv(preview)),
+        )
+        if loaded != preview.images:
+            raise ValueError("canonical loader did not reproduce the previewed domain images")
+    except (OSError, ValueError, csv.Error) as exc:
+        issues.append(InventoryIssue("conflict", str(exc)))
+    return replace(preview, issues=tuple(issues))
+
+
 def _limitations(request: InventoryRequest, matches: list[InventoryMatch]) -> tuple[str, ...]:
     sets = [match.slide_set for match in matches]
     limitations = [NAME_LIMITATION, REFERENCE_LIMITATION]
@@ -430,7 +582,19 @@ def _limitations(request: InventoryRequest, matches: list[InventoryMatch]) -> tu
 
 
 def render_inventory_csv(preview: InventoryPreview) -> str:
-    """The canonical wide CSV for ``preview``: rows by ``set_id``, deterministic columns."""
+    """Canonical CSV: wide paired sets or long-form independent domains."""
+    if preview.request.pairing == "unpaired":
+        rows = [asdict(item) for item in preview.images]
+        columns = [
+            field
+            for field in UNPAIRED_COLUMNS
+            if field in {"domain", "path"} or any(row[field] for row in rows)
+        ]
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, columns, lineterminator="\n", extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+        return buffer.getvalue()
     request = preview.request
     assets = [
         *(("input", name) for name in request.modalities),
@@ -486,7 +650,8 @@ def _csv_row(slide_set: SlideSet) -> dict[str, str]:
 
 def _destination(preview: InventoryPreview, output: Path | str | None) -> Path:
     root = preview.dataset_root
-    path = Path(output) if output is not None else DEFAULT_OUTPUT
+    default = UNPAIRED_OUTPUT if preview.request.pairing == "unpaired" else DEFAULT_OUTPUT
+    path = Path(output) if output is not None else default
     if path.is_absolute():
         path = Path(os.path.abspath(path))
         for base in (root, preview.request.dataset_root.absolute()):
@@ -507,8 +672,9 @@ def write_inventory(preview: InventoryPreview, output: Path | str | None = None)
 
     Discovery is rerun from the request and must reproduce the preview exactly; the
     rendered CSV is written to a sibling temporary file and published only after the
-    canonical loader resolves it to the previewed slide sets. ``output`` defaults to
-    ``inputs/slide_sets.csv``; a relative ``output`` is relative to ``dataset_root``.
+    canonical loader reproduces the previewed records. ``output`` defaults to
+    ``inputs/slide_sets.csv`` (paired) or ``inputs/paths.csv`` (unpaired); relative
+    outputs are relative to ``dataset_root``.
     """
     if not preview.valid:
         raise ValueError("refusing to write an invalid inventory preview")
@@ -517,6 +683,23 @@ def write_inventory(preview: InventoryPreview, output: Path | str | None = None)
         raise FileExistsError(f"refusing to overwrite existing {destination}")
     request = preview.request
     current = preview_inventory(request)
+    if request.pairing == "unpaired":
+        if current != preview:
+            raise ValueError("source assets or metadata changed since the preview; preview again")
+
+        def verify_unpaired(temporary: Path) -> None:
+            loaded = load_unpaired_inventory(
+                _unpaired_config(request, current.dataset_root, temporary)
+            )
+            if loaded != current.images:
+                raise ValueError("canonical loader did not reproduce the previewed domain images")
+            if _source_stats(current.dataset_root, current.images) != current.source_stats:
+                raise ValueError("source assets changed during publication; preview again")
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        return publish_file_no_replace(
+            render_inventory_csv(current).encode("utf-8"), destination, verify=verify_unpaired
+        )
     if (current.matches, current.sources, current.issues) != (
         preview.matches,
         preview.sources,

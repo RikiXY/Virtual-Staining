@@ -1,5 +1,7 @@
 # Prepare-only; values illustrate the contract and are not study recommendations.
-# Real patient IDs are required in the hand-authored inventory for this split.
+# Real patient IDs are required in the inventory for this split.
+# Author inputs/paths.csv with vs inventory write --pairing unpaired and --metadata;
+# see docs/dataset_format.md#authoring-independent-raw-domains.
 # vs config check --config config/runs/minimal_unpaired_prepare.yaml --stages prepare
 # vs config resolve --config config/runs/minimal_unpaired_prepare.yaml --stages prepare
 # vs prepare --config config/runs/minimal_unpaired_prepare.yaml
