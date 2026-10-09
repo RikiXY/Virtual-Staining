@@ -1,11 +1,14 @@
 # Local run queue - exhaustive annotated reference.
 #   vs queue --queue config/queues/local/my_queue.yaml     (--queue is a CLI flag)
 #
-# Before any job runs, preflight parses every job's run config (RunConfig.from_yaml);
-# one invalid or missing config fails the queue with nothing executed. Jobs then run
+# Before any job runs, preflight resolves every config against that job's selected
+# stages (RunConfig.from_yaml); omitted stages require the full four-stage pipeline.
+# One invalid or missing config fails the queue with nothing executed. Jobs then run
 # one after another. Queue state is written to
 # local_workspace/queues/<name>.state.json (for a queue under config/queues/;
 # elsewhere, <queue file>.state.json). Unknown keys are rejected.
+# Operation-specific files: config/queues/example_operations.yaml.
+# All-default full pipelines: config/queues/example_full.yaml.
 # For a controlled ablation (the optional `ablation` block) see
 # config/queues/example_ablation.yaml.
 

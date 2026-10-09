@@ -145,9 +145,12 @@ existing run identity and consumed-data records.
 
 Complete current-schema configurations and the exhaustive annotated
 [Pix2Pix](../config/runs/example.yaml) and
-[CycleGAN](../config/runs/example_cyclegan.yaml) references remain valid. Inspection,
-preflight and queue tools use the shared contract; a comprehensive stage-specific
-authoring and batch UX is outside this change.
+[CycleGAN](../config/runs/example_cyclegan.yaml) references remain valid. Inspection and
+queues pass their explicit stage selections to this same resolver. Runnable minimal files live under `config/runs/minimal_prepare.yaml`,
+`minimal_train.yaml`, `minimal_infer.yaml`, `minimal_evaluate.yaml`, and
+`minimal_train_infer.yaml`; their comments include configuration-only commands.
+[Operation queues](../config/queues/example_operations.yaml) select stages per file;
+[full-run queues](../config/queues/example_full.yaml) demonstrate the default pipeline.
 
 ## Notes
 
@@ -354,23 +357,36 @@ from virtual_staining.applications.config_authoring import (
     inspect_run_mapping, inspect_run_yaml, preflight, write_config_yaml,
 )
 
-inspection = inspect_run_mapping(raw, definitions=my_definitions)  # or inspect_run_yaml(path, ...)
+stages = ("prepare",)
+inspection = inspect_run_mapping(raw, definitions=my_definitions, stages=stages)
+# Equivalent YAML entry point: inspect_run_yaml(path, my_definitions, stages=stages)
 inspection.authored_yaml     # the caller's mapping, key order and every valid field kept
-inspection.resolved_yaml     # RunConfig.to_dict(), byte-identical to a tracked resolved.yaml
+inspection.resolved_yaml     # RunConfig.resolved_yaml(), including explicit stage context
 inspection.resolved_sha256   # the config hash a tracked stage records for this config
-inspection.origins           # {"training.losses.generator[0].weight": "supplied", ...}
+inspection.origins           # {"preprocessing.inputs.inventory": "supplied", ...}
 
-report = preflight(inspection.config, ["prepare", "train"], depth="assets")
+report = preflight(inspection.config, stages, depth="assets")
 report.valid                 # False only when a check is "invalid"
 write_config_yaml(inspection.authored_yaml, Path("run.yaml"))  # never overwrites
 ```
 
 `definitions` defaults to the built-in set; supplied external options are preserved in
 both authored and resolved forms. `authored` retains the caller's mapping and key order;
-`resolved_yaml` and `resolved_sha256` match tracked config snapshots. `origins` marks
+`resolved_yaml` and `resolved_sha256` match tracked config snapshots for the same effective
+configuration, Definitions and ordered stage selection. Both inspection entry points take
+keyword-only `stages=()`: omission checks supplied sections without validating any selected
+execution, and never infers stages. `inspection.config.stages` exposes this scope. Minimal
+prepare inspection can use an empty `Definitions()` and introduces no method, model,
+results path or run name. Selected requirements fail during resolution, before preflight.
+The authored YAML view renders the supplied mapping; tracked `input.yaml` separately
+preserves the original file bytes, including comments. `origins` marks
 leaves `supplied` (even if normalized) or `defaulted`; it is explanatory only.
 
-`preflight(config, stages, depth=...)` respects the given stage order. `config` depth
+`preflight(config, stages, depth=...)` respects the given stage order and validates all
+selected configuration requirements before checking assets. For an already resolved
+config, requirement failures are reported as `invalid`; asset checks are then skipped.
+Use explicit stages at inspection time to obtain the appropriate method defaults and
+snapshot identity. With no stages, even asset depth checks no stage inputs. `config` depth
 inspects no asset paths. `assets` adds read-only path, schema, membership, group, and
 checkpoint-selection checks. Results are `valid`, `invalid`, `planned` (an earlier
 selected stage produces the input, not yet verified), `unverified`, or `not_applicable`.

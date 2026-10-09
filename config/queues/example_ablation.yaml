@@ -7,6 +7,11 @@
 # difference. The summary (fixed values, per-job variable values, resolved-config hashes)
 # is written to local_workspace/queues/<name>.ablation.summary.json.
 #
+# Every declared fixed/variable path must exist in every resolved
+# job. Absent operation-specific fields (e.g. run_name on prepare-only jobs) fail
+# preflight; remove inapplicable comparisons or use separate queues. The comparison
+# hash retains loss-order normalization; it is not the tracked resolved-YAML hash.
+#
 # These guardrails only prove that the resolved configs differ where declared. They do
 # not prove scientific equivalence of the arms (data, code and hardware can still differ)
 # or biological independence of their splits.

@@ -8,12 +8,27 @@ explicitly local, sequential, and single-worker in v1. Every queue and ablation 
 is documented in [`config/queues/example.yaml`](../config/queues/example.yaml) and
 [`config/queues/example_ablation.yaml`](../config/queues/example_ablation.yaml).
 
+Every job resolves with its explicit `stages`, or the full `prepare, train, infer,
+evaluate` sequence when omitted. All configurations and ablation comparisons pass
+before any stage starts, even with `continue_on_failure: true`. Configuration preflight
+reads YAML only; it does not validate assets or freeze consumed data. Queue state still
+records preflight failure and leaves other jobs pending. Execution validates and binds
+its own input snapshots. Job paths are queue-directory-relative; paths inside run YAML
+retain their existing bases.
+
+See [operation-specific jobs](../config/queues/example_operations.yaml) and
+[default full-run jobs](../config/queues/example_full.yaml).
+
 Ablation summaries are written beside queue state as
 `local_workspace/queues/<queue-name>.ablation.summary.json`. The summary lists
 jobs, labels, run names, canonical resolved config hashes, declared fixed
 values, and declared variable values. Loss lists are compared through resolved
 loss config entries, so omitted default-zero terms are not treated as
-active losses.
+active losses. Every requested fixed or variable dot path must exist in every resolved job. An absent/inapplicable field fails preflight with the job, path
+and stages; it is never a meaningful ablation choice. Choose applicable fields or separate
+operations into queues. Prepare-only summaries omit `run_name` when absent. Existing
+ablation `config_hash` values identify loss-order-normalized JSON for comparison, not
+tracked resolved-YAML bytes; that established comparison format is unchanged.
 
 Example layout:
 
@@ -116,8 +131,12 @@ Verbatim copy of the YAML file passed to `--config` for that stage.
 The effective configuration with parsed values and defaults, serialized with sorted
 YAML keys. Its hash identifies these bytes only; see [Reproducibility](reproducibility.md).
 
-`vs config resolve --config ...` prints these exact bytes without running a stage, and
-`vs config check` prints their SHA-256 as `config_sha256` (the stage's `config_hash`).
+`vs config resolve --config ... --stages train` prints these exact bytes without running
+a stage, and `vs config check --config ... --stages train` prints their SHA-256 as
+`config_sha256` (the stage's `config_hash`). Supply the same ordered stages as execution,
+e.g. `--stages train infer` for that selected pipeline. Without stages these commands
+perform unscoped inspection, with a different snapshot identity and no execution assurance.
+The deterministic stage-context comment is part of the canonical bytes, not a schema key.
 
 Losses, augmentation, schedulers, and early stopping retain their effective values in
 this snapshot; their configuration semantics are documented in the

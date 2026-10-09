@@ -15,6 +15,7 @@ import torch
 import yaml
 
 from tests.config_helpers import write_config_data, write_queue_config, write_run_config
+from virtual_staining.applications.config_authoring import inspect_run_yaml
 from virtual_staining.applications.pipeline import run_stage, run_stages
 from virtual_staining.applications.prepare import prepare
 from virtual_staining.applications.run_queue import run_queue
@@ -209,6 +210,11 @@ def test_full_pipeline_smoke(tmp_path: Path) -> None:
     for stage in ("train", "infer", "evaluate"):
         record = _read_json(run_root / "metadata" / "stages" / f"{stage}.json")
         assert record["status"] == "completed"
+        inspection = inspect_run_yaml(resume_path, stages=(stage,))
+        assert (
+            run_root / "config" / stage / "resolved.yaml"
+        ).read_bytes() == inspection.resolved_yaml.encode()
+        assert record["config"]["sha256"] == inspection.resolved_sha256
         snapshot = _read_json(Path(record["consumed_data"]["metadata_path"]))
         assert snapshot["snapshot_id"] == record["consumed_data"]["snapshot_id"]
         assert snapshot["group_validation"]["status"] in {"unavailable", "not_applicable"}
@@ -332,6 +338,9 @@ def test_prepare_only_cli_without_run_placeholders(tmp_path: Path, command: str)
     resolved = yaml.safe_load(layout.resolved_config_path.read_text())
     assert set(resolved) == set(raw)
     assert layout.input_config_path.read_bytes() == authored
+    inspection = inspect_run_yaml(path, stages=("prepare",))
+    assert layout.resolved_config_path.read_bytes() == inspection.resolved_yaml.encode()
+    assert layout.config_hash_path.read_text() == inspection.resolved_sha256
     assert layout.config_hash_path.read_text() == sha256_file(layout.resolved_config_path)
     assert layout.manifest_path.is_file()
     assert layout.dataset_fingerprint_path.is_file()
@@ -344,26 +353,44 @@ def test_prepare_only_cli_without_run_placeholders(tmp_path: Path, command: str)
 
 
 @pytest.mark.slow
-def test_independent_minimal_stage_configs_preserve_tracked_provenance(tmp_path: Path) -> None:
+@pytest.mark.parametrize("queued", [False, True])
+def test_independent_minimal_stage_configs_preserve_tracked_provenance(
+    tmp_path: Path, queued: bool
+) -> None:
     root = _make_synthetic_dataset(tmp_path / "dataset")
     full = _write_smoke_config(tmp_path, root)
     raw = yaml.safe_load(full.read_text())
     prepare_raw = {key: raw[key] for key in ("dataset_root", "image_size", "data", "preprocessing")}
-    with _patched_prepare_dependencies():
-        run_stage(write_config_data(tmp_path / "prepare.yaml", prepare_raw), "prepare")
     common = {
         key: raw[key] for key in ("dataset_root", "results_path", "run_name", "image_size", "data")
     }
     train_raw = {**common, "model": raw["model"], "training": raw["training"]}
-    run_stage(write_config_data(tmp_path / "train.yaml", train_raw), "train")
     infer_raw = {
         **common,
         "model": {key: value for key, value in raw["model"].items() if key != "discriminator"},
         "inference": raw["inference"],
     }
-    run_stage(write_config_data(tmp_path / "infer.yaml", infer_raw), "infer")
     evaluate_raw = {**common, "model": {key: raw["model"][key] for key in ("inputs", "outputs")}}
-    run_stage(write_config_data(tmp_path / "evaluate.yaml", evaluate_raw), "evaluate")
+    jobs = []
+    for stage, mapping in (
+        ("prepare", prepare_raw),
+        ("train", train_raw),
+        ("infer", infer_raw),
+        ("evaluate", evaluate_raw),
+    ):
+        path = write_config_data(tmp_path / f"{stage}.yaml", mapping)
+        jobs.append({"config_path": str(path), "stages": [stage]})
+    with _patched_prepare_dependencies():
+        if queued:
+            queue_path = write_config_data(
+                tmp_path / "queue.yaml", {"name": "operations", "jobs": jobs}
+            )
+            state = run_queue(queue_path)
+            assert state.status == "completed"
+            assert [job.status for job in state.jobs] == ["completed"] * 4
+        else:
+            for job in jobs:
+                run_stage(Path(job["config_path"]), job["stages"][0])
     run_root = tmp_path / "runs" / "smoke_run"
     run = _read_json(run_root / "metadata" / "run.json")
     assert run["stages_present"] == ["train", "infer", "evaluate"]
@@ -375,6 +402,11 @@ def test_independent_minimal_stage_configs_preserve_tracked_provenance(tmp_path:
     for stage in run["stages_present"]:
         record = _read_json(run_root / "metadata" / "stages" / f"{stage}.json")
         assert record["status"] == "completed"
+        inspection = inspect_run_yaml(tmp_path / f"{stage}.yaml", stages=(stage,))
+        assert (
+            run_root / "config" / stage / "resolved.yaml"
+        ).read_bytes() == inspection.resolved_yaml.encode()
+        assert record["config"]["sha256"] == inspection.resolved_sha256
         snapshot = _read_json(Path(record["consumed_data"]["metadata_path"]))
         assert snapshot["snapshot_id"] == record["consumed_data"]["snapshot_id"]
     train = _read_json(run_root / "metadata" / "stages" / "train.json")

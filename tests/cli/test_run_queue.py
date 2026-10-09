@@ -4,10 +4,19 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
+import yaml
 
-from tests.config_helpers import write_queue_config, write_run_config, write_yaml
+from tests.config_helpers import (
+    pix2pix_config_data,
+    prepare_config_data,
+    write_config_data,
+    write_queue_config,
+    write_run_config,
+    write_yaml,
+)
 from virtual_staining import cli
 from virtual_staining.applications.run_queue import _load_local_run_queue, run_queue
 
@@ -17,7 +26,14 @@ MINIMAL_TRAINING_YAML = (
 
 
 def _write_config(tmp_path: Path, section_yaml: str) -> Path:
-    return write_run_config(tmp_path, section_yaml)
+    path = write_run_config(tmp_path, section_yaml)
+    raw = yaml.safe_load(path.read_text())
+    raw["preprocessing"] = prepare_config_data(tmp_path)["preprocessing"]
+    raw["preprocessing"]["inputs"].update(
+        modalities=["label_free"], reference="label_free", target_modalities=["stained"]
+    )
+    raw["inference"] = {"checkpoint_policy": "latest"}
+    return write_config_data(path, raw)
 
 
 def _write_queue(tmp_path: Path, jobs_yaml: str, *, continue_on_failure: bool = False) -> Path:
@@ -229,8 +245,10 @@ def test_run_queue_ablation_validation_passes_and_writes_summary(
             - training.losses.discriminator
         jobs:
           - config_path: {config_a}
+            stages: [train]
             label: baseline
           - config_path: {config_b}
+            stages: [train]
             label: ssim_only
         """,
     )
@@ -309,7 +327,9 @@ def test_run_queue_ablation_validation_fails_on_undeclared_difference(
             - run_name
         jobs:
           - config_path: {config_a}
+            stages: [train]
           - config_path: {config_b}
+            stages: [train]
         """,
     )
     calls: list[Path] = []
@@ -382,7 +402,9 @@ def test_run_queue_ablation_canonicalizes_loss_list_order(
             - run_name
         jobs:
           - config_path: {config_a}
+            stages: [train]
           - config_path: {config_b}
+            stages: [train]
         """,
     )
     monkeypatch.setattr(
@@ -547,3 +569,139 @@ def test_load_local_run_queue_rejects_unknown_stage(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="unknown stage"):
         _load_local_run_queue(queue_path)
+
+
+def test_mixed_operation_queue_resolves_each_job_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from virtual_staining.applications.run_queue import _preflight_run_configs
+    from virtual_staining.config.run import RunConfig
+
+    jobs = []
+    for index, stages in enumerate(
+        [("prepare",), ("train",), ("infer",), ("evaluate",), ("train", "infer")]
+    ):
+        raw = prepare_config_data(tmp_path)
+        if stages != ("prepare",):
+            raw = pix2pix_config_data(tmp_path)
+            if "train" not in stages:
+                raw.pop("training")
+                raw["model"].pop("discriminator")
+            if "infer" in stages:
+                raw["inference"] = {"checkpoint_policy": "latest"}
+            if stages == ("evaluate",):
+                raw["model"].pop("generator")
+        path = write_config_data(tmp_path / f"job{index}.yaml", raw)
+        jobs.append({"config_path": path.name, "stages": list(stages)})
+    queue_path = write_config_data(tmp_path / "queue.yaml", {"name": "mixed", "jobs": jobs})
+    queue = _load_local_run_queue(queue_path)
+    configs = _preflight_run_configs(queue)
+    calls = []
+
+    def execute(path: Path, stages: Sequence[str], **kwargs: object) -> None:
+        config = RunConfig.from_yaml(path, stages=stages)
+        assert config.resolved_yaml() == configs[len(calls)].resolved_yaml()
+        calls.append(tuple(stages))
+
+    monkeypatch.setattr("virtual_staining.applications.run_queue.run_stages", execute)
+    state = run_queue(queue_path)
+    assert state.status == "completed"
+    assert calls == [job.stages for job in queue.jobs]
+    assert not (tmp_path / "dataset").exists() and not (tmp_path / "results").exists()
+
+
+@pytest.mark.parametrize("failure", ["default_full", "train_infer", "unpaired"])
+@pytest.mark.parametrize("continue_on_failure", [False, True])
+def test_third_job_configuration_failure_prevents_all_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str, continue_on_failure: bool
+) -> None:
+    raw = prepare_config_data(tmp_path)
+    valid = write_config_data(tmp_path / "prepare.yaml", raw)
+    stages = None
+    if failure == "train_infer":
+        raw = pix2pix_config_data(tmp_path)
+        stages = ["train", "infer"]
+    elif failure == "unpaired":
+        raw["data"] = {"pairing": "unpaired"}
+        stages = ["prepare"]
+    invalid = write_config_data(tmp_path / "invalid.yaml", raw)
+    job: dict[str, Any] = {"config_path": str(invalid)}
+    if stages:
+        job["stages"] = stages
+    queue_path = write_config_data(
+        tmp_path / "queue.yaml",
+        {
+            "name": "blocked",
+            "continue_on_failure": continue_on_failure,
+            "jobs": [{"config_path": str(valid), "stages": ["prepare"]}] * 2 + [job],
+        },
+    )
+    calls = []
+    monkeypatch.setattr(
+        "virtual_staining.applications.run_queue.run_stages",
+        lambda *args, **kwargs: calls.append(args),
+    )
+    state = run_queue(queue_path)
+    assert calls == []
+    assert state.status == "failed"
+    assert [job.status for job in state.jobs] == ["pending", "pending", "failed"]
+    assert all(job.started_at is None for job in state.jobs)
+    error = state.jobs[2].error or ""
+    assert "job 2" in error
+    assert {
+        "default_full": "model requires inputs",
+        "train_infer": "inference",
+        "unpaired": "unsupported",
+    }[failure] in error
+    assert not (tmp_path / "dataset").exists() and not (tmp_path / "results").exists()
+
+
+@pytest.mark.parametrize("kind", ["fixed_fields", "variable_fields"])
+@pytest.mark.parametrize("field", ["run_name", "model.generator", "training.epochs"])
+def test_ablation_rejects_absent_fields_on_the_responsible_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, field: str
+) -> None:
+    full = pix2pix_config_data(tmp_path)
+    first = write_config_data(tmp_path / "train.yaml", full)
+    second = write_config_data(tmp_path / "prepare.yaml", prepare_config_data(tmp_path))
+    ablation = {"variable_fields": ["dataset_root"], kind: [field]}
+    queue_path = write_config_data(
+        tmp_path / "queue.yaml",
+        {
+            "name": "absent",
+            "ablation": ablation,
+            "jobs": [
+                {"config_path": str(first), "stages": ["train"]},
+                {"config_path": str(second), "stages": ["prepare"]},
+            ],
+        },
+    )
+    calls = []
+    monkeypatch.setattr(
+        "virtual_staining.applications.run_queue.run_stages",
+        lambda *args, **kwargs: calls.append(args),
+    )
+    state = run_queue(queue_path)
+    assert calls == [] and state.status == "failed"
+    assert [job.status for job in state.jobs] == ["pending", "failed"]
+    error = state.jobs[1].error or ""
+    assert field in error and "absent or inapplicable" in error and "stages prepare" in error
+    assert not _load_local_run_queue(queue_path).ablation_summary_path.exists()
+
+
+def test_prepare_ablation_does_not_invent_run_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = write_config_data(tmp_path / "prepare.yaml", prepare_config_data(tmp_path))
+    queue_path = write_config_data(
+        tmp_path / "queue.yaml",
+        {
+            "name": "prepare",
+            "ablation": {"variable_fields": ["preprocessing.split.seed"]},
+            "jobs": [{"config_path": str(path), "stages": ["prepare"]}],
+        },
+    )
+    monkeypatch.setattr("virtual_staining.applications.run_queue.run_stages", lambda *a, **k: None)
+    assert run_queue(queue_path).status == "completed"
+    summary = json.loads(_load_local_run_queue(queue_path).ablation_summary_path.read_text())
+    assert "run_name" not in summary["jobs"][0]

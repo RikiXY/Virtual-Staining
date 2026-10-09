@@ -1,0 +1,11 @@
+# Minimal evaluate configuration; illustrative settings, not study recommendations.
+# vs config check --config config/runs/minimal_evaluate.yaml --stages evaluate
+# vs config resolve --config config/runs/minimal_evaluate.yaml --stages evaluate
+# Configuration-only inspection needs no assets. Execution needs the selected stage inputs.
+# See example.yaml for all options and path bases; stages are not run-YAML keys.
+dataset_root: local_workspace/datasets/your_sample
+results_path: local_workspace/results
+run_name: operation_example
+model:
+  inputs: [AF, LF]
+  outputs: [HE]

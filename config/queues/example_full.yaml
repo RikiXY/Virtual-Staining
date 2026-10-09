@@ -1,0 +1,7 @@
+# Both jobs use the default prepare -> train -> infer -> evaluate pipeline.
+# vs queue --queue config/queues/example_full.yaml
+# Supply real assets first; see example.yaml for every queue option.
+name: example_full
+jobs:
+  - config_path: ../runs/minimal_pix2pix.yaml
+  - config_path: ../runs/example_ablation_ssim.yaml

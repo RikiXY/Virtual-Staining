@@ -254,7 +254,9 @@ def _preflight_run_configs(queue: LocalRunQueue) -> tuple[RunConfig, ...]:
         try:
             if not job.config_path.is_file():
                 raise FileNotFoundError(f"Config file not found: {job.config_path}")
-            configs.append(RunConfig.from_yaml(job.config_path))
+            configs.append(
+                RunConfig.from_yaml(job.config_path, stages=job.stages or DEFAULT_FULL_RUN_STAGES)
+            )
         except Exception as exc:
             raise QueuePreflightError(index, job.config_path, str(exc)) from exc
     return tuple(configs)
@@ -266,6 +268,8 @@ def _preflight_ablation(queue: LocalRunQueue, configs: tuple[RunConfig, ...]) ->
     try:
         summary = _build_ablation_summary(queue, configs)
         _write_ablation_summary(queue.ablation_summary_path, summary)
+    except QueuePreflightError:
+        raise
     except Exception as exc:
         first_job = queue.jobs[0]
         raise QueuePreflightError(0, first_job.config_path, str(exc)) from exc
@@ -279,6 +283,18 @@ def _build_ablation_summary(
         raise QueueAblationError("queue has no ablation configuration")
 
     resolved_configs = tuple(_canonicalize_resolved_config(config.to_dict()) for config in configs)
+    for index, (job, resolved) in enumerate(zip(queue.jobs, resolved_configs, strict=True)):
+        for path in (*queue.ablation.fixed_fields, *queue.ablation.variable_fields):
+            try:
+                _get_dot_path(resolved, path)
+            except QueueAblationError as exc:
+                stages = job.stages or DEFAULT_FULL_RUN_STAGES
+                raise QueuePreflightError(
+                    index,
+                    job.config_path,
+                    f"{exc} for stages {', '.join(stages)}. Choose an applicable ablation "
+                    "field present in every job, or separate these operations into queues.",
+                ) from exc
     flattened_configs = tuple(_flatten_config(config) for config in resolved_configs)
     _validate_ablation_differences(queue.ablation, flattened_configs)
 
@@ -294,7 +310,7 @@ def _build_ablation_summary(
                 "label": job.label,
                 "notes": job.notes,
                 "config_path": str(job.config_path),
-                "run_name": config.project.run_name,
+                **({"run_name": config.project.run_name} if config.project.run_name else {}),
                 "config_hash": sha256_json(resolved_config),
                 "variable_values": {
                     field: _get_dot_path(resolved_config, field)
@@ -402,7 +418,7 @@ def _get_dot_path(value: Any, path: str) -> Any:
     current = value
     for part in path.split("."):
         if not isinstance(current, dict) or part not in current:
-            return None
+            raise QueueAblationError(f"Ablation field {path!r} is absent or inapplicable")
         current = current[part]
     return current
 

@@ -11,7 +11,12 @@ from typing import Any
 import pytest
 import yaml
 
-from tests.config_helpers import cyclegan_config_data, pix2pix_config_data, write_config_data
+from tests.config_helpers import (
+    cyclegan_config_data,
+    pix2pix_config_data,
+    prepare_config_data,
+    write_config_data,
+)
 from tests.external_method.tiny_reconstruction import TINY_CONV, TINY_RESIDUAL, TinyReconstruction
 from tests.manifest_helpers import make_manifest_record, manifest_metadata
 from virtual_staining.applications.config_authoring import (
@@ -25,6 +30,7 @@ from virtual_staining.applications.config_authoring import (
 from virtual_staining.config.run import RunConfig
 from virtual_staining.data.layout import DatasetLayout
 from virtual_staining.data.manifest import DatasetManifest
+from virtual_staining.definitions import Definitions
 from virtual_staining.experiment.run_layout import RunLayout
 from virtual_staining.experiment.snapshots import save_stage_config_snapshots
 from virtual_staining.methods.builtin import builtin_definitions
@@ -303,7 +309,8 @@ def test_current_owners_still_reject_invalid_configs(
         inspect_run_mapping(raw)
 
 
-def test_external_definitions_keep_method_options(tmp_path: Path) -> None:
+@pytest.mark.parametrize("stages", [(), ("train",), ("evaluate",)])
+def test_external_definitions_keep_method_options(tmp_path: Path, stages: tuple[str, ...]) -> None:
     definitions = builtin_definitions().extend(
         methods=[TinyReconstruction()], components=[TINY_CONV, TINY_RESIDUAL]
     )
@@ -320,8 +327,10 @@ def test_external_definitions_keep_method_options(tmp_path: Path) -> None:
         "model": {"inputs": ["source"], "outputs": ["target"]},
         "training": {"batch_size": 2, "epochs": 1, "seed": 1, "num_workers": 0},
     }
-    by_mapping = inspect_run_mapping(raw, definitions)
-    by_yaml = inspect_run_yaml(write_config_data(tmp_path / "run.yaml", raw), definitions)
+    by_mapping = inspect_run_mapping(raw, definitions, stages=stages)
+    by_yaml = inspect_run_yaml(
+        write_config_data(tmp_path / "run.yaml", raw), definitions, stages=stages
+    )
 
     assert by_mapping.resolved_sha256 == by_yaml.resolved_sha256
     assert yaml.safe_load(by_mapping.authored_yaml)["method"] == raw["method"]
@@ -570,9 +579,12 @@ def test_unpaired_evaluation_collections(tmp_path: Path) -> None:
 
 def test_artifacts_from_earlier_selected_stages_are_planned(tmp_path: Path) -> None:
     preprocessing = _write_inventory(tmp_path / "dataset")
-    config = inspect_run_mapping(_paired_config(tmp_path, preprocessing=preprocessing)).config
+    stages = ("prepare", "train", "infer", "evaluate")
+    config = inspect_run_mapping(
+        _paired_config(tmp_path, preprocessing=preprocessing), stages=stages
+    ).config
 
-    report = preflight(config, ["prepare", "train", "infer", "evaluate"], depth="assets")
+    report = preflight(config, stages, depth="assets")
 
     assert report.valid
     assert _statuses(report) == {
@@ -700,3 +712,183 @@ def test_config_check_resolves_plural_outputs_without_assets(tmp_path: Path) -> 
     singular["model"]["target"] = "HE"
     with pytest.raises(ValueError, match="model.target is not part of the current schema"):
         inspect_run_mapping(singular)
+
+
+@pytest.mark.parametrize(
+    "stages",
+    [
+        (),
+        ("prepare",),
+        ("train",),
+        ("infer",),
+        ("evaluate",),
+        ("train", "infer"),
+        ("prepare", "train", "infer", "evaluate"),
+        ("evaluate", "infer"),
+    ],
+)
+def test_scoped_inspection_matches_resolver_and_snapshot(
+    tmp_path: Path, stages: tuple[str, ...]
+) -> None:
+    raw = prepare_config_data(tmp_path)
+    if set(stages) - {"prepare"}:
+        raw.update(pix2pix_config_data(tmp_path, outputs=("HE", "IHC")))
+        if "prepare" not in stages:
+            raw.pop("preprocessing")
+        if "train" not in stages:
+            raw.pop("training")
+            raw["model"].pop("discriminator")
+        if "infer" in stages:
+            raw["inference"] = {"checkpoint_policy": "latest"}
+        if not set(stages) & {"train", "infer"}:
+            raw["model"].pop("generator")
+    original = copy.deepcopy(raw)
+    path = write_config_data(tmp_path / "input.yaml", raw)
+    inspection = inspect_run_mapping(raw, stages=stages)
+    by_yaml = inspect_run_yaml(path, stages=stages)
+    canonical = RunConfig.from_yaml(path, stages=stages)
+    assert raw == original == inspection.authored
+    assert yaml.safe_load(inspection.authored_yaml) == raw
+    assert inspection.config.stages == stages
+    assert inspection.resolved == canonical.to_dict()
+    assert inspection.resolved_yaml == by_yaml.resolved_yaml == canonical.resolved_yaml()
+    assert inspection.origins == by_yaml.origins
+    assert inspection.origins["dataset_root"] == "supplied"
+    assert inspection.origins["data.pairing"] == "defaulted"
+    resolved = tmp_path / "tracked" / "resolved.yaml"
+    copied = tmp_path / "tracked" / "input.yaml"
+    tracked_hash = save_stage_config_snapshots(
+        canonical, path, input_dest=copied, resolved_dest=resolved
+    )
+    assert copied.read_bytes() == path.read_bytes()
+    assert resolved.read_bytes() == inspection.resolved_yaml.encode()
+    assert inspection.resolved_sha256 == by_yaml.resolved_sha256 == tracked_hash
+    assert inspect_run_yaml(resolved, stages=stages).resolved_sha256 == tracked_hash
+    if not set(stages) - {"prepare"}:
+        assert (
+            not {"method", "model", "training", "run_name", "results_path"}
+            & inspection.resolved.keys()
+        )
+        assert not any(
+            p.startswith(("method", "model", "run_name", "results_path"))
+            for p in inspection.origins
+        )
+
+
+def test_unscoped_inspection_does_not_infer_execution(tmp_path: Path) -> None:
+    raw = {"dataset_root": str(tmp_path / "absent")}
+    inspection = inspect_run_mapping(raw)
+    assert inspection.config.stages == ()
+    assert inspection.config.method is None
+    with pytest.raises(ValueError, match="preprocessing is required"):
+        inspect_run_mapping(raw, stages=("prepare",))
+    raw = prepare_config_data(tmp_path)
+    unscoped = inspect_run_mapping(raw)
+    selected = inspect_run_mapping(raw, stages=("prepare",))
+    assert unscoped.resolved == selected.resolved
+    assert unscoped.resolved_sha256 != selected.resolved_sha256
+
+
+@pytest.mark.parametrize(
+    "section", ["method", "model", "training", "inference", "evaluation", "data"]
+)
+@pytest.mark.parametrize("value", [None, {"unknown": True}])
+def test_scoped_inspection_rejects_invalid_inactive_sections(
+    tmp_path: Path, section: str, value: Any, forbid_execution: None
+) -> None:
+    raw = prepare_config_data(tmp_path)
+    raw[section] = value
+    with pytest.raises((TypeError, ValueError), match=section):
+        inspect_run_mapping(raw, stages=("prepare",))
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("stages", [("prepare",), ("prepare", "train")])
+def test_inspection_rejects_unpaired_prepare_without_side_effects(
+    tmp_path: Path, stages: tuple[str, ...], forbid_execution: None
+) -> None:
+    raw = prepare_config_data(tmp_path)
+    raw["data"] = {"pairing": "unpaired"}
+    assert inspect_run_mapping(raw).config.data.pairing == "unpaired"
+    with pytest.raises(ValueError, match="prepare.*unpaired.*unsupported"):
+        inspect_run_mapping(raw, stages=stages)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("stage", ["train", "infer", "evaluate"])
+def test_scoped_cyclegan_inspection_uses_operation_requirements(tmp_path: Path, stage: str) -> None:
+    raw = cyclegan_config_data(tmp_path)
+    if stage != "train":
+        raw.pop("training")
+        raw["model"].pop("discriminator")
+        raw["data"].pop("domains")
+    if stage == "evaluate":
+        raw["model"].pop("generator")
+        raw["evaluation"] = {"reference_collection": "reference/{split}/*.png"}
+    inspection = inspect_run_mapping(raw, stages=(stage,))
+    assert inspection.config.stages == (stage,)
+    if stage == "train":
+        raw["data"].pop("domains")
+    elif stage == "infer":
+        raw.pop("inference")
+    else:
+        raw.pop("evaluation")
+    with pytest.raises(ValueError, match="data.domains|inference|reference_collection"):
+        inspect_run_mapping(raw, stages=(stage,))
+
+
+def test_scoped_config_only_inspection_never_touches_assets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, forbid_execution: None
+) -> None:
+    def fail(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("configuration inspection accessed assets")
+
+    for name in (
+        "resolve_slide_sets",
+        "load_manifest_or_raise",
+        "resolve_domain_collections",
+        "resolve_inference_checkpoint",
+        "load_paired_evaluation_manifest",
+    ):
+        monkeypatch.setattr(f"virtual_staining.applications.config_authoring.{name}", fail)
+    raw = _paired_config(tmp_path)
+    raw["preprocessing"] = prepare_config_data(tmp_path)["preprocessing"]
+    raw["preprocessing"]["inputs"].update(
+        modalities=["label_free"], reference="label_free", target_modalities=["stained"]
+    )
+    stages = ("prepare", "train", "infer", "evaluate")
+    inspection = inspect_run_mapping(raw, stages=stages)
+    assert preflight(inspection.config, stages).valid
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_later_config_failure_skips_all_asset_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, forbid_execution: None
+) -> None:
+    raw = prepare_config_data(tmp_path)
+    config = inspect_run_mapping(raw, stages=("prepare",)).config
+
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("asset inspection started before all configurations passed")
+
+    monkeypatch.setattr(
+        "virtual_staining.applications.config_authoring.resolve_slide_sets", forbidden
+    )
+    report = preflight(config, ("prepare", "train"), depth="assets")
+    assert not report.valid
+    assert _statuses(report)["prepare.assets"] == "unverified"
+    assert _statuses(report)["train.config"] == "invalid"
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.usefixtures("forbid_execution")
+def test_minimal_prepare_asset_preflight_needs_no_definitions(tmp_path: Path) -> None:
+    root = tmp_path / "dataset"
+    raw = {"dataset_root": str(root), "preprocessing": _write_inventory(root)}
+    before = _tree(tmp_path)
+    inspection = inspect_run_mapping(raw, Definitions(), stages=("prepare",))
+    report = preflight(inspection.config, ("prepare",), depth="assets")
+    assert _statuses(report)["prepare.inventory"] == "valid"
+    assert not report.content_verified
+    assert inspection.config.method is None and inspection.config.model is None
+    assert _tree(tmp_path) == before

@@ -1136,3 +1136,25 @@ def test_ablation_preflight_rejects_undeclared_differences(
 
     with pytest.raises(QueueAblationError, match=message):
         _build_ablation_summary(queue, _preflight_run_configs(queue))
+
+
+@pytest.mark.parametrize("name", ["prepare", "train", "infer", "evaluate", "train_infer"])
+def test_minimal_operation_examples_inspect_with_declared_stages(name: str) -> None:
+    from virtual_staining.applications.config_authoring import inspect_run_yaml
+
+    stages = tuple(name.split("_"))
+    inspection = inspect_run_yaml(_RUNS / f"minimal_{name}.yaml", stages=stages)
+    assert inspection.config.stages == stages
+    assert inspection.resolved_yaml == inspection.config.resolved_yaml()
+    if name == "prepare":
+        assert not {"method", "model", "run_name", "results_path"} & inspection.resolved.keys()
+    if name == "evaluate":
+        assert set(inspection.resolved["model"]) == {"inputs", "outputs"}
+
+
+@pytest.mark.parametrize("name", ["operations", "full"])
+def test_operation_and_full_queue_examples_preflight(name: str) -> None:
+    queue = _load_local_run_queue(_QUEUES / f"example_{name}.yaml")
+    configs = _preflight_run_configs(queue)
+    expected = [(stage,) for stage in VALID_STAGES] if name == "operations" else [VALID_STAGES] * 2
+    assert [config.stages for config in configs] == expected

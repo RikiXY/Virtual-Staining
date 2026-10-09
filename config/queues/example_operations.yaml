@@ -1,0 +1,13 @@
+# Independent operation files, executed sequentially after all configs pass preflight.
+# vs queue --queue config/queues/example_operations.yaml
+# Supply real assets first; paths inside each run YAML retain their documented bases.
+name: example_operations
+jobs:
+  - config_path: ../runs/minimal_prepare.yaml
+    stages: [prepare]
+  - config_path: ../runs/minimal_train.yaml
+    stages: [train]
+  - config_path: ../runs/minimal_infer.yaml
+    stages: [infer]
+  - config_path: ../runs/minimal_evaluate.yaml
+    stages: [evaluate]

@@ -38,7 +38,7 @@ _COMMAND_HELP = {
     "organize": "Organize run outputs by metric ranking.",
     "export-model": "Export selected run checkpoints as a portable local model bundle.",
     "queue": "Execute pipeline runs from a queue file.",
-    "config": "Resolve or check a run config without running any stage.",
+    "config": "Inspect configuration or validate selected stage requirements without execution.",
     "inventory": "Preview or write the raw paired slide-set inventory from explicit mappings.",
     "status": "Check the runtime environment and optional hardware support.",
 }

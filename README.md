@@ -132,8 +132,13 @@ and [generated artifacts](docs/run_format.md#generated-images) for the complete 
 Queue full or partial pipeline runs sequentially:
 
 ```bash
-vs queue --queue config/queues/example.yaml
+vs queue --queue config/queues/example_operations.yaml  # separate operation YAML files
+vs queue --queue config/queues/example_full.yaml        # default full pipeline per job
 ```
+
+All job configs must satisfy their selected stages before the first job executes.
+Omitted job stages require the full four-stage pipeline. Queues preserve run-config path
+bases; job `config_path` is relative to the queue file.
 
 [Queue configuration](config/queues/example.yaml) and
 [controlled ablations](config/queues/example_ablation.yaml) document the supported
@@ -155,15 +160,28 @@ method, model, training, results directory, or run name.
 ### Inspecting and checking a config
 
 ```bash
-vs config resolve --config my_run.yaml                      # resolved YAML on stdout
-vs config resolve --config my_run.yaml --output resolved.yaml   # never overwrites
-vs config check --config my_run.yaml                        # config only; no assets needed
+vs config check --config config/runs/minimal_prepare.yaml --stages prepare
+vs config resolve --config config/runs/minimal_prepare.yaml --stages prepare
+vs config check --config config/runs/minimal_train.yaml --stages train
+vs config check --config config/runs/minimal_infer.yaml --stages infer
+vs config check --config config/runs/minimal_evaluate.yaml --stages evaluate
+vs config resolve --config config/runs/minimal_train_infer.yaml --stages train infer
+vs config resolve --config my_run.yaml --stages train --output resolved.yaml  # never overwrites
 vs config check --config my_run.yaml --stages prepare train infer evaluate --assets
 ```
 
-Resolution prints effective configuration values; checking validates the config without
-running a stage. `--assets` adds read-only input checks, not content verification or a
-frozen input snapshot. See [config inspection and preflight](docs/library_api.md#inspecting-and-checking-configs).
+Both commands validate the union of explicit `--stages` requirements through the same
+resolver used by execution. Without `--stages`, they inspect supplied configuration only;
+success does not certify any execution. Stages are never inferred from present sections.
+Resolve writes canonical YAML to stdout (scope to stderr); check reports scope and the
+same resolved SHA-256. Use the same stages and order as execution for matching snapshots.
+Omitted prepare-only method, model and run fields stay absent.
+
+`--assets` adds read-only checks for explicitly selected stages; it selects no stages,
+does not verify content, freeze inputs, or certify scientific validity. Earlier selected
+producers yield `planned` checks, not verified artifacts. Configuration-only inspection
+needs no image, dataset or checkpoint access. See
+[config inspection and preflight](docs/library_api.md#inspecting-and-checking-configs).
 
 ### Authoring the paired slide-set inventory
 

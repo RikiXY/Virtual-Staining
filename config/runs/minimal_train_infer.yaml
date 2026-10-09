@@ -1,0 +1,22 @@
+# Minimal train infer configuration; illustrative settings, not study recommendations.
+# vs config check --config config/runs/minimal_train_infer.yaml --stages train infer
+# vs config resolve --config config/runs/minimal_train_infer.yaml --stages train infer
+# Configuration-only inspection needs no assets. Execution needs the selected stage inputs.
+# See example.yaml for all options and path bases; stages are not run-YAML keys.
+dataset_root: local_workspace/datasets/your_sample
+results_path: local_workspace/results
+run_name: operation_example
+model:
+  inputs: [AF, LF]
+  outputs: [HE]
+training:
+  epochs: 1
+  seed: 42
+  num_workers: 0
+  losses:
+    generator:
+      - name: l1
+        weight: 25.0
+    discriminator: []
+inference:
+  checkpoint_policy: latest

@@ -28,17 +28,24 @@ def _build_parser() -> argparse.ArgumentParser:
         "check", help="Validate a run config, optionally with read-only asset preflight."
     )
     add_config_argument(check)
-    check.add_argument(
-        "--stages",
-        nargs="+",
-        choices=VALID_STAGES,
-        default=(),
-        help="Stages to check, in the order they would run.",
-    )
+    for command in (resolve, check):
+        command.add_argument(
+            "--stages",
+            nargs="+",
+            choices=VALID_STAGES,
+            default=(),
+            help=(
+                "Resolve requirements for these stages, in execution order. Omission inspects "
+                "supplied configuration only; it does not validate any selected execution."
+            ),
+        )
     check.add_argument(
         "--assets",
         action="store_true",
-        help="Also check stage inputs read-only (paths, schemas, membership, groups).",
+        help=(
+            "Also check selected stage inputs read-only (paths, schemas, membership, groups); "
+            "does not select stages or certify scientific validity."
+        ),
     )
     return parser
 
@@ -52,12 +59,18 @@ def main(argv: list[str] | None = None) -> None:
 
     args = _build_parser().parse_args(argv)
     try:
-        inspection = inspect_run_yaml(Path(args.config))
+        inspection = inspect_run_yaml(Path(args.config), stages=args.stages)
     except (OSError, TypeError, ValueError) as exc:
         print(f"invalid config {args.config}: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
+    scope = (
+        f"selected execution: {' '.join(args.stages)}"
+        if args.stages
+        else "unscoped inspection; no selected execution validated"
+    )
     if args.action == "resolve":
+        print(f"scope: {scope}", file=sys.stderr)
         if args.output is None:
             sys.stdout.write(inspection.resolved_yaml)
         else:
@@ -70,6 +83,7 @@ def main(argv: list[str] | None = None) -> None:
 
     report = preflight(inspection.config, args.stages, depth="assets" if args.assets else "config")
     print(f"config_sha256: {inspection.resolved_sha256}")
+    print(f"scope: {scope}")
     print(f"depth: {report.depth}")
     print(f"stages: {' '.join(report.stages) or '-'}")
     for check in report.checks:

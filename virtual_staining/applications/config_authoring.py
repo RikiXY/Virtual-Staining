@@ -58,8 +58,8 @@ CONFIG_LIMITATION = (
     "mask, checkpoint, or generated-image path was inspected."
 )
 ASSET_LIMITATIONS = (
-    "content_verified=false: paths, schemas, membership, supplied group metadata, and "
-    "checkpoint selection were checked; no file was hashed, decoded, or deserialized.",
+    "content_verified=false: asset checks cover only paths, schemas, membership, supplied "
+    "group metadata, and checkpoint selection; no file was hashed, decoded, or deserialized.",
     "No content-level duplicate or leakage check was run; no patient independence or "
     "scientific validity is claimed.",
     "A successful preflight is not a frozen input snapshot: assets may change afterwards, "
@@ -77,7 +77,7 @@ class RunConfigInspection:
 
     ``authored`` is the caller's mapping (plain dicts/lists, order kept) and
     ``authored_yaml`` renders exactly it; ``resolved``/``resolved_yaml`` are
-    ``RunConfig.to_dict()`` rendered with the tracked-snapshot serializer, so
+    ``RunConfig.to_dict()`` and ``RunConfig.resolved_yaml()`` (including selected stages), so
     ``resolved_sha256`` equals the hash a tracked stage records. ``origins`` maps every
     resolved leaf path to ``supplied`` or ``defaulted``; it is explanatory only.
     """
@@ -138,11 +138,18 @@ def field_origins(
 
 
 def inspect_run_mapping(
-    raw: Mapping[str, Any], definitions: Definitions | None = None
+    raw: Mapping[str, Any],
+    definitions: Definitions | None = None,
+    *,
+    stages: Sequence[str] = (),
 ) -> RunConfigInspection:
-    """Resolve ``raw`` through ``RunConfig.from_mapping`` and describe both forms."""
+    """Resolve through the canonical resolver for the explicit union of ``stages``.
+
+    Omission inspects supplied configuration without certifying any execution; stages
+    are never inferred from sections. Supplied inactive sections are still validated.
+    """
     authored = _plain(raw) if isinstance(raw, Mapping) else raw
-    config = RunConfig.from_mapping(authored, definitions)
+    config = RunConfig.from_mapping(authored, definitions, stages=stages)
     resolved = config.to_dict()
     resolved_yaml = config.resolved_yaml()
     return RunConfigInspection(
@@ -157,9 +164,13 @@ def inspect_run_mapping(
 
 
 def inspect_run_yaml(
-    path: str | Path, definitions: Definitions | None = None
+    path: str | Path,
+    definitions: Definitions | None = None,
+    *,
+    stages: Sequence[str] = (),
 ) -> RunConfigInspection:
-    return inspect_run_mapping(load_yaml_mapping(path), definitions)
+    """Inspect YAML with the same explicit execution scope as ``inspect_run_mapping``."""
+    return inspect_run_mapping(load_yaml_mapping(path), definitions, stages=stages)
 
 
 def write_config_yaml(text: str, destination: Path) -> Path:
@@ -202,21 +213,36 @@ def preflight(
     RunConfig.check_stages(stages)
     if depth not in ("config", "assets"):
         raise ValueError(f"Unsupported preflight depth {depth!r}")
-    checks = [PreflightCheck("config.resolve", None, "valid", "configuration resolved")]
-    for index, stage in enumerate(stages):
+    errors: dict[str, str] = {}
+    for stage in stages:
         try:
             config.validate_stages((stage,))
         except (ValueError, TypeError) as exc:
-            checks.append(PreflightCheck(f"{stage}.config", stage, "invalid", str(exc)))
+            errors[stage] = str(exc)
+    checks = [PreflightCheck("config.resolve", None, "valid", "configuration resolved")]
+    for index, stage in enumerate(stages):
+        if stage in errors:
+            checks.append(PreflightCheck(f"{stage}.config", stage, "invalid", errors[stage]))
             continue
         checks.append(PreflightCheck(f"{stage}.config", stage, "valid", "configuration valid"))
-        if depth == "config":
+        if depth == "config" or errors:
             checks.append(
-                PreflightCheck(f"{stage}.assets", stage, "unverified", "asset checks not requested")
+                PreflightCheck(
+                    f"{stage}.assets",
+                    stage,
+                    "unverified",
+                    "asset checks skipped: invalid selected configuration"
+                    if errors
+                    else "asset checks not requested",
+                )
             )
         else:
             checks.extend(_STAGE_CHECKS[stage](config, frozenset(stages[:index])))
     limitations = (CONFIG_LIMITATION,) if depth == "config" else ASSET_LIMITATIONS
+    if not stages:
+        limitations += (
+            "Unscoped inspection: no selected execution validated and no stage assets checked.",
+        )
     return PreflightReport(depth, tuple(stages), tuple(checks), limitations)
 
 

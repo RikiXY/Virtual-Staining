@@ -27,6 +27,15 @@
 #   evaluate - protocol unpaired: compares generated images with the real test/ images
 #              of the reference domain in data.domains.
 #
+# Conditional requirements: --stages selects the union of operation requirements.
+# Both `vs config check` and `vs config resolve` accept --stages; omit it only for
+# unscoped inspection, which does not certify any execution. Supplied sections are
+# always validated, even when inactive. The requirements are summarized below.
+# Prepare needs preprocessing, not method/model/results_path/run_name. Train needs
+# training; infer needs inference with checkpoint selection. Evaluate needs neither
+# training nor network definitions. data.pairing remains the only pairing declaration;
+# raw unpaired prepare is unsupported. --assets adds read-only checks, not execution.
+#
 # Unknown keys are rejected at every level. Relative project paths (dataset_root,
 # results_path, manifest_path, inference.output_dir, evaluation.generated_dir,
 # evaluation.output_dir) are used as written, i.e. they resolve from the process
@@ -81,9 +90,11 @@ dataset_root: local_workspace/datasets/your_sample
 # usual file-existence, data.hash_policy and group-leakage checks still apply.
 # manifest_path: local_workspace/manifests/manifest_subset.csv
 
-# Required. Parent of every run directory; this run writes to <results_path>/<run_name>/.
+# Required for train/infer/evaluate; optional for prepare-only.
+# Parent of run directories; this run writes to <results_path>/<run_name>/.
 results_path: local_workspace/results
-# Required non-blank string. Reusing a name reuses (and overwrites) that run directory.
+# Required non-blank string for train/infer/evaluate; optional for prepare-only.
+# Reusing a name reuses (and overwrites) that run directory.
 run_name: example_cyclegan_run
 
 # Optional; default [256, 256]. [width, height] in pixels - width FIRST ([320, 256] =
