@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
-from dataclasses import replace
+from dataclasses import asdict, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
+from virtual_staining.data import consumption
 from virtual_staining.data.consumption import (
+    SNAPSHOT_SCHEMA_VERSION,
     AssetRow,
     DataLeakageError,
     SnapshotPaths,
@@ -20,6 +25,7 @@ from virtual_staining.data.consumption import (
     validate_groups,
     write_snapshot,
 )
+from virtual_staining.utils.hashing import sha256_bytes, sha256_json
 
 
 def _write(root: Path, locator: str, content: bytes) -> None:
@@ -66,6 +72,13 @@ def test_relocated_root_keeps_identity_and_records_binding_separately(tmp_path: 
     assert first.membership_sha256 == second.membership_sha256
     assert first.roots != second.roots
     assert first.roots["dataset"] == str(first_root.resolve())
+    first_paths = SnapshotPaths.in_dir(tmp_path / "first")
+    second_paths = SnapshotPaths.in_dir(tmp_path / "second")
+    first_reference = write_snapshot(first, first_paths)
+    second_reference = write_snapshot(second, second_paths)
+    assert first_reference["snapshot_id"] == second_reference["snapshot_id"]
+    assert first_paths.rows.read_bytes() == second_paths.rows.read_bytes()
+    assert load_snapshot(second_paths).roots == second.roots
 
 
 @pytest.mark.parametrize(
@@ -337,6 +350,195 @@ def test_sidecar_enriches_only_listed_paths_and_rejects_conflicts(tmp_path: Path
 
 
 # Persistence
+
+
+@pytest.mark.parametrize("hash_policy", ["content", "membership"])
+@pytest.mark.parametrize("empty", [False, True])
+def test_publication_preserves_canonical_identity_and_artifacts(
+    tmp_path: Path, hash_policy: str, empty: bool
+) -> None:
+    rows = [] if empty else _dataset(tmp_path)
+    if rows:
+        rows[0] = replace(rows[0], sample_id="é,1")
+    snapshot = _snapshot(
+        tmp_path,
+        list(reversed(rows)),
+        hash_policy=hash_policy,
+        selection={"domains": ["A"], "example": {"z": None, "a": "é"}},
+        context={"protocol": "paired"},
+        sources={"inventory": "inventory.csv", "sha256": sha256_bytes(b"inventory")},
+    )
+    membership = sha256_json([asdict(row) for row in snapshot.rows])
+    identity_payload = {
+        "schema_version": SNAPSHOT_SCHEMA_VERSION,
+        "kind": snapshot.kind,
+        "adapter": snapshot.adapter,
+        "hash_policy": snapshot.hash_policy,
+        "selection": snapshot.selection,
+        "context": snapshot.context,
+        "membership_sha256": membership,
+    }
+    snapshot_id = sha256_json(identity_payload)
+    paths = SnapshotPaths.in_dir(tmp_path / "meta")
+    created_at = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    with (
+        patch.object(consumption, "sha256_json", wraps=sha256_json) as hashing,
+        patch.object(consumption, "datetime") as clock,
+    ):
+        clock.now.return_value = created_at
+        reference = write_snapshot(snapshot, paths)
+        # Count the actual canonical hashes, not unrelated rows-file or content hashes.
+        assert hashing.call_count == 2
+        assert hashing.call_args_list[0].args == ([asdict(row) for row in snapshot.rows],)
+        assert hashing.call_args_list[1].args == (identity_payload,)
+
+    expected_csv = (
+        "root,locator,role,domain,split,sample_id,set_id,specimen_id,patient_id,"
+        "status,size,sha256\n"
+    )
+    if not empty:
+        first_hash = sha256_bytes(b"a") if hash_policy == "content" else ""
+        second_hash = sha256_bytes(b"b") if hash_policy == "content" else ""
+        expected_csv += (
+            f'dataset,train/a.png,input,A,train,"é,1",x1,s1,p1,present,1,{first_hash}\n'
+            f"dataset,val/b.png,input,A,val,,x2,s2,p2,present,1,{second_hash}\n"
+        )
+    assert paths.rows.read_bytes() == expected_csv.encode("utf-8")
+    expected_metadata = {
+        "schema_version": SNAPSHOT_SCHEMA_VERSION,
+        "kind": snapshot.kind,
+        "adapter": snapshot.adapter,
+        "snapshot_id": snapshot_id,
+        "membership_sha256": membership,
+        "hash_policy": hash_policy,
+        "content_verified": hash_policy == "content",
+        "selection": snapshot.selection,
+        "context": snapshot.context,
+        "sources": snapshot.sources,
+        "group_validation": snapshot.group_validation,
+        "duplicates": list(snapshot.duplicates),
+        "limitations": list(snapshot.limitations),
+        "validation_context": snapshot.validation_context,
+        "root_binding": snapshot.roots,
+        "row_count": len(rows),
+        "rows_file": paths.rows.name,
+        "rows_sha256": sha256_bytes(expected_csv.encode("utf-8")),
+        "created_at": created_at.isoformat(),
+    }
+    assert paths.metadata.read_bytes() == (json.dumps(expected_metadata, indent=2) + "\n").encode(
+        "utf-8"
+    )
+    assert reference == {
+        "snapshot_id": snapshot_id,
+        "membership_sha256": membership,
+        "hash_policy": hash_policy,
+        "content_verified": hash_policy == "content",
+        "row_count": len(rows),
+        "metadata_path": str(paths.metadata),
+        "rows_path": str(paths.rows),
+    }
+    assert snapshot.membership_sha256 == membership
+    assert snapshot.snapshot_id == snapshot_id
+    assert snapshot.reference(paths) == reference
+    assert load_snapshot(paths) == snapshot
+
+
+@pytest.mark.parametrize(
+    "field", ["selection", "context", "sources", "group_validation", "validation_context"]
+)
+def test_publications_observe_nested_mutation_without_caching(tmp_path: Path, field: str) -> None:
+    rows = _dataset(tmp_path)
+    _write(tmp_path, "test/c.png", b"c")
+    snapshot = _snapshot(
+        tmp_path,
+        rows,
+        selection={"split": ["train", "val"]},
+        context={"protocol": "paired"},
+        sources={"inventory": {"path": "inventory.csv"}},
+        validation_context=[_row("test/c.png", "test")],
+    )
+    nested = getattr(snapshot, field)
+    nested["example"] = {"value": "original"}
+    first_paths = SnapshotPaths.in_dir(tmp_path / "first")
+    first = write_snapshot(snapshot, first_paths)
+    repeated_paths = SnapshotPaths.in_dir(tmp_path / "repeated")
+    repeated = write_snapshot(snapshot, repeated_paths)
+    assert repeated == {
+        **first,
+        "metadata_path": str(repeated_paths.metadata),
+        "rows_path": str(repeated_paths.rows),
+    }
+    first_metadata = json.loads(first_paths.metadata.read_bytes())
+    repeated_metadata = json.loads(repeated_paths.metadata.read_bytes())
+    first_metadata.pop("created_at")
+    repeated_metadata.pop("created_at")
+    assert repeated_metadata == first_metadata
+    assert repeated_paths.rows.read_bytes() == first_paths.rows.read_bytes()
+
+    nested["example"]["value"] = "changed"
+    second_paths = SnapshotPaths.in_dir(tmp_path / "second")
+    second = write_snapshot(snapshot, second_paths)
+    assert (second["snapshot_id"] != first["snapshot_id"]) == (field in {"selection", "context"})
+    assert second["membership_sha256"] == first["membership_sha256"]
+    assert second["snapshot_id"] == snapshot.snapshot_id
+    assert second == snapshot.reference(second_paths)
+    assert json.loads(second_paths.metadata.read_bytes())[field] == nested
+    assert load_snapshot(second_paths) == snapshot
+    assert first_metadata[field]["example"]["value"] == "original"
+
+
+@pytest.mark.parametrize("missing", ["metadata", "rows"])
+def test_missing_snapshot_artifact_is_rejected(tmp_path: Path, missing: str) -> None:
+    snapshot = _snapshot(tmp_path, _dataset(tmp_path))
+    paths = SnapshotPaths.in_dir(tmp_path / "meta")
+    write_snapshot(snapshot, paths)
+    getattr(paths, missing).unlink()
+    with pytest.raises(FileNotFoundError):
+        load_snapshot(paths)
+
+
+def test_mismatched_snapshot_identity_is_rejected(tmp_path: Path) -> None:
+    snapshot = _snapshot(tmp_path, _dataset(tmp_path))
+    paths = SnapshotPaths.in_dir(tmp_path / "meta")
+    write_snapshot(snapshot, paths)
+    metadata = json.loads(paths.metadata.read_bytes())
+    metadata["context"]["protocol"] = "changed"
+    paths.metadata.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(ValueError, match="Snapshot identity mismatch"):
+        load_snapshot(paths)
+
+
+@pytest.mark.parametrize("artifact", ["rows", "metadata"])
+def test_publication_failure_preserves_error_and_cleans_temporary_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, artifact: str
+) -> None:
+    rows = _dataset(tmp_path)
+    paths = SnapshotPaths.in_dir(tmp_path / "meta")
+    write_snapshot(_snapshot(tmp_path, rows), paths)
+    old_rows, old_metadata = paths.rows.read_bytes(), paths.metadata.read_bytes()
+    _write(tmp_path, "train/a.png", b"changed")
+    snapshot = _snapshot(tmp_path, rows)
+    replace_path = Path.replace
+    failure = OSError("injected publication failure")
+
+    def fail(source: Path, target: Path) -> Path:
+        if target == getattr(paths, artifact):
+            raise failure
+        return replace_path(source, target)
+
+    monkeypatch.setattr(Path, "replace", fail)
+    with pytest.raises(OSError, match="injected publication failure") as raised:
+        write_snapshot(snapshot, paths)
+    assert raised.value is failure
+    assert not list(paths.metadata.parent.glob(".*.tmp"))
+    assert paths.metadata.read_bytes() == old_metadata
+    if artifact == "rows":
+        assert paths.rows.read_bytes() == old_rows
+        load_snapshot(paths)
+    else:
+        assert paths.rows.read_bytes() != old_rows
+        with pytest.raises(ValueError, match="do not match"):
+            load_snapshot(paths)
 
 
 def test_snapshot_round_trip_and_torn_pairs_are_rejected(tmp_path: Path) -> None:

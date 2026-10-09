@@ -127,6 +127,9 @@ class DataSnapshot:
 
     @property
     def snapshot_id(self) -> str:
+        return self._snapshot_id(self.membership_sha256)
+
+    def _snapshot_id(self, membership_sha256: str) -> str:
         return sha256_json(
             {
                 "schema_version": SNAPSHOT_SCHEMA_VERSION,
@@ -135,14 +138,15 @@ class DataSnapshot:
                 "hash_policy": self.hash_policy,
                 "selection": self.selection,
                 "context": self.context,
-                "membership_sha256": self.membership_sha256,
+                "membership_sha256": membership_sha256,
             }
         )
 
     def reference(self, paths: SnapshotPaths) -> dict[str, Any]:
+        membership_sha256 = self.membership_sha256
         return {
-            "snapshot_id": self.snapshot_id,
-            "membership_sha256": self.membership_sha256,
+            "snapshot_id": self._snapshot_id(membership_sha256),
+            "membership_sha256": membership_sha256,
             "hash_policy": self.hash_policy,
             "content_verified": self.hash_policy == "content",
             "row_count": len(self.rows),
@@ -409,12 +413,13 @@ def write_snapshot(snapshot: DataSnapshot, paths: SnapshotPaths) -> dict[str, An
     """
     rows = _rows_bytes(snapshot.rows)
     _atomic_write(paths.rows, rows)
+    reference = snapshot.reference(paths)
     metadata = {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
         "kind": snapshot.kind,
         "adapter": snapshot.adapter,
-        "snapshot_id": snapshot.snapshot_id,
-        "membership_sha256": snapshot.membership_sha256,
+        "snapshot_id": reference["snapshot_id"],
+        "membership_sha256": reference["membership_sha256"],
         "hash_policy": snapshot.hash_policy,
         "content_verified": snapshot.hash_policy == "content",
         "selection": snapshot.selection,
@@ -431,7 +436,7 @@ def write_snapshot(snapshot: DataSnapshot, paths: SnapshotPaths) -> dict[str, An
         "created_at": datetime.now(UTC).isoformat(),
     }
     _atomic_write(paths.metadata, (json.dumps(metadata, indent=2) + "\n").encode("utf-8"))
-    return snapshot.reference(paths)
+    return reference
 
 
 def _parse_row(raw: Mapping[str, str]) -> AssetRow:
