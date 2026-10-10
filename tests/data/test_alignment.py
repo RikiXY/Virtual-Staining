@@ -162,6 +162,7 @@ def test_reject_superseded_or_unsupported_metadata(frames, change):
         ((0, 3), np.eye(3)),
         ((2, 3), np.diag([0, 1, 1])),
         ((2, 3), [[1, 0.1, 0], [0, 1, 0], [0, 0, 1]]),
+        ((2, 3), [[0, -1, 0], [1, 0, 0], [0, 0, 1]]),
         ((2, 3), np.diag([-1, -1, 1])),
     ],
 )
@@ -300,6 +301,271 @@ def test_support_validity_disagreement_empty_and_offset_grid(frames):
         reference_support=replace(reference, values=~ones),
     )
     assert qc.status == "insufficient_evidence" and qc.metrics["support_iou"] is None
+
+
+def _full_grid_qc_counts(candidate, request, moving, reference):
+    """Frozen pre-block evidence calculation; intentionally only used on small grids."""
+    from virtual_staining.data.alignment.warping import _coordinates, _sample_evidence
+
+    h, w = reference.grid.shape
+    native = _coordinates(reference.grid.grid_to_level0, 0, 0, w, h)
+    inverse = candidate.inverse().matrix
+    points = native @ inverse[:2, :2].T + inverse[:2, 2]
+    values, known = _sample_evidence(
+        moving, points, conservative=reference.kind == "observation_validity"
+    )
+    for coords, asset in ((native, candidate.reference), (points, candidate.moving)):
+        known &= (
+            (coords[..., 0] >= -0.5)
+            & (coords[..., 0] < asset.shape[1] - 0.5)
+            & (coords[..., 1] >= -0.5)
+            & (coords[..., 1] < asset.shape[0] - 0.5)
+        )
+    x, y, width, height = request.reference_region(candidate.reference)
+    known &= (
+        (native[..., 0] >= x - 0.5)
+        & (native[..., 0] < x + width - 0.5)
+        & (native[..., 1] >= y - 0.5)
+        & (native[..., 1] < y + height - 0.5)
+    )
+    denominator = (
+        int(np.count_nonzero(known & (values | reference.values)))
+        if reference.kind == "tissue_support"
+        else int(np.count_nonzero(known))
+    )
+    return int(np.count_nonzero(known & values & reference.values)), denominator
+
+
+@pytest.mark.parametrize("pattern", ["true", "false", "mixed"])
+@pytest.mark.parametrize("region", [None, (1, 1, 3, 3), (10, 10, 2, 2)])
+@pytest.mark.parametrize(
+    "mapping",
+    [
+        "identity",
+        "translation",
+        "fractional",
+        "anisotropic",
+        "rotation",
+        "affine",
+        "empty",
+        "boundary",
+    ],
+)
+def test_qc_block_counts_and_decisions_match_full_grid(monkeypatch, pattern, region, mapping):
+    from virtual_staining.data.alignment import registration
+
+    moving, reference = ImageGeometry("moving", (12, 14)), ImageGeometry("reference", (12, 14))
+    matrix = np.eye(3)
+    support_grid = GridGeometry((7, 9), np.eye(3))
+    moving_grid = GridGeometry((6, 8), np.eye(3))
+    if mapping in {"translation", "fractional", "empty"}:
+        matrix[:2, 2] = {"translation": (7, 5), "fractional": (0.5, -0.25), "empty": (30, 0)}[
+            mapping
+        ]
+    elif mapping == "anisotropic":
+        support_grid = GridGeometry.resized_crop((7, 9), origin=(1, -1), scale=(1.25, 1.5))
+        moving_grid = GridGeometry.resized_crop((6, 8), origin=(-1, 2), scale=(1.5, 0.75))
+    elif mapping == "rotation":
+        matrix = np.array([[0, -1, 10], [1, 0, 0], [0, 0, 1]])
+    elif mapping == "affine":
+        matrix = np.array([[1, 0.125, 0.5], [-0.25, 1, 1], [0, 0, 1]])
+    elif mapping == "boundary":
+        support_grid = GridGeometry((7, 9), np.array([[1, 0, -0.5], [0, 1, -0.5], [0, 0, 1]]))
+    candidate = AlignmentTransform(moving, reference, "affine", matrix)
+    request = RegistrationRequest("same_section_restained", "affine", diagnostic_region=region)
+    # Validity has its own reference grid; it must not inherit support's block slices.
+    validity_grid = GridGeometry.resized_crop((5, 7), origin=(0, 1), scale=(0.75, 1.25))
+    kwargs = {}
+    expected_counts = []
+    for kind, grid in (("support", support_grid), ("validity", validity_grid)):
+        for side, asset, current_grid in (
+            ("reference", reference, grid),
+            ("moving", moving, moving_grid),
+        ):
+            rows, columns = np.indices(current_grid.shape)
+            values = np.full(current_grid.shape, pattern != "false", dtype=bool)
+            if pattern == "mixed":
+                values = (rows + columns + (side == "moving")) % 3 != 0
+            kwargs[f"{side}_{kind}"] = evidence(
+                asset,
+                values,
+                "tissue_support" if kind == "support" else "observation_validity",
+                current_grid,
+            )
+        expected_counts.append(
+            _full_grid_qc_counts(
+                candidate, request, kwargs[f"moving_{kind}"], kwargs[f"reference_{kind}"]
+            )
+        )
+    # The geometric/landmark decision is independent of evidence partitioning.
+    landmarks = np.array([[1.0, 1.0] if region is None else region[:2]], dtype=float)
+    landmark_args: dict[str, Any] = dict(moving_landmarks=landmarks, reference_landmarks=landmarks)
+    baseline = evaluate_alignment_qc(candidate, request, QCPolicy(), **landmark_args)
+    metrics = dict(baseline.metrics)
+    metric_names = ("support_iou", "observation_valid_fraction")
+    for name, (numerator, denominator) in zip(metric_names, expected_counts, strict=True):
+        metrics[name] = float(numerator / denominator) if denominator else None
+    policy = QCPolicy({name: (1, 1) for name in metric_names})
+    rejected = tuple(
+        f"threshold_failed:{name}"
+        for name in sorted(metric_names)
+        if metrics[name] is not None and metrics[name] != 1
+    )
+    missing = tuple(sorted(name for name, value in metrics.items() if value is None))
+    unmet = tuple(f"missing:{name}" for name in sorted(metric_names) if metrics[name] is None)
+    expected = replace(
+        baseline,
+        metrics=metrics,
+        missing_evidence=missing,
+        reasons=rejected + unmet,
+        status="rejected" if rejected else "insufficient_evidence" if unmet else "accepted",
+    )
+    original_count = np.count_nonzero
+    for block_size in (1, 4, 256):
+        calls = []
+
+        def count(values, calls=calls):
+            result = original_count(values)
+            calls.append(int(result))
+            return result
+
+        with monkeypatch.context() as patch:
+            patch.setattr(registration, "_QC_BLOCK_SIZE", block_size)
+            patch.setattr(registration.np, "count_nonzero", count)
+            actual = evaluate_alignment_qc(candidate, request, policy, **kwargs, **landmark_args)
+        assert actual == expected
+        offset = 0
+        for grid, (numerator, denominator) in zip(
+            (support_grid, validity_grid), expected_counts, strict=True
+        ):
+            blocks = ((grid.shape[0] + block_size - 1) // block_size) * (
+                (grid.shape[1] + block_size - 1) // block_size
+            )
+            assert sum(calls[offset : offset + 2 * blocks : 2]) == denominator
+            assert sum(calls[offset + 1 : offset + 2 * blocks : 2]) == numerator
+            offset += 2 * blocks
+        assert offset == len(calls)
+
+
+@pytest.mark.parametrize("shape", [(1, 1), (1, 257), (255, 17), (256, 256), (513, 519)])
+@pytest.mark.parametrize("region", [None, (0, 0, 1, 1)])
+def test_qc_coordinate_and_sampling_allocations_are_bounded(monkeypatch, shape, region):
+    import weakref
+
+    from virtual_staining.data.alignment import registration
+
+    frames = ImageGeometry("moving", shape), ImageGeometry("reference", shape)
+    candidate = transform(frames, family="identity")
+    request = RegistrationRequest("same_section_restained", "identity", diagnostic_region=region)
+    kwargs: dict[str, Any] = {
+        f"{side}_{kind}": evidence(
+            asset,
+            np.ones(shape, bool),
+            "tissue_support" if kind == "support" else "observation_validity",
+        )
+        for side, asset in zip(("moving", "reference"), frames, strict=True)
+        for kind in ("support", "validity")
+    }
+    coordinates, sample = registration._coordinates, registration._sample_evidence
+    origins, sampled, live = [], [], []
+
+    def bounded_coordinates(matrix, x, y, width, height):
+        assert all(item() is None for item in live)
+        assert 0 < width <= 256 and 0 < height <= 256
+        origins.append((x, y, width, height))
+        native = coordinates(matrix, x, y, width, height)
+        live.append(weakref.ref(native))
+        return native
+
+    def bounded_sample(evidence, points, *, conservative):
+        assert points.shape[0] <= 256 and points.shape[1] <= 256
+        sampled.append((points.shape, conservative))
+        values, known = sample(evidence, points, conservative=conservative)
+        live.extend(weakref.ref(item) for item in (points, values, known))
+        return values, known
+
+    monkeypatch.setattr(registration, "_coordinates", bounded_coordinates)
+    monkeypatch.setattr(registration, "_sample_evidence", bounded_sample)
+    qc = evaluate_alignment_qc(candidate, request, QCPolicy({"support_iou": (1, 1)}), **kwargs)
+    assert qc.status == "accepted"
+    assert qc.metrics["support_iou"] == qc.metrics["observation_valid_fraction"] == 1
+    expected_origins = [
+        (x, y, min(256, shape[1] - x), min(256, shape[0] - y))
+        for y in range(0, shape[0], 256)
+        for x in range(0, shape[1], 256)
+    ]
+    assert origins == expected_origins * 2
+    assert sampled == [
+        ((h, w, 2), conservative)
+        for conservative in (False, True)
+        for _, _, w, h in expected_origins
+    ]
+    assert all(item() is None for item in live)
+
+
+@pytest.mark.parametrize("side", [None, "moving", "reference"])
+def test_qc_missing_pair_never_allocates_blocks(frames, monkeypatch, side):
+    from virtual_staining.data.alignment import registration
+
+    monkeypatch.setattr(
+        registration, "_coordinates", Mock(side_effect=AssertionError("allocation"))
+    )
+    kwargs: dict[str, Any] = {}
+    if side is not None:
+        asset = frames[0 if side == "moving" else 1]
+        kwargs = {
+            f"{side}_{kind}": evidence(
+                asset,
+                np.ones(asset.shape, bool),
+                "tissue_support" if kind == "support" else "observation_validity",
+            )
+            for kind in ("support", "validity")
+        }
+    request = RegistrationRequest("same_section_restained", "identity")
+    candidate = transform(frames, family="identity")
+    policy = QCPolicy({"support_iou": (1, 1), "observation_valid_fraction": (1, 1)})
+    assert evaluate_alignment_qc(candidate, request, policy, **kwargs) == evaluate_alignment_qc(
+        candidate, request, policy
+    )
+    if side is not None:
+        kwargs[f"{side}_support"] = replace(kwargs[f"{side}_support"], kind="observation_validity")
+        with pytest.raises(AlignmentError, match="kind/asset"):
+            evaluate_alignment_qc(candidate, request, policy, **kwargs)
+
+
+def test_qc_sampling_failure_releases_blocks(frames, monkeypatch):
+    import weakref
+
+    from virtual_staining.data.alignment import registration
+
+    sample = registration._sample_evidence
+    live = []
+    calls = 0
+
+    def fail_second_block(evidence, points, *, conservative):
+        nonlocal calls
+        assert all(item() is None for item in live)
+        live.append(weakref.ref(points))
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("sampling failed")
+        return sample(evidence, points, conservative=conservative)
+
+    monkeypatch.setattr(registration, "_QC_BLOCK_SIZE", 4)
+    monkeypatch.setattr(registration, "_sample_evidence", fail_second_block)
+    try:
+        evaluate_alignment_qc(
+            transform(frames),
+            RegistrationRequest("same_section_restained", "affine"),
+            QCPolicy(),
+            moving_support=evidence(frames[0], np.ones(frames[0].shape, bool)),
+            reference_support=evidence(frames[1], np.ones(frames[1].shape, bool)),
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "sampling failed"
+    else:
+        pytest.fail("Sampling failure was swallowed")
+    assert calls == 2 and all(item() is None for item in live)
 
 
 def test_linear_interpolation_validity_and_labels(frames):

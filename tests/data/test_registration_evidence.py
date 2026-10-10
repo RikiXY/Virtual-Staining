@@ -54,9 +54,11 @@ def _map(
 
 
 @pytest.mark.parametrize("tiled", [False, True])
+@pytest.mark.parametrize("block_size", [3, 256])
 def test_builder_transports_distinct_evidence_to_backend_and_each_patch(
-    tmp_path, monkeypatch, tiled
+    tmp_path, monkeypatch, tiled, block_size
 ):
+    monkeypatch.setattr("virtual_staining.data.alignment.registration._QC_BLOCK_SIZE", block_size)
     config, slide_set = _dataset(tmp_path, tiled=tiled, masks=True)
     supplied = {
         ("S1", "LF"): (_map("LF"), _map("LF", "observation_validity")),

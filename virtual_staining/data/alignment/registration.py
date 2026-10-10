@@ -27,6 +27,8 @@ from virtual_staining.data.alignment.models import (
 )
 from virtual_staining.data.alignment.warping import _coordinates, _sample_evidence
 
+_QC_BLOCK_SIZE = 256
+
 
 @dataclass(frozen=True)
 class RegistrationBackend:
@@ -417,36 +419,42 @@ def evaluate_alignment_qc(
         if moving is None or reference is None:
             continue
         h, w = reference.grid.shape
-        native = _coordinates(reference.grid.grid_to_level0, 0, 0, w, h)
         inverse = candidate.inverse().matrix
-        points = native @ inverse[:2, :2].T + inverse[:2, 2]
-        values, known = _sample_evidence(
-            moving, points, conservative=kind == "observation_validity"
-        )
-        # Evidence outside either native asset is not an observation of that asset.
-        for coords, asset in ((native, candidate.reference), (points, candidate.moving)):
-            known &= (
-                (coords[..., 0] >= -0.5)
-                & (coords[..., 0] < asset.shape[1] - 0.5)
-                & (coords[..., 1] >= -0.5)
-                & (coords[..., 1] < asset.shape[0] - 0.5)
-            )
         x, y, width, height = region
-        known &= (
-            (native[..., 0] >= x - 0.5)
-            & (native[..., 0] < x + width - 0.5)
-            & (native[..., 1] >= y - 0.5)
-            & (native[..., 1] < y + height - 0.5)
-        )
-        denominator = (
-            int(np.count_nonzero(known & (values | reference.values)))
-            if kind == "tissue_support"
-            else int(np.count_nonzero(known))
-        )
+        numerator = denominator = 0
+        for row in range(0, h, _QC_BLOCK_SIZE):
+            for column in range(0, w, _QC_BLOCK_SIZE):
+                block_h, block_w = min(_QC_BLOCK_SIZE, h - row), min(_QC_BLOCK_SIZE, w - column)
+                native = _coordinates(reference.grid.grid_to_level0, column, row, block_w, block_h)
+                points = native @ inverse[:2, :2].T + inverse[:2, 2]
+                values, known = _sample_evidence(
+                    moving, points, conservative=kind == "observation_validity"
+                )
+                # Evidence outside either native asset is not an observation of that asset.
+                for coords, asset in ((native, candidate.reference), (points, candidate.moving)):
+                    known &= (
+                        (coords[..., 0] >= -0.5)
+                        & (coords[..., 0] < asset.shape[1] - 0.5)
+                        & (coords[..., 1] >= -0.5)
+                        & (coords[..., 1] < asset.shape[0] - 0.5)
+                    )
+                known &= (
+                    (native[..., 0] >= x - 0.5)
+                    & (native[..., 0] < x + width - 0.5)
+                    & (native[..., 1] >= y - 0.5)
+                    & (native[..., 1] < y + height - 0.5)
+                )
+                reference_values = reference.values[row : row + block_h, column : column + block_w]
+                denominator += (
+                    int(np.count_nonzero(known & (values | reference_values)))
+                    if kind == "tissue_support"
+                    else int(np.count_nonzero(known))
+                )
+                numerator += int(np.count_nonzero(known & values & reference_values))
+                # Drop all block arrays, including the loop alias, before the next allocation.
+                del native, points, coords, values, known, reference_values
         if denominator:
-            metrics[metric] = float(
-                np.count_nonzero(known & values & reference.values) / denominator
-            )
+            metrics[metric] = float(numerator / denominator)
     missing.extend(name for name, value in metrics.items() if value is None)
     unmet = []
     for name, (low, high) in sorted(policy.thresholds.items()):
