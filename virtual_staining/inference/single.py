@@ -309,10 +309,11 @@ def _run_tiled_prediction(
                 ]
             weights[:, y : y + actual_h, x : x + actual_w] += 1.0
 
-    return {
-        name: (accumulator / weights.clamp_min(1.0)).clamp(0, 1)
-        for name, accumulator in accumulators.items()
-    }
+    weights.clamp_min_(1.0)
+    for accumulator in accumulators.values():
+        accumulator.div_(weights)
+        accumulator.clamp_(0, 1)
+    return accumulators
 
 
 def _write_tiled_rgb(

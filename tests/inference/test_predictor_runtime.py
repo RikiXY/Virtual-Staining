@@ -9,8 +9,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
-from PIL import Image
+from PIL import Image, PngImagePlugin
 
+from virtual_staining.inference import outputs as output_writer
+from virtual_staining.inference.outputs import save_rgb
 from virtual_staining.inference.single import (
     DirectoryInferenceResult,
     InferenceRuntime,
@@ -18,6 +20,8 @@ from virtual_staining.inference.single import (
     SingleInferenceResult,
     run_image_path_inference,
 )
+from virtual_staining.models.io_contract import denormalize_model_output
+from virtual_staining.utils.image_io import PillowRegionImageReader
 
 CPU = torch.device("cpu")
 
@@ -441,3 +445,110 @@ def test_standalone_contract_accepts_safe_output_names(tmp_path: Path, output_na
 
     assert isinstance(result, SingleInferenceResult)
     assert result.output_paths == {output_name: tmp_path / "out.png"}
+
+
+def test_tiled_publication_matches_prechange_png_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _pair(tmp_path / "in", (37, 21), name="sample.png")
+    originals = {name: path.read_bytes() for name, path in paths.items()}
+    names = ("PAS", "HE")
+    model = InMemoryPredictor(names)
+    coordinates = [(x, y) for y in (0, 5) for x in (0, 12, 21)]
+    sums = {name: torch.zeros(3, 21, 37) for name in names}
+    weights = torch.zeros(1, 21, 37)
+    closed: list[Path] = []
+    original_close = PillowRegionImageReader.close
+
+    def close(reader: PillowRegionImageReader) -> None:
+        closed.append(reader.path)
+        original_close(reader)
+
+    def predictor(inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        outputs = model(inputs)
+        x, y = coordinates[len(model.calls) - 1]
+        for name, value in outputs.items():
+            sums[name][:, y : y + 16, x : x + 16] += denormalize_model_output(value)[0]
+        weights[:, y : y + 16, x : x + 16] += 1
+        return outputs
+
+    monkeypatch.setattr(PillowRegionImageReader, "close", close)
+    result = run_image_path_inference(
+        _runtime(predictor, outputs=names), paths, tmp_path / "out", mode="tile", tile_overlap=4
+    )
+    expected_paths = {name: tmp_path / "out" / name / "sample_generated.png" for name in names}
+    assert isinstance(result, SingleInferenceResult)
+    assert result == SingleInferenceResult(paths, expected_paths, (16, 16), "tile", "cpu")
+    assert tuple(result.output_paths) == names
+    assert closed == list(paths.values())
+    assert model.calls == [("AF", "LF")] * len(coordinates)
+    source = _read(paths["LF"])
+    for name, path in expected_paths.items():
+        reference = tmp_path / "reference" / f"{name}.png"
+        save_rgb((sums[name] / weights.clamp_min(1.0)).clamp(0, 1), reference)
+        assert path.read_bytes() == reference.read_bytes()
+        with Image.open(path) as image:
+            assert image.size == (37, 21) and image.mode == "RGB"
+            assert image.info == {}
+        np.testing.assert_array_equal(_read(path), source if name == "HE" else 255 - source)
+        assert list(path.parent.iterdir()) == [path]
+    assert {name: path.read_bytes() for name, path in paths.items()} == originals
+
+
+@pytest.mark.parametrize("failure", ["predictor", "writer", "verification"])
+def test_tiled_failure_closes_readers_and_preserves_per_file_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    paths = _pair(tmp_path / "in", (37, 21), name="sample.png")
+    destinations = {
+        name: tmp_path / "out" / name / "sample_generated.png" for name in ("PAS", "HE")
+    }
+    for path in destinations.values():
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"previous result")
+    closed: list[Path] = []
+    original_close = PillowRegionImageReader.close
+    original_save = output_writer.save_image
+    original_verify = PngImagePlugin.PngImageFile.verify
+    model = InMemoryPredictor(("PAS", "HE"))
+
+    def close(reader: PillowRegionImageReader) -> None:
+        closed.append(reader.path)
+        original_close(reader)
+
+    def predictor(inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        if failure == "predictor" and model.calls:
+            raise RuntimeError("predictor failure")
+        return model(inputs)
+
+    def save(output: torch.Tensor, partial: Path) -> None:
+        assert closed == list(paths.values())
+        original_save(output, partial)
+        if failure == "writer" and partial.parent == destinations["HE"].parent:
+            raise OSError("writer failure")
+
+    def verify(image: PngImagePlugin.PngImageFile) -> None:
+        original_verify(image)
+        assert isinstance(image.filename, str)
+        if failure == "verification" and Path(image.filename).parent == destinations["HE"].parent:
+            raise OSError("verification failure")
+
+    monkeypatch.setattr(PillowRegionImageReader, "close", close)
+    monkeypatch.setattr(output_writer, "save_image", save)
+    monkeypatch.setattr(PngImagePlugin.PngImageFile, "verify", verify)
+    with pytest.raises((RuntimeError, OSError), match=f"{failure} failure"):
+        run_image_path_inference(
+            _runtime(predictor, outputs=("PAS", "HE")),
+            paths,
+            tmp_path / "out",
+            mode="tile",
+            tile_overlap=4,
+        )
+    assert closed == list(paths.values())
+    assert destinations["HE"].read_bytes() == b"previous result"
+    if failure == "predictor":
+        assert destinations["PAS"].read_bytes() == b"previous result"
+    else:
+        np.testing.assert_array_equal(_read(destinations["PAS"]), 255 - _read(paths["LF"]))
+    for path in destinations.values():
+        assert list(path.parent.iterdir()) == [path]

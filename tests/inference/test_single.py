@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import cast
+from weakref import ref
 
 import pytest
 import torch
@@ -119,6 +120,98 @@ def test_tiled_prediction_uses_shared_coordinates_for_all_modalities() -> None:
 def _write_image(path: Path, size: tuple[int, int] = (4, 4)) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", size, color=(10, 20, 30)).save(path)
+
+
+@pytest.mark.parametrize("names", [("PAS",), ("PAS", "HE"), ("PAS", "HE", "DAB", "TRI")])
+@pytest.mark.parametrize(
+    ("size", "overlap", "xs", "ys", "x_weights", "y_weights"),
+    [
+        ((4, 4), 0, [0], [0], [1] * 4, [1] * 4),
+        ((3, 2), 1, [0], [0], [1] * 3, [1] * 2),
+        ((7, 5), 0, [0, 3], [0, 1], [1, 1, 1, 2, 1, 1, 1], [1, 2, 2, 2, 1]),
+        ((8, 7), 1, [0, 3, 4], [0, 3], [1, 1, 1, 2, 2, 2, 2, 1], [1, 1, 1, 2, 1, 1, 1]),
+        ((6, 6), 2, [0, 2], [0, 2], [1, 1, 2, 2, 1, 1], [1, 1, 2, 2, 1, 1]),
+    ],
+)
+def test_tiled_finalization_matches_reference_and_owns_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+    names: tuple[str, ...],
+    size: tuple[int, int],
+    overlap: int,
+    xs: list[int],
+    ys: list[int],
+    x_weights: list[int],
+    y_weights: list[int],
+) -> None:
+    import virtual_staining.inference.single as single
+
+    width, height = size
+    image = Image.new("RGB", size)
+    image.putdata([(x, y, 37) for y in range(height) for x in range(width)])
+    source_bytes = image.tobytes()
+    coordinates = [(x, y) for y in ys for x in xs]
+    ramp = torch.linspace(-0.1, 0.1, 16).reshape(4, 4)
+    # Bypass the runner's earlier clamp to exercise both final clamp boundaries.
+    predictions = [
+        {
+            name: torch.stack((-1 + ramp, 0.2 + ramp, 1.5 + ramp)) + i * 0.037 + j * 0.013
+            for j, name in enumerate(names)
+        }
+        for i in range(len(coordinates))
+    ]
+    snapshots = [{name: value.clone() for name, value in tile.items()} for tile in predictions]
+    prediction_refs = [ref(value) for tile in predictions for value in tile.values()]
+    sums = {name: torch.zeros(3, height, width) for name in names}
+    for i, (x, y) in enumerate(coordinates):
+        w, h = min(4, width - x), min(4, height - y)
+        for name in names:
+            sums[name][:, y : y + h, x : x + w] += predictions[i][name][:, :h, :w]
+    weights = (
+        torch.tensor(y_weights, dtype=torch.float32)[:, None]
+        * torch.tensor(x_weights, dtype=torch.float32)[None, :]
+    ).unsqueeze(0)
+    expected = {name: (value / weights.clamp_min(1.0)).clamp(0, 1) for name, value in sums.items()}
+    calls = 0
+
+    def predict(tiles: dict[str, Image.Image], runtime: object, transform: object):
+        nonlocal calls
+        x, y = coordinates[calls]
+        expected_tile = Image.new("RGB", (4, 4), "white")
+        expected_tile.paste(image.crop((x, y, min(x + 4, width), min(y + 4, height))), (0, 0))
+        assert tiles["LF"].tobytes() == expected_tile.tobytes()
+        calls += 1
+        return predictions[calls - 1]
+
+    monkeypatch.setattr(single, "_predict_images", predict)
+    runtime = InferenceRuntime(
+        lambda inputs: pytest.fail("use the local prediction seam"),
+        PredictionContract(("LF",), names, (4, 4)),
+        torch.device("cpu"),
+    )
+    outputs = _run_tiled_prediction({"LF": image}, runtime, overlap)
+
+    assert calls == len(coordinates)
+    assert tuple(outputs) == names
+    assert len({value.untyped_storage().data_ptr() for value in outputs.values()}) == len(names)
+    for name, output in outputs.items():
+        assert output.dtype == torch.float32 and output.shape == (3, height, width)
+        assert torch.equal(output, expected[name])
+        assert (output[0] == 0).all() and (output[2] == 1).all()
+        assert ((output[1] > 0) & (output[1] < 1)).all()
+        assert all(
+            output.untyped_storage().data_ptr() != tile[name].untyped_storage().data_ptr()
+            for tile in predictions
+        )
+    outputs[names[0]].fill_(0.75)
+    assert all(torch.equal(outputs[name], expected[name]) for name in names[1:])
+    assert image.tobytes() == source_bytes
+    assert all(
+        torch.equal(tile[name], snapshot[name])
+        for tile, snapshot in zip(predictions, snapshots, strict=True)
+        for name in names
+    )
+    predictions.clear()
+    assert all(value() is None for value in prediction_refs)
 
 
 def test_directory_inputs_pair_exact_relative_paths_and_preserve_subdirectories(
