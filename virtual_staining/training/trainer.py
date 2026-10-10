@@ -88,6 +88,7 @@ class Trainer:
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
+        self._published_checkpoint: tuple[int, Path] | None = None
         self._logs_dir = run_paths.logs_dir
         self._checkpoints_dir = run_paths.checkpoints_dir
         self._output_val_dir = run_paths.output_val_dir
@@ -117,6 +118,7 @@ class Trainer:
             if not checkpoint_path.is_file():
                 raise FileNotFoundError(f"resume checkpoint not found: {checkpoint_path}")
 
+        self._published_checkpoint = None
         return self._checkpoints.load(checkpoint_path)
 
     def train(
@@ -211,6 +213,7 @@ class Trainer:
         *,
         start_epoch: int,
     ) -> _TrainingSession:
+        self._published_checkpoint = None
         loss_names = list(self.method.loss_names)
         progress_tracker = self._start_progress_tracker(start_epoch)
 
@@ -358,6 +361,7 @@ class Trainer:
         return val_metrics, ranked_checkpoint_path
 
     def _validate(self, epoch: int) -> MethodMetrics:
+        self._published_checkpoint = None
         recorder = self._benchmark_recorder
         if recorder is None:
             return self._validate_impl(epoch)
@@ -377,6 +381,8 @@ class Trainer:
         epoch: int,
         val_metrics: MethodMetrics | None,
     ) -> None:
+        # Scheduler counters can change even when the learning rate does not.
+        self._published_checkpoint = None
         if self.method.step_schedulers(
             epoch=epoch,
             validation_metrics=val_metrics,
@@ -489,7 +495,9 @@ class Trainer:
         if session.start_epoch >= self.config.epochs or session.final_metrics is None:
             return
 
-        if (session.final_epoch + 1) % self.config.checkpoint_rate == 0:
+        published = self._published_checkpoint
+        if published is not None and published[0] == session.final_epoch:
+            session.last_checkpoint = published[1].name
             return
 
         checkpoint_path = self._save_checkpoint(session.final_epoch)
@@ -500,11 +508,16 @@ class Trainer:
             session.best_checkpoint = checkpoint_path.name
 
     def _save_checkpoint(self, epoch: int) -> Path:
+        self._published_checkpoint = None
         recorder = self._benchmark_recorder
         if recorder is None:
-            return self._checkpoints.save(epoch)
-        with recorder.phase("checkpoint"):
-            return self._checkpoints.save(epoch)
+            path = self._checkpoints.save(epoch)
+        else:
+            with recorder.phase("checkpoint"):
+                path = self._checkpoints.save(epoch)
+        # Only reporting, ranking and session-owned early stopping follow publication.
+        self._published_checkpoint = (epoch, path)
+        return path
 
     def _emit_progress(
         self,
@@ -547,6 +560,7 @@ class Trainer:
         epoch: int,
         session: _TrainingSession,
     ) -> MethodMetrics:
+        self._published_checkpoint = None
         self.method.train_mode()
         set_epoch = getattr(self.train_loader.dataset, "set_epoch", None)
         if callable(set_epoch):

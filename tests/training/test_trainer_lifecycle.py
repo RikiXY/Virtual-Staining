@@ -3,21 +3,27 @@
 from __future__ import annotations
 
 import csv
+import json
 import math
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import patch
 
 import pytest
 import torch
 from torch.utils.data import DataLoader
 
-from virtual_staining.checkpoint_contract import CheckpointIdentity
+from tests.checkpoint_helpers import assert_nested_equal
+from virtual_staining.checkpoint_contract import CheckpointIdentity, read_checkpoint
+from virtual_staining.checkpoint_selection import resolve_checkpoint_path
 from virtual_staining.config.project import ProjectConfig
-from virtual_staining.config.scheduler import LearningRateSchedulerConfig
+from virtual_staining.config.scheduler import LearningRateSchedulerConfig, LearningRateSchedulerName
 from virtual_staining.config.training import EarlyStoppingConfig, TrainingConfig
 from virtual_staining.experiment.run_layout import RunLayout, ensure_run_directories
+from virtual_staining.training import checkpoints as checkpoint_module
 from virtual_staining.training import progress as progress_module
+from virtual_staining.training.checkpoints import MethodCheckpointManager
 from virtual_staining.training.helpers import (
     TrainingEpochAccumulator,
     build_lr_scheduler,
@@ -27,7 +33,7 @@ from virtual_staining.training.helpers import (
 from virtual_staining.training.progress import ProgressUpdate
 from virtual_staining.training.results import TrainingResult
 from virtual_staining.training.runtime import MethodMetrics
-from virtual_staining.training.trainer import Trainer
+from virtual_staining.training.trainer import Trainer, _TrainingSession
 
 _MISSING = object()
 
@@ -53,7 +59,9 @@ class _FakeMethod:
         self.val_losses = list(val_losses)
         self.calls: list[tuple[Any, ...]] = []
         self.clock: _Clock | None = None
-        self.optimizer = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=1.0)
+        self.weight = torch.nn.Parameter(torch.zeros(1))
+        self.steps = 0
+        self.optimizer = torch.optim.SGD([self.weight], lr=1.0, momentum=0.9)
         self.scheduler = build_lr_scheduler(self.scheduler_config, training.epochs, self.optimizer)
         if self.scheduler is not None:
             original_step = self.scheduler.step
@@ -71,7 +79,9 @@ class _FakeMethod:
         return len(cast(torch.Tensor, batch))
 
     def step(self, batch: object, *, epoch: int, global_step: int) -> MethodMetrics:
+        self.weight.grad = torch.ones_like(self.weight)
         self.optimizer.step()
+        self.steps += 1
         if self.clock is not None:
             self.clock.mono += 1.0 + global_step % 3
         value = float(cast(torch.Tensor, batch).mean())
@@ -133,10 +143,23 @@ class _FakeMethod:
         return {"objective": "scripted"}
 
     def state_dict(self) -> dict[str, Any]:
-        return {"weight": torch.zeros(1)}
+        return {
+            "weight": self.weight.detach(),
+            "steps": self.steps,
+            "optimizer": self.optimizer.state_dict(),
+            # Exclude the test's call-counting wrapper from scheduler state.
+            "scheduler": None
+            if self.scheduler is None
+            else {k: v for k, v in self.scheduler.state_dict().items() if k != "step"},
+        }
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
-        pass
+        with torch.no_grad():
+            self.weight.copy_(state["weight"])
+        self.steps = state["steps"]
+        self.optimizer.load_state_dict(state["optimizer"])
+        if self.scheduler is not None:
+            self.scheduler.load_state_dict(state["scheduler"])
 
 
 class _Clock:
@@ -172,6 +195,7 @@ def _run(
     val_losses: Sequence[Any] = (),
     clock: _Clock | None = None,
     scheduler: LearningRateSchedulerConfig | None = None,
+    resume: bool = False,
 ) -> tuple[TrainingResult, list[ProgressUpdate], _FakeMethod, RunLayout]:
     project = ProjectConfig(
         dataset_root=tmp_path / "dataset",
@@ -195,7 +219,8 @@ def _run(
         config_hash="sha256:test",
         progress_reporter=updates.append,
     )
-    return trainer.train(seed=0), updates, method, paths
+    start_epoch = trainer.resume("latest") if resume else 0
+    return trainer.train(seed=0, start_epoch=start_epoch), updates, method, paths
 
 
 def _rows(paths: RunLayout) -> list[dict[str, str]]:
@@ -405,3 +430,325 @@ def test_plateau_steps_only_on_finite_validation_events(tmp_path: Path) -> None:
     assert [call for call in method.calls if call[0] == "step_schedulers"] == [
         ("step_schedulers", epoch, epoch % 2 == 1) for epoch in range(8)
     ]
+
+
+@pytest.fixture
+def saved_epochs(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    epochs: list[int] = []
+    original = MethodCheckpointManager.save
+
+    def save(manager: MethodCheckpointManager, epoch: int) -> Path:
+        path = original(manager, epoch)
+        epochs.append(epoch)
+        return path
+
+    monkeypatch.setattr(MethodCheckpointManager, "save", save)
+    return epochs
+
+
+@pytest.mark.parametrize(
+    ("validate_rate", "checkpoint_rate", "values", "expected"),
+    [
+        (1, 2, [1.0, 2.0, 3.0], [0, 1, 2]),
+        (1, 1, [1.0, 2.0, 3.0], [0, 1, 2]),
+        (2, 2, [1.0], [1, 2]),
+        (10, 3, [], [2]),
+        (1, 10, [1.0, 2.0, 3.0], [0, 1, 2]),
+        (1, 2, [1.0, 2.0, math.nan], [0, 1, 2]),
+        (1, 2, [1.0, 2.0, _MISSING], [0, 1, 2]),
+        (1, 10, [math.nan] * 3, [2]),
+        (1, 10, [_MISSING] * 3, [2]),
+    ],
+)
+def test_final_publication_uses_actual_save_evidence(
+    tmp_path: Path,
+    saved_epochs: list[int],
+    validate_rate: int,
+    checkpoint_rate: int,
+    values: list[Any],
+    expected: list[int],
+) -> None:
+    with (
+        patch.object(torch, "save", wraps=torch.save) as serialize,
+        patch.object(checkpoint_module, "read_checkpoint", wraps=read_checkpoint) as readback,
+        patch.object(
+            checkpoint_module, "validate_checkpoint", wraps=checkpoint_module.validate_checkpoint
+        ) as validate,
+    ):
+        result, updates, method, paths = _run(
+            tmp_path,
+            _training(validate_rate=validate_rate, checkpoint_rate=checkpoint_rate),
+            val_losses=values,
+        )
+    assert saved_epochs == expected
+    assert serialize.call_count == readback.call_count == validate.call_count == len(expected)
+    assert sorted(p.name for p in paths.checkpoints_dir.glob("*.pth")) == [
+        f"ep{epoch:03d}.pth" for epoch in expected
+    ]
+    payload = cast(dict, read_checkpoint(paths.checkpoints_dir / "ep002.pth"))
+    assert payload["epoch"] == result.final_epoch == 2
+    assert payload["format_version"] == 4
+    assert payload["config_hash"] == "sha256:test"
+    assert_nested_equal(payload["state"], method.state_dict())
+    assert updates[-1].last_checkpoint_name == "ep002.pth"
+    assert resolve_checkpoint_path(paths.checkpoints_dir, policy="latest").name == "ep002.pth"
+    assert len(_lifecycle_updates(updates, 2)) == 1
+    assert method.steps == 6
+
+
+@pytest.mark.parametrize("scheduler_name", ["none", "linear_decay", "reduce_on_plateau"])
+def test_reused_payload_and_history_match_previous_final_save(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    saved_epochs: list[int],
+    scheduler_name: LearningRateSchedulerName,
+) -> None:
+    scheduler = LearningRateSchedulerConfig(
+        name=scheduler_name, decay_start_epoch=0, monitor="loss_G_val", patience=0, factor=0.5
+    )
+    training = _training(checkpoint_rate=2, checkpoint_top_k=2)
+    result, updates, method, paths = _run(
+        tmp_path / "reuse", training, val_losses=[1.0, 2.0, 3.0], scheduler=scheduler
+    )
+    assert saved_epochs == [0, 1, 2]
+    retained = read_checkpoint(paths.checkpoints_dir / "ep002.pth")
+
+    def previous_final_save(trainer: Trainer, session: _TrainingSession) -> None:
+        path = trainer._save_checkpoint(session.final_epoch)
+        session.last_checkpoint = path.name
+
+    monkeypatch.setattr(Trainer, "_save_final_checkpoint_if_needed", previous_final_save)
+    saved_epochs.clear()
+    old_result, old_updates, old_method, old_paths = _run(
+        tmp_path / "previous", training, val_losses=[1.0, 2.0, 3.0], scheduler=scheduler
+    )
+    assert saved_epochs == [0, 1, 2, 2]
+    assert_nested_equal(retained, read_checkpoint(old_paths.checkpoints_dir / "ep002.pth"))
+    assert_nested_equal(method.state_dict(), old_method.state_dict())
+    assert _rows(paths) == _rows(old_paths)
+    assert method.calls == old_method.calls
+    assert result.best_checkpoint_path == paths.checkpoints_dir / "ep000.pth"
+    assert old_result.best_checkpoint_path == old_paths.checkpoints_dir / "ep000.pth"
+    assert [
+        (
+            u.epoch,
+            u.step_metrics,
+            u.eval_metrics,
+            u.last_checkpoint_name,
+            u.best_checkpoint_name,
+            u.progress,
+        )
+        for u in updates
+    ] == [
+        (
+            u.epoch,
+            u.step_metrics,
+            u.eval_metrics,
+            u.last_checkpoint_name,
+            u.best_checkpoint_name,
+            u.progress,
+        )
+        for u in old_updates
+    ]
+    catalog = json.loads((paths.checkpoints_dir / "best.json").read_text())
+    assert catalog == json.loads((old_paths.checkpoints_dir / "best.json").read_text())
+    records = catalog["metrics"]["loss_G_val"]["records"]
+    assert [record["epoch"] for record in records] == [0, 1]
+    assert all(record["objective_metadata"] == {"objective": "scripted"} for record in records)
+    state = cast(dict, retained)["state"]
+    if scheduler_name == "linear_decay":
+        assert state["scheduler"]["last_epoch"] == 3
+        assert state["optimizer"]["param_groups"][0]["lr"] == 0.0
+    elif scheduler_name == "reduce_on_plateau":
+        assert state["scheduler"]["last_epoch"] == 3
+        assert state["scheduler"]["best"] == 1.0
+        assert state["optimizer"]["param_groups"][0]["lr"] == 0.25
+
+
+@pytest.mark.parametrize("rank", [True, False])
+def test_early_stop_reuses_only_published_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, saved_epochs: list[int], rank: bool
+) -> None:
+    if not rank:
+        monkeypatch.setattr(_FakeMethod, "checkpoint_selection_metrics", lambda *args: {})
+    early = EarlyStoppingConfig(monitor="loss_G_val", mode="min", patience=1)
+    result, updates, _, paths = _run(
+        tmp_path,
+        _training(epochs=5, checkpoint_rate=10, early_stopping=early),
+        val_losses=[1.0, 2.0],
+    )
+    assert saved_epochs == ([0, 1] if rank else [1])
+    assert (result.final_epoch, result.stop_epoch, result.stopped_early) == (1, 1, True)
+    assert (result.early_stopping_best_epoch, result.early_stopping_best_value) == (0, 1.0)
+    assert result.stop_reason is not None and "1 validation event(s)" in result.stop_reason
+    assert result.best_checkpoint_path == paths.checkpoints_dir / (
+        "ep000.pth" if rank else "ep001.pth"
+    )
+    assert updates[-1].last_checkpoint_name == "ep001.pth"
+    assert updates[-1].progress == 1.0
+
+
+@pytest.mark.parametrize("new_epochs", [False, True])
+@pytest.mark.parametrize("early_stop", [False, True])
+def test_resume_does_not_reuse_previous_execution_publication(
+    tmp_path: Path, saved_epochs: list[int], new_epochs: bool, early_stop: bool
+) -> None:
+    _, _, _, paths = _run(tmp_path, _training(epochs=1, checkpoint_rate=2))
+    original = (paths.checkpoints_dir / "ep000.pth").read_bytes()
+    saved_epochs.clear()
+    early = (
+        EarlyStoppingConfig(monitor="loss_G_val", mode="min", patience=1) if early_stop else None
+    )
+    training = _training(
+        epochs=(5 if early_stop else 3) if new_epochs else 1,
+        checkpoint_rate=2,
+        resume="latest",
+        early_stopping=early,
+    )
+    result, updates, method, _ = _run(tmp_path, training, val_losses=[2.0, 3.0], resume=True)
+    assert saved_epochs == ([1, 2] if new_epochs else [])
+    assert result.final_epoch == (2 if new_epochs else 0)
+    assert result.stopped_early == (new_epochs and early_stop)
+    assert result.best_checkpoint_path == paths.checkpoints_dir / "ep000.pth"
+    assert (paths.checkpoints_dir / "ep000.pth").read_bytes() == original
+    assert method.steps == (6 if new_epochs else 2)
+    if new_epochs:
+        assert updates[-1].last_checkpoint_name == "ep002.pth"
+        assert updates[-1].progress == 1.0
+        assert_nested_equal(
+            cast(dict, read_checkpoint(paths.checkpoints_dir / "ep002.pth"))["state"],
+            method.state_dict(),
+        )
+    else:
+        assert updates == []
+
+
+@pytest.mark.parametrize("checkpoint_rate", [1, 2])
+@pytest.mark.parametrize("scheduler_name", ["linear_decay", "reduce_on_plateau"])
+def test_scheduler_operation_after_publication_requires_new_final_save(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    saved_epochs: list[int],
+    checkpoint_rate: int,
+    scheduler_name: LearningRateSchedulerName,
+) -> None:
+    original = Trainer._save_final_checkpoint_if_needed
+
+    def finalize(trainer: Trainer, session: _TrainingSession) -> None:
+        # Exercise a late scheduler operation, even on the regular checkpoint cadence.
+        trainer._step_lr_schedulers(
+            epoch=session.final_epoch, val_metrics=session.latest_eval_metrics
+        )
+        original(trainer, session)
+        original(trainer, session)  # Repeated finalization must reuse the new publication.
+
+    monkeypatch.setattr(Trainer, "_save_final_checkpoint_if_needed", finalize)
+    scheduler = LearningRateSchedulerConfig(
+        name=scheduler_name, decay_start_epoch=0, monitor="loss_G_val"
+    )
+    _, _, method, paths = _run(
+        tmp_path, _training(checkpoint_rate=checkpoint_rate), scheduler=scheduler
+    )
+    assert saved_epochs == [0, 1, 2, 2]
+    payload = cast(dict, read_checkpoint(paths.checkpoints_dir / "ep002.pth"))
+    assert payload["state"]["scheduler"]["last_epoch"] == 4
+    assert_nested_equal(payload["state"], method.state_dict())
+
+
+@pytest.mark.parametrize("mutation", ["train", "validate", "resume", "other_epoch"])
+def test_late_method_operations_invalidate_final_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, saved_epochs: list[int], mutation: str
+) -> None:
+    original = Trainer._save_final_checkpoint_if_needed
+
+    def finalize(trainer: Trainer, session: _TrainingSession) -> None:
+        if mutation == "train":
+            trainer._train_epoch(session.final_epoch, session)
+        elif mutation == "validate":
+            # A method is allowed to maintain serialized validation state.
+            def validate(method: _FakeMethod, *args: Any, **kwargs: Any) -> MethodMetrics:
+                method.steps += 1
+                return MethodMetrics(losses={"loss_G": 1.0, "loss_D": 0.0})
+
+            monkeypatch.setattr(_FakeMethod, "validate", validate)
+            trainer._validate(session.final_epoch)
+        elif mutation == "resume":
+            trainer.resume("ep000.pth")
+        else:
+            trainer._save_checkpoint(session.final_epoch - 1)
+        original(trainer, session)
+
+    monkeypatch.setattr(Trainer, "_save_final_checkpoint_if_needed", finalize)
+    _, _, method, paths = _run(tmp_path, _training(checkpoint_rate=2))
+    assert saved_epochs == ([0, 1, 2, 1, 2] if mutation == "other_epoch" else [0, 1, 2, 2])
+    assert_nested_equal(
+        cast(dict, read_checkpoint(paths.checkpoints_dir / "ep002.pth"))["state"],
+        method.state_dict(),
+    )
+
+
+@pytest.mark.parametrize("operation", ["serialize", "readback", "validate", "publish"])
+def test_checkpoint_failure_propagates_without_reuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    target, name = {
+        "serialize": (torch, "save"),
+        "readback": (checkpoint_module, "read_checkpoint"),
+        "validate": (checkpoint_module, "validate_checkpoint"),
+        "publish": (checkpoint_module.os, "replace"),
+    }[operation]
+    original_save = Trainer._save_checkpoint
+
+    def checked_save(trainer: Trainer, epoch: int) -> Path:
+        if epoch < 2:
+            return original_save(trainer, epoch)
+        with monkeypatch.context() as failure_patch:
+            failure_patch.setattr(target, name, fail)
+            with pytest.raises(RuntimeError, match="publication failed"):
+                original_save(trainer, epoch)
+        assert trainer._published_checkpoint is None
+        raise RuntimeError("publication failed")
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("publication failed")
+
+    monkeypatch.setattr(Trainer, "_save_checkpoint", checked_save)
+    with pytest.raises(RuntimeError, match="publication failed"):
+        _run(tmp_path, _training())
+    assert sorted(path.name for path in tmp_path.rglob("*.pth")) == ["ep000.pth", "ep001.pth"]
+    assert list(tmp_path.rglob("*.tmp")) == []
+    (catalog_path,) = tmp_path.rglob("best.json")
+    catalog = json.loads(catalog_path.read_text())
+    assert [record["epoch"] for record in catalog["metrics"]["loss_G_val"]["records"]] == [0, 1]
+
+
+def test_final_reuse_keeps_independent_metric_rankings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, saved_epochs: list[int]
+) -> None:
+    monkeypatch.setattr(
+        _FakeMethod,
+        "checkpoint_selection_metrics",
+        lambda self, metrics: {
+            "loss_G_val": metrics.losses["loss_G"],
+            "val_ssim": metrics.losses["loss_G"],
+        },
+    )
+    monkeypatch.setattr(
+        _FakeMethod,
+        "checkpoint_selection_modes",
+        lambda self: {"loss_G_val": "min", "val_ssim": "max"},
+    )
+    result, updates, _, paths = _run(
+        tmp_path, _training(checkpoint_rate=2, checkpoint_top_k=1), val_losses=[1.0, 2.0, 3.0]
+    )
+    assert saved_epochs == [0, 1, 2]
+    assert result.best_checkpoint_path == paths.checkpoints_dir / "ep000.pth"
+    assert updates[-1].best_checkpoint_name == "ep000.pth"
+    assert (
+        resolve_checkpoint_path(paths.checkpoints_dir, policy="best", metric="val_ssim").name
+        == "ep002.pth"
+    )
+    catalog = json.loads((paths.checkpoints_dir / "best.json").read_text())
+    assert {
+        name: [r["epoch"] for r in metric["records"]] for name, metric in catalog["metrics"].items()
+    } == {"loss_G_val": [0], "val_ssim": [2]}
